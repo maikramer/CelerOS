@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "api_version": 2,
+  "major_update": false,
+  "minor_update": false,
+  "security_update": false,
+  "changelog": "- Over-the-air firmware updates (Settings > System Updates > INSTALL)\n- Web firmware upload via file manager (/update)\n- Captive portal WiFi setup\n- Net.* HTTP API for JS apps\n- Settings PIN lock\n- Brightness control (SmartDisplay)",
+  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update.",
+  "firmware_url": "https://raw.githubusercontent.com/maikramer/KryonOS/refs/heads/main/updates/smartdisplay_4848S040/firmware.bin"
+}

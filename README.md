@@ -69,6 +69,39 @@ If your specific hardware setup uses different pins, you will need to recompile 
 
 ---
 
+## Supported Boards
+
+The UI is resolution-adaptive (`src/Display/Layout.h`): screens scale from the physical
+display size, so apps and system UI work on any panel (fonts, list rows, footer and
+the app "X" button are derived from `tft.width()/height()`).
+
+### 1. Classic ESP32 + ILI9341 (env `esp32doit-devkit-v1`)
+ESP32 DevKit + 2.8" SPI 240x320 ILI9341 + resistive touch XPT2046 (see pin tables above).
+
+### 2. SmartDisplay ESP32-S3 4.0" — Guition ESP32-S3-4848S040 (env `smartdisplay_4848S040`)
+ESP32-S3-N16R8 (16 MB flash QIO + 8 MB PSRAM OPI), 4" IPS 480x480 **ST7701** RGB panel,
+capacitive touch **GT911**, backlight PWM. Graphics via **LovyanGFX** (TFT_eSPI does not
+support the S3 RGB peripheral); board config lives in `src/Display/Display.h`.
+
+| Function | Pins |
+|---|---|
+| RGB data (D0–D15) | B: 4,5,6,7,15 · G: 8,20,3,46,9,10 · R: 11,12,13,14,0 |
+| HSYNC / VSYNC / DE / PCLK | 16 / 17 / 18 / 21 (12 MHz) |
+| Panel init SPI (3-wire) | CS=39, SCK=48, MOSI=47 |
+| Backlight | GPIO 38 (PWM) |
+| Touch GT911 (I2C) | SDA=19, SCL=45, addr 0x5D |
+| SD card (SPI, shared bus) | MOSI=47, SCK=48, MISO=41, CS=42 |
+
+Capacitive touch needs no calibration — the resistive Touch Calibrator is hidden on
+this target. Build and flash with:
+
+```bash
+pio run -e smartdisplay_4848S040 -t upload      # firmware
+pio run -e smartdisplay_4848S040 -t uploadfs    # LittleFS (demo app em data/)
+```
+
+---
+
 ## How to Flash
 
 ### Option 1: Using Precompiled Binaries

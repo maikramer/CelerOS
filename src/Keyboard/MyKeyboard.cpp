@@ -1,6 +1,7 @@
 #include "MyKeyboard.h"
+#include "../Display/Layout.h"
 
-TFT_eSPI *MyKeyboard::tftInstance = nullptr;
+KryonDisplay *MyKeyboard::tftInstance = nullptr;
 
 const int kw = 12; // keyboard width
 const int kh = 4;  // keyboard height
@@ -11,7 +12,7 @@ char qwerty_keyset[kh][kw][2] = {
     {{'\\', '|'}, {'z', 'Z'}, {'x', 'X'}, {'c', 'C'}, {'v', 'V'}, {'b', 'B'}, {'n', 'N'}, {'m', 'M'}, {',', '<'}, {'.', '>'}, {'/', '?'}, {' ', ' '}}
 };
 
-void MyKeyboard::init(TFT_eSPI *tft) {
+void MyKeyboard::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -46,46 +47,46 @@ void MyKeyboard::drawKeyboard(String currentText, String promptMsg, bool caps, i
     // Prompt
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
-    tftInstance->drawString(promptMsg, 5, 10, 2);
+    tftInstance->drawString(promptMsg, UI::sx(5), UI::sy(10), UI::font(2));
     
     // Text box
-    tftInstance->drawRect(5, 30, 230, 30, TFT_GREEN);
+    tftInstance->drawRect(UI::sx(5), UI::sy(30), UI::W - UI::sx(10), UI::sy(30), TFT_GREEN);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(currentText + "_", 10, 38, 2);
+    tftInstance->drawString(currentText + "_", UI::sx(10), UI::sy(38), UI::font(2));
     
     // Top Row Buttons (OK, CAPS, DEL, SPACE, ESC)
-    int btnW = 240 / 5;
+    int btnW = UI::W / 5;
     const char* btns[] = {"OK", caps ? "abc" : "ABC", "DEL", "SPACE", "ESC"};
     for (int i=0; i<5; i++) {
-        tftInstance->drawRect(i * btnW, 70, btnW, 30, TFT_GREEN);
+        tftInstance->drawRect(i * btnW, UI::sy(70), btnW, UI::sy(30), TFT_GREEN);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString(btns[i], i * btnW + btnW/2, 85, 2);
+        tftInstance->drawString(btns[i], i * btnW + btnW/2, UI::sy(85), UI::font(2));
     }
     
     // Keyboard Grid
-    int keyW = 240 / kw;
-    int keyH = (320 - 110) / kh;
+    int keyW = UI::W / kw;
+    int keyH = (UI::H - UI::sy(110)) / kh;
     
     for (int y=0; y<kh; y++) {
         for (int x=0; x<kw; x++) {
             int px = x * keyW;
-            int py = 110 + y * keyH;
+            int py = UI::sy(110) + y * keyH;
             
             tftInstance->drawRect(px, py, keyW, keyH, TFT_DARKGREY);
             
             char c = caps ? qwerty_keyset[y][x][1] : qwerty_keyset[y][x][0];
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
             tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString(String(c), px + keyW/2, py + keyH/2, 2);
+            tftInstance->drawString(String(c), px + keyW/2, py + keyH/2, UI::font(2));
         }
     }
 }
 
 void MyKeyboard::handleTouch(uint16_t x, uint16_t y, String &currentText, bool &caps, bool &done) {
     // Top Row Buttons
-    if (y >= 70 && y <= 100) {
-        int btnW = 240 / 5;
+    if (y >= UI::sy(70) && y <= UI::sy(100)) {
+        int btnW = UI::W / 5;
         if (x < btnW * 1) {
             done = true; // OK
         } else if (x < btnW * 2) {
@@ -102,12 +103,12 @@ void MyKeyboard::handleTouch(uint16_t x, uint16_t y, String &currentText, bool &
     }
     
     // Keyboard Grid
-    if (y >= 110) {
-        int keyW = 240 / kw;
-        int keyH = (320 - 110) / kh;
+    if (y >= UI::sy(110)) {
+        int keyW = UI::W / kw;
+        int keyH = (UI::H - UI::sy(110)) / kh;
         
         int kx = x / keyW;
-        int ky = (y - 110) / keyH;
+        int ky = (y - UI::sy(110)) / keyH;
         
         if (kx >= 0 && kx < kw && ky >= 0 && ky < kh) {
             char c = caps ? qwerty_keyset[ky][kx][1] : qwerty_keyset[ky][kx][0];

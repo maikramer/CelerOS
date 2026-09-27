@@ -5,7 +5,7 @@ Welcome to the **KryonOS JavaScript API Reference**. This document provides deep
 ---
 ## KryonOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 1
+### API Level: 2
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -35,12 +35,15 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 ### Display Properties
 
 #### `System.screenWidth()`
-- **Returns:** `Integer` (Always `240` on default hardware).
+- **Returns:** `Integer` (e.g., `240` on the classic board, `480` on the SmartDisplay 4").
 - **Description:** Returns the total physical width of the TFT display.
 
 #### `System.screenHeight()`
-- **Returns:** `Integer` (Always `320` on default hardware).
+- **Returns:** `Integer` (e.g., `320` on the classic board, `480` on the SmartDisplay 4").
 - **Description:** Returns the total physical height of the TFT display.
+
+> Always query these at runtime — the UI is resolution-adaptive, so hardcoding
+> 240x320 will clip on larger panels.
 
 ### OS Utilities
 
@@ -370,3 +373,46 @@ The `FS` global object controls the C++ virtual file system layer. It dynamicall
 **Take Apps and Games from KryonOS Official App Store Repository As Example: https://github.com/Haris16-code/KryonOS-AppStore**
 ---
 *Document Version: 1.0 (Built for KryonOS JavaScript Environment)*
+
+## 6. Networking: `Net` (API Level 2)
+
+HTTP client for JS apps. Calls are **blocking** (the script waits for the
+response, timeout 10s). HTTP and HTTPS are both supported; responses larger
+than 32 KB are truncated.
+
+> Memory note: HTTPS (TLS) takes ~45 KB of heap during the call and shares
+> memory with the JS runtime (~90 KB) — keep payloads small, especially on
+> boards without PSRAM.
+
+#### `Net.isConnected()`
+- **Returns:** Boolean
+- **Description:** Returns `true` if WiFi is currently connected.
+
+#### `Net.get(url)`
+- **Parameters:** `url` (String, `http://` or `https://`)
+- **Returns:** String (response body) or `null` on failure (DNS, timeout, HTTP status outside 2xx).
+- **Description:** Performs an HTTP GET. Follows redirects. Throws an error if WiFi is not connected.
+
+#### `Net.getJSON(url)`
+- **Parameters:** `url` (String)
+- **Returns:** Parsed JS object/array, or `null` on request failure.
+- **Description:** Like `Net.get()`, but parses the body as JSON. A malformed JSON body throws a visible script error.
+
+#### `Net.post(url, body, contentType)`
+- **Parameters:**
+  - `url` (String)
+  - `body` (String) — request body
+  - `contentType` (String, optional — defaults to `"text/plain"`, e.g. `"application/json"`)
+- **Returns:** String (response body) or `null` on failure.
+- **Description:** Performs an HTTP POST. Throws an error if WiFi is not connected.
+
+### Example
+
+```javascript
+var quote = Net.getJSON("http://economia.awesomeapi.com.br/json/last/USD-BRL");
+if (quote === null) {
+    System.print("request failed");
+} else {
+    System.print("USD/BRL: " + quote.USDBRL.bid);
+}
+```

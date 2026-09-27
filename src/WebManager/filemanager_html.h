@@ -113,6 +113,7 @@ const char filemanager_html[] PROGMEM = R"rawliteral(
                     <button class="btn btn-secondary" onclick="refreshDir()">🔄 Refresh</button>
                     <button class="btn btn-secondary" onclick="openCreateModal('folder')">📁 New Folder</button>
                     <button class="btn btn-secondary" onclick="openCreateModal('file')">📄 New File</button>
+                    <button class="btn btn-secondary" onclick="window.open('/update','_blank')">⚙️ Firmware Update</button>
                     <label class="btn btn-primary">
                         📤 Upload File
                         <input type="file" id="file-uploader" onchange="uploadFile()">

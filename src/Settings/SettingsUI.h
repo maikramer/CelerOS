@@ -1,11 +1,11 @@
 #ifndef SETTINGS_UI_H
 #define SETTINGS_UI_H
 
-#include <TFT_eSPI.h>
+#include "../Display/Display.h"
 
 class SettingsUI {
 public:
-    static void init(TFT_eSPI *tft);
+    static void init(KryonDisplay *tft);
     static void draw();
     static void handleTouch(uint16_t x, uint16_t y);
 
@@ -30,8 +30,14 @@ public:
     static void handleUpdaterTouch(uint16_t x, uint16_t y);
     static bool checkUpdateSilent();
 
+    // Fluxo bloqueante de flash OTA: barra de progresso, reboot ao concluir
+    // ou tela de erro com botao BACK.
+    static void runOtaInstall();
+
 private:
-    static TFT_eSPI *tftInstance;
+    static KryonDisplay *tftInstance;
+    static void otaProgressCb(int percent);
+    static int otaProgressLast;
 };
 
 #endif // SETTINGS_UI_H

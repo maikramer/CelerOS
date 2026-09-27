@@ -1,0 +1,10 @@
+{
+  "name": "Touch Test",
+  "packageName": "kryonos.touchtest",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Teste de display e touch: barras RGB + alvo de toque. Toque no X (canto superior direito) para sair.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 1
+}

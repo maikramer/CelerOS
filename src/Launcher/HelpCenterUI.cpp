@@ -1,10 +1,11 @@
 #include "HelpCenterUI.h"
+#include "../Display/Layout.h"
 #include "../File System/FileSystem.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
 
-TFT_eSPI* HelpCenterUI::tftInstance = nullptr;
+KryonDisplay* HelpCenterUI::tftInstance = nullptr;
 
 int HelpCenterUI::uiState = 0;
 int HelpCenterUI::selectedIndex = 0;
@@ -53,7 +54,7 @@ const char* offContent3[] = {
 };
 
 
-void HelpCenterUI::init(TFT_eSPI *tft) {
+void HelpCenterUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -70,70 +71,70 @@ void HelpCenterUI::draw() {
 }
 
 void HelpCenterUI::drawMainMenu() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Help Center", 120, 21, 2);
+    tftInstance->drawString("Help Center", UI::sx(120), UI::sy(21), UI::font(2));
     
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+    tftInstance->fillRect(UI::sx(10), UI::sy(45), UI::sx(220), UI::sy(230), TFT_BLACK);
     
     // Offline Button
     if (selectedIndex == 0) {
-        tftInstance->fillRoundRect(20, 80, 200, 40, 5, TFT_WHITE);
+        tftInstance->fillRoundRect(UI::sx(20), UI::sy(80), UI::sx(200), UI::sy(40), UI::sx(5), TFT_WHITE);
         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
     } else {
-        tftInstance->drawRoundRect(20, 80, 200, 40, 5, TFT_WHITE);
+        tftInstance->drawRoundRect(UI::sx(20), UI::sy(80), UI::sx(200), UI::sy(40), UI::sx(5), TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    tftInstance->drawString("Offline Help Center", 120, 100, 2);
+    tftInstance->drawString("Offline Help Center", UI::sx(120), UI::sy(100), UI::font(2));
     
     // Online Button
     if (selectedIndex == 1) {
-        tftInstance->fillRoundRect(20, 140, 200, 40, 5, TFT_WHITE);
+        tftInstance->fillRoundRect(UI::sx(20), UI::sy(140), UI::sx(200), UI::sy(40), UI::sx(5), TFT_WHITE);
         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
     } else {
-        tftInstance->drawRoundRect(20, 140, 200, 40, 5, TFT_WHITE);
+        tftInstance->drawRoundRect(UI::sx(20), UI::sy(140), UI::sx(200), UI::sy(40), UI::sx(5), TFT_WHITE);
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    tftInstance->drawString("Online Help Center", 120, 160, 2);
+    tftInstance->drawString("Online Help Center", UI::sx(120), UI::sy(160), UI::font(2));
     
     // Footer
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 120, 300, 2);
+    tftInstance->drawString("BACK", UI::sx(120), UI::sy(300), UI::font(2));
 }
 
 void HelpCenterUI::drawList(const String& title) {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
     
-    int titleWidth = tftInstance->textWidth(title, 2);
-    if (titleWidth > 200) {
+    int titleWidth = tftInstance->textWidth(title, UI::font(2));
+    if (titleWidth > UI::sx(200)) {
         String scrollText = title + "      ";
         int len = scrollText.length();
         String shifted = "";
         for (int i = 0; i < len; i++) {
             char c = scrollText.charAt((titleScrollPos + i) % len);
-            if (tftInstance->textWidth(shifted + c, 2) > 210) break;
+            if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(210)) break;
             shifted += c;
         }
         tftInstance->setTextDatum(ML_DATUM);
-        tftInstance->drawString(shifted, 10, 21, 2);
+        tftInstance->drawString(shifted, UI::sx(10), UI::sy(21), UI::font(2));
     } else {
-        tftInstance->drawString(title, 120, 21, 2);
+        tftInstance->drawString(title, UI::sx(120), UI::sy(21), UI::font(2));
     }
     
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+    tftInstance->fillRect(UI::sx(10), UI::sy(45), UI::sx(220), UI::sy(230), TFT_BLACK);
     
     int yPos = 45;
-    int itemsPerPage = 7;
+    int itemsPerPage = UI::ITEMS_PER_PAGE;
     tftInstance->setTextDatum(TL_DATUM);
     
     for (int i=0; i<itemsPerPage; i++) {
@@ -141,26 +142,26 @@ void HelpCenterUI::drawList(const String& title) {
         if (idx >= listCount) break;
         
         if (idx == selectedIndex) {
-            tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+            tftInstance->fillRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(25), TFT_WHITE);
             tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
             
-            int itemWidth = tftInstance->textWidth(listItems[idx], 2);
-            if (itemWidth > 190) {
+            int itemWidth = tftInstance->textWidth(listItems[idx], UI::font(2));
+            if (itemWidth > UI::sx(190)) {
                 String scrollText = listItems[idx] + "      ";
                 int len = scrollText.length();
                 String shifted = "";
                 for (int j = 0; j < len; j++) {
                     char c = scrollText.charAt((listScrollPos + j) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 190) break;
+                    if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(190)) break;
                     shifted += c;
                 }
-                tftInstance->drawString("> " + shifted, 15, yPos + 4, 2);
+                tftInstance->drawString("> " + shifted, UI::sx(15), UI::sy(yPos + 4), UI::font(2));
             } else {
-                tftInstance->drawString("> " + listItems[idx], 15, yPos + 4, 2);
+                tftInstance->drawString("> " + listItems[idx], UI::sx(15), UI::sy(yPos + 4), UI::font(2));
             }
         } else {
             tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-            tftInstance->drawString("  " + listItems[idx], 15, yPos + 4, 2);
+            tftInstance->drawString("  " + listItems[idx], UI::sx(15), UI::sy(yPos + 4), UI::font(2));
         }
         yPos += 30;
     }
@@ -169,44 +170,44 @@ void HelpCenterUI::drawList(const String& title) {
     if (listCount > itemsPerPage) {
         int thumbH = max(20, (230 * itemsPerPage) / listCount);
         int thumbY = 45 + (scrollOffset * (230 - thumbH)) / (listCount - itemsPerPage);
-        tftInstance->fillRect(232, 45, 3, 230, TFT_DARKGREY);
-        tftInstance->fillRect(232, thumbY, 3, thumbH, TFT_WHITE);
+        tftInstance->fillRect(UI::sx(232), UI::sy(45), UI::sx(3), UI::sy(230), TFT_DARKGREY);
+        tftInstance->fillRect(UI::sx(232), UI::sy(thumbY), UI::sx(3), UI::sy(thumbH), TFT_WHITE);
     }
     
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 35, 300, 2);
-    tftInstance->drawString("UP", 95, 300, 2);
-    tftInstance->drawString("SEL", 155, 300, 2);
-    tftInstance->drawString("DN", 215, 300, 2);
+    tftInstance->drawString("BACK", UI::sx(35), UI::sy(300), UI::font(2));
+    tftInstance->drawString("UP", UI::sx(95), UI::sy(300), UI::font(2));
+    tftInstance->drawString("SEL", UI::sx(155), UI::sy(300), UI::font(2));
+    tftInstance->drawString("DN", UI::sx(215), UI::sy(300), UI::font(2));
 }
 
 void HelpCenterUI::drawViewer() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
     
-    int titleWidth = tftInstance->textWidth(currentViewerTitle, 2);
-    if (titleWidth > 200) {
+    int titleWidth = tftInstance->textWidth(currentViewerTitle, UI::font(2));
+    if (titleWidth > UI::sx(200)) {
         String scrollText = currentViewerTitle + "      ";
         int len = scrollText.length();
         String shifted = "";
         for (int i = 0; i < len; i++) {
             char c = scrollText.charAt((titleScrollPos + i) % len);
-            if (tftInstance->textWidth(shifted + c, 2) > 210) break;
+            if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(210)) break;
             shifted += c;
         }
         tftInstance->setTextDatum(ML_DATUM);
-        tftInstance->drawString(shifted, 10, 21, 2);
+        tftInstance->drawString(shifted, UI::sx(10), UI::sy(21), UI::font(2));
     } else {
-        tftInstance->drawString(currentViewerTitle, 120, 21, 2);
+        tftInstance->drawString(currentViewerTitle, UI::sx(120), UI::sy(21), UI::font(2));
     }
     
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+    tftInstance->fillRect(UI::sx(10), UI::sy(45), UI::sx(220), UI::sy(230), TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
     
@@ -228,7 +229,7 @@ void HelpCenterUI::drawViewer() {
         }
         
         if (currentLine >= viewerScrollOffset && currentLine < viewerScrollOffset + 14) {
-            tftInstance->drawString(content.substring(0, splitIdx), 12, yPos, 2);
+            tftInstance->drawString(content.substring(0, splitIdx), UI::sx(12), UI::sy(yPos), UI::font(2));
             yPos += 16;
         }
         
@@ -241,35 +242,35 @@ void HelpCenterUI::drawViewer() {
     
     // Up/Down Indicators
     if (viewerScrollOffset > 0) {
-        tftInstance->fillTriangle(220, 50, 230, 60, 210, 60, TFT_WHITE);
+        tftInstance->fillTriangle(UI::sx(220), UI::sy(50), UI::sx(230), UI::sy(60), UI::sx(210), UI::sy(60), TFT_WHITE);
     }
     if (currentLine > viewerScrollOffset + 14) {
-        tftInstance->fillTriangle(220, 265, 210, 255, 230, 255, TFT_WHITE);
+        tftInstance->fillTriangle(UI::sx(220), UI::sy(265), UI::sx(210), UI::sy(255), UI::sx(230), UI::sy(255), TFT_WHITE);
     }
     
-    tftInstance->fillRoundRect(5, 285, 230, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 40, 300, 2);
-    tftInstance->drawString("UP", 120, 300, 2);
-    tftInstance->drawString("DN", 200, 300, 2);
+    tftInstance->drawString("BACK", UI::sx(40), UI::sy(300), UI::font(2));
+    tftInstance->drawString("UP", UI::sx(120), UI::sy(300), UI::font(2));
+    tftInstance->drawString("DN", UI::sx(200), UI::sy(300), UI::font(2));
 }
 
 void HelpCenterUI::drawDialog() {
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_RED);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_RED);
     tftInstance->setTextColor(TFT_RED, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Error", 120, 21, 2);
+    tftInstance->drawString("Error", UI::sx(120), UI::sy(21), UI::font(2));
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(dialogMessage, 120, 140, 2);
+    tftInstance->drawString(dialogMessage, UI::sx(120), UI::sy(140), UI::font(2));
     
-    tftInstance->drawRoundRect(85, 220, 70, 30, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(85), UI::sy(220), UI::sx(70), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("OK", 120, 235, 2);
+    tftInstance->drawString("OK", UI::sx(120), UI::sy(235), UI::font(2));
 }
 
 // --- Loaders ---
@@ -317,8 +318,8 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(loadingMsg, 120, 140, 2);
-    tftInstance->drawRect(30, 160, 180, 20, TFT_WHITE);
+    tftInstance->drawString(loadingMsg, UI::sx(120), UI::sy(140), UI::font(2));
+    tftInstance->drawRect(UI::sx(30), UI::sy(160), UI::sx(180), UI::sy(20), TFT_WHITE);
     
     int httpCode = http.GET();
     if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
@@ -345,7 +346,7 @@ bool HelpCenterUI::downloadFile(const String& url, const String& destPath, const
                     
                     if (totalLen > 0) {
                         int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(32, 162, progressWidth, 16, TFT_GREEN);
+                        tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
                     }
                 }
             } else {
@@ -461,21 +462,21 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
     extern int currentState;
     
     if (uiState == 0) { // Main Menu
-        if (y >= 80 && y <= 120) {
+        if (y >= UI::sy(80) && y <= UI::sy(120)) {
             selectedIndex = 0; draw();
             loadOfflineCategories();
-        } else if (y >= 140 && y <= 180) {
+        } else if (y >= UI::sy(140) && y <= UI::sy(180)) {
             selectedIndex = 1; draw();
             if(!fetchOnlineCategories()) {
                 uiState = 6; draw();
             }
-        } else if (y >= 285) {
+        } else if (y >= UI::sy(285)) {
             currentState = 0; // Launcher
         }
     }
     else if (uiState == 1 || uiState == 2 || uiState == 3 || uiState == 4) { // Lists
-        if (y >= 45 && y <= 270) {
-            int clickedAbs = scrollOffset + ((y - 45) / 30);
+        if (y >= UI::sy(45) && y <= UI::sy(270)) {
+            int clickedAbs = scrollOffset + ((y - UI::LIST_Y) / UI::ITEM_H);
             if (clickedAbs < listCount) {
                 if (selectedIndex != clickedAbs) {
                     selectedIndex = clickedAbs;
@@ -497,12 +498,12 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
                 }
             }
         }
-        else if (y >= 285) {
-            if (x < 70) { // BACK
+        else if (y >= UI::sy(285)) {
+            if (x < UI::sx(70)) { // BACK
                 if (uiState == 1 || uiState == 3) { uiState = 0; selectedIndex = 0; draw(); }
                 else if (uiState == 2) { loadOfflineCategories(); }
                 else if (uiState == 4) { if(!fetchOnlineCategories()) { uiState = 6; draw(); } }
-            } else if (x >= 70 && x < 130) { // UP
+            } else if (x >= UI::sx(70) && x < UI::sx(130)) { // UP
                 if (selectedIndex > 0) {
                     selectedIndex--;
                     if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
@@ -510,15 +511,15 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
                     lastListScrollTime = millis();
                     draw();
                 }
-            } else if (x >= 130 && x < 190) { // SEL
+            } else if (x >= UI::sx(130) && x < UI::sx(190)) { // SEL
                 if (uiState == 1) { selectedCategoryIndex = selectedIndex; loadOfflineTopics(selectedCategoryIndex); }
                 else if (uiState == 2) { loadOfflineContent(selectedCategoryIndex, selectedIndex); }
                 else if (uiState == 3) { currentCategoryName = listItems[selectedIndex]; if(!fetchOnlineTopics(listUrls[selectedIndex])) { uiState = 6; draw(); } }
                 else if (uiState == 4) { if(!fetchOnlineContent(listUrls[selectedIndex], listItems[selectedIndex])) { uiState = 6; draw(); } }
-            } else if (x >= 190) { // DN
+            } else if (x >= UI::sx(190)) { // DN
                 if (selectedIndex < listCount - 1) {
                     selectedIndex++;
-                    if (selectedIndex >= scrollOffset + 7) scrollOffset = selectedIndex - 6;
+                    if (selectedIndex >= scrollOffset + UI::ITEMS_PER_PAGE) scrollOffset = selectedIndex - (UI::ITEMS_PER_PAGE - 1);
                     listScrollPos = 0;
                     lastListScrollTime = millis();
                     draw();
@@ -527,23 +528,23 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
         }
     }
     else if (uiState == 5) { // Viewer
-        if (y < 100) { // Scroll Up
+        if (y < UI::sy(100)) { // Scroll Up
             if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
-        } else if (y > 180 && y < 270) { // Scroll Down
+        } else if (y > UI::sy(180) && y < UI::sy(270)) { // Scroll Down
             viewerScrollOffset++; draw();
-        } else if (y >= 285) {
-            if (x < 70) { // BACK
+        } else if (y >= UI::sy(285)) {
+            if (x < UI::sx(70)) { // BACK
                 if (listUrls[0].length() > 0) { uiState = 4; draw(); }
                 else { loadOfflineTopics(selectedCategoryIndex); }
-            } else if (x >= 70 && x < 160) { // UP
+            } else if (x >= UI::sx(70) && x < UI::sx(160)) { // UP
                 if (viewerScrollOffset > 0) { viewerScrollOffset--; draw(); }
-            } else if (x >= 160) { // DN
+            } else if (x >= UI::sx(160)) { // DN
                 viewerScrollOffset++; draw();
             }
         }
     }
     else if (uiState == 6) { // Dialog
-        if (y >= 220 && y <= 250 && x >= 85 && x <= 155) {
+        if (y >= UI::sy(220) && y <= UI::sy(250) && x >= UI::sx(85) && x <= UI::sx(155)) {
             uiState = 0;
             draw();
         }
@@ -552,16 +553,16 @@ void HelpCenterUI::handleTouch(uint16_t x, uint16_t y) {
 
 void HelpCenterUI::update() {
     if (uiState == 5 && tftInstance) {
-        int titleWidth = tftInstance->textWidth(currentViewerTitle, 2);
-        if (titleWidth > 200) {
+        int titleWidth = tftInstance->textWidth(currentViewerTitle, UI::font(2));
+        if (titleWidth > UI::sx(200)) {
             unsigned long waitTime = (titleScrollPos == 0) ? 1500 : 350;
             if (millis() - lastTitleScrollTime > waitTime) {
                 lastTitleScrollTime = millis();
                 int scrollTextLen = currentViewerTitle.length() + 6;
                 titleScrollPos = (titleScrollPos + 1) % scrollTextLen;
                 
-                tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-                tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+                tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+                tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
                 tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
                 
@@ -570,10 +571,10 @@ void HelpCenterUI::update() {
                 String shifted = "";
                 for (int i = 0; i < len; i++) {
                     char c = scrollText.charAt((titleScrollPos + i) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 210) break;
+                    if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(210)) break;
                     shifted += c;
                 }
-                tftInstance->drawString(shifted, 10, 21, 2);
+                tftInstance->drawString(shifted, UI::sx(10), UI::sy(21), UI::font(2));
             }
         }
     } else if (uiState >= 1 && uiState <= 4 && tftInstance) {
@@ -583,16 +584,16 @@ void HelpCenterUI::update() {
         else if (uiState == 3) headerTitle = "Online Categories";
         else if (uiState == 4) headerTitle = currentCategoryName;
         
-        int titleWidth = tftInstance->textWidth(headerTitle, 2);
-        if (titleWidth > 200) {
+        int titleWidth = tftInstance->textWidth(headerTitle, UI::font(2));
+        if (titleWidth > UI::sx(200)) {
             unsigned long waitTime = (titleScrollPos == 0) ? 1500 : 350;
             if (millis() - lastTitleScrollTime > waitTime) {
                 lastTitleScrollTime = millis();
                 int scrollTextLen = headerTitle.length() + 6;
                 titleScrollPos = (titleScrollPos + 1) % scrollTextLen;
                 
-                tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-                tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+                tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+                tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
                 tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
                 
@@ -601,16 +602,16 @@ void HelpCenterUI::update() {
                 String shifted = "";
                 for (int i = 0; i < len; i++) {
                     char c = scrollText.charAt((titleScrollPos + i) % len);
-                    if (tftInstance->textWidth(shifted + c, 2) > 210) break;
+                    if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(210)) break;
                     shifted += c;
                 }
-                tftInstance->drawString(shifted, 10, 21, 2);
+                tftInstance->drawString(shifted, UI::sx(10), UI::sy(21), UI::font(2));
             }
         }
         
         if (listCount > 0 && selectedIndex >= 0 && selectedIndex < listCount) {
-            int itemWidth = tftInstance->textWidth(listItems[selectedIndex], 2);
-            if (itemWidth > 190) {
+            int itemWidth = tftInstance->textWidth(listItems[selectedIndex], UI::font(2));
+            if (itemWidth > UI::sx(190)) {
                 unsigned long waitTime = (listScrollPos == 0) ? 1500 : 300;
                 if (millis() - lastListScrollTime > waitTime) {
                     lastListScrollTime = millis();
@@ -619,7 +620,7 @@ void HelpCenterUI::update() {
                     
                     int yPos = 45 + ((selectedIndex - scrollOffset) * 30);
                     if (yPos >= 45 && yPos < 255) {
-                        tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+                        tftInstance->fillRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(25), TFT_WHITE);
                         tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
                         tftInstance->setTextDatum(TL_DATUM);
                         
@@ -628,10 +629,10 @@ void HelpCenterUI::update() {
                         String shifted = "";
                         for (int j = 0; j < len; j++) {
                             char c = scrollText.charAt((listScrollPos + j) % len);
-                            if (tftInstance->textWidth(shifted + c, 2) > 190) break;
+                            if (tftInstance->textWidth(shifted + c, UI::font(2)) > UI::sx(190)) break;
                             shifted += c;
                         }
-                        tftInstance->drawString("> " + shifted, 15, yPos + 4, 2);
+                        tftInstance->drawString("> " + shifted, UI::sx(15), UI::sy(yPos + 4), UI::font(2));
                     }
                 }
             }

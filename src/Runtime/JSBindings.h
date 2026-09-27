@@ -3,15 +3,15 @@
 
 #include <Arduino.h>
 #include "duktape.h"
-#include <TFT_eSPI.h>
+#include "../Display/Display.h"
 
 class JSBindings {
 public:
-    static void init(duk_context *ctx, TFT_eSPI *tft);
+    static void init(duk_context *ctx, KryonDisplay *tft);
 
 private:
-    static TFT_eSPI *tftInstance;
-    static TFT_eSprite *tftSprite;
+    static KryonDisplay *tftInstance;
+    static KryonSprite *tftSprite;
 
     // Double Buffering
     static duk_ret_t js_createSprite(duk_context *ctx);
@@ -82,6 +82,12 @@ private:
     // Network Bindings
     static duk_ret_t js_getIPAddress(duk_context *ctx);
     static duk_ret_t js_isWiFiActive(duk_context *ctx);
+
+    // Network Bindings - HTTP (objeto Net, API level 2)
+    static duk_ret_t js_netGet(duk_context *ctx);
+    static duk_ret_t js_netGetJSON(duk_context *ctx);
+    static duk_ret_t js_netPost(duk_context *ctx);
+    static duk_ret_t js_netIsConnected(duk_context *ctx);
 
     // FileSystem Bindings
     static duk_ret_t js_readTextFile(duk_context *ctx);

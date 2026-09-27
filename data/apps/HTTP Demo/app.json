@@ -1,0 +1,10 @@
+{
+  "name": "HTTP Demo",
+  "packageName": "kryonos.httpdemo",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Demonstra a API Net.* (nivel 2): busca a cotacao USD/BRL em uma API publica e mostra na tela. Requer WiFi conectado.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 2
+}
