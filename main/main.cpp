@@ -8,16 +8,12 @@
 #include "Display/Backlight.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
-#include "Launcher/InstallerUI.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
 #include "Runtime/JSBindings.h"
 #include "Kernel/Core/HarixKernel.h"
-#include "WebServerApp/WebServerAppUI.h"
 #include "Kernel/TimeManager.h"
-#include "Launcher/AppStoreUI.h"
-#include "Launcher/HelpCenterUI.h"
 #include "Launcher/Screens.h"
 #include "USBDevice/SerialLink.h"
 #include "Boards/Board.h"
@@ -25,24 +21,11 @@
 #include "USBDevice/USBDevice.h"
 #endif
 
-// Define states
+// Telas de sistema (Settings, App Store, Installer, Help, Web Server) sao
+// apps JS em /local/apps (W8) — o firmware carrega so o core + launcher.
+// currentState sobrevive apenas para o TouchCalibrator sinalizar "voltar
+// ao launcher" no boot.
 #define STATE_LAUNCHER 0
-#define STATE_SETTINGS 1
-#define STATE_RUN_APP 2
-#define STATE_INSTALLER 3
-#define STATE_CALIBRATOR 4
-#define STATE_WEB_APP 5
-#define STATE_SETTINGS_WIFI 6
-#define STATE_SETTINGS_ABOUT 7
-#define STATE_SETTINGS_APPS 8
-#define STATE_SETTINGS_TIME 9
-#define STATE_SETTINGS_TIME_MANUAL 10
-#define STATE_UPDATER_BOOT 11
-#define STATE_UPDATER_MANUAL 12
-#define STATE_APP_STORE 13
-#define STATE_HELP_CENTER 14
-#define STATE_SETTINGS_SECURITY 15
-#define STATE_SETTINGS_DISPLAY 16
 
 int currentState = STATE_LAUNCHER;
 KryonDisplay& tft = Board::display();
@@ -113,11 +96,7 @@ static void kryonSetup() {
 
     // Init UI Components
     LauncherUI::init(&tft);
-    InstallerUI::init(&tft);
     TouchCalibrator::init(&tft);
-    WebServerAppUI::init(&tft);
-    AppStoreUI::init(&tft);
-    HelpCenterUI::init(&tft);
 
     // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
     Serial.println("DEBUG: Scanning Local Apps...");
@@ -145,39 +124,12 @@ static void kryonSetup() {
     Serial.println("DEBUG: Setup complete, entering loop!");
 }
 
-// Guardiao da transicao: telas antigas ainda navegam escrevendo em
-// currentState; aqui a mudanca e refletida na pilha do Navigator.
-static void pumpLegacyNavigation() {
-    static int last = STATE_LAUNCHER;
-    if (currentState == last) return;
-    last = currentState;
-
-    if (currentState == STATE_LAUNCHER) {
-        kui::Navigator::home();
-        return;
-    }
-    if (currentState == STATE_RUN_APP || currentState == STATE_CALIBRATOR) return;  // tratados fora
-    LegacyScreen* s = LegacyScreen::forState(currentState);
-    if (s != nullptr) {
-        // substitui o topo se for tela antiga diferente; senao empilha
-        kui::Screen* top = kui::Navigator::top();
-        if (top != nullptr && top != (kui::Screen*)&s_launcher && kui::Navigator::depth() > 1) {
-            kui::Navigator::replace(s);
-        } else {
-            kui::Navigator::push(s);
-        }
-    }
-}
-
 static void kryonLoop() {
     // UI (input + redraw)
     kui::Navigator::tick();
 
     // Reboot diferido do upload web de firmware (/update)
     WebManager::tick();
-
-    // Navegacao das telas antigas via currentState -> pilha do Navigator
-    pumpLegacyNavigation();
 
     delay(5);
 }

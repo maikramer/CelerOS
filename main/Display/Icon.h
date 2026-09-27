@@ -30,6 +30,15 @@ public:
     // O icone existe (e foi carregado em cache)? Sem desenhar fallback.
     static bool available(const char* name);
 
+    // Icone de pacote de app: caminho absoluto do .bin (ex.:
+    // /local/apps/Foo/icon.bin), mesmos formatos v1/v2. draw/available
+    // aceitam caminho absoluto no lugar do nome. Cache proprio —
+    // invalidateFileIcons() e chamado no rescan do launcher porque o app
+    // pode ter sido reinstalado com outra arte.
+    static void drawFile(lgfx::LGFXBase* tft, const char* path, int x, int y);
+    static bool availableFile(const char* path);
+    static void invalidateFileIcons();
+
     // Tile de app do usuario: quadrado arredondado na cor derivada do nome +
     // letra inicial. Desenhado em runtime (nao usa asset).
     static void drawAppTile(lgfx::LGFXBase* tft, const char* appName, int x, int y);

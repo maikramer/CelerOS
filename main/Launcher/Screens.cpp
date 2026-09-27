@@ -3,11 +3,6 @@
 #include "../Display/Icon.h"
 #include "../Kernel/TimeManager.h"
 #include "../FileSystem/FileSystem.h"
-#include "../Settings/SettingsScreens.h"
-#include "../Launcher/InstallerUI.h"
-#include "../Launcher/AppStoreUI.h"
-#include "../Launcher/HelpCenterUI.h"
-#include "../WebServerApp/WebServerAppUI.h"
 #include "../WebManager/WebManager.h"
 #include "../WebManager/WifiSetupPortal.h"
 #include "../Boards/Board.h"
@@ -19,11 +14,6 @@
 
 using namespace kui;
 
-// Estados antigos (main.cpp) — so para a transicao LegacyScreen
-#define LEGACY_WEB_APP 5
-#define LEGACY_APP_STORE 13
-#define LEGACY_HELP_CENTER 14
-
 // ============================================================ Launcher =====
 
 namespace {
@@ -34,9 +24,6 @@ int gridCellW() { return UI::W / LauncherUI::gridCols(); }
 int gridCellH() { return gridAreaH() / LauncherUI::gridRows(); }
 int gridLeft() { return (UI::W - LauncherUI::gridCols() * gridCellW()) / 2; }
 int gridCellsPerPage() { return LauncherUI::gridCols() * LauncherUI::gridRows(); }
-
-const char* const kSysIcons[4] = {"appstore", "installer", "settings", "help"};
-const char* const kSysNames[4] = {"App Store", "Installer", "Settings", "Help"};
 
 // Area tocavel do status de rede (canto direito do header): abre o WiFi
 kui::Rect wifiStatusRect() {
@@ -144,17 +131,11 @@ void LauncherScreen::draw(kui::Canvas& c) {
                                 UI::sx(12), THEME_RAISED);
             }
 
-            std::string label;
-            if (entry < 4) {
-                if (Icon::available(kSysIcons[entry])) {
-                    c.drawIcon(kSysIcons[entry], iconX, iconY);
-                } else {
-                    c.fillRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(12), THEME_CARD);
-                    c.drawRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(12), THEME_STROKE);
-                }
-                label = kSysNames[entry];
+            const std::string& label = LauncherUI::appEntryName(entry);
+            const std::string& icon = LauncherUI::appEntryIcon(entry);
+            if (!icon.empty() && Icon::available(icon.c_str())) {
+                c.drawIcon(icon.c_str(), iconX, iconY);
             } else {
-                label = LauncherUI::appEntryName(entry - 4);
                 c.drawAppTile(label.c_str(), iconX, iconY);
             }
             c.text(c.ellipsize(label, labelFont, cell.w - UI::sx(6)), cell.x + cell.w / 2,
@@ -220,11 +201,7 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     for (int entry = page * gridCellsPerPage();
          entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
         if (!cellRect(entry).contains(ev.x, ev.y)) continue;
-        if (entry == 0) LegacyScreen::openLegacy(LEGACY_APP_STORE);
-        else if (entry == 1) LegacyScreen::openLegacy(3);  // installer
-        else if (entry == 2) SettingsScreens::open();
-        else if (entry == 3) LegacyScreen::openLegacy(LEGACY_HELP_CENTER);
-        else Navigator::push(AppHostScreen::instance(entry - 4));
+        Navigator::push(AppHostScreen::instance(entry));
         return true;
     }
     return false;
@@ -669,54 +646,5 @@ void WifiSetupScreen::onTick(uint32_t dtMs) {
         Navigator::toast("WiFi conectado", THEME_OK);
         Navigator::pop();
     }
-}
-
-// ============================================================ Legacy =======
-
-void LegacyScreen::onTick(uint32_t dtMs) {
-    // telas antigas esperam o handler repetido enquanto pressionado
-    if (m_pressed) {
-        m_repeatAccum += dtMs;
-        if (m_repeatAccum >= 100) {
-            m_repeatAccum = 0;
-            m_touchFn((uint16_t)m_lastX, (uint16_t)m_lastY);
-        }
-    }
-}
-
-bool LegacyScreen::onTouch(const kui::TouchEvent& ev) {
-    if (ev.type == TouchEvent::Press) {
-        m_pressed = true;
-        m_lastX = ev.x;
-        m_lastY = ev.y;
-    } else if (ev.type == TouchEvent::Drag) {
-        m_lastX = ev.x;
-        m_lastY = ev.y;
-    } else if (ev.type == TouchEvent::Release) {
-        m_pressed = false;
-    }
-    m_touchFn((uint16_t)ev.x, (uint16_t)ev.y);
-    return true;
-}
-
-namespace {
-LegacyScreen* s_legacyCache[17] = {};
-}  // namespace
-
-LegacyScreen* LegacyScreen::forState(int legacyState) {
-    if (legacyState <= 0 || legacyState > 16) return nullptr;
-    if (s_legacyCache[legacyState] != nullptr) return s_legacyCache[legacyState];
-
-    LegacyScreen* s = nullptr;
-    // Settings saiu do mapa legacy (port W7c-2 -> SettingsScreens).
-    switch (legacyState) {
-        case 3: s = new LegacyScreen("installer", InstallerUI::draw, InstallerUI::handleTouch); break;
-        case LEGACY_WEB_APP: s = new LegacyScreen("webapp", WebServerAppUI::draw, WebServerAppUI::handleTouch); break;
-        case LEGACY_APP_STORE: s = new LegacyScreen("appstore", AppStoreUI::draw, AppStoreUI::handleTouch); break;
-        case LEGACY_HELP_CENTER: s = new LegacyScreen("help", HelpCenterUI::draw, HelpCenterUI::handleTouch); break;
-        default: break;
-    }
-    s_legacyCache[legacyState] = s;
-    return s;
 }
 

@@ -1,5 +1,6 @@
 #include "KryonShell.h"
 #include "FileSystem/FileSystem.h"
+#include "Launcher/LauncherUI.h"
 #include "Boards/Board.h"
 #include "Display/Theme.h"
 
@@ -65,7 +66,8 @@ int cmdHelp(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
         "  ps              tarefas FreeRTOS\n"
         "  uptime          tempo ligado\n"
         "  info            versao/board/rede\n"
-        "  reboot          reinicia o sistema\n");
+        "  reboot          reinicia o sistema\n"
+        "  rescan          reler lista de apps do launcher\n");
     return 0;
 }
 
@@ -306,6 +308,13 @@ int cmdColorBars(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+int cmdRescan(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    LauncherUI::requestRescan();
+    print(ctx, "launcher rescaneando apps\r\n");
+    return 0;
+}
+
 int cmdReboot(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -322,6 +331,7 @@ const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
+    {"rescan", cmdRescan},
     {"colorbars", cmdColorBars},
 };
 

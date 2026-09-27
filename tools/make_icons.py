@@ -169,6 +169,31 @@ def main() -> None:
         print(f"ok  {dst.relative_to(ROOT)}")
     contact_sheet(items)
 
+    # Icones de pacote: apps de sistema (data/apps/<Nome>/) carregam a
+    # propria arte (icon.bin) — mesmo .bin do /local/icons correspondente,
+    # copiado para o pacote virar artefato instalavel/atualizavel.
+    for app_name, icon_id in APP_PKG_ICONS.items():
+        src_bin = OUT / f"{icon_id}.bin"
+        if not src_bin.exists():
+            print(f"AVISO: {src_bin} ausente, pacote de '{app_name}' sem icone")
+            continue
+        pkg_dir = ROOT / "data" / "apps" / app_name
+        if not (pkg_dir / "app.json").exists():
+            print(f"AVISO: {pkg_dir} sem app.json, pulando icone")
+            continue
+        (pkg_dir / "icon.bin").write_bytes(src_bin.read_bytes())
+        print(f"ok  {(pkg_dir / 'icon.bin').relative_to(ROOT)}")
+
+
+# Apps de sistema e o id do icone /local/icons usado como arte do pacote
+APP_PKG_ICONS = {
+    "App Store": "appstore",
+    "Help": "help",
+    "Installer": "installer",
+    "Settings": "settings",
+    "Web Server": "web",
+}
+
 
 if __name__ == "__main__":
     main()

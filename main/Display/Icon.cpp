@@ -25,7 +25,10 @@ uint16_t* Icon::load(const char* name, uint8_t** alphaOut) {
     constexpr size_t PX = (size_t)SIZE * SIZE;
     constexpr size_t V1_SZ = PX * 2;           // RGB565 opaco
     constexpr size_t V2_SZ = PX * 2 + PX / 2;  // + mascara A4
-    std::string path = std::string("/local/icons/") + name + ".bin";
+    // nome comum -> /local/icons/<nome>.bin; caminho absoluto (icone de
+    // pacote de app) e usado como veio
+    std::string path = (name[0] == '/') ? std::string(name)
+                                        : std::string("/local/icons/") + name + ".bin";
     FILE* f = fopen(path.c_str(), "rb");
     if (f == nullptr) return nullptr;
 
@@ -62,6 +65,7 @@ uint16_t* Icon::load(const char* name, uint8_t** alphaOut) {
 }
 
 bool Icon::available(const char* name) {
+    if (name[0] == '/') return availableFile(name);
     int i = index(name);
     if (i < 0) return false;
     if (!cache[i]) cache[i] = load(name, &alpha[i]);
@@ -112,6 +116,7 @@ void Icon::drawAlpha(lgfx::LGFXBase* tft, const uint16_t* px, const uint8_t* a4,
 
 void Icon::draw(lgfx::LGFXBase* tft, const char* name, int x, int y) {
     if (!tft) return;
+    if (name[0] == '/') { drawFile(tft, name, x, y); return; }
     int i = index(name);
     if (i >= 0) {
         if (!cache[i]) cache[i] = load(name, &alpha[i]);
@@ -120,6 +125,67 @@ void Icon::draw(lgfx::LGFXBase* tft, const char* name, int x, int y) {
             else tft->pushImage(x, y, SIZE, SIZE, cache[i]);
             return;
         }
+    }
+    drawFallback(tft, x, y);
+}
+
+// ---- icones de pacote: cache proprio por caminho absoluto ----------------
+// O launcher pode redesenhar varias vezes por gesto; o cache evita reler o
+// .bin a cada frame. Invalidado no rescan (app reinstalado = arte nova).
+namespace {
+constexpr int FILE_CACHE = 12;
+std::string g_filePath[FILE_CACHE];
+uint16_t* g_filePx[FILE_CACHE] = {};
+uint8_t* g_fileA[FILE_CACHE] = {};
+}  // namespace
+
+void Icon::invalidateFileIcons() {
+    for (int i = 0; i < FILE_CACHE; i++) {
+        free(g_filePx[i]);
+        free(g_fileA[i]);
+        g_filePx[i] = nullptr;
+        g_fileA[i] = nullptr;
+        g_filePath[i].clear();
+    }
+}
+
+bool Icon::availableFile(const char* path) {
+    for (int i = 0; i < FILE_CACHE; i++) {
+        if (g_filePath[i] == path) return g_filePx[i] != nullptr;
+    }
+    int slot = -1;
+    for (int i = 0; i < FILE_CACHE; i++) {
+        if (g_filePx[i] == nullptr) { slot = i; break; }
+    }
+    if (slot < 0) {  // cache cheio: recicla o primeiro slot
+        slot = 0;
+        free(g_filePx[0]);
+        free(g_fileA[0]);
+        g_filePx[0] = nullptr;
+        g_fileA[0] = nullptr;
+        g_filePath[0].clear();
+    }
+    uint8_t* a = nullptr;
+    uint16_t* px = load(path, &a);
+    if (px == nullptr) return false;
+    g_filePath[slot] = path;
+    g_filePx[slot] = px;
+    g_fileA[slot] = a;
+    return true;
+}
+
+void Icon::drawFile(lgfx::LGFXBase* tft, const char* path, int x, int y) {
+    if (!tft) return;
+    for (int i = 0; i < FILE_CACHE; i++) {
+        if (g_filePath[i] == path && g_filePx[i]) {
+            if (g_fileA[i]) drawAlpha(tft, g_filePx[i], g_fileA[i], x, y);
+            else tft->pushImage(x, y, SIZE, SIZE, g_filePx[i]);
+            return;
+        }
+    }
+    if (availableFile(path)) {
+        drawFile(tft, path, x, y);
+        return;
     }
     drawFallback(tft, x, y);
 }
