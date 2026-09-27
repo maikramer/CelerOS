@@ -113,6 +113,12 @@ private:
     static duk_ret_t js_prompt(duk_context *ctx);
 
     // System nivel 3 (apps de sistema em JS — W8)
+    static duk_ret_t js_textWidth(duk_context *ctx);
+    static duk_ret_t js_theme(duk_context *ctx);
+    static duk_ret_t js_drawIcon(duk_context *ctx);
+    static duk_ret_t js_copyFile(duk_context *ctx);
+    static duk_ret_t js_copyDirectory(duk_context *ctx);
+    static duk_ret_t js_removeDirectory(duk_context *ctx);
     static duk_ret_t js_setBrightness(duk_context *ctx);
     static duk_ret_t js_getBrightness(duk_context *ctx);
     static duk_ret_t js_backlightSupported(duk_context *ctx);

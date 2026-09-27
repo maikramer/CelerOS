@@ -9,6 +9,8 @@
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
 #include "../Display/Backlight.h"
+#include "../Display/Theme.h"
+#include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
@@ -543,7 +545,7 @@ duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
 
 // Returns an object { x, y, touched } 
 duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
-    uint16_t tx, ty;
+    uint16_t tx = 0, ty = 0;
     bool touched = false;
     if (tftInstance) {
         touched = tftInstance->getTouch(&tx, &ty);
@@ -956,6 +958,82 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     return 1;
 }
 
+duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
+    if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
+    const char* str = duk_require_string(ctx, 0);
+    int font = duk_get_int_default(ctx, 1, 2);
+    int w = tftInstance->textWidth(str, UI::font(font));
+    // devolve no espaco virtual 240x320 (inverso do jsx())
+    duk_push_int(ctx, (int)((long)w * 240 / tftInstance->width()));
+    return 1;
+}
+
+duk_ret_t JSBindings::js_theme(duk_context *ctx) {
+    // Cores do tema do OS ja em RGB565 (espaco de cor do JS) — os apps de
+    // sistema herdam a identidade visual do Kui em qualquer placa.
+    auto put = [&](const char* k, uint32_t rgb888) {
+        uint32_t r = (rgb888 >> 16) & 0xFF, g = (rgb888 >> 8) & 0xFF, b = rgb888 & 0xFF;
+        duk_push_uint(ctx, (duk_uint_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)));
+        duk_put_prop_string(ctx, -2, k);
+    };
+    duk_push_object(ctx);
+    put("bg", THEME_BG);
+    put("card", THEME_CARD);
+    put("raised", THEME_RAISED);
+    put("stroke", THEME_STROKE);
+    put("accent", THEME_ACCENT);
+    put("accentD", THEME_ACCENT_D);
+    put("onAccent", THEME_ON_ACCENT);
+    put("text", THEME_TEXT);
+    put("textDim", THEME_TEXT_DIM);
+    put("ok", THEME_OK);
+    put("warn", THEME_WARN);
+    put("err", THEME_ERR);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
+    if (!tftInstance) return 0;
+    const char* name = duk_require_string(ctx, 0);
+    int x = duk_require_int(ctx, 1);
+    int y = duk_require_int(ctx, 2);
+    Icon::draw(tftInstance, name, jsx(x), jsy(y));
+    return 0;
+}
+
+duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
+    duk_push_boolean(ctx, FileSystem::copyFile(duk_require_string(ctx, 0),
+                                               duk_require_string(ctx, 1)) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
+    duk_push_boolean(ctx, FileSystem::copyDirectory(duk_require_string(ctx, 0),
+                                                    duk_require_string(ctx, 1)) ? 1 : 0);
+    return 1;
+}
+
+// Remocao recursiva (app = pasta com app.json/main.js/icon.bin...). rmdir so
+// aceita pasta vazia; sem isso o Settings nao conseguiria desinstalar apps.
+static bool removeTree(const std::string& dir) {
+    FileEntry entries[50];
+    int n = FileSystem::listDirectory(dir.c_str(), entries, 50);
+    if (n < 0) n = 0;
+    for (int i = 0; i < n; i++) {
+        if (entries[i].isDir) {
+            if (!removeTree(entries[i].path)) return false;
+        } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
+            return false;
+        }
+    }
+    return FileSystem::rmdir(dir.c_str());
+}
+
+duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
+    duk_push_boolean(ctx, removeTree(duk_require_string(ctx, 0)) ? 1 : 0);
+    return 1;
+}
+
 // =====================================================
 // System nivel 3 — suporte aos apps de sistema em JS (W8)
 // =====================================================
@@ -1278,6 +1356,8 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_put_prop_string(ctx, -2, "setTextColor");
     duk_push_c_function(ctx, js_setTextSize, 1);
     duk_put_prop_string(ctx, -2, "setTextSize");
+    duk_push_c_function(ctx, js_textWidth, 2);
+    duk_put_prop_string(ctx, -2, "textWidth");
 
     // --- Utility ---
     duk_push_c_function(ctx, js_color, 3);
@@ -1379,6 +1459,10 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_put_prop_string(ctx, -2, "webActive");
     duk_push_c_function(ctx, js_webSetActive, 1);
     duk_put_prop_string(ctx, -2, "webSetActive");
+    duk_push_c_function(ctx, js_theme, 0);
+    duk_put_prop_string(ctx, -2, "theme");
+    duk_push_c_function(ctx, js_drawIcon, 3);
+    duk_put_prop_string(ctx, -2, "drawIcon");
 
     // Assign to global variable 'System'
     duk_put_prop_string(ctx, -2, "System");
@@ -1439,6 +1523,12 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_put_prop_string(ctx, -2, "mountSD");
     duk_push_c_function(ctx, js_unmountSD, 0);
     duk_put_prop_string(ctx, -2, "unmountSD");
+    duk_push_c_function(ctx, js_copyFile, 2);
+    duk_put_prop_string(ctx, -2, "copyFile");
+    duk_push_c_function(ctx, js_copyDirectory, 2);
+    duk_put_prop_string(ctx, -2, "copyDirectory");
+    duk_push_c_function(ctx, js_removeDirectory, 1);
+    duk_put_prop_string(ctx, -2, "removeDirectory");
     
     // Assign to global variable 'FS'
     duk_put_prop_string(ctx, -2, "FS");

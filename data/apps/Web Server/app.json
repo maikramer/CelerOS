@@ -1,0 +1,13 @@
+{
+  "name": "Web Server",
+  "packageName": "kryonos.webserver",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Liga e desliga o servidor web (file manager, upload de arquivos e de firmware na porta 80) e mostra o IP de acesso.",
+  "type": "System",
+  "category": "System",
+  "api": 3,
+  "system": true,
+  "order": 50,
+  "icon": "web"
+}

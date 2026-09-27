@@ -102,40 +102,4 @@ private:
     kui::Button m_btnBack, m_btnScan, m_btnWeb;
 };
 
-// ------------------------------------------------------------- Legacy wrap --
-// Embrulho de uma tela antiga (draw/handleTouch estaticos) como Screen.
-// Desenha direto no display (sem sprite) e repete o toque enquanto
-// pressionado (as telas antigas esperam polling continuo).
-class LegacyScreen : public kui::Screen {
-public:
-    using DrawFn = void (*)();
-    using TouchFn = void (*)(uint16_t, uint16_t);
-
-    LegacyScreen(const char* name, DrawFn draw, TouchFn touch)
-        : m_name(name), m_drawFn(draw), m_touchFn(touch) {}
-
-    bool wantsDirectDraw() const override { return true; }
-    // Telas antigas navegam via currentState: um pop externo dessincroniza
-    bool allowsBackGesture() const override { return false; }
-    const char* name() const { return m_name; }
-
-    void draw(kui::Canvas& c) override { (void)c; m_drawFn(); }
-    void onTick(uint32_t dtMs) override;
-    bool onTouch(const kui::TouchEvent& ev) override;
-
-    // Cria o wrapper do estado antigo correspondente (currentState)
-    static LegacyScreen* forState(int legacyState);
-
-    // Transicao para telas antigas a partir de codigo novo
-    static void openLegacy(int legacyState) { LegacyScreen* s = forState(legacyState); if (s) kui::Navigator::push(s); }
-
-private:
-    const char* m_name;
-    DrawFn m_drawFn;
-    TouchFn m_touchFn;
-    int m_lastX = 0, m_lastY = 0;
-    bool m_pressed = false;
-    uint32_t m_repeatAccum = 0;
-};
-
 #endif  // KRYONOS_SCREENS_H
