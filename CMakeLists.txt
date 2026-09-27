@@ -20,4 +20,4 @@ set(EXCLUDE_COMPONENTS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(KryonOS VERSION 1.0.0)
+project(KryonOS VERSION 1.1.0)
