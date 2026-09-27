@@ -2,15 +2,14 @@
 #include <string>
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Boards/Board.h"
 
 static KryonDisplay* blTft = nullptr;
 static const char* BRIGHTNESS_FILE = "/local/brightness.txt";
 
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-
 static int currentLevel = 100;
 
-bool Backlight::isSupported() { return true; }
+bool Backlight::isSupported() { return Board::profile().backlightPwm; }
 
 int Backlight::get() { return currentLevel; }
 
@@ -18,7 +17,9 @@ void Backlight::set(int level, bool persist) {
     if (level < 5) level = 5;
     if (level > 100) level = 100;
     currentLevel = level;
-    if (blTft) blTft->setBrightness((uint8_t)(level * 255 / 100));
+    if (blTft && Board::profile().backlightPwm) {
+        blTft->setBrightness((uint8_t)(level * 255 / 100));
+    }
     if (persist) {
         FileSystem::writeTextFile(BRIGHTNESS_FILE, std::to_string(level).c_str());
     }
@@ -31,14 +32,3 @@ void Backlight::init(KryonDisplay* tft) {
     if (lvl < 5 || lvl > 100) lvl = 100;
     set(lvl, false);
 }
-
-#else  // placa classica: backlight fixo
-
-static const int currentLevel = 100;
-
-bool Backlight::isSupported() { return false; }
-int Backlight::get() { return currentLevel; }
-void Backlight::set(int level, bool persist) { (void)level; (void)persist; }
-void Backlight::init(KryonDisplay* tft) { blTft = tft; }
-
-#endif

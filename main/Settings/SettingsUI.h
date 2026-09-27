@@ -3,7 +3,7 @@
 
 #include <string>
 
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 
 class SettingsUI {
 public:

@@ -2,7 +2,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "Display/Display.h"
+#include "Boards/Board.h"
 #include "Display/Layout.h"
 #include "Display/Backlight.h"
 #include "FileSystem/FileSystem.h"
@@ -20,6 +20,7 @@
 #include "Launcher/AppStoreUI.h"
 #include "Launcher/HelpCenterUI.h"
 #include "USBDevice/SerialLink.h"
+#include "Boards/Board.h"
 #if CONFIG_KRYONOS_USB_NATIVE
 #include "USBDevice/USBDevice.h"
 #endif
@@ -44,18 +45,19 @@
 #define STATE_SETTINGS_DISPLAY 16
 
 int currentState = STATE_LAUNCHER;
-KryonDisplay tft = KryonDisplay();
+KryonDisplay& tft = Board::display();
 
 static void kryonSetup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n--- KryonOS Booting ---");
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    Serial.printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
-#endif
+    Serial.printf("board: %s\n", Board::profile().name);
+    if (Board::profile().hasPsram) {
+        Serial.printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
+    }
 
-    // Init TFT
-    tft.init();
+    // Init TFT (HAL da placa)
+    Board::init();
     tft.setRotation(0);
     UI::init(tft.width(), tft.height());
     ESP_LOGI("kryon.lcd", "depth=%d rot=%d w=%d h=%d",
@@ -176,22 +178,22 @@ static void kryonSetup() {
     Serial.println("DEBUG: Local Apps Scanned.");
 
     // Attempt to read touch calibration
-#ifdef KRYONOS_TOUCH_CAPACITIVE
-    // Touch capacitivo (GT911): nao requer calibracao
-    Serial.println("DEBUG: Capacitive touch, skipping calibrator.");
-    currentState = STATE_LAUNCHER;
-#else
-    Serial.println("DEBUG: Reading CalData...");
-    uint16_t calData[5];
-    if (FileSystem::readCalData(calData)) {
-        Serial.println("Calibration data found and loaded.");
-        tft.setTouch(calData);
+    if (Board::profile().capacitiveTouch) {
+        // Touch capacitivo (GT911): nao requer calibracao
+        Serial.println("DEBUG: Capacitive touch, skipping calibrator.");
         currentState = STATE_LAUNCHER;
     } else {
-        Serial.println("No calibration data. Entering calibrator.");
-        currentState = STATE_CALIBRATOR;
+        Serial.println("DEBUG: Reading CalData...");
+        uint16_t calData[5];
+        if (FileSystem::readCalData(calData)) {
+            Serial.println("Calibration data found and loaded.");
+            tft.setTouch(calData);
+            currentState = STATE_LAUNCHER;
+        } else {
+            Serial.println("No calibration data. Entering calibrator.");
+            currentState = STATE_CALIBRATOR;
+        }
     }
-#endif
     
     // Check for updates on boot
     if (currentState == STATE_LAUNCHER && WebManager::isWifiConnected()) {

@@ -1,7 +1,7 @@
 #ifndef INSTALLER_UI_H
 #define INSTALLER_UI_H
 
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 #include <Arduino.h>
 #include "../FileSystem/FileSystem.h"
 #include <string>

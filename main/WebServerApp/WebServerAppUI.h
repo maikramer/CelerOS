@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 
 class WebServerAppUI {
 private:

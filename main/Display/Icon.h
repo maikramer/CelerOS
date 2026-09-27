@@ -1,7 +1,7 @@
 #ifndef KRYONOS_ICON_H
 #define KRYONOS_ICON_H
 
-#include "Display.h"
+#include "Boards/Board.h"
 
 // ============================================================================
 // Pacote de icones 64x64 RGB565 do KryonOS.

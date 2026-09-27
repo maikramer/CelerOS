@@ -1,7 +1,7 @@
 #ifndef LAUNCHER_UI_H
 #define LAUNCHER_UI_H
 
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 #include <Arduino.h>
 #include <string>
 

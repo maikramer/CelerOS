@@ -1,7 +1,7 @@
 #ifndef KRYONOS_BACKLIGHT_H
 #define KRYONOS_BACKLIGHT_H
 
-#include "Display.h"
+#include "Boards/Board.h"
 
 // Controle de brilho do backlight (porte do BrightnessScreen do
 // satisfaction-hub, adaptado ao KryonOS). Nivel 5-100 persistido em

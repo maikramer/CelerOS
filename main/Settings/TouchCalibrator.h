@@ -1,7 +1,7 @@
 #ifndef TOUCH_CALIBRATOR_H
 #define TOUCH_CALIBRATOR_H
 
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 
 class TouchCalibrator {
 public:

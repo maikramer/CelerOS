@@ -19,11 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
-#include "Display/Display.h"
-// display global criado no main.cpp (captura de tela)
-extern KryonDisplay tft;
-#endif
+#include "Boards/Board.h"  // display (captura de tela) e id da placa
 
 #if !defined(KRYONOS_VERSION)
 #define KRYONOS_VERSION "?"
@@ -97,13 +93,7 @@ bool takeU32(const uint8_t*& p, uint16_t& len, uint32_t& out) {
 }
 
 const char* boardId() {
-#if defined(KRYONOS_BOARD_CYD)
-    return "cyd";
-#elif defined(KRYONOS_BOARD_SMARTDISPLAY_4IN)
-    return "smartdisplay_4in";
-#else
-    return "unknown";
-#endif
+    return Board::profile().id;
 }
 
 // estado da escrita em curso (uma por vez, como o upload web)
@@ -504,20 +494,16 @@ void handleOtaAbort() {
 // ---------------------------------------------------------------- screenshot
 
 void handleScreenshot() {
-    uint16_t w = 0, h = 0;
-#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
-    w = (uint16_t)tft.width();
-    h = (uint16_t)tft.height();
-#endif
+    KryonDisplay& tft = Board::display();
+    uint16_t w = (uint16_t)tft.width();
+    uint16_t h = (uint16_t)tft.height();
     size_t bytes = (size_t)w * h * 2;
     uint16_t* fb = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
     if (fb == nullptr) {
         respondError(KL_SCREENSHOT, "sem memoria para captura");
         return;
     }
-#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
     tft.readRect(0, 0, w, h, fb);  // RGB565 do framebuffer
-#endif
     uint8_t head[4] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8)};
     respond(KL_SCREENSHOT, 0, head, sizeof(head));
 

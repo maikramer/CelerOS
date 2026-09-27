@@ -17,16 +17,18 @@
 // para a tela fisica (UI::sx/sy) e converte cores RGB565 -> formato nativo.
 // No alvo classico os fatores sao 1:1 e a camada e transparente.
 // ---------------------------------------------------------------------------
+static KryonDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
+
 static inline uint32_t jsc(uint32_t c) {
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    // RGB565 -> RGB888 (LovyanGFX do S3 interpreta inteiros como RGB888)
+    // Painel 16-bit (RGB565 nativo): cor passa direto; caso contrario
+    // expande RGB565 -> RGB888 (determinado pelo display em runtime)
+    if (s_jsTft == nullptr || s_jsTft->getColorDepth() == 16) {
+        return c;
+    }
     uint32_t r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
     return ((((r << 3) | (r >> 2)) & 0xFF) << 16)
          | ((((g << 2) | (g >> 4)) & 0xFF) << 8)
          | (((b << 3) | (b >> 2)) & 0xFF);
-#else
-    return c;
-#endif
 }
 static inline int jsx(int v) { return UI::sx(v); }
 static inline int jsy(int v) { return UI::sy(v); }
@@ -126,10 +128,8 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
     }
 
     tftSprite = new KryonSprite(tftInstance);
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    // Em telas grandes o sprite so cabe na PSRAM
+    // Prefere PSRAM quando disponivel (sem PSRAM o LovyanGFX usa o heap)
     tftSprite->setPsram(true);
-#endif
 
     void* ptr = nullptr;
 
@@ -956,6 +956,7 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
 // =====================================================
 
 void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
+    s_jsTft = tft;
     tftInstance = tft;
 
     // --- System Object ---
