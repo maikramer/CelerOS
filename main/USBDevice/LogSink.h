@@ -8,6 +8,7 @@
 // link), a saida e descartada para nao corromper transferencias binarias;
 // no futuro o logcat (W6c) tecla aqui para envia-los pela ferramenta.
 void kryon_log_vprintf(const char* fmt, va_list args);
+void kryon_log_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 bool kryon_log_silent(void);
 
 #endif // KRYON_LOG_SINK_H

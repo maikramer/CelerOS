@@ -14,7 +14,7 @@ set(KRYONOS_SRCS
     "Display/Backlight.cpp"
     "Display/Icon.cpp"
     "WebManager/WebManager.cpp"
-    "WebManager/CaptivePortal.cpp"
+    "WebManager/WifiSetupPortal.cpp"
     "OTA/OtaManager.cpp"
     "Kernel/Core/HarixKernel.cpp"
     "Kernel/TimeManager.cpp"

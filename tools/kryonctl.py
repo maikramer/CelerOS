@@ -97,12 +97,14 @@ class KryonLink:
 
     def _read_frame(self, expect_cmd=None, timeout=None):
         timeout = timeout or self.timeout
-        # procura o magic 0x4B (resincroniza se houver lixo)
+        # procura o magic 0x4B um byte por vez (resincroniza se houver lixo)
         while True:
-            head = read_exact(self.ser, 4, timeout)
-            magic, cmd, length = head[0], head[1], struct.unpack("<H", head[2:4])[0]
-            if magic == 0x4B:
-                break
+            first = read_exact(self.ser, 1, timeout)
+            if first[0] != 0x4B:
+                continue
+            head = first + read_exact(self.ser, 3, timeout)
+            cmd, length = head[1], struct.unpack("<H", head[2:4])[0]
+            break
         payload = read_exact(self.ser, length, timeout) if length else b""
         return cmd, payload
 

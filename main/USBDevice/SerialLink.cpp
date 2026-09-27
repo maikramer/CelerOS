@@ -104,8 +104,14 @@ void linkTask(void*) {
             exitLinkMode();
         }
 
+        // Espera 1 byte (bloqueante) e drena o restante sem bloquear: pedir N
+        // bytes de uma vez faz o driver esperar o timeout inteiro ate completa-los.
         uint8_t buf[64];
-        int n = uart_read_bytes(K_UART, buf, sizeof(buf), pdMS_TO_TICKS(250));
+        int n = uart_read_bytes(K_UART, buf, 1, pdMS_TO_TICKS(250));
+        if (n > 0) {
+            int more = uart_read_bytes(K_UART, buf + 1, sizeof(buf) - 1, 0);
+            if (more > 0) n += more;
+        }
         for (int i = 0; i < n; i++) {
             uint8_t b = buf[i];
             if (s_mode == MODE_CONSOLE) {
@@ -187,4 +193,11 @@ bool kryon_log_silent(void) {
 void kryon_log_vprintf(const char* fmt, va_list args) {
     if (s_mode == MODE_LINK) return;  // nao intercala na sessao do kryonctl
     vprintf(fmt, args);
+}
+
+void kryon_log_printf(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    kryon_log_vprintf(fmt, args);
+    va_end(args);
 }

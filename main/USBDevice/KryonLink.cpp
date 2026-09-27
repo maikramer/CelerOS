@@ -140,7 +140,7 @@ void execPrint(void* ctx, const char* fmt, ...) {
 // ------------------------------------------------------------------ handlers
 
 void handleHello(const uint8_t* payload, uint16_t len) {
-    char id[32];
+    char id[64];
     snprintf(id, sizeof(id), "KRYONOS %s|%s|api %d|proto 1", KRYONOS_VERSION, boardId(), KRYONOS_API_LEVEL);
     respond(KL_HELLO, 0, id, (uint16_t)strlen(id));
 }
@@ -263,7 +263,7 @@ void handleRead(const uint8_t* payload, uint16_t len) {
         respondError(KL_READ, "pedido malformado");
         return;
     }
-    if (want > KryonLink::MAX_PAYLOAD - 1) want = KryonLink::MAX_PAYLOAD - 1;
+    if (want > KryonLink::MAX_PAYLOAD) want = KryonLink::MAX_PAYLOAD;
 
     FILE* f = fopen(path, "rb");
     if (f == nullptr) {
@@ -273,11 +273,11 @@ void handleRead(const uint8_t* payload, uint16_t len) {
     static uint8_t buf[KryonLink::MAX_PAYLOAD];
     size_t got = 0;
     if (fseek(f, (long)offset, SEEK_SET) == 0) {
-        got = fread(buf + 1, 1, want, f);
+        got = fread(buf, 1, want, f);
     }
     fclose(f);
-    buf[0] = 0;  // status OK; EOF e sinalizado por got < want
-    respond(KL_READ, 0, buf, (uint16_t)(1 + got));
+    // respond() acrescenta o status; EOF e sinalizado por got < want
+    respond(KL_READ, 0, buf, (uint16_t)got);
 }
 
 void handleWriteBegin(const uint8_t* payload, uint16_t len) {
