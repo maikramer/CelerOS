@@ -25,6 +25,8 @@
 #include "esp_timer.h"
 
 // --- Constantes de nivel GPIO (valores identicos ao arduino-esp32) ---------
+#define PROGMEM
+
 #define HIGH 1
 #define LOW 0
 #define INPUT 0x01

@@ -1,29 +1,43 @@
 #include "CaptivePortal.h"
+#include "WebManager.h"
+
 #include <string>
-#include <WiFi.h>
-#include <DNSServer.h>
-#include <ESPAsyncWebServer.h>
-#include "../Display/Layout.h"
+#include <cstring>
+#include <cstdio>
+#include <cstdint>
+
+#include "esp_http_server.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "lwip/sockets.h"
+#include "WifiAP.h"
+
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Display/Layout.h"
 
-// Estado compartilhado entre a task do AsyncTCP (handlers) e o loop do
-// modal. As credenciais pendentes sao escritas antes de connectRequested,
-// lidas uma vez pelo loop — pragmático no mesmo padrao dos eventos do
-// satisfaction-hub.
+// Portal de setup WiFi sobre ESP-IDF puro:
+//   - AP aberto "KryonOS-Setup-XXXX" (192.168.4.1) via componente WifiAP
+//   - DNS wildcard (task propria, UDP :53 -> 192.168.4.1)
+//   - httpd na porta 80 com /, /scan, /connect, /status e redirect nas
+//     sondas de captive portal (generate_204, hotspot-detect.html, ...)
+// A conexao STA acontece no loop do modal (fora dos handlers), igual ao
+// porte Arduino; a pagina acompanha via GET /status.
+
 enum PortalState { PORTAL_IDLE, PORTAL_CONNECTING, PORTAL_CONNECTED, PORTAL_FAILED };
 
-static DNSServer dnsServer;
-static AsyncWebServer portalServer(80);
+// singleton: WifiAP::instance()
+static httpd_handle_t s_portalServer = nullptr;
+static volatile bool s_dnsRunning = false;
 
-static volatile bool connectRequested = false;
-static volatile int connectState = PORTAL_IDLE;
-static std::string pendingSsid = "";
-static std::string pendingPass = "";
-static std::string connectBody = "";
-static unsigned long connectStart = 0;
+static volatile bool s_connectRequested = false;
+static volatile int s_connectState = PORTAL_IDLE;
+static std::string s_pendingSsid = "";
+static std::string s_pendingPass = "";
+static std::string s_connectBody = "";
+static unsigned long s_connectStart = 0;
 
-static const char PORTAL_HTML[] PROGMEM = R"html(<!DOCTYPE html>
+static const char PORTAL_HTML[] = R"html(<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -132,10 +146,61 @@ scan();
 </html>)html";
 
 // ---------------------------------------------------------------------------
+// DNS wildcard (task): qualquer consulta A responde 192.168.4.1
+// ---------------------------------------------------------------------------
+
+static void dnsTask(void* /*arg*/) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock >= 0) {
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        struct sockaddr_in bindAddr = {};
+        bindAddr.sin_family = AF_INET;
+        bindAddr.sin_port = htons(53);
+        bindAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        if (bind(sock, (struct sockaddr*)&bindAddr, sizeof(bindAddr)) == 0) {
+            uint8_t buf[512];
+            while (s_dnsRunning) {
+                struct sockaddr_in src = {};
+                socklen_t srcLen = sizeof(src);
+                int n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr*)&src, &srcLen);
+                if (n <= 0 || n < 12) continue;
+
+                // Resposta: mesmos ID/flags + AA setado, 1 answer
+                buf[2] = 0x85;
+                buf[3] = 0x80;
+                buf[6] = 0; buf[7] = 1;    // ANCOUNT = 1
+                buf[8] = 0; buf[9] = 0;    // NSCOUNT
+                buf[10] = 0; buf[11] = 0;  // ARCOUNT
+
+                int qd = 12;
+                // pula QNAME
+                while (qd < n && buf[qd] != 0) { qd += buf[qd] + 1; }
+                qd += 5;  // null + QTYPE + QCLASS
+
+                if (qd + 16 <= (int)sizeof(buf)) {
+                    uint8_t* a = &buf[qd];
+                    a[0] = 0xC0; a[1] = 0x0C;          // ponteiro p/ QNAME
+                    a[2] = 0; a[3] = 1;                 // A
+                    a[4] = 0; a[5] = 1;                 // IN
+                    a[6] = 0; a[7] = 0; a[8] = 0; a[9] = 60;  // TTL
+                    a[10] = 0; a[11] = 4;               // RDLENGTH
+                    a[12] = 192; a[13] = 168; a[14] = 4; a[15] = 1;
+                    sendto(sock, buf, qd + 16, 0, (struct sockaddr*)&src, srcLen);
+                }
+            }
+        }
+        close(sock);
+    }
+    vTaskDelete(NULL);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-static std::string urlDecode(const std::string& str) {
+static std::string urlDecodeP(const std::string& str) {
     std::string out;
     out.reserve(str.length());
     for (size_t i = 0; i < str.length(); i++) {
@@ -148,7 +213,7 @@ static std::string urlDecode(const std::string& str) {
     return out;
 }
 
-static std::string jsonEscape(const std::string& s) {
+static std::string jsonEscapeP(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.length(); i++) {
         char c = s[i];
@@ -158,88 +223,99 @@ static std::string jsonEscape(const std::string& s) {
     return out;
 }
 
-static void registerRoutes() {
-    portalServer.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-        req->send(200, "text/html", PORTAL_HTML);
-    });
+static void portalSend(httpd_req_t* req, const char* type, const std::string& body) {
+    httpd_resp_set_type(req, type);
+    httpd_resp_send(req, body.c_str(), body.length());
+}
 
-    portalServer.on("/scan", HTTP_GET, [](AsyncWebServerRequest* req) {
-        int n = WiFi.scanNetworks();  // sincrono (~2s); ok para o portal single-user
-        std::string json = "{\"networks\":[";
-        bool first = true;
-        for (int i = 0; i < n; i++) {
-            std::string ssid = WiFi.SSID(i).c_str();
-            if (ssid.length() == 0) continue;
-            std::string needle = "\"" + jsonEscape(ssid) + "\"";
-            if (kstr::indexOf(json, needle) != -1) continue;  // dedup (scan ja vem por RSSI)
-            if (!first) json += ",";
-            first = false;
-            json += "{\"ssid\":\"" + jsonEscape(ssid) + "\",\"rssi\":" + std::to_string(WiFi.RSSI(i)) + "}";
-        }
-        json += "]}";
-        WiFi.scanDelete();
-        req->send(200, "application/json", json.c_str());
-    });
+static esp_err_t portal_index(httpd_req_t* req) {
+    portalSend(req, "text/html", PORTAL_HTML);
+    return ESP_OK;
+}
 
-    portalServer.on("/connect", HTTP_POST,
-        [](AsyncWebServerRequest* req) {
-            int ssidIdx = kstr::indexOf(connectBody, "ssid=");
-            int passIdx = kstr::indexOf(connectBody, "password=");
-            if (ssidIdx < 0) {
-                connectBody = "";
-                req->send(400, "application/json", "{\"success\":false}");
-                return;
-            }
-            std::string raw = connectBody;
-            connectBody = "";
+static esp_err_t portal_scan(httpd_req_t* req) {
+    KryonScanEntry nets[16];
+    int n = WebManager::scanNetworks(nets, 16);  // bloqueante ~2s; portal e single-user
 
-            std::string ssid = raw.substr(ssidIdx + 5);
-            int amp = kstr::indexOf(ssid, '&');
-            ssid = (amp >= 0) ? ssid.substr(0, amp) : ssid;
-            ssid = urlDecode(ssid);
-            ssid = kstr::trim(ssid);
+    std::string json = "{\"networks\":[";
+    bool first = true;
+    for (int i = 0; i < n; i++) {
+        if (nets[i].ssid.empty()) continue;
+        std::string needle = "\"" + jsonEscapeP(nets[i].ssid) + "\"";
+        if (kstr::indexOf(json, needle) != -1) continue;  // dedup
+        if (!first) json += ",";
+        first = false;
+        json += "{\"ssid\":\"" + jsonEscapeP(nets[i].ssid) + "\",\"rssi\":" + std::to_string(nets[i].rssi) + "}";
+    }
+    json += "]}";
+    portalSend(req, "application/json", json);
+    return ESP_OK;
+}
 
-            std::string pass = "";
-            if (passIdx >= 0) {
-                pass = raw.substr(passIdx + 9);
-                amp = kstr::indexOf(pass, '&');
-                pass = (amp >= 0) ? pass.substr(0, amp) : pass;
-                pass = urlDecode(pass);
-            }
+static esp_err_t portal_connect(httpd_req_t* req) {
+    // le corpo (urlencoded, pequeno)
+    std::string body(req->content_len, '\0');
+    size_t got = 0;
+    while (got < body.size()) {
+        int r = httpd_req_recv(req, &body[got], body.size() - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
 
-            if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 64) {
-                req->send(400, "application/json", "{\"success\":false}");
-                return;
-            }
-            pendingSsid = ssid;
-            pendingPass = pass;
-            connectState = PORTAL_IDLE;
-            connectRequested = true;  // o loop do modal faz o WiFi.begin
-            req->send(200, "application/json", "{\"success\":true}");
-        },
-        nullptr,
-        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
-            if (index == 0) connectBody = "";
-            if (connectBody.length() + len < 600) connectBody.append((const char*)data, len);
-        });
+    int ssidIdx = kstr::indexOf(body, "ssid=");
+    int passIdx = kstr::indexOf(body, "password=");
+    if (ssidIdx < 0) {
+        portalSend(req, "application/json", "{\"success\":false}");
+        return ESP_OK;
+    }
 
-    portalServer.on("/status", HTTP_GET, [](AsyncWebServerRequest* req) {
-        std::string json = "{\"state\":\"";
-        switch (connectState) {
-            case PORTAL_CONNECTING: json += "connecting"; break;
-            case PORTAL_CONNECTED:  json += "connected"; break;
-            case PORTAL_FAILED:     json += "failed"; break;
-            default:                json += "idle"; break;
-        }
-        json += std::string("\",\"ip\":\"") + (connectState == PORTAL_CONNECTED ? WiFi.localIP().toString().c_str() : "") + "\"}";
-        req->send(200, "application/json", json.c_str());
-    });
+    std::string ssid = body.substr(ssidIdx + 5);
+    int amp = kstr::indexOf(ssid, '&');
+    ssid = (amp >= 0) ? ssid.substr(0, amp) : ssid;
+    ssid = urlDecodeP(ssid);
+    ssid = kstr::trim(ssid);
 
-    // Sondas de deteccao de captive portal (Android/Apple/Windows) e
-    // qualquer outra rota: redireciona para a raiz
-    portalServer.onNotFound([](AsyncWebServerRequest* req) {
-        req->redirect("http://192.168.4.1/");
-    });
+    std::string pass = "";
+    if (passIdx >= 0) {
+        pass = body.substr(passIdx + 9);
+        amp = kstr::indexOf(pass, '&');
+        pass = (amp >= 0) ? pass.substr(0, amp) : pass;
+        pass = urlDecodeP(pass);
+    }
+
+    if (ssid.empty() || ssid.length() > 32 || pass.length() > 64) {
+        portalSend(req, "application/json", "{\"success\":false}");
+        return ESP_OK;
+    }
+
+    s_pendingSsid = ssid;
+    s_pendingPass = pass;
+    s_connectState = PORTAL_IDLE;
+    s_connectRequested = true;  // o loop do modal conecta
+    portalSend(req, "application/json", "{\"success\":true}");
+    return ESP_OK;
+}
+
+static esp_err_t portal_status(httpd_req_t* req) {
+    std::string json = "{\"state\":\"";
+    switch (s_connectState) {
+        case PORTAL_CONNECTING: json += "connecting"; break;
+        case PORTAL_CONNECTED:  json += "connected"; break;
+        case PORTAL_FAILED:     json += "failed"; break;
+        default:                json += "idle"; break;
+    }
+    std::string ip = (s_connectState == PORTAL_CONNECTED) ? WebManager::getIPAddress() : "";
+    json += std::string("\",\"ip\":\"") + jsonEscapeP(ip) + "\"}";
+    portalSend(req, "application/json", json);
+    return ESP_OK;
+}
+
+// Sondas de captive portal (Android/Apple/Windows): redirect para a raiz
+static esp_err_t portal_redirect(httpd_req_t* req) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
 }
 
 // Linha de status na tela do display (apaga a regiao antes de escrever)
@@ -252,12 +328,18 @@ static void portalStatus(KryonDisplay* tft, const std::string& l1, const std::st
 }
 
 static void portalCleanup(bool connected) {
-    dnsServer.stop();
-    portalServer.end();
-    WiFi.scanDelete();
-    connectBody = "";
-    if (connected) WiFi.mode(WIFI_STA);   // derruba o AP, mantem a conexao
-    else           WiFi.mode(WIFI_OFF);
+    if (s_portalServer != nullptr) {
+        httpd_stop(s_portalServer);
+        s_portalServer = nullptr;
+    }
+    s_dnsRunning = false;
+    WifiAP::instance().stop();
+    if (connected) {
+        esp_wifi_set_mode(WIFI_MODE_STA);   // derruba o AP, mantem a conexao
+    } else {
+        esp_wifi_stop();
+    }
+    s_connectBody = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -265,19 +347,47 @@ static void portalCleanup(bool connected) {
 // ---------------------------------------------------------------------------
 
 bool CaptivePortal::runBlocking(KryonDisplay* tft) {
+    // A porta 80 e do portal: pausa o servidor principal se estiver no ar
+    WebManager::stopWebServer();
+
     // Sufixo do nome do AP: 4 ultimos hex do MAC
     uint8_t mac[6] = {0};
-    WiFi.macAddress(mac);
+    esp_wifi_get_mac(WIFI_IF_AP, mac);
     std::string apSsid = "KryonOS-Setup-" + kstr::fmt("%X", mac[4]) + kstr::fmt("%X", mac[5]);
 
-    connectRequested = false;
-    connectState = PORTAL_IDLE;
+    s_connectRequested = false;
+    s_connectState = PORTAL_IDLE;
 
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(apSsid.c_str());  // rede aberta; IP padrao 192.168.4.1
-    dnsServer.start(53, "*", WiFi.softAPIP());
-    registerRoutes();
-    portalServer.begin();
+    // Ordem importante: STA primeiro (o init do WifiConnection forca modo STA),
+    // AP depois, e entao promove para AP_STA mantendo o AP de pe.
+    WebManager::wifi().init();
+    if (!WifiAP::instance().start(apSsid)) {
+        Serial.println("Falha ao iniciar AP do portal");
+        return false;
+    }
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_start();
+
+    s_dnsRunning = true;
+    xTaskCreate(dnsTask, "kryon_dns", 4096, nullptr, 5, nullptr);
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.stack_size = 12288;
+    config.max_uri_handlers = 8;
+    config.uri_match_fn = httpd_uri_match_wildcard;
+    if (httpd_start(&s_portalServer, &config) == ESP_OK) {
+        const httpd_uri_t root = { "/", HTTP_GET, portal_index, nullptr };
+        httpd_register_uri_handler(s_portalServer, &root);
+        const httpd_uri_t scan = { "/scan", HTTP_GET, portal_scan, nullptr };
+        httpd_register_uri_handler(s_portalServer, &scan);
+        const httpd_uri_t connect = { "/connect", HTTP_POST, portal_connect, nullptr };
+        httpd_register_uri_handler(s_portalServer, &connect);
+        const httpd_uri_t status = { "/status", HTTP_GET, portal_status, nullptr };
+        httpd_register_uri_handler(s_portalServer, &status);
+        const httpd_uri_t wild = { "/*", HTTP_GET, portal_redirect, nullptr };
+        httpd_register_uri_handler(s_portalServer, &wild);
+    }
 
     // Tela de espera
     tft->fillScreen(TFT_BLACK);
@@ -305,34 +415,33 @@ bool CaptivePortal::runBlocking(KryonDisplay* tft) {
     tft->drawString("SKIP", UI::sx(120), UI::sy(295), UI::font(2));
 
     while (true) {
-        dnsServer.processNextRequest();
-
-        if (connectRequested) {
-            connectRequested = false;
-            connectState = PORTAL_CONNECTING;
-            portalStatus(tft, "Connecting to:", pendingSsid);
-            WiFi.begin(pendingSsid.c_str(),
-                       pendingPass.length() ? pendingPass.c_str() : nullptr);
-            connectStart = millis();
+        if (s_connectRequested) {
+            s_connectRequested = false;
+            s_connectState = PORTAL_CONNECTING;
+            portalStatus(tft, "Connecting to:", s_pendingSsid);
+            WebManager::wifi().setConnectionTimeout(15000);
+            // Async: o AP precisa continuar atendendo /status durante a conexao
+            WebManager::wifi().connect(s_pendingSsid, s_pendingPass, true);
+            s_connectStart = millis();
         }
 
-        if (connectState == PORTAL_CONNECTING) {
-            if (WiFi.status() == WL_CONNECTED) {
-                std::string creds = pendingSsid + "\n" + pendingPass;
+        if (s_connectState == PORTAL_CONNECTING) {
+            if (WebManager::wifi().isConnected()) {
+                std::string creds = s_pendingSsid + "\n" + s_pendingPass;
                 if (FileSystem::exists("/sd/")) {
                     FileSystem::writeTextFile("/sd/wifi.txt", creds.c_str());
                 } else {
                     FileSystem::writeTextFile("/local/wifi.txt", creds.c_str());
                 }
-                connectState = PORTAL_CONNECTED;
-                portalStatus(tft, "Connected!", WiFi.localIP().toString().c_str());
+                s_connectState = PORTAL_CONNECTED;
+                portalStatus(tft, "Connected!", WebManager::getIPAddress());
                 delay(1500);
                 portalCleanup(true);
                 return true;
             }
-            if (millis() - connectStart > 15000) {
-                WiFi.disconnect();  // aborta so o lado STA; o AP segue de pe
-                connectState = PORTAL_FAILED;
+            if (millis() - s_connectStart > 16000) {
+                WebManager::wifi().disconnect();  // aborta o STA; o AP segue de pe
+                s_connectState = PORTAL_FAILED;
                 portalStatus(tft, "Connection failed!", "Try again from the page");
             }
         }
