@@ -160,7 +160,7 @@ void SettingsUI::drawWiFi() {
         tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
         tftInstance->drawString("WiFi: ON", UI::sx(120), UI::sy(160), UI::font(2));
         
-        bool hasWifiCredentials = FileSystem::exists("/sd/wifi.txt") || FileSystem::exists("/local/wifi.txt");
+        bool hasWifiCredentials = WebManager::hasSavedNetworks();
         if (hasWifiCredentials) {
             tftInstance->fillRoundRect(UI::sx(10), UI::sy(195), UI::sx(108), UI::sy(30), UI::sx(4), TFT_RED);
             tftInstance->setTextColor(TFT_WHITE, TFT_RED);
@@ -197,7 +197,7 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
             FileSystem::deleteFile("/local/nowifi.txt");
 
             // Check if wifi credentials exist
-            bool hasWifiCredentials = FileSystem::exists("/sd/wifi.txt") || FileSystem::exists("/local/wifi.txt");
+            bool hasWifiCredentials = WebManager::hasSavedNetworks();
             if (!hasWifiCredentials) {
                 // Launch the Visual WiFi Scanner
                 scanAndConnectWiFi();
@@ -223,7 +223,7 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
     if (y >= UI::sy(195) && y <= UI::sy(225)) {
         bool wifiDisabled = FileSystem::exists("/local/nowifi.txt");
         if (!wifiDisabled) {
-            bool hasWifiCredentials = FileSystem::exists("/sd/wifi.txt") || FileSystem::exists("/local/wifi.txt");
+            bool hasWifiCredentials = WebManager::hasSavedNetworks();
 
             // Captive portal: metade direita (com credenciais) ou linha inteira
             bool hitPortal = hasWifiCredentials
@@ -238,9 +238,7 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
             }
 
             if (hasWifiCredentials && x >= UI::sx(10) && x <= UI::sx(118)) {
-                if (FileSystem::exists("/sd/wifi.txt")) FileSystem::deleteFile("/sd/wifi.txt");
-                if (FileSystem::exists("/local/wifi.txt")) FileSystem::deleteFile("/local/wifi.txt");
-                WebManager::disable();
+                WebManager::forgetAllNetworks();  // limpa NVS + wifi.txt legado
 
                 tftInstance->fillScreen(TFT_BLACK);
                 tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);

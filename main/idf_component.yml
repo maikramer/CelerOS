@@ -3,3 +3,7 @@ dependencies:
     version: "^7.1.0"
   joltwallet/esp_littlefs:
     git: https://github.com/joltwallet/esp_littlefs.git
+  espressif/esp_tinyusb:
+    version: "^2.0.1~1"
+    rules:
+      - if: "target in [esp32s2, esp32s3, esp32p4]"

@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include "ArduinoJson.h"
 
+#include "NetworkCredentialStore.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Kernel/TimeManager.h"
@@ -20,98 +21,90 @@
 
 static const char* WM_TAG = "kryon.web";
 
-static WifiConnection s_wifi;
 static httpd_handle_t s_server = nullptr;
-static bool s_eventsBound = false;
+static bool s_nmEventsBound = false;
 static volatile bool s_rebootPending = false;
-static unsigned long s_reconnectGateUntil = 0;  // auto-reconnect suspenso ate este ms
-static unsigned long s_lastReconnectTry = 0;
-static std::string s_savedSsid;
-static std::string s_savedPass;
 
 // ---------------------------------------------------------------------------
-// WifiConnection glue
+// NetworkManager (componente Connection) glue
 // ---------------------------------------------------------------------------
 
-WifiConnection& WebManager::wifi() { return s_wifi; }
+static NetworkManager& nm() { return NetworkManager::instance(); }
 
-void WebManager::onStateChanged(WifiConnection* conn, WiFiConnectionState /*oldState*/, WiFiConnectionState newState) {
-    if (newState == WiFiConnectionState::Connected) {
-        ESP_LOGI(WM_TAG, "WiFi conectado: %s IP=%s", conn->getSSID().c_str(), conn->getIPAddress().toString().c_str());
+WifiConnection& WebManager::wifi() { return *nm().getWifiConnection(); }
+
+// Estado de rede: NTP na conexao e (re)subida do servidor quando habilitado.
+// Handlers so tocam estado/acoes leves — o Event do componente dispara sob mutex.
+void WebManager::onNetworkStateChanged(NetworkState /*oldState*/, NetworkState newState) {
+    if (newState == NetworkState::Connected) {
+        ESP_LOGI(WM_TAG, "WiFi conectado, IP=%s", nm().getIpAddress().c_str());
         TimeManager::syncNTP();
-    } else if (newState == WiFiConnectionState::Error) {
-        // Auto-reconnect com backoff de 10s (mesmo comportamento do porte
-        // Arduino), suspenso na janela pos-disable() e durante o portal.
-        if (millis() > s_reconnectGateUntil && !s_savedSsid.empty()) {
-            unsigned long now = millis();
-            if (now - s_lastReconnectTry >= 10000) {
-                s_lastReconnectTry = now;
-                ESP_LOGI(WM_TAG, "WiFi caiu, reconectando...");
-                conn->connect(s_savedSsid, s_savedPass, true);  // async
-            }
+        if (FileSystem::exists("/local/web_on.txt")) {
+            startWebServerIfNeeded();
         }
     }
 }
 
-static bool loadCredentials(std::string& ssid, std::string& pass) {
-    std::string content;
-    if (FileSystem::exists("/sd/wifi.txt")) {
-        content = FileSystem::readTextFile("/sd/wifi.txt");
-    } else if (FileSystem::exists("/local/wifi.txt")) {
-        content = FileSystem::readTextFile("/local/wifi.txt");
-    } else {
-        Serial.println("No wifi.txt found on SD card or LittleFS.");
-        return false;
-    }
+// Import one-shot do wifi.txt legado ("ssid\npass") para o
+// NetworkCredentialStore (NVS). Renomeia para wifi.txt.migrated —
+// idempotente e seguro mesmo com store ja populado.
+void WebManager::importLegacyWifiTxt() {
+    const char* legacy[] = {"/sd/wifi.txt", "/local/wifi.txt"};
+    for (const char* path : legacy) {
+        if (!FileSystem::exists(path)) continue;
 
-    int nl = kstr::indexOf(content, '\n');
-    if (nl < 0) {
-        ssid = kstr::trim(content);
-        pass = "";
-    } else {
-        ssid = kstr::trim(content.substr(0, nl));
-        pass = kstr::trim(content.substr(nl + 1));
+        std::string content = FileSystem::readTextFile(path);
+        int nl = kstr::indexOf(content, '\n');
+        std::string ssid, pass;
+        if (nl < 0) {
+            ssid = kstr::trim(content);
+        } else {
+            ssid = kstr::trim(content.substr(0, nl));
+            pass = kstr::trim(content.substr(nl + 1));
+        }
+
+        if (!ssid.empty() && nm().getCredentialStore().getNetworkCount() == 0) {
+            nm().getCredentialStore().saveNetwork(KnownNetwork(ssid.c_str(), pass.c_str()));
+            Serial.print("wifi.txt migrado para o credential store (NVS): ");
+            Serial.println(ssid.c_str());
+        }
+        FileSystem::renameFile(path, (std::string(path) + ".migrated").c_str());
+        return;  // so o primeiro que existir (SD tem preferencia)
     }
-    return !ssid.empty();
 }
 
 bool WebManager::init() {
-    if (!s_eventsBound) {
-        s_eventsBound = true;
-        nvs_flash_init();  // exigido pelo esp_wifi ( phy calib ); idempotente
-        s_wifi.setConnectionTimeout(10000);
-        s_wifi.setMaxRetries(3);
-        s_wifi.onStateChanged.addHandler(
-            [](WifiConnection* conn, WiFiConnectionState o, WiFiConnectionState n) {
-                WebManager::onStateChanged(conn, o, n);
-            });
-    }
+    nvs_flash_init();  // exigido pelo esp_wifi e pelo credential store (NVS)
 
-    std::string ssid, pass;
-    if (!loadCredentials(ssid, pass)) return false;
-    s_savedSsid = ssid;
-    s_savedPass = pass;
-
-    Serial.print("Connecting to WiFi: ");
-    Serial.println(ssid.c_str());
-
-    ErrorCode err = s_wifi.init();
+    ErrorCode err = nm().init(true);  // background task: reconexao/roaming
     if (err != CommonErrorCodes::None) {
-        Serial.println("WiFi subsystem init failed.");
+        Serial.println("NetworkManager init failed.");
         return false;
     }
 
-    err = s_wifi.connect(ssid, pass, false);  // bloqueante (timeout interno 10s)
-    if (err != CommonErrorCodes::None || !s_wifi.isConnected()) {
+    if (!s_nmEventsBound) {
+        s_nmEventsBound = true;
+        nm().onStateChanged.addHandler(
+            [](NetworkState o, NetworkState n) { WebManager::onNetworkStateChanged(o, n); });
+    }
+
+    importLegacyWifiTxt();
+
+    if (nm().getCredentialStore().getNetworkCount() == 0) {
+        Serial.println("No saved networks (NVS store vazio).");
+        return false;
+    }
+    if (FileSystem::exists("/local/nowifi.txt")) {
+        Serial.println("WiFi desligado pelo usuario (nowifi.txt).");
+        return false;
+    }
+
+    Serial.println("Connecting to known network(s)...");
+    err = nm().connectToKnown();  // bloqueante: escolhe a melhor rede conhecida
+    if (err != CommonErrorCodes::None || !nm().isConnected()) {
         Serial.println("WiFi connection failed.");
         return false;
     }
-
-    Serial.println("WiFi connected!");
-    Serial.print("IP Address: ");
-    Serial.println(s_wifi.getIPAddress().toString().c_str());
-
-    // NTP e sincronizado pelo handler de estado Connected
 
     if (!FileSystem::exists("/local/web_on.txt")) {
         Serial.println("Web Server disabled by user (web_on.txt not found).");
@@ -123,14 +116,14 @@ bool WebManager::init() {
 }
 
 bool WebManager::enable() {
+    nm().setAutoReconnect(true);
     return WebManager::init();
 }
 
 void WebManager::disable() {
-    s_reconnectGateUntil = millis() + 8000;  // silencia o auto-reconnect
+    nm().setAutoReconnect(false);  // silencia a background task
     stopWebServer();
-    s_wifi.disconnect();
-    esp_wifi_stop();
+    nm().disconnect();
     Serial.println("WiFi disabled at runtime");
 }
 
@@ -156,16 +149,16 @@ void WebManager::tick() {
 }
 
 bool WebManager::isActive() {
-    return s_wifi.isConnected();
+    return nm().isConnected();
 }
 
 bool WebManager::isWifiConnected() {
-    return s_wifi.isConnected();
+    return nm().isConnected();
 }
 
 std::string WebManager::getIPAddress() {
-    if (s_wifi.isConnected()) {
-        return s_wifi.getIPAddress().toString();
+    if (nm().isConnected()) {
+        return nm().getIpAddress();
     }
     return "";
 }
@@ -174,41 +167,28 @@ bool WebManager::connect(const std::string& ssid, const std::string& password,
                           bool saveCreds, uint32_t timeoutMs) {
     if (ssid.empty() || ssid.length() > 32 || password.length() > 64) return false;
 
-    s_wifi.setConnectionTimeout(timeoutMs);
-    ErrorCode err = s_wifi.init();
-    if (err != CommonErrorCodes::None) return false;
-
-    err = s_wifi.connect(ssid, password, false);
-    bool ok = (err == CommonErrorCodes::None) && s_wifi.isConnected();
-    if (ok && saveCreds) {
-        s_savedSsid = ssid;
-        s_savedPass = password;
-        std::string creds = ssid + "\n" + password;
-        if (FileSystem::exists("/sd/")) {
-            FileSystem::writeTextFile("/sd/wifi.txt", creds.c_str());
-        } else {
-            FileSystem::writeTextFile("/local/wifi.txt", creds.c_str());
-        }
-    }
-    s_wifi.setConnectionTimeout(10000);
-    return ok;
+    if (nm().init(true) != CommonErrorCodes::None) return false;
+    nm().getWifiConnection()->setConnectionTimeout(timeoutMs);
+    ErrorCode err = nm().connect(ssid, password, saveCreds);  // salva no NVS
+    nm().getWifiConnection()->setConnectionTimeout(10000);
+    return (err == CommonErrorCodes::None) && nm().isConnected();
 }
 
 void WebManager::disconnect() {
-    s_wifi.disconnect();
+    nm().disconnect();
 }
 
 int WebManager::scanNetworks(KryonScanEntry* out, int maxN) {
     if (out == nullptr || maxN <= 0) return 0;
-    s_wifi.init();
+    if (nm().init(true) != CommonErrorCodes::None) return 0;
 
-    wifi_ap_record_t aps[20];
-    int n = s_wifi.scan(aps, 20);
-    if (n <= 0) return 0;
+    if (nm().startScan(true) != CommonErrorCodes::None) return 0;
+    std::vector<ScannedNetwork> results = nm().getLastScanResults();
 
     int count = 0;
-    for (int i = 0; i < n && count < maxN; i++) {
-        std::string ssid = (const char*)aps[i].ssid;
+    for (const auto& net : results) {
+        if (count >= maxN) break;
+        std::string ssid = net.ssid;
         if (ssid.empty()) continue;
         // dedup por SSID (o scan ja vem ordenado por RSSI)
         bool dup = false;
@@ -217,22 +197,21 @@ int WebManager::scanNetworks(KryonScanEntry* out, int maxN) {
         }
         if (dup) continue;
         out[count].ssid = ssid;
-        out[count].rssi = aps[i].rssi;
-        out[count].secure = aps[i].authmode != WIFI_AUTH_OPEN;
+        out[count].rssi = net.rssi;
+        out[count].secure = net.authMode != WIFI_AUTH_OPEN;
         count++;
     }
     return count;
 }
 
 bool WebManager::startScanAsync() {
-    return s_wifi.init() == CommonErrorCodes::None &&
-           s_wifi.startScanAsync() == CommonErrorCodes::None;
+    return nm().init(true) == CommonErrorCodes::None &&
+           nm().startScan(false) == CommonErrorCodes::None;
 }
 
 std::vector<KryonScanEntry> WebManager::getLastScan() {
     std::vector<KryonScanEntry> out;
-    WiFiScanResult result = s_wifi.getLastScanResults();
-    for (const auto& net : result.networks) {
+    for (const auto& net : nm().getLastScanResults()) {
         if (net.ssid[0] == '\0') continue;
         KryonScanEntry e;
         e.ssid = net.ssid;
@@ -241,6 +220,22 @@ std::vector<KryonScanEntry> WebManager::getLastScan() {
         out.push_back(e);
     }
     return out;
+}
+
+bool WebManager::hasSavedNetworks() {
+    if (nm().getCredentialStore().getNetworkCount() > 0) return true;
+    // wifi.txt legado ainda nao importado (ex.: boot com nowifi.txt pula o init)
+    return FileSystem::exists("/sd/wifi.txt") || FileSystem::exists("/local/wifi.txt");
+}
+
+void WebManager::forgetAllNetworks() {
+    nm().setAutoReconnect(false);
+    nm().getCredentialStore().clearAllNetworks();
+    FileSystem::deleteFile("/sd/wifi.txt");
+    FileSystem::deleteFile("/local/wifi.txt");
+    FileSystem::deleteFile("/sd/wifi.txt.migrated");
+    FileSystem::deleteFile("/local/wifi.txt.migrated");
+    disable();
 }
 
 // ---------------------------------------------------------------------------

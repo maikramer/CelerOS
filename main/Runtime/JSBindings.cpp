@@ -7,6 +7,30 @@
 #include "../Utils/StrUtils.h"
 #include "HttpClient.h"
 
+// ---------------------------------------------------------------------------
+// Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
+//
+// Os apps da loja sao escritos para o alvo classico (CYD): cores literais
+// RGB565 (0xF800, 0x18E3...) e geometria 240x320. Em paineis maiores o
+// runtime "mente" para o app: reporta 240x320, escala coordenadas/tamanhos
+// para a tela fisica (UI::sx/sy) e converte cores RGB565 -> formato nativo.
+// No alvo classico os fatores sao 1:1 e a camada e transparente.
+// ---------------------------------------------------------------------------
+static inline uint32_t jsc(uint32_t c) {
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+    // RGB565 -> RGB888 (LovyanGFX do S3 interpreta inteiros como RGB888)
+    uint32_t r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
+    return ((((r << 3) | (r >> 2)) & 0xFF) << 16)
+         | ((((g << 2) | (g >> 4)) & 0xFF) << 8)
+         | (((b << 3) | (b >> 2)) & 0xFF);
+#else
+    return c;
+#endif
+}
+static inline int jsx(int v) { return UI::sx(v); }
+static inline int jsy(int v) { return UI::sy(v); }
+static inline int jsu(int v) { return (UI::sx(v) + UI::sy(v)) / 2; }  // uniforme (raios)
+
 KryonDisplay* JSBindings::tftInstance = nullptr;
 KryonSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
@@ -90,31 +114,34 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
 
     int w = duk_require_int(ctx, 0);
     int h = duk_require_int(ctx, 1);
-    
+    // Canvas virtual: o sprite e alocado no tamanho FISICO equivalente
+    int pw = jsx(w);
+    int ph = jsy(h);
+
     if (tftSprite) {
         tftSprite->deleteSprite();
         delete tftSprite;
         tftSprite = nullptr;
     }
-    
+
     tftSprite = new KryonSprite(tftInstance);
 #ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
     // Em telas grandes o sprite so cabe na PSRAM
     tftSprite->setPsram(true);
 #endif
-    
+
     void* ptr = nullptr;
-    
+
     // First try 16-bit color if we have plenty of contiguous RAM
-    if (ESP.getMaxAllocHeap() > (uint32_t)(w * h * 2 + 10000)) {
+    if (ESP.getMaxAllocHeap() > (uint32_t)(pw * ph * 2 + 10000)) {
         tftSprite->setColorDepth(16);
-        ptr = tftSprite->createSprite(w, h);
+        ptr = tftSprite->createSprite(pw, ph);
     }
-    
+
     // Fallback to 8-bit color if 16-bit failed or wasn't attempted
     if (!ptr) {
-        tftSprite->setColorDepth(8); 
-        ptr = tftSprite->createSprite(w, h);
+        tftSprite->setColorDepth(8);
+        ptr = tftSprite->createSprite(pw, ph);
     }
     
     if (!ptr) {
@@ -142,7 +169,7 @@ duk_ret_t JSBindings::js_pushSprite(duk_context *ctx) {
     if (!tftInstance || !tftSprite) return 0;
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
-    tftSprite->pushSprite(x, y);
+    tftSprite->pushSprite(jsx(x), jsy(y));
     return 0;
 }
 
@@ -159,8 +186,8 @@ duk_ret_t JSBindings::js_drawFastVLine(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int h = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawFastVLine(x, y, h, color);
-    else tftInstance->drawFastVLine(x, y, h, color);
+    if (useSprite && tftSprite) tftSprite->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
+    else tftInstance->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
     return 0;
 }
 
@@ -170,8 +197,8 @@ duk_ret_t JSBindings::js_drawFastHLine(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int w = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawFastHLine(x, y, w, color);
-    else tftInstance->drawFastHLine(x, y, w, color);
+    if (useSprite && tftSprite) tftSprite->drawFastHLine(jsx(x), jsy(y), jsx(w), jsc(color));
+    else tftInstance->drawFastHLine(jsx(x), jsy(y), jsx(w), jsc(color));
     return 0;
 }
 
@@ -182,7 +209,7 @@ duk_ret_t JSBindings::js_drawFastHLine(duk_context *ctx) {
 duk_ret_t JSBindings::js_fillScreen(duk_context *ctx) {
     if (!tftInstance) return 0;
     uint32_t color = duk_require_uint(ctx, 0);
-    if (useSprite && tftSprite) tftSprite->fillScreen(color); else tftInstance->fillScreen(color);
+    if (useSprite && tftSprite) tftSprite->fillScreen(jsc(color)); else tftInstance->fillScreen(jsc(color));
     return 0;
 }
 
@@ -193,7 +220,7 @@ duk_ret_t JSBindings::js_fillRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->fillRect(x, y, w, h, color); else tftInstance->fillRect(x, y, w, h, color);
+    if (useSprite && tftSprite) tftSprite->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color)); else tftInstance->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
     return 0;
 }
 
@@ -204,7 +231,7 @@ duk_ret_t JSBindings::js_drawRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->drawRect(x, y, w, h, color); else tftInstance->drawRect(x, y, w, h, color);
+    if (useSprite && tftSprite) tftSprite->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color)); else tftInstance->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
     return 0;
 }
 
@@ -215,7 +242,7 @@ duk_ret_t JSBindings::js_drawLine(duk_context *ctx) {
     int x1 = duk_require_int(ctx, 2);
     int y1 = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->drawLine(x0, y0, x1, y1, color); else tftInstance->drawLine(x0, y0, x1, y1, color);
+    if (useSprite && tftSprite) tftSprite->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color)); else tftInstance->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color));
     return 0;
 }
 
@@ -224,7 +251,7 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
     uint32_t color = duk_require_uint(ctx, 2);
-    if (useSprite && tftSprite) tftSprite->drawPixel(x, y, color); else tftInstance->drawPixel(x, y, color);
+    if (useSprite && tftSprite) tftSprite->drawPixel(jsx(x), jsy(y), jsc(color)); else tftInstance->drawPixel(jsx(x), jsy(y), jsc(color));
     return 0;
 }
 
@@ -234,7 +261,7 @@ duk_ret_t JSBindings::js_drawCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawCircle(x, y, r, color); else tftInstance->drawCircle(x, y, r, color);
+    if (useSprite && tftSprite) tftSprite->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color)); else tftInstance->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
 
@@ -244,7 +271,7 @@ duk_ret_t JSBindings::js_fillCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->fillCircle(x, y, r, color); else tftInstance->fillCircle(x, y, r, color);
+    if (useSprite && tftSprite) tftSprite->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color)); else tftInstance->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
 
@@ -257,7 +284,7 @@ duk_ret_t JSBindings::js_drawTriangle(duk_context *ctx) {
     int x2 = duk_require_int(ctx, 4);
     int y2 = duk_require_int(ctx, 5);
     uint32_t color = duk_require_uint(ctx, 6);
-    if (useSprite && tftSprite) tftSprite->drawTriangle(x0, y0, x1, y1, x2, y2, color); else tftInstance->drawTriangle(x0, y0, x1, y1, x2, y2, color);
+    if (useSprite && tftSprite) tftSprite->drawTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color)); else tftInstance->drawTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
     return 0;
 }
 
@@ -270,7 +297,7 @@ duk_ret_t JSBindings::js_fillTriangle(duk_context *ctx) {
     int x2 = duk_require_int(ctx, 4);
     int y2 = duk_require_int(ctx, 5);
     uint32_t color = duk_require_uint(ctx, 6);
-    if (useSprite && tftSprite) tftSprite->fillTriangle(x0, y0, x1, y1, x2, y2, color); else tftInstance->fillTriangle(x0, y0, x1, y1, x2, y2, color);
+    if (useSprite && tftSprite) tftSprite->fillTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color)); else tftInstance->fillTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
     return 0;
 }
 
@@ -282,7 +309,7 @@ duk_ret_t JSBindings::js_drawRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    if (useSprite && tftSprite) tftSprite->drawRoundRect(x, y, w, h, r, color); else tftInstance->drawRoundRect(x, y, w, h, r, color);
+    if (useSprite && tftSprite) tftSprite->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color)); else tftInstance->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
     return 0;
 }
 
@@ -294,7 +321,7 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    if (useSprite && tftSprite) tftSprite->fillRoundRect(x, y, w, h, r, color); else tftInstance->fillRoundRect(x, y, w, h, r, color);
+    if (useSprite && tftSprite) tftSprite->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color)); else tftInstance->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
     return 0;
 }
 
@@ -385,7 +412,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
 
     // Draw row by row
     for (int row = 0; row < bmpHeight; row++) {
-        int drawY = flip ? (y + bmpHeight - 1 - row) : (y + row);
+        int drawY = flip ? (jsy(y) + (int)((bmpHeight - 1 - row) * (float)UI::H / 320.0f)) : (jsy(y) + (int)(row * (float)UI::H / 320.0f));
         
         // Skip drawing if out of bounds
         if (drawY < 0 || drawY >= tftInstance->height()) {
@@ -417,8 +444,8 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
                 }
             }
 
-            int drawX = x + pixelsRead;
-            tftInstance->pushImage(drawX, drawY, pixelsToRead, 1, tftbuffer);
+            int drawX = jsx(x) + (int)(pixelsRead * (float)UI::W / 240.0f);
+            tftInstance->pushImage(drawX, drawY, (int)(pixelsToRead * (float)UI::W / 240.0f), 1, tftbuffer);
             
             pixelsRead += pixelsToRead;
         }
@@ -447,7 +474,7 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int y = duk_require_int(ctx, 2);
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
     tftInstance->setTextDatum(TL_DATUM);
-    if (useSprite && tftSprite) tftSprite->drawString(str, x, y, font); else tftInstance->drawString(str, x, y, font);
+    if (useSprite && tftSprite) tftSprite->drawString(str, jsx(x), jsy(y), UI::font(font)); else tftInstance->drawString(str, jsx(x), jsy(y), UI::font(font));
     return 0;
 }
 
@@ -457,9 +484,9 @@ duk_ret_t JSBindings::js_setTextColor(duk_context *ctx) {
     // Optional background color (defaults to foreground = transparent)
     if (duk_is_number(ctx, 1)) {
         uint32_t bg = duk_require_uint(ctx, 1);
-        if (useSprite && tftSprite) tftSprite->setTextColor(fg, bg); else tftInstance->setTextColor(fg, bg);
+        if (useSprite && tftSprite) tftSprite->setTextColor(jsc(fg), jsc(bg)); else tftInstance->setTextColor(jsc(fg), jsc(bg));
     } else {
-        if (useSprite && tftSprite) tftSprite->setTextColor(fg); else tftInstance->setTextColor(fg);
+        if (useSprite && tftSprite) tftSprite->setTextColor(jsc(fg)); else tftInstance->setTextColor(jsc(fg));
     }
     return 0;
 }
@@ -487,19 +514,20 @@ duk_ret_t JSBindings::js_color(duk_context *ctx) {
     if (g > 255) g = 255;
     if (b < 0) b = 0;
     if (b > 255) b = 255;
-    duk_push_uint(ctx, KryonColorRGB(r, g, b));
+    // Convencao JS: cores sao RGB565 (mesmo valor em qualquer placa)
+    duk_push_uint(ctx, ((uint32_t)(r & 0xF8) << 8) | ((uint32_t)(g & 0xFC) << 3) | ((uint32_t)b >> 3));
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenWidth(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, UI::W); return 1; }
-    duk_push_int(ctx, tftInstance->width());
+    // Canvas virtual: os apps veem o tamanho de projeto (240)
+    duk_push_int(ctx, 240);
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, UI::H); return 1; }
-    duk_push_int(ctx, tftInstance->height());
+    // Canvas virtual: os apps veem o tamanho de projeto (320)
+    duk_push_int(ctx, 320);
     return 1;
 }
 
@@ -521,10 +549,13 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
         }
     }
     
+    // Coordenadas no espaco de projeto 240x320 (hit-zones dos apps batem)
+    int jx = tftInstance ? ((int)tx * 240 / tftInstance->width()) : 0;
+    int jy = tftInstance ? ((int)ty * 320 / tftInstance->height()) : 0;
     duk_push_object(ctx);
-    duk_push_int(ctx, touched ? (int)tx : 0);
+    duk_push_int(ctx, touched ? jx : 0);
     duk_put_prop_string(ctx, -2, "x");
-    duk_push_int(ctx, touched ? (int)ty : 0);
+    duk_push_int(ctx, touched ? jy : 0);
     duk_put_prop_string(ctx, -2, "y");
     duk_push_boolean(ctx, touched ? 1 : 0);
     duk_put_prop_string(ctx, -2, "touched");
@@ -1104,16 +1135,16 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex
-    duk_push_uint(ctx, TFT_BLACK);   duk_put_prop_string(ctx, -2, "BLACK");
-    duk_push_uint(ctx, TFT_WHITE);   duk_put_prop_string(ctx, -2, "WHITE");
-    duk_push_uint(ctx, TFT_RED);     duk_put_prop_string(ctx, -2, "RED");
-    duk_push_uint(ctx, TFT_GREEN);   duk_put_prop_string(ctx, -2, "GREEN");
-    duk_push_uint(ctx, TFT_BLUE);    duk_put_prop_string(ctx, -2, "BLUE");
-    duk_push_uint(ctx, TFT_YELLOW);  duk_put_prop_string(ctx, -2, "YELLOW");
-    duk_push_uint(ctx, TFT_CYAN);    duk_put_prop_string(ctx, -2, "CYAN");
-    duk_push_uint(ctx, TFT_MAGENTA); duk_put_prop_string(ctx, -2, "MAGENTA");
-    duk_push_uint(ctx, TFT_ORANGE);  duk_put_prop_string(ctx, -2, "ORANGE");
-    duk_push_uint(ctx, TFT_DARKGREY);duk_put_prop_string(ctx, -2, "DARKGREY");
+    duk_push_uint(ctx, 0x0000);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "BLACK");
+    duk_push_uint(ctx, 0xFFFF);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "WHITE");
+    duk_push_uint(ctx, 0xF800);  // RGB565 (convencao JS)     duk_put_prop_string(ctx, -2, "RED");
+    duk_push_uint(ctx, 0x07E0);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "GREEN");
+    duk_push_uint(ctx, 0x001F);  // RGB565 (convencao JS)    duk_put_prop_string(ctx, -2, "BLUE");
+    duk_push_uint(ctx, 0xFFE0);  // RGB565 (convencao JS)  duk_put_prop_string(ctx, -2, "YELLOW");
+    duk_push_uint(ctx, 0x07FF);  // RGB565 (convencao JS)    duk_put_prop_string(ctx, -2, "CYAN");
+    duk_push_uint(ctx, 0xF81F);  // RGB565 (convencao JS) duk_put_prop_string(ctx, -2, "MAGENTA");
+    duk_push_uint(ctx, 0xFDA0);  // RGB565 (convencao JS)  duk_put_prop_string(ctx, -2, "ORANGE");
+    duk_push_uint(ctx, 0x7BEF);  // RGB565 (convencao JS)duk_put_prop_string(ctx, -2, "DARKGREY");
 
     duk_pop(ctx); // pop global object
 }
