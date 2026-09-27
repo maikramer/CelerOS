@@ -475,7 +475,7 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int y = duk_require_int(ctx, 2);
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
     tftInstance->setTextDatum(TL_DATUM);
-    if (useSprite && tftSprite) tftSprite->drawString(str, jsx(x), jsy(y), UI::font(font)); else tftInstance->drawString(str, jsx(x), jsy(y), UI::font(font));
+    if (useSprite && tftSprite) tftSprite->drawString(str, jsx(x), jsy(y), KryonFont(UI::font(font))); else tftInstance->drawString(str, jsx(x), jsy(y), UI::font(font));
     return 0;
 }
 

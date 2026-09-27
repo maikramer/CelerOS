@@ -6,6 +6,7 @@
 #include "InstallerUI.h"
 #include "../Utils/StrUtils.h"
 #include "../WebManager/WebManager.h"
+#include "../Display/LegacyPalette.h"  // por ultimo: TFT_* -> tons do tema
 
 extern int currentState;
 

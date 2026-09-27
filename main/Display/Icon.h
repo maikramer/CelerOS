@@ -34,8 +34,15 @@ public:
     // letra inicial. Desenhado em runtime (nao usa asset).
     static void drawAppTile(lgfx::LGFXBase* tft, const char* appName, int x, int y);
 
-    // Cor de acento derivada do nome (formato nativo do alvo)
+    // Cor de acento derivada do nome (RGB888)
     static uint32_t appTileColor(const char* appName);
+
+    // Mistura RGB888: t256 = 0 -> a, 256 -> b
+    static uint32_t mix(uint32_t a, uint32_t b, int t256);
+
+    // Retangulo arredondado com gradiente vertical (top -> bottom), RGB888
+    static void fillGradientRoundRect(lgfx::LGFXBase* tft, int x, int y, int w, int h, int r,
+                                      uint32_t top, uint32_t bottom);
 
 private:
     static constexpr int COUNT = 11;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "../WebManager/WebManager.h"
 #include "HttpClient.h"
+#include "../Display/LegacyPalette.h"  // por ultimo: TFT_* -> tons do tema
 
 KryonDisplay* HelpCenterUI::tftInstance = nullptr;
 

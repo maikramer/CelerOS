@@ -141,7 +141,7 @@ void KeyboardScreen::draw(Canvas& c) {
     }
     if (m_cursorOn) {
         int tw = c.textWidth(shown.c_str(), UI::font(2));
-        int ch = UI::big ? 26 : 16;  // altura visual das fontes 4/2
+        int ch = c.fontHeight(KryonFont(UI::font(2)));
         c.fillRect({f.x + pad + tw + UI::sx(1), ty - ch / 2, UI::sx(2), ch}, THEME_ACCENT);
     }
 
@@ -150,12 +150,12 @@ void KeyboardScreen::draw(Canvas& c) {
     for (int i = 0; i < (int)m_keys.size(); i++) {
         const Key& k = m_keys[i];
         const Rect& r = k.r;
-        bool flash = (i == m_flashKey && now - m_flashMs < 150);
+        bool flash = (i == m_flashKey && now - m_flashMs < 150) || isPressed(r);
 
         switch (k.kind) {
             case KOk:
-                c.fillRoundRect(r, UI::sx(3), THEME_ACCENT);
-                c.text("OK", r.x + r.w / 2, r.y + r.h / 2, UI::font(2), 0x08222A, MC_DATUM);
+                c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_ACCENT);
+                c.text("OK", r.x + r.w / 2, r.y + r.h / 2, UI::font(2), flash ? THEME_TEXT : THEME_ON_ACCENT, MC_DATUM);
                 break;
             case KChar: {
                 char s[2] = {labelChar(k.ch), 0};
@@ -170,7 +170,7 @@ void KeyboardScreen::draw(Canvas& c) {
                 c.text("space", r.x + r.w / 2, r.y + r.h / 2, UI::font(1), THEME_TEXT_DIM, MC_DATUM);
                 break;
             case KShift:
-                c.fillRoundRect(r, UI::sx(3), m_mode == Upper ? THEME_ACCENT_D : THEME_CARD);
+                c.fillRoundRect(r, UI::sx(3), (m_mode == Upper || flash) ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
                 drawShiftGlyph(c, r, m_mode == Upper ? THEME_TEXT : THEME_TEXT_DIM);
                 break;
@@ -288,13 +288,12 @@ std::string getString(const std::string& initialText, const std::string& promptM
     Canvas canvas(Board::display());
     TouchPump pump;
     while (!done) {
-        pump.poll([&](const TouchEvent& ev) { kb.onTouch(ev); });
+        pump.poll([&](const TouchEvent& ev) {
+            kb.onTouch(ev);
+            if (ev.type != TouchEvent::Drag) kb.markDirty();  // tecla "afunda"
+        });
         kb.onTick(5);
-        if (kb.consumeDirty()) {
-            canvas.begin(false);
-            kb.draw(canvas);
-            canvas.end();
-        }
+        if (kb.consumeDirty()) canvas.render([&](Canvas& c) { kb.draw(c); });
         delay(5);
     }
     return ok ? result : std::string();

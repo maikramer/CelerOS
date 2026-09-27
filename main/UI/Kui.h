@@ -14,8 +14,13 @@
 //      mesmo Rect desenha e testa o toque — fim dos hit-tests manuais.
 //   4. Texto sempre transparente (sem cor de fundo): quem limpa o fundo
 //      e o widget, por retangulo inteiro. Fundos "estranhos" acabam.
-//   5. Canvas: sprite full-screen na PSRAM quando disponivel (transicao
-//      sem flicker); sem PSRAM desenha direto no display.
+//   5. Canvas com buffer: o frame e composto fora da tela e enviado de uma
+//      vez (zero flicker). Com PSRAM: sprite full-screen; sem PSRAM (CYD):
+//      faixas horizontais na RAM interna — a tela e desenhada N vezes, uma
+//      por faixa, entao draw() deve ser idempotente (sem efeitos colaterais
+//      alem de calcular geometria).
+//   6. Feedback de toque: widgets consultam kui::isPressed(rect) no draw e
+//      o Navigator redesenha no press/release — todo alvo tocavel "afunda".
 //
 // Coordenadas: fisicas (px do display). Para layout, usar UI::sx/sy do
 // design 240x320 como hoje.
@@ -51,7 +56,10 @@ struct TouchEvent {
     int dy() const { return y - startY; }
 
     // tap = release rapido sem deslocamento relevante
-    bool isTap() const { return type == Release && holdMs < 400 && abs(dx()) < UI::sx(25) && abs(dy()) < UI::sy(25); }
+    // (mesma tolerancia do TouchState::moved: o que "afunda" e o que dispara)
+    bool isTap() const { return type == Release && holdMs < 800 && abs(dx()) < slopX() && abs(dy()) < slopY(); }
+    static int slopX() { return UI::sx(18); }
+    static int slopY() { return UI::sy(18); }
     // swipe = release com deslocamento dominante em um eixo
     enum Swipe { SwipeNone, SwipeLeft, SwipeRight, SwipeUp, SwipeDown };
     Swipe swipe() const {
@@ -63,44 +71,96 @@ struct TouchEvent {
     }
 };
 
+// ----------------------------------------------------------- TouchState ----
+// Estado do toque em andamento (atualizado pelo TouchPump). Widgets usam no
+// draw() para o estado "pressionado".
+struct TouchState {
+    bool down = false;
+    bool moved = false;       // saiu da tolerancia de tap (virou arrasto)
+    int x = 0, y = 0;         // posicao atual
+    int startX = 0, startY = 0;
+};
+const TouchState& touchState();
+// Toque ativo, sem arrasto, que comecou e continua dentro de r
+bool isPressed(const Rect& r);
+
+// ------------------------------------------------------------- Tipografia ----
+// Papeis tipograficos (escolhem a fonte certa para a densidade da tela).
+// Os numeros de fonte legados (1/2/4) seguem valendo via KryonFont().
+namespace type {
+const lgfx::IFont* caption();   // legendas, rotulos de icone
+const lgfx::IFont* body();      // texto corrido, itens de lista, botoes
+const lgfx::IFont* title();     // titulos de tela (negrito)
+const lgfx::IFont* display();   // relogio / numeros grandes (negrito)
+}  // namespace type
+
 // ---------------------------------------------------------------- Canvas ----
-// Superficie de desenho de um frame: sprite full-screen (PSRAM) ou display.
+// Superficie de desenho de um frame. O buffer (sprite full-screen na PSRAM
+// ou faixa na RAM interna) e unico e compartilhado entre instancias.
 class Canvas {
 public:
-    explicit Canvas(KryonDisplay& dev);
-    ~Canvas();  // libera o sprite full-screen (PSRAM/heap) quando o Canvas e temporario
+    enum Mode { Direct, FullFrame, Bands };
 
-    // Ciclo de um redesenho: begin() ... primitivas ... end()
-    // direct=true desenha direto no display (telas legacy), sem sprite.
-    void begin(bool direct = false);
-    void end();
+    explicit Canvas(KryonDisplay& dev);
+
+    // Compoe um frame: chama fn uma vez (FullFrame/Direct) ou uma vez por
+    // faixa (Bands) e apresenta o resultado. direct=true desenha direto no
+    // display (telas legacy, que limpam/desenham por conta propria).
+    void render(const std::function<void(Canvas&)>& fn, bool direct = false);
+
+    // Modo do frame em andamento
+    Mode mode() const { return m_mode; }
 
     // Primitivas (unidades fisicas; cores RGB888 como o resto do firmware)
     void fill(uint32_t color);
     void fillRect(const Rect& r, uint32_t color);
     void fillRoundRect(const Rect& r, int radius, uint32_t color);
+    void fillGradient(const Rect& r, int radius, uint32_t top, uint32_t bottom);
     void drawRoundRect(const Rect& r, int radius, uint32_t color);
     void drawRect(const Rect& r, uint32_t color);
     void drawLine(int x0, int y0, int x1, int y1, uint32_t color);
+    void drawFastHLine(int x, int y, int w, uint32_t color);
     void drawCircle(int cx, int cy, int r, uint32_t color);
     void fillCircle(int cx, int cy, int r, uint32_t color);
+    void fillTriangle(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color);
+    // Arco preenchido (angulos em graus, 0 = 3h, sentido horario)
+    void fillArc(int cx, int cy, int r0, int r1, float a0, float a1, uint32_t color);
     void pushImage(int x, int y, int w, int h, const uint16_t* data);
     // Icone do pacote (Icon::draw): compoe o alpha sobre o fundo atual
     void drawIcon(const char* name, int x, int y);
+    // Tile de app do usuario (gradiente + inicial)
+    void drawAppTile(const char* appName, int x, int y);
+    // Escurece tudo que ja foi desenhado neste frame (fundo de modal)
+    void dim();
+    // Recorte (coordenadas fisicas); clearClip restaura a tela inteira
+    void setClip(const Rect& r);
+    void clearClip();
+
     // Texto SEMPRE transparente (o widget limpa o proprio fundo antes)
     void text(const char* s, int x, int y, uint8_t font, uint32_t color, int datum = TL_DATUM);
     void text(const std::string& s, int x, int y, uint8_t font, uint32_t color, int datum = TL_DATUM);
+    void text(const char* s, int x, int y, const lgfx::IFont* font, uint32_t color, int datum = TL_DATUM);
+    void text(const std::string& s, int x, int y, const lgfx::IFont* font, uint32_t color, int datum = TL_DATUM);
     int textWidth(const char* s, uint8_t font);
+    int textWidth(const char* s, const lgfx::IFont* font);
+    int fontHeight(const lgfx::IFont* font);
+    // Corta s com ".." ate caber em maxW
+    std::string ellipsize(const std::string& s, const lgfx::IFont* font, int maxW);
 
     int width() const;
     int height() const;
 
 private:
     KryonDisplay& m_dev;
-    KryonSprite* m_sprite = nullptr;  // full-screen quando cabe (PSRAM)
-    bool m_active = false;
-    lgfx::LGFXBase* target();  // sprite quando ativo, senao o display
+    lgfx::LGFXBase* m_target;
+    int m_offY = 0;        // topo da faixa corrente (Bands)
+    Mode m_mode = Direct;
+    int Y(int y) const { return y - m_offY; }
 };
+
+// Cabecalho padrao das telas Kui: faixa com titulo; devolve a altura.
+int headerHeight();
+void drawHeader(Canvas& c, const char* title);
 
 // ---------------------------------------------------------------- Screen ----
 class Screen {
@@ -114,6 +174,8 @@ public:
     virtual void onTick(uint32_t dtMs) { (void)dtMs; }
     // Telas antigas (embrulhadas) desenham direto no display, sem sprite
     virtual bool wantsDirectDraw() const { return false; }
+    // Swipe a partir da borda esquerda volta (Navigator::pop)
+    virtual bool allowsBackGesture() const { return true; }
 
     void markDirty() { m_dirty = true; }
     bool consumeDirty() {
@@ -160,30 +222,37 @@ public:
     void draw(Canvas& c) override;
 };
 
-// Lista rolavel: itens de uma linha, selecao por tap, scroll por drag.
+// Lista rolavel: itens de uma linha, selecao por tap, scroll por pixel com
+// inercia (fling). O dono chama tick(dt) no onTick e marca dirty se true.
 class List : public Widget {
 public:
     struct Item {
         std::string label;
         std::string right;   // texto a direita (opcional)
+        int bars = -1;       // 0..4: indicador de sinal a direita (-1 = nenhum)
         bool enabled = true;
     };
 
     std::vector<Item> items;
     int selected = -1;
-    int top = 0;             // primeiro item visivel
     std::function<void(int)> onSelect;
 
     void draw(Canvas& c) override;
     bool onTouch(const TouchEvent& ev, Rect myRect) override;
+    bool tick(uint32_t dtMs);   // anima a inercia; true = precisa redesenhar
     void ensureVisible(int idx);
+    void scrollToTop() { m_scroll = 0; m_vel = 0; }
 
     int visibleRows(const Rect& myRect) const;
+    static int rowH();
 
 private:
-    int rowH() const { return UI::ITEM_H; }
-    int m_dragAccum = 0;
-    int m_pressRow = -1;
+    int maxScroll() const;
+    void clampScroll();
+    float m_scroll = 0;      // px rolados
+    float m_vel = 0;         // px/ms (positivo = conteudo sobe)
+    uint32_t m_lastDragMs = 0;
+    bool m_dragging = false;
 };
 
 // Dialog modal: overlay escuro + card + botoes. Exibido pelo Navigator

@@ -23,7 +23,7 @@ set(KRYONOS_SRCS
     "Launcher/AppStoreUI.cpp"
     "Launcher/HelpCenterUI.cpp"
     "Runtime/JSBindings.cpp"
-    "Settings/SettingsUI.cpp"
+    "Settings/SettingsScreens.cpp"
     "Settings/TouchCalibrator.cpp"
     "WebServerApp/WebServerAppUI.cpp"
     "USBDevice/USBDevice.cpp"

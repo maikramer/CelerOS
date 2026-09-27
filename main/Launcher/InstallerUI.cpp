@@ -5,6 +5,7 @@
 #include "../Kernel/Core/HarixKernel.h"
 #include "LauncherUI.h"
 #include "../Utils/StrUtils.h"
+#include "../Display/LegacyPalette.h"  // por ultimo: TFT_* -> tons do tema
 
 // External state variable
 extern int currentState;

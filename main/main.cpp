@@ -4,10 +4,10 @@
 #include "freertos/task.h"
 #include "Boards/Board.h"
 #include "Display/Layout.h"
+#include "Display/Theme.h"
 #include "Display/Backlight.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
-#include "Settings/SettingsUI.h"
 #include "Launcher/InstallerUI.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
@@ -48,9 +48,20 @@ int currentState = STATE_LAUNCHER;
 KryonDisplay& tft = Board::display();
 static LauncherScreen s_launcher;  // base da pilha do Navigator
 
+// Splash de boot no tema: logo + status + trilho da barra de progresso (a
+// barra e preenchida pelo scan de apps em (sx(20), sy(200), sx(200), sy(10))).
+static void bootSplash(const char* status) {
+    tft.fillScreen(THEME_BG);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(THEME_TEXT);
+    tft.drawString("KryonOS", UI::cx(), UI::sy(140), UI::big ? &fonts::FreeSansBold24pt7b : &fonts::FreeSansBold18pt7b);
+    tft.setTextColor(THEME_TEXT_DIM);
+    tft.drawString(status, UI::cx(), UI::sy(175), UI::font(1));
+    tft.fillRoundRect(UI::sx(20), UI::sy(200), UI::sx(200), UI::sy(10), UI::sy(5), THEME_CARD);
+}
+
 static void kryonSetup() {
     Serial.begin(115200);
-    delay(1000);
     Serial.println("\n--- KryonOS Booting ---");
     Serial.printf("board: %s\n", Board::profile().name);
     if (Board::profile().hasPsram) {
@@ -64,29 +75,13 @@ static void kryonSetup() {
     ESP_LOGI("kryon.lcd", "depth=%d rot=%d w=%d h=%d",
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
 
-    // Cartao de teste de cores (~1.2s): R G B W Y C na metade de cima.
-    // Diagnostico visual da pipeline de cor do painel RGB.
-    {
-        int bw = tft.width() / 6;
-        uint32_t bars[6] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF, 0xFFFF00, 0x00FFFF};
-        for (int i = 0; i < 6; i++) {
-            tft.fillRect(i * bw, 0, bw, tft.height() / 2, bars[i]);
-        }
-        tft.setTextColor(0x000000, 0xFFFFFF);
-        tft.setTextDatum(TL_DATUM);
-        tft.drawString("COLOR TEST", 8, 8, 4);
-        delay(1200);
-    }
-
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("Booting KryonOS...", UI::cx(), UI::cy(), UI::font(2));
+    bootSplash("Iniciando...");
 
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
         Serial.println("File System Warning: One or more FS failed to mount.");
-        tft.drawString("FS Mount Warning!", UI::cx(), UI::sy(180), UI::font(2));
+        tft.setTextColor(THEME_WARN);
+        tft.drawString("Aviso: falha ao montar FS", UI::cx(), UI::sy(230), UI::font(1));
         delay(1000);
     }
 
@@ -118,18 +113,15 @@ static void kryonSetup() {
 
     // Init UI Components
     LauncherUI::init(&tft);
-    SettingsUI::init(&tft);
     InstallerUI::init(&tft);
     TouchCalibrator::init(&tft);
     WebServerAppUI::init(&tft);
     AppStoreUI::init(&tft);
     HelpCenterUI::init(&tft);
 
-    // Initial App Scan (with loading bar)
+    // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
     Serial.println("DEBUG: Scanning Local Apps...");
-    tft.fillScreen(TFT_BLACK);
-    tft.drawString("Loading Apps...", UI::cx(), UI::cy(), UI::font(2));
-    tft.drawRect(UI::sx(18), UI::sy(198), UI::sx(204), UI::sy(14), TFT_WHITE); // Loading bar outline
+    bootSplash("Carregando apps...");
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
     Serial.println("DEBUG: Local Apps Scanned.");

@@ -54,6 +54,25 @@
 #define TFT_GREENYELLOW 0xADFF2F
 #define TFT_PINK        0xFF99FF
 
+// ---------------------------------------------------------------------------
+// Tipografia: os numeros de fonte herdados do TFT_eSPI (1/2/4/6) viram fontes
+// proporcionais DejaVu com metrica equivalente. A fonte 6 nativa so tem
+// digitos (titulos em tela grande sumiam) e a GLCD 6x8 e serrilhada demais.
+// 7/8 (digitos 7-seg/grandes) seguem nativas.
+//
+//   1 -> DejaVu9   (~GLCD 6x8)     2 -> DejaVu12 (~Font2 16px)
+//   4 -> DejaVu24  (~Font4 26px)   6 -> DejaVu40 (titulos em tela grande)
+// ---------------------------------------------------------------------------
+inline const lgfx::IFont* KryonFont(uint8_t font) {
+    switch (font) {
+        case 1: return &lgfx::fonts::DejaVu9;
+        case 2: return &lgfx::fonts::DejaVu12;
+        case 4: return &lgfx::fonts::DejaVu24;
+        case 6: return &lgfx::fonts::DejaVu40;
+        default: return lgfx::fontdata[font];
+    }
+}
+
 // Base comum dos displays por placa: shims TFT_eSPI + hooks de calibracao.
 // Placas com touch resistivo sobrescrevem setTouch/calibrateTouch.
 class KryonDisplayBase : public lgfx::LGFX_Device {
@@ -61,12 +80,18 @@ public:
     using lgfx::LovyanGFX::textWidth;
     using lgfx::LovyanGFX::drawString;
 
-    // textWidth(str, font) com fonte numerica (usado pelo marquee/labels)
+    // drawString/textWidth com fonte numerica passam pela tabela KryonFont
+    size_t drawString(const char* string, int32_t x, int32_t y, uint8_t font) {
+        return lgfx::LovyanGFX::drawString(string, x, y, KryonFont(font));
+    }
+    size_t drawString(const std::string& string, int32_t x, int32_t y, uint8_t font) {
+        return lgfx::LovyanGFX::drawString(string.c_str(), x, y, KryonFont(font));
+    }
     int16_t textWidth(const char* string, uint8_t font) {
-        return (int16_t)lgfx::LovyanGFX::textWidth(string, lgfx::fontdata[font]);
+        return (int16_t)lgfx::LovyanGFX::textWidth(string, KryonFont(font));
     }
     int16_t textWidth(const std::string& string, uint8_t font) {
-        return (int16_t)lgfx::LovyanGFX::textWidth(string.c_str(), lgfx::fontdata[font]);
+        return (int16_t)lgfx::LovyanGFX::textWidth(string.c_str(), KryonFont(font));
     }
 
     virtual void setTouch(uint16_t* calData) { (void)calData; }

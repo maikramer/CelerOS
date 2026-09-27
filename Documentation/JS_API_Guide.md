@@ -144,7 +144,7 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
   - `promptMsg` (String) - Header text displayed above the keyboard.
   - `initialText` (String) - Text pre-filled into the keyboard input box.
 - **Returns:** `String`
-- **Description:** Completely suspends JavaScript execution and opens the native C++ Full-Screen Touch Keyboard. Once the user clicks "Enter", execution resumes and the typed string is returned. Returns an empty string `""` if the user clicks "Cancel".
+- **Description:** Completely suspends JavaScript execution and opens the native C++ full-screen QWERTY touch keyboard (with shift and two symbol pages). Once the user taps "OK", execution resumes and the typed string is returned. Returns an empty string `""` if the user taps "X" (cancel).
 
 ---
 

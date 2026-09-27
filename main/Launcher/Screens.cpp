@@ -3,7 +3,7 @@
 #include "../Display/Icon.h"
 #include "../Kernel/TimeManager.h"
 #include "../FileSystem/FileSystem.h"
-#include "../Settings/SettingsUI.h"
+#include "../Settings/SettingsScreens.h"
 #include "../Launcher/InstallerUI.h"
 #include "../Launcher/AppStoreUI.h"
 #include "../Launcher/HelpCenterUI.h"
@@ -14,22 +14,15 @@
 #include "../Utils/StrUtils.h"
 
 #include <Arduino.h>
+#include <algorithm>
+#include <ctime>
 
 using namespace kui;
 
 // Estados antigos (main.cpp) — so para a transicao LegacyScreen
-#define LEGACY_SETTINGS 1
 #define LEGACY_WEB_APP 5
-#define LEGACY_SETTINGS_WIFI 6
-#define LEGACY_SETTINGS_ABOUT 7
-#define LEGACY_SETTINGS_APPS 8
-#define LEGACY_SETTINGS_TIME 9
-#define LEGACY_SETTINGS_TIME_MANUAL 10
-#define LEGACY_UPDATER_BOOT 11
 #define LEGACY_APP_STORE 13
 #define LEGACY_HELP_CENTER 14
-#define LEGACY_SETTINGS_SECURITY 15
-#define LEGACY_SETTINGS_DISPLAY 16
 
 // ============================================================ Launcher =====
 
@@ -42,33 +35,42 @@ int gridCellH() { return gridAreaH() / LauncherUI::gridRows(); }
 int gridLeft() { return (UI::W - LauncherUI::gridCols() * gridCellW()) / 2; }
 int gridCellsPerPage() { return LauncherUI::gridCols() * LauncherUI::gridRows(); }
 
-// tile de app (letra inicial sobre cor do hash) desenhado no Canvas
-void drawAppTile(kui::Canvas& c, const std::string& name, int x, int y) {
-    uint32_t bg = Icon::appTileColor(name.c_str());
-    c.fillRoundRect({x, y, Icon::SIZE, Icon::SIZE}, UI::sx(8), bg);
-    char letter = 'A';
-    for (char ch : name) {
-        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
-            letter = (ch >= 'a' && ch <= 'z') ? ch - 32 : ch;
-            break;
-        }
+const char* const kSysIcons[4] = {"appstore", "installer", "settings", "help"};
+const char* const kSysNames[4] = {"App Store", "Installer", "Settings", "Help"};
+
+// Area tocavel do status de rede (canto direito do header): abre o WiFi
+kui::Rect wifiStatusRect() {
+    int hdr = gridHeaderH();
+    int w = UI::sx(110);
+    return {UI::W - w, 0, w, hdr};
+}
+
+// Data curta em pt-BR ("dom, 27 set"); vazia enquanto o relogio nao foi ajustado
+std::string shortDate() {
+    static const char* const kDays[7] = {"dom", "seg", "ter", "qua", "qui", "sex", "sab"};
+    static const char* const kMonths[12] = {"jan", "fev", "mar", "abr", "mai", "jun",
+                                             "jul", "ago", "set", "out", "nov", "dez"};
+    time_t now = time(nullptr);
+    struct tm t;
+    localtime_r(&now, &t);
+    if (t.tm_year + 1900 < 2020) return "";
+    return kstr::fmt("%s, %d %s", kDays[t.tm_wday], t.tm_mday, kMonths[t.tm_mon]);
+}
+
+// Glifo de WiFi vetorial: 3 arcos + ponto, base em (cx, by)
+void drawWifiGlyph(kui::Canvas& c, int cx, int by, bool on) {
+    uint32_t col = on ? THEME_TEXT : THEME_STROKE;
+    int t = UI::sx(3) > 2 ? UI::sx(3) : 2;
+    for (int i = 1; i <= 3; i++) {
+        int r = UI::sx(5) * i;
+        c.fillArc(cx, by, r - t, r, 225, 315, (i == 3 && !on) ? THEME_STROKE : col);
     }
-    c.text(std::string(1, letter), x + Icon::SIZE / 2, y + Icon::SIZE / 2, UI::big ? 6 : 4,
-           THEME_TEXT, MC_DATUM);
-}
-
-kui::Rect wifiBannerRect() {
-    int h = UI::sy(24);
-    return {UI::sx(8), UI::H - h - UI::sy(6), UI::W - UI::sx(16), h};
-}
-
-bool wifiBannerVisible() {
-    return !WebManager::isActive() && !FileSystem::exists("/local/nowifi.txt");
+    c.fillCircle(cx, by - 1, t - 1 > 0 ? t - 1 : 1, col);
 }
 }  // namespace
 
 kui::Rect LauncherScreen::cellRect(int entryIndex) const {
-    int cell = entryIndex - page * gridCellsPerPage();
+    int cell = entryIndex % gridCellsPerPage();
     int col = cell % LauncherUI::gridCols();
     int row = cell / LauncherUI::gridCols();
     return {gridLeft() + col * gridCellW(), gridTop() + row * gridCellH(), gridCellW(), gridCellH()};
@@ -81,114 +83,146 @@ void LauncherScreen::onEnter() {
     }
     if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
     if (page < 0) page = 0;
+    m_noWifiPref = FileSystem::exists("/local/nowifi.txt");
+    m_dragDx = 0;
+}
+
+void LauncherScreen::drawStatusBar(kui::Canvas& c) {
+    int hdr = gridHeaderH();
+    c.fillGradient({0, 0, UI::W, hdr}, 0, THEME_CARD, THEME_BG);
+
+    // relogio + data (esquerda)
+    int x = UI::sx(14);
+    std::string date = shortDate();
+    if (date.empty()) {
+        c.text(TimeManager::getFormattedTime(), x, hdr / 2, kui::type::display(), THEME_TEXT, ML_DATUM);
+    } else {
+        c.text(TimeManager::getFormattedTime(), x, hdr * 2 / 5, kui::type::display(), THEME_TEXT, ML_DATUM);
+        c.text(date, x + UI::sx(1), hdr * 4 / 5, kui::type::caption(), THEME_TEXT_DIM, ML_DATUM);
+    }
+
+    // rede (direita): glifo + pilula "Sem WiFi" quando offline
+    bool wifi = WebManager::isActive();
+    kui::Rect st = wifiStatusRect();
+    if (kui::isPressed(st)) c.fillRoundRect({st.x + UI::sx(4), UI::sy(8), st.w - UI::sx(8), hdr - UI::sy(16)}, UI::sx(8), THEME_RAISED);
+    int gx = UI::W - UI::sx(26);
+    drawWifiGlyph(c, gx, hdr / 2 + UI::sx(8), wifi);
+    if (!wifi && !m_noWifiPref) {
+        const lgfx::IFont* f = kui::type::caption();
+        const char* msg = "Sem WiFi";
+        int pw = c.textWidth(msg, f) + UI::sx(16);
+        int ph = UI::sy(20);
+        kui::Rect pill{gx - UI::sx(22) - pw, (hdr - ph) / 2, pw, ph};
+        c.drawRoundRect(pill, ph / 2, THEME_WARN);
+        c.text(msg, pill.x + pw / 2, pill.y + ph / 2, f, THEME_WARN, MC_DATUM);
+    } else if (!wifi) {
+        c.text("offline", gx - UI::sx(22), hdr / 2, kui::type::caption(), THEME_TEXT_DIM, MR_DATUM);
+    }
 }
 
 void LauncherScreen::draw(kui::Canvas& c) {
     c.fill(THEME_BG);
+    drawStatusBar(c);
 
-    // header: card + barra accent + titulo + relogio + wifi
-    int hdr = gridHeaderH();
-    c.fillRect({0, 0, UI::W, hdr}, THEME_CARD);
-    c.fillRect({0, hdr - UI::sy(3), UI::W, UI::sy(3)}, THEME_ACCENT);
-    c.text("KryonOS", UI::sx(14), hdr / 2, UI::font(4), THEME_TEXT, ML_DATUM);
+    // grid: pagina atual deslocada pelo arrasto + vizinha entrando pela borda
+    const lgfx::IFont* labelFont = kui::type::caption();
+    const int labelGap = UI::big ? 8 : 4;
+    auto drawPage = [&](int pg, int xOff) {
+        if (pg < 0 || pg >= LauncherUI::gridTotalPages()) return;
+        for (int entry = pg * gridCellsPerPage();
+             entry < LauncherUI::gridTotalEntries() && entry < (pg + 1) * gridCellsPerPage(); entry++) {
+            kui::Rect cell = cellRect(entry);
+            cell.x += xOff;
+            if (cell.x + cell.w <= 0 || cell.x >= UI::W) continue;
+            int iconX = cell.x + (cell.w - Icon::SIZE) / 2;
+            int labelH = c.fontHeight(labelFont);
+            int iconY = cell.y + (cell.h - Icon::SIZE - labelGap - labelH) / 2;
 
-    bool wifi = WebManager::isActive();
-    const char* wifiName = wifi ? "wifi_on" : "wifi_off";
-    if (Icon::available(wifiName)) {
-        c.drawIcon(wifiName, UI::W - Icon::SIZE - UI::sx(10), (hdr - Icon::SIZE) / 2);
-    } else {
-        c.fillCircle(UI::W - UI::sx(12), hdr / 2, UI::sx(4), wifi ? THEME_OK : THEME_TEXT_DIM);
-    }
-    c.text(TimeManager::getFormattedTime(), UI::W - Icon::SIZE - UI::sx(24), hdr / 2, UI::font(2),
-           THEME_TEXT_DIM, MR_DATUM);
-
-    // grid
-    const char* sysIcons[4] = {"appstore", "installer", "settings", "help"};
-    const char* sysNames[4] = {"App Store", "Installer", "Settings", "Help"};
-    for (int entry = page * gridCellsPerPage();
-         entry < LauncherUI::gridTotalEntries() && entry < (page + 1) * gridCellsPerPage(); entry++) {
-        kui::Rect cell = cellRect(entry);
-        int iconX = cell.x + (cell.w - Icon::SIZE) / 2;
-        int iconY = cell.y + (cell.h - Icon::SIZE - (UI::big ? 26 : 14)) / 2;
-        std::string label;
-        if (entry < 4) {
-            if (Icon::available(sysIcons[entry])) {
-                c.drawIcon(sysIcons[entry], iconX, iconY);
-            } else {
-                c.fillRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(8), THEME_CARD);
-                c.drawRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(8), THEME_STROKE);
+            if (xOff == 0 && kui::isPressed(cell)) {
+                int pad = UI::sx(6);
+                c.fillRoundRect({cell.x + pad, iconY - pad, cell.w - 2 * pad, Icon::SIZE + labelGap + labelH + 2 * pad},
+                                UI::sx(12), THEME_RAISED);
             }
-            label = sysNames[entry];
-        } else {
-            int appIdx = entry - 4;
-            drawAppTile(c, LauncherUI::appEntryName(appIdx), iconX, iconY);
-            label = LauncherUI::appEntryName(appIdx);
-        }
-        // label truncada
-        std::string shown = label;
-        while (shown.length() > 1 && c.textWidth(shown.c_str(), UI::font(2)) > cell.w - UI::sx(8)) {
-            shown = shown.substr(0, shown.length() - 1);
-        }
-        if (shown != label && shown.length() > 1) shown += ".";
-        c.text(shown, cell.x + cell.w / 2, iconY + Icon::SIZE + (UI::big ? 6 : 3), UI::font(2), THEME_TEXT, TC_DATUM);
-    }
 
-    // dots
+            std::string label;
+            if (entry < 4) {
+                if (Icon::available(kSysIcons[entry])) {
+                    c.drawIcon(kSysIcons[entry], iconX, iconY);
+                } else {
+                    c.fillRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(12), THEME_CARD);
+                    c.drawRoundRect({iconX, iconY, Icon::SIZE, Icon::SIZE}, UI::sx(12), THEME_STROKE);
+                }
+                label = kSysNames[entry];
+            } else {
+                label = LauncherUI::appEntryName(entry - 4);
+                c.drawAppTile(label.c_str(), iconX, iconY);
+            }
+            c.text(c.ellipsize(label, labelFont, cell.w - UI::sx(6)), cell.x + cell.w / 2,
+                   iconY + Icon::SIZE + labelGap, labelFont, THEME_TEXT, TC_DATUM);
+        }
+    };
+    c.setClip({0, gridHeaderH(), UI::W, UI::H - gridHeaderH()});
+    drawPage(page, m_dragDx);
+    if (m_dragDx < 0) drawPage(page + 1, m_dragDx + UI::W);
+    if (m_dragDx > 0) drawPage(page - 1, m_dragDx - UI::W);
+    c.clearClip();
+
+    // indicador de pagina: pilula na atual
     int tp = LauncherUI::gridTotalPages();
     if (tp > 1) {
         int dotsY = UI::H - UI::sy(14);
-        int spacing = UI::sx(18);
-        int x0 = UI::cx() - (tp - 1) * spacing / 2;
+        int d = UI::sx(3);
+        int activeW = UI::sx(16);
+        int gap = UI::sx(8);
+        int total = (tp - 1) * (2 * d + gap) + activeW;
+        int x = UI::cx() - total / 2;
         for (int i = 0; i < tp; i++) {
-            c.fillCircle(x0 + i * spacing, dotsY, i == page ? UI::sx(3) : UI::sx(2),
-                         i == page ? THEME_ACCENT : THEME_STROKE);
+            int w = (i == page) ? activeW : 2 * d;
+            c.fillRoundRect({x, dotsY - d, w, 2 * d}, d, i == page ? THEME_ACCENT : THEME_STROKE);
+            x += w + gap;
         }
-    }
-
-    // banner "WiFi offline"
-    if (wifiBannerVisible()) {
-        kui::Rect r = wifiBannerRect();
-        c.fillRoundRect(r, UI::sx(6), 0x231A0D);
-        c.drawRoundRect(r, UI::sx(6), THEME_WARN);
-        c.text("WiFi offline - toque para configurar", r.x + r.w / 2, r.y + r.h / 2, UI::font(1),
-               THEME_WARN, MC_DATUM);
     }
 }
 
 bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
+    const int tp = LauncherUI::gridTotalPages();
+
+    // arrasto horizontal: a pagina acompanha o dedo
+    if (ev.type == TouchEvent::Drag) {
+        if (kui::touchState().moved && ev.startY > gridHeaderH() && abs(ev.dx()) > abs(ev.dy())) {
+            int dx = ev.dx();
+            if ((page == 0 && dx > 0) || (page == tp - 1 && dx < 0)) dx /= 3;  // resistencia nas pontas
+            if (dx != m_dragDx) {
+                m_dragDx = dx;
+                return true;
+            }
+        }
+        return false;
+    }
     if (ev.type != TouchEvent::Release) return false;
 
-    // banner wifi -> tela de setup
-    if (ev.isTap() && wifiBannerVisible() && wifiBannerRect().contains(ev.x, ev.y)) {
+    if (m_dragDx != 0 || ev.swipe() == TouchEvent::SwipeLeft || ev.swipe() == TouchEvent::SwipeRight) {
+        int dx = ev.dx();
+        bool fast = ev.swipe() == TouchEvent::SwipeLeft || ev.swipe() == TouchEvent::SwipeRight;
+        if ((dx < -UI::W / 4 || (fast && dx < 0)) && page < tp - 1) page++;
+        else if ((dx > UI::W / 4 || (fast && dx > 0)) && page > 0) page--;
+        m_dragDx = 0;
+        return true;
+    }
+
+    if (!ev.isTap()) return false;
+
+    if (wifiStatusRect().contains(ev.x, ev.y)) {
         Navigator::push(WifiSetupScreen::instance());
         return true;
     }
 
-    // swipe troca pagina
-    switch (ev.swipe()) {
-        case TouchEvent::SwipeLeft:
-            if (page < LauncherUI::gridTotalPages() - 1) {
-                page++;
-                markDirty();
-            }
-            return true;
-        case TouchEvent::SwipeRight:
-            if (page > 0) {
-                page--;
-                markDirty();
-            }
-            return true;
-        default: break;
-    }
-
-    if (!ev.isTap()) return false;
     for (int entry = page * gridCellsPerPage();
-         entry < LauncherUI::gridTotalPages() * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries();
-         entry++) {
+         entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
         if (!cellRect(entry).contains(ev.x, ev.y)) continue;
         if (entry == 0) LegacyScreen::openLegacy(LEGACY_APP_STORE);
         else if (entry == 1) LegacyScreen::openLegacy(3);  // installer
-        else if (entry == 2) LegacyScreen::openLegacy(LEGACY_SETTINGS);
+        else if (entry == 2) SettingsScreens::open();
         else if (entry == 3) LegacyScreen::openLegacy(LEGACY_HELP_CENTER);
         else Navigator::push(AppHostScreen::instance(entry - 4));
         return true;
@@ -196,7 +230,11 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     return false;
 }
 
-void LauncherScreen::onTick(uint32_t) {
+void LauncherScreen::onTick(uint32_t dtMs) {
+    // relogio/rede mudam no maximo por segundo: sem formatar string a cada 5 ms
+    m_pollAccumMs += dtMs;
+    if (m_pollAccumMs < 250) return;
+    m_pollAccumMs = 0;
     std::string clock = TimeManager::getFormattedTime();
     bool wifi = WebManager::isActive();
     if (clock != lastClock || wifi != lastWifi) {
@@ -250,12 +288,12 @@ SemaphoreHandle_t s_scanMutex = nullptr;
 volatile bool s_scanDelivered = false;
 bool s_scanHandlerBound = false;
 
-// Barras de sinal (glifos ASCII) para o texto a direita do item
-const char* rssiBars(int32_t rssi) {
-    if (rssi >= -50) return "####";
-    if (rssi >= -62) return "###";
-    if (rssi >= -74) return "##";
-    return "#";
+// Nivel de sinal 1..4 (desenhado como barras pela List)
+int rssiLevel(int32_t rssi) {
+    if (rssi >= -50) return 4;
+    if (rssi >= -62) return 3;
+    if (rssi >= -74) return 2;
+    return 1;
 }
 }  // namespace
 
@@ -313,21 +351,21 @@ void WifiSetupScreen::rebuildList() {
         if (!dup) m_nets.push_back({ssid, net.rssi, net.authMode != WIFI_AUTH_OPEN});
     }
 
+    // mais forte primeiro (a List corta rotulos longos com "..")
+    std::sort(m_nets.begin(), m_nets.end(), [](const NetEntry& a, const NetEntry& b) { return a.rssi > b.rssi; });
     m_list.items.clear();
-    int maxChars = UI::big ? 28 : 16;
     for (const auto& n : m_nets) {
-        std::string label = n.ssid;
-        if ((int)label.length() > maxChars) label = label.substr(0, maxChars - 1) + ".";
         List::Item it;
-        it.label = label;
-        it.right = n.secure ? rssiBars(n.rssi) : "aberta";
+        it.label = n.ssid;
+        it.right = n.secure ? "" : "aberta";
+        it.bars = rssiLevel(n.rssi);
         m_list.items.push_back(it);
     }
     List::Item hidden;
     hidden.label = "Outra rede (oculta)...";
     m_list.items.push_back(hidden);
     m_list.selected = -1;
-    m_list.top = 0;
+    m_list.scrollToTop();
 }
 
 void WifiSetupScreen::updateStatus() {
@@ -375,34 +413,57 @@ void WifiSetupScreen::askHiddenSsid() {
     Navigator::push(kb);
 }
 
+namespace {
+// Resultado da task de conexao: -1 rodando/ocioso, 0 falhou, 1 conectou
+volatile int s_connResult = -1;
+bool s_connRunning = false;
+
+struct ConnJob {
+    std::string ssid, password;
+};
+
+void connectTask(void* arg) {
+    ConnJob* job = (ConnJob*)arg;
+    bool ok = WebManager::connect(job->ssid, job->password, true, 15000);
+    delete job;
+    s_connResult = ok ? 1 : 0;
+    vTaskDelete(nullptr);
+}
+}  // namespace
+
 void WifiSetupScreen::tryConnect(const std::string& ssid, const std::string& password,
                                  bool secure) {
-    drawConnecting(ssid);  // feedback direto no display: o connect bloqueia ~15s
-    bool ok = WebManager::connect(ssid, password, true, 15000);
+    if (s_connRunning) return;
+    m_connSsid = ssid;
+    m_connSecure = secure;
+    s_connResult = -1;
+    ConnJob* job = new ConnJob{ssid, password};
+    if (xTaskCreate(connectTask, "wifi_conn", 6144, job, 5, nullptr) != pdPASS) {
+        delete job;
+        Navigator::toast("Sem memoria para conectar", THEME_ERR);
+        return;
+    }
+    s_connRunning = true;
+    m_phase = Connecting;
+    m_spinMs = 0;
+    markDirty();
+}
+
+void WifiSetupScreen::finishConnect(bool ok) {
+    s_connRunning = false;
+    s_connResult = -1;
+    m_phase = LocalList;
     if (ok) {
         WebManager::enable();  // religa o servidor web se o usuario o tinha ligado
-        Navigator::toast("WiFi conectado", THEME_OK);
+        Navigator::toast("Conectado a " + m_connSsid, THEME_OK);
         m_scanStarted = false;  // proxima entrada refaz o scan
         Navigator::pop();       // volta para quem abriu (launcher/settings)
         return;
     }
     Navigator::toast("Falha ao conectar", THEME_ERR);
+    updateStatus();
     markDirty();
-    if (secure) askPassword(ssid);  // senha provavelmente errada: pede de novo
-}
-
-void WifiSetupScreen::drawConnecting(const std::string& ssid) {
-    Canvas c(Board::display());
-    c.begin(true);  // direto no display, sem sprite
-    c.fill(THEME_BG);
-    int hdr = UI::sy(56);
-    c.fillRect({0, 0, UI::W, hdr}, THEME_CARD);
-    c.fillRect({0, hdr - UI::sy(3), UI::W, UI::sy(3)}, THEME_ACCENT);
-    c.text("Configurar WiFi", UI::sx(14), hdr / 2, UI::font(4), THEME_TEXT, ML_DATUM);
-    c.text("Conectando em", UI::cx(), UI::sy(140), UI::font(2), THEME_TEXT, MC_DATUM);
-    c.text(ssid, UI::cx(), UI::sy(166), UI::font(2), THEME_ACCENT, MC_DATUM);
-    c.text("Aguarde...", UI::cx(), UI::sy(205), UI::font(1), THEME_TEXT_DIM, MC_DATUM);
-    c.end();
+    if (m_connSecure) askPassword(m_connSsid);  // senha provavelmente errada: pede de novo
 }
 
 void WifiSetupScreen::enterWebPortal() {
@@ -451,10 +512,21 @@ void WifiSetupScreen::onExit() {
 
 void WifiSetupScreen::draw(Canvas& c) {
     c.fill(THEME_BG);
-    int hdr = UI::sy(56);
-    c.fillRect({0, 0, UI::W, hdr}, THEME_CARD);
-    c.fillRect({0, hdr - UI::sy(3), UI::W, UI::sy(3)}, THEME_ACCENT);
-    c.text("Configurar WiFi", UI::sx(14), hdr / 2, UI::font(4), THEME_TEXT, ML_DATUM);
+    drawHeader(c, "WiFi");
+    int hdr = headerHeight();
+
+    if (m_phase == Connecting) {
+        // spinner: arco de 90 graus girando sobre trilho
+        int r = UI::sx(22), t = UI::sx(5);
+        int cy = UI::sy(150);
+        c.fillArc(UI::cx(), cy, r - t, r, 0, 360, THEME_CARD);
+        float a0 = (float)((m_spinMs * 360 / 1000) % 360);
+        c.fillArc(UI::cx(), cy, r - t, r, a0, a0 + 90, THEME_ACCENT);
+        c.text("Conectando em", UI::cx(), UI::sy(200), type::body(), THEME_TEXT_DIM, MC_DATUM);
+        c.text(c.ellipsize(m_connSsid, type::title(), UI::W - UI::sx(24)), UI::cx(), UI::sy(226), type::title(),
+               THEME_TEXT, MC_DATUM);
+        return;
+    }
 
     if (m_phase == WebPortal) {
         c.text("1. Conecte no ponto de acesso:", UI::cx(), UI::sy(92), UI::font(2), THEME_TEXT, MC_DATUM);
@@ -525,6 +597,7 @@ void WifiSetupScreen::draw(Canvas& c) {
 }
 
 bool WifiSetupScreen::onTouch(const TouchEvent& ev) {
+    if (m_phase == Connecting) return false;
     if (m_phase == WebPortal) return m_btnBack.onTouch(ev, m_btnBack.rect);
     if (m_btnBack.onTouch(ev, m_btnBack.rect)) return true;
     if (m_btnScan.onTouch(ev, m_btnScan.rect)) return true;
@@ -532,12 +605,22 @@ bool WifiSetupScreen::onTouch(const TouchEvent& ev) {
     return m_list.onTouch(ev, m_list.rect);
 }
 
-void WifiSetupScreen::onTick(uint32_t) {
+void WifiSetupScreen::onTick(uint32_t dtMs) {
     // Teclado descartado so e deletado aqui, fora da cadeia de chamadas dele
     if (m_kbTrash != nullptr) {
         delete m_kbTrash;
         m_kbTrash = nullptr;
     }
+
+    if (m_phase == Connecting) {
+        uint32_t before = m_spinMs / 40;
+        m_spinMs += dtMs;
+        if (m_spinMs / 40 != before) markDirty();  // ~25 fps
+        if (s_connResult >= 0) finishConnect(s_connResult == 1);
+        return;
+    }
+
+    if (m_list.tick(dtMs)) markDirty();  // inercia do scroll
 
     if (m_phase == LocalList) {
         if (s_scanDelivered) {
@@ -590,12 +673,6 @@ void WifiSetupScreen::onTick(uint32_t) {
 
 // ============================================================ Legacy =======
 
-namespace {
-// wrappers para DrawFn (sem parametros)
-void drawUpdaterBoot() { SettingsUI::drawUpdater(true); }
-void drawUpdaterManual() { SettingsUI::drawUpdater(false); }
-}  // namespace
-
 void LegacyScreen::onTick(uint32_t dtMs) {
     // telas antigas esperam o handler repetido enquanto pressionado
     if (m_pressed) {
@@ -631,21 +708,12 @@ LegacyScreen* LegacyScreen::forState(int legacyState) {
     if (s_legacyCache[legacyState] != nullptr) return s_legacyCache[legacyState];
 
     LegacyScreen* s = nullptr;
+    // Settings saiu do mapa legacy (port W7c-2 -> SettingsScreens).
     switch (legacyState) {
-        case LEGACY_SETTINGS: s = new LegacyScreen("settings", SettingsUI::draw, SettingsUI::handleTouch); break;
         case 3: s = new LegacyScreen("installer", InstallerUI::draw, InstallerUI::handleTouch); break;
         case LEGACY_WEB_APP: s = new LegacyScreen("webapp", WebServerAppUI::draw, WebServerAppUI::handleTouch); break;
-        case LEGACY_SETTINGS_WIFI: s = new LegacyScreen("settings:wifi", SettingsUI::drawWiFi, SettingsUI::handleWiFiTouch); break;
-        case LEGACY_SETTINGS_ABOUT: s = new LegacyScreen("settings:about", SettingsUI::drawAbout, SettingsUI::handleAboutTouch); break;
-        case LEGACY_SETTINGS_APPS: s = new LegacyScreen("settings:apps", SettingsUI::drawApps, SettingsUI::handleAppsTouch); break;
-        case LEGACY_SETTINGS_TIME: s = new LegacyScreen("settings:time", SettingsUI::drawTimeSettings, SettingsUI::handleTimeTouch); break;
-        case LEGACY_SETTINGS_TIME_MANUAL: s = new LegacyScreen("settings:timemanual", SettingsUI::drawTimeManual, SettingsUI::handleTimeManualTouch); break;
-        case LEGACY_UPDATER_BOOT: s = new LegacyScreen("updater", drawUpdaterBoot, SettingsUI::handleUpdaterTouch); break;
-        case 12: s = new LegacyScreen("updater", drawUpdaterManual, SettingsUI::handleUpdaterTouch); break;
         case LEGACY_APP_STORE: s = new LegacyScreen("appstore", AppStoreUI::draw, AppStoreUI::handleTouch); break;
         case LEGACY_HELP_CENTER: s = new LegacyScreen("help", HelpCenterUI::draw, HelpCenterUI::handleTouch); break;
-        case LEGACY_SETTINGS_SECURITY: s = new LegacyScreen("settings:security", SettingsUI::drawSecurity, SettingsUI::handleSecurityTouch); break;
-        case LEGACY_SETTINGS_DISPLAY: s = new LegacyScreen("settings:display", SettingsUI::drawDisplaySettings, SettingsUI::handleDisplayTouch); break;
         default: break;
     }
     s_legacyCache[legacyState] = s;
