@@ -1,0 +1,13 @@
+{
+  "name": "Help",
+  "packageName": "kryonos.help",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Central de ajuda: como usar o KryonOS, gestos, Wi-Fi, apps e notas de versao.",
+  "type": "System",
+  "category": "System",
+  "api": 3,
+  "system": true,
+  "order": 40,
+  "icon": "help"
+}

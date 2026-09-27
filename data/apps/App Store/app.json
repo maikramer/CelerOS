@@ -1,0 +1,13 @@
+{
+  "name": "App Store",
+  "packageName": "kryonos.appstore",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Loja de apps: catalogo online com instalacao e atualizacao direto do GitHub.",
+  "type": "System",
+  "category": "System",
+  "api": 3,
+  "system": true,
+  "order": 10,
+  "icon": "appstore"
+}

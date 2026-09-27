@@ -1,0 +1,13 @@
+{
+  "name": "Settings",
+  "packageName": "kryonos.settings",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN), tela, atualizacao OTA e sobre.",
+  "type": "System",
+  "category": "System",
+  "api": 3,
+  "system": true,
+  "order": 30,
+  "icon": "settings"
+}

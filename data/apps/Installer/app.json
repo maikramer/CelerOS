@@ -1,0 +1,13 @@
+{
+  "name": "Installer",
+  "packageName": "kryonos.installer",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Instala apps a partir do cartao SD na flash (ou no propio SD) e gerencia o destino de instalacao.",
+  "type": "System",
+  "category": "System",
+  "api": 3,
+  "system": true,
+  "order": 20,
+  "icon": "installer"
+}
