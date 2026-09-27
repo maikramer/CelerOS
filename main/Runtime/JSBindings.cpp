@@ -5,10 +5,7 @@
 #include "../WebManager/WebManager.h"
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
-#include <SPI.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
+#include "HttpClient.h"
 
 KryonDisplay* JSBindings::tftInstance = nullptr;
 KryonSprite* JSBindings::tftSprite = nullptr;
@@ -302,19 +299,19 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
 }
 
 // Helper functions for BMP parsing
-static uint16_t read16(fs::File &f) {
+static uint16_t read16(FILE *f) {
   uint16_t result;
-  ((uint8_t *)&result)[0] = f.read(); // LSB
-  ((uint8_t *)&result)[1] = f.read(); // MSB
+  ((uint8_t *)&result)[0] = fgetc(f); // LSB
+  ((uint8_t *)&result)[1] = fgetc(f); // MSB
   return result;
 }
 
-static uint32_t read32(fs::File &f) {
+static uint32_t read32(FILE *f) {
   uint32_t result;
-  ((uint8_t *)&result)[0] = f.read(); // LSB
-  ((uint8_t *)&result)[1] = f.read();
-  ((uint8_t *)&result)[2] = f.read();
-  ((uint8_t *)&result)[3] = f.read(); // MSB
+  ((uint8_t *)&result)[0] = fgetc(f); // LSB
+  ((uint8_t *)&result)[1] = fgetc(f);
+  ((uint8_t *)&result)[2] = fgetc(f);
+  ((uint8_t *)&result)[3] = fgetc(f); // MSB
   return result;
 }
 
@@ -324,28 +321,19 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
 
-    fs::FS* targetFS = nullptr;
-    std::string relPath;
-    if (strncmp(path, "/sd", 3) == 0) {
-        targetFS = &SD;
-        relPath = path + 3;
-        if (!kstr::startsWith(relPath, "/")) relPath = "/" + relPath;
-    } else if (strncmp(path, "/local", 6) == 0) {
-        targetFS = &LittleFS;
-        relPath = path + 6;
-        if (!kstr::startsWith(relPath, "/")) relPath = "/" + relPath;
-    } else {
+    // /sd e /local sao pontos de montagem reais no VFS: abre o caminho original
+    if (strncmp(path, "/sd", 3) != 0 && strncmp(path, "/local", 6) != 0) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
 
-    fs::File bmpFS = targetFS->open(relPath, FILE_READ);
-    if (!bmpFS) { Serial.printf("BMP ERR: Could not open file %s\n", relPath.c_str()); duk_push_boolean(ctx, 0); return 1; }
+    FILE *bmpFS = fopen(path, "rb");
+    if (!bmpFS) { Serial.printf("BMP ERR: Could not open file %s\n", path); duk_push_boolean(ctx, 0); return 1; }
 
     uint16_t sig = read16(bmpFS);
     if (sig != 0x4D42) { // "BM" signature
         Serial.printf("BMP ERR: Invalid signature: 0x%04X\n", sig);
-        bmpFS.close();
+        fclose(bmpFS);
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -360,7 +348,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     uint16_t planes = read16(bmpFS);
     if (planes != 1) { // Planes must be 1
         Serial.printf("BMP ERR: Invalid planes: %d\n", planes);
-        bmpFS.close();
+        fclose(bmpFS);
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -368,7 +356,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     uint16_t bmpDepth = read16(bmpFS);
     if (bmpDepth != 16 && bmpDepth != 24 && bmpDepth != 32) { // 16, 24, 32-bit BMPs supported
         Serial.printf("BMP ERR: Unsupported depth: %d\n", bmpDepth);
-        bmpFS.close();
+        fclose(bmpFS);
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -376,7 +364,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     uint32_t comp = read32(bmpFS);
     if (comp != 0 && comp != 3) { // 0=BI_RGB, 3=BI_BITFIELDS
         Serial.printf("BMP ERR: Unsupported compression: %lu\n", comp);
-        bmpFS.close();
+        fclose(bmpFS);
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -393,7 +381,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     uint8_t sdbuffer[4 * 64]; // Read buffer (max 4 bytes per pixel * 64 pixels)
     uint16_t tftbuffer[64];   // Convert to 16-bit 565 colors
 
-    bmpFS.seek(imageOffset);
+    fseek(bmpFS, imageOffset, SEEK_SET);
 
     // Draw row by row
     for (int row = 0; row < bmpHeight; row++) {
@@ -401,7 +389,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
         
         // Skip drawing if out of bounds
         if (drawY < 0 || drawY >= tftInstance->height()) {
-            bmpFS.seek(bmpFS.position() + rowSize);
+            fseek(bmpFS, (long)rowSize, SEEK_CUR);
             continue;
         }
 
@@ -409,7 +397,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
         while (pixelsRead < bmpWidth) {
             uint32_t pixelsToRead = bmpWidth - pixelsRead;
             if (pixelsToRead > 64) pixelsToRead = 64;
-            bmpFS.read(sdbuffer, pixelsToRead * bytesPerPixel);
+            fread(sdbuffer, 1, pixelsToRead * bytesPerPixel, bmpFS);
             
             for (uint32_t i = 0; i < pixelsToRead; i++) {
                 if (bmpDepth == 24) {
@@ -439,11 +427,11 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
         uint32_t padding = rowSize - (bmpWidth * bytesPerPixel);
         if (padding > 0) {
             uint8_t padBuffer[4];
-            bmpFS.read(padBuffer, padding);
+            fread(padBuffer, 1, padding, bmpFS);
         }
     }
 
-    bmpFS.close();
+    fclose(bmpFS);
     duk_push_boolean(ctx, 1);
     return 1;
 }
@@ -493,9 +481,12 @@ duk_ret_t JSBindings::js_color(duk_context *ctx) {
     int g = duk_require_int(ctx, 1);
     int b = duk_require_int(ctx, 2);
     // Clamp values
-    if (r < 0) r = 0; if (r > 255) r = 255;
-    if (g < 0) g = 0; if (g > 255) g = 255;
-    if (b < 0) b = 0; if (b > 255) b = 255;
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
     duk_push_uint(ctx, KryonColorRGB(r, g, b));
     return 1;
 }
@@ -708,7 +699,7 @@ duk_ret_t JSBindings::js_isWiFiActive(duk_context *ctx) {
 // Executa GET/POST e devolve o body em "out". Sem WiFi conectado: duk_error
 // (o script ve um erro legivel em vez de um null silencioso).
 static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!WebManager::isWifiConnected()) {
         duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
         return false;
     }
@@ -721,36 +712,17 @@ static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
         if (duk_is_string(ctx, 2)) contentType = duk_get_string(ctx, 2);
     }
 
-    // Clientes na pilha: precisam sobreviver enquanto "http" estiver em uso
-    WiFiClientSecure secureClient;
-    HTTPClient http;
+    // Componente Http (esp_http_client): https usa o cert bundle do sistema
+    HttpClient http;
     http.setTimeout(10000);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    bool begun;
-    if (kstr::startsWith(url, "https:")) {
-        secureClient.setInsecure();  // mesmo padrao do updater do OS
-        begun = http.begin(secureClient, url);
-    } else {
-        begun = http.begin(url);
-    }
-    if (!begun) return false;
-
-    int code;
+    HttpResponse resp;
     if (isPost) {
-        http.addHeader("Content-Type", contentType.c_str());
-        code = http.POST(body.c_str());
+        resp = http.post(url, body, contentType);
     } else {
-        code = http.GET();
+        resp = http.get(url);
     }
-    if (code < 200 || code >= 300) {
-        http.end();
-        return false;
-    }
-    {
-        String s = http.getString();
-        out.assign(s.c_str(), s.length());
-    }
-    http.end();
+    if (!resp.isOk()) return false;
+    out = resp.body;
     if (out.length() > NET_MAX_BODY) out.resize(NET_MAX_BODY);
     return true;
 }
@@ -778,7 +750,7 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_netIsConnected(duk_context *ctx) {
-    duk_push_boolean(ctx, WiFi.status() == WL_CONNECTED);
+    duk_push_boolean(ctx, WebManager::isWifiConnected());
     return 1;
 }
 

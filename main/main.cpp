@@ -1,9 +1,9 @@
 #include <Arduino.h>
-#include <SPI.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "Display/Display.h"
 #include "Display/Layout.h"
 #include "Display/Backlight.h"
-#include <WiFi.h>
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
 #include "Settings/SettingsUI.h"
@@ -41,12 +41,12 @@
 int currentState = STATE_LAUNCHER;
 KryonDisplay tft = KryonDisplay();
 
-void setup() {
+static void kryonSetup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n--- KryonOS Booting ---");
 #ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    Serial.printf("PSRAM: %u bytes (free %u)\n", ESP.getPsramSize(), ESP.getFreePsram());
+    Serial.printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
 #endif
 
     // Init TFT
@@ -119,13 +119,13 @@ void setup() {
     } else {
         Serial.println("DEBUG: WebManager Disabled by user (RAM Mode).");
     }
-    Serial.printf("DEBUG: Free heap before Kernel: %u\n", ESP.getFreeHeap());
+    Serial.printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
     Serial.println("DEBUG: Starting HarixKernel...");
     HarixKernel::init(&tft);
     Serial.println("HarixKernel initialized successfully.");
-    Serial.printf("DEBUG: Free heap after Kernel: %u\n", ESP.getFreeHeap());
+    Serial.printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Init UI Components
     LauncherUI::init(&tft);
@@ -165,7 +165,7 @@ void setup() {
 #endif
     
     // Check for updates on boot
-    if (currentState == STATE_LAUNCHER && WiFi.status() == WL_CONNECTED) {
+    if (currentState == STATE_LAUNCHER && WebManager::isWifiConnected()) {
         Serial.println("DEBUG: Checking for updates...");
         if (SettingsUI::checkUpdateSilent()) {
             currentState = STATE_UPDATER_BOOT;
@@ -184,7 +184,7 @@ void setup() {
 
 int lastState = -1; // To trigger draws on state change
 
-void loop() {
+static void kryonLoop() {
 
     if (currentState != lastState) {
         if (currentState != STATE_RUN_APP) {
@@ -295,4 +295,12 @@ void loop() {
 
     // Yield to let ESP32 handle background tasks (WiFi, etc.)
     delay(10);
+}
+
+// Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)
+extern "C" void app_main(void) {
+    kryonSetup();
+    while (true) {
+        kryonLoop();
+    }
 }

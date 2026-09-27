@@ -67,6 +67,7 @@ private:
     static bool checkUpdates();
     static int compareVersions(const std::string& v1, const std::string& v2);
     static bool downloadFile(const std::string& url, const std::string& destPath, const std::string& loadingMsg);
+    static bool fetchJson(const std::string& url, const std::string& loadingMsg, std::string& outBody);
     static void performInstall(int appIdx);
 };
 

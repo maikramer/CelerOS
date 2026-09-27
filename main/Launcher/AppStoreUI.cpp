@@ -1,13 +1,11 @@
 #include "AppStoreUI.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
+#include "HttpClient.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
-#include <SD.h>
 #include "InstallerUI.h"
 #include "../Utils/StrUtils.h"
+#include "../WebManager/WebManager.h"
 
 extern int currentState;
 
@@ -67,14 +65,17 @@ void AppStoreUI::draw() {
 // ============================================================
 // Network Fetching
 // ============================================================
+// Estado da barra de progresso quando o servidor nao informa o
+// tamanho total (total == -1): avanca um pouco por chunk recebido
+static int unknownSizeProgress = 0;
+
 bool AppStoreUI::downloadFile(const std::string& url, const std::string& destPath, const std::string& loadingMsg) {
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!WebManager::isWifiConnected()) {
         dialogMessage = "Please turn on WiFi first\nto access the app store.";
         return false;
     }
     
-    HTTPClient http;
-    http.begin(url.c_str());
+    HttpClient http;
     
     // Draw initial progress UI
     tftInstance->fillScreen(TFT_BLACK);
@@ -83,76 +84,62 @@ bool AppStoreUI::downloadFile(const std::string& url, const std::string& destPat
     tftInstance->drawString(loadingMsg.c_str(), UI::sx(120), UI::sy(140), UI::font(2));
     tftInstance->drawRect(UI::sx(30), UI::sy(160), UI::sx(180), UI::sy(20), TFT_WHITE);
     
-    int httpCode = http.GET();
-    if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
-        int totalLen = http.getSize();
-        int downloaded = 0;
-        
-        WiFiClient *stream = http.getStreamPtr();
-        fs::FS* targetFS = &LittleFS;
-        std::string relPath = destPath;
-        if (kstr::startsWith(destPath, "/sd/")) {
-            targetFS = &SD;
-            relPath = destPath.substr(3);
-        } else if (kstr::startsWith(destPath, "/local/")) {
-            targetFS = &LittleFS;
-            relPath = destPath.substr(6);
+    // Update Progress Bar
+    unknownSizeProgress = 0;
+    http.setProgressCallback([](int64_t done, int64_t total) {
+        int progressWidth;
+        if (total > 0) {
+            progressWidth = map((long)done, 0, (long)total, 0, 176);
+            if (progressWidth > 176) progressWidth = 176;
+        } else {
+            // Tamanho desconhecido: incrementa a barra a cada chunk
+            if (unknownSizeProgress < 170) unknownSizeProgress += 2;
+            progressWidth = unknownSizeProgress;
         }
-        
-        File file = targetFS->open(relPath.c_str(), "w");
-        if (!file) {
-            dialogMessage = "Error: FS Write Failed!";
-            http.end();
-            return false;
-        }
-        
-        uint8_t buff[512] = { 0 };
-        int len;
-        
-        while (http.connected() && (totalLen == -1 || downloaded < totalLen)) {
-            size_t size = stream->available();
-            if (size) {
-                int readLen = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
-                if (readLen > 0) {
-                    file.write(buff, readLen);
-                    downloaded += readLen;
-                    
-                    // Update Progress Bar
-                    if (totalLen > 0) {
-                        int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
-                    }
-                }
-            } else {
-                delay(1);
-            }
-        }
-        file.close();
-        http.end();
+        tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
+    });
+    
+    HttpResponse resp = http.downloadToFile(url, destPath);
+    if (resp.isOk()) {
         return true;
     } else {
-        dialogMessage = "Error HTTP " + std::to_string(httpCode);
-        http.end();
+        dialogMessage = "Error HTTP " + std::to_string(resp.statusCode);
         return false;
     }
 }
 
-bool AppStoreUI::fetchCategories() {
-    std::string tmpPath = "/tmp_index.json";
-    if (!downloadFile(INDEX_URL, tmpPath, "Fetching App Store...")) {
+bool AppStoreUI::fetchJson(const std::string& url, const std::string& loadingMsg, std::string& outBody) {
+    if (!WebManager::isWifiConnected()) {
+        dialogMessage = "Please turn on WiFi first\nto access the app store.";
         return false;
     }
     
-    File file = LittleFS.open(tmpPath.c_str(), "r");
-    if (!file) {
-        dialogMessage = "Failed to open index";
+    // Draw loading screen (same layout as the download progress UI)
+    tftInstance->fillScreen(TFT_BLACK);
+    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
+    tftInstance->setTextDatum(MC_DATUM);
+    tftInstance->drawString(loadingMsg.c_str(), UI::sx(120), UI::sy(140), UI::font(2));
+    tftInstance->drawRect(UI::sx(30), UI::sy(160), UI::sx(180), UI::sy(20), TFT_WHITE);
+    
+    HttpClient http;
+    HttpResponse resp = http.get(url);
+    if (!resp.isOk()) {
+        dialogMessage = "Error HTTP " + std::to_string(resp.statusCode);
+        return false;
+    }
+    
+    outBody = resp.body;
+    return true;
+}
+
+bool AppStoreUI::fetchCategories() {
+    std::string body;
+    if (!fetchJson(INDEX_URL, "Fetching App Store...", body)) {
         return false;
     }
     
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    LittleFS.remove(tmpPath.c_str());
+    DeserializationError error = deserializeJson(doc, body);
     
     if (error) {
         dialogMessage = "JSON Parse Failed";
@@ -180,21 +167,13 @@ bool AppStoreUI::fetchCategories() {
 bool AppStoreUI::fetchCategoryApps(const std::string& url) {
     if (url == "UPDATE_ACTION") return checkUpdates();
     
-    std::string tmpPath = "/tmp_category.json";
-    if (!downloadFile(url, tmpPath, "Loading " + currentCategoryName + "...")) {
-        return false;
-    }
-    
-    File file = LittleFS.open(tmpPath.c_str(), "r");
-    if (!file) {
-        dialogMessage = "Failed to open category";
+    std::string body;
+    if (!fetchJson(url, "Loading " + currentCategoryName + "...", body)) {
         return false;
     }
     
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    LittleFS.remove(tmpPath.c_str());
+    DeserializationError error = deserializeJson(doc, body);
     
     if (error) {
         dialogMessage = "Category Parse Failed";
@@ -263,76 +242,66 @@ bool AppStoreUI::checkUpdates() {
     updateAppCount = 0;
     isUpdateMode = true;
     
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!WebManager::isWifiConnected()) {
         dialogMessage = "Please turn on WiFi first\nto check for updates.";
         return false;
     }
     
+    const char* appRoots[2] = {"/sd/apps", "/local/apps"};
     for (int i=0; i<2; i++) {
-        fs::FS* targetFS = (i == 0) ? (fs::FS*)&SD : (fs::FS*)&LittleFS;
-        if (!targetFS->exists("/apps")) continue;
-        
-        File root = targetFS->open("/apps");
-        if (!root || !root.isDirectory()) continue;
-        
-        File appDir = root.openNextFile();
-        while (appDir) {
-            if (appDir.isDirectory()) {
-                std::string appJsonPath = "/apps/";
-                std::string dName = appDir.name();
-                if (kstr::lastIndexOf(dName, '/') >= 0) dName = dName.substr(kstr::lastIndexOf(dName, '/') + 1);
-                appJsonPath += dName + "/app.json";
-                if (targetFS->exists(appJsonPath.c_str())) {
-                    File jsonFile = targetFS->open(appJsonPath.c_str(), "r");
-                    if (jsonFile) {
+        const char* rootPath = appRoots[i];
+        if (!FileSystem::isDirectory(rootPath)) continue;
+
+        FileEntry appDirs[40];
+        int dirCount = FileSystem::listDirectory(rootPath, appDirs, 40);
+
+        for (int d = 0; d < dirCount; d++) {
+            if (appDirs[d].isDir) {
+                std::string appJsonPath = std::string(rootPath) + "/" + appDirs[d].name + "/app.json";
+                if (FileSystem::exists(appJsonPath.c_str())) {
+                    std::string jsonBody = FileSystem::readTextFile(appJsonPath.c_str());
+                    if (!jsonBody.empty()) {
                         JsonDocument doc;
-                        if (!deserializeJson(doc, jsonFile)) {
+                        if (!deserializeJson(doc, jsonBody)) {
                             std::string metaUrl = doc["metaUrl"].as<std::string>();
                             std::string localVer = doc["version"].as<std::string>();
                             std::string pkgName = doc["packageName"].as<std::string>();
                             std::string name = doc["name"].as<std::string>();
                             
                             if (metaUrl.length() > 0 && updateAppCount < 50) {
-                                std::string tmpPath = "/tmp_update.json";
-                                if (downloadFile(metaUrl, tmpPath, "Checking " + name + "...")) {
-                                    File remoteJson = LittleFS.open(tmpPath.c_str(), "r");
-                                    if (remoteJson) {
-                                        JsonDocument rdoc;
-                                        if (!deserializeJson(rdoc, remoteJson)) {
-                                            std::string remoteVer = rdoc["version"].as<std::string>();
-                                            int remoteApi = rdoc["api"] | 1;
+                                std::string body;
+                                if (fetchJson(metaUrl, "Checking " + name + "...", body)) {
+                                    JsonDocument rdoc;
+                                    if (!deserializeJson(rdoc, body)) {
+                                        std::string remoteVer = rdoc["version"].as<std::string>();
+                                        int remoteApi = rdoc["api"] | 1;
+                                        
+                                        if (compareVersions(remoteVer, localVer) > 0) {
+                                            std::string baseUrl = metaUrl;
+                                            int lastSlash = kstr::lastIndexOf(baseUrl, '/');
+                                            if (lastSlash > 0) baseUrl = baseUrl.substr(0, lastSlash + 1);
                                             
-                                            if (compareVersions(remoteVer, localVer) > 0) {
-                                                std::string baseUrl = metaUrl;
-                                                int lastSlash = kstr::lastIndexOf(baseUrl, '/');
-                                                if (lastSlash > 0) baseUrl = baseUrl.substr(0, lastSlash + 1);
-                                                
-                                                updateApps[updateAppCount].id = pkgName;
-                                                updateApps[updateAppCount].name = rdoc["name"] | name;
-                                                updateApps[updateAppCount].version = remoteVer;
-                                                updateApps[updateAppCount].author = rdoc["author"] | "Unknown";
-                                                std::string changelog = rdoc["changelog"] | "";
-                                                if (changelog.length() > 0) {
-                                                    updateApps[updateAppCount].description = changelog;
-                                                } else {
-                                                    updateApps[updateAppCount].description = "Update available!";
-                                                }
-                                                updateApps[updateAppCount].metaUrl = metaUrl;
-                                                updateApps[updateAppCount].appUrl = baseUrl + "main.js";
-                                                updateAppCount++;
+                                            updateApps[updateAppCount].id = pkgName;
+                                            updateApps[updateAppCount].name = rdoc["name"] | name;
+                                            updateApps[updateAppCount].version = remoteVer;
+                                            updateApps[updateAppCount].author = rdoc["author"] | "Unknown";
+                                            std::string changelog = rdoc["changelog"] | "";
+                                            if (changelog.length() > 0) {
+                                                updateApps[updateAppCount].description = changelog;
+                                            } else {
+                                                updateApps[updateAppCount].description = "Update available!";
                                             }
+                                            updateApps[updateAppCount].metaUrl = metaUrl;
+                                            updateApps[updateAppCount].appUrl = baseUrl + "main.js";
+                                            updateAppCount++;
                                         }
-                                        remoteJson.close();
                                     }
-                                    LittleFS.remove(tmpPath.c_str());
                                 }
                             }
                         }
-                        jsonFile.close();
                     }
                 }
             }
-            appDir = root.openNextFile();
         }
     }
     
@@ -657,57 +626,50 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
                 selectedAppIndex = clickedAbs;
                 
                 // Fetch Meta for details
-                std::string tmpPath = "/tmp_meta.json";
-                if (downloadFile(currentApps[selectedAppIndex].metaUrl, tmpPath, "Loading details...")) {
-                    File file = LittleFS.open(tmpPath.c_str(), "r");
-                    if (file) {
-                        JsonDocument doc;
-                        if (!deserializeJson(doc, file)) {
-                            int appApi = doc["api"] | 1;
-                            if (appApi > KRYONOS_API_LEVEL) {
-                                file.close();
-                                LittleFS.remove(tmpPath.c_str());
-                                if (isUpdateMode) {
-                                    dialogMessage = "API " + std::to_string(appApi) + " needed to update.\nPlease update OS first!";
-                                } else {
-                                    dialogMessage = "This App Requires KryonOS API " + std::to_string(appApi) + "\nPlease update OS!";
-                                }
-                                storeState = 4;
-                                drawDialog();
-                                return;
+                std::string body;
+                if (fetchJson(currentApps[selectedAppIndex].metaUrl, "Loading details...", body)) {
+                    JsonDocument doc;
+                    if (!deserializeJson(doc, body)) {
+                        int appApi = doc["api"] | 1;
+                        if (appApi > KRYONOS_API_LEVEL) {
+                            if (isUpdateMode) {
+                                dialogMessage = "API " + std::to_string(appApi) + " needed to update.\nPlease update OS first!";
+                            } else {
+                                dialogMessage = "This App Requires KryonOS API " + std::to_string(appApi) + "\nPlease update OS!";
                             }
-                            currentApps[selectedAppIndex].name = doc["name"] | currentApps[selectedAppIndex].id;
-                            currentApps[selectedAppIndex].description = doc["description"] | "No description.";
-                            currentApps[selectedAppIndex].author = doc["author"] | "Unknown";
-                            currentApps[selectedAppIndex].version = doc["version"] | "1.0.0";
-                            
-                            // Check if installed and if this is an update
-                            isUpdateMode = false;
-                            std::string pkgName = doc["packageName"] | currentApps[selectedAppIndex].id;
-                            for (int fsIdx=0; fsIdx<2; fsIdx++) {
-                                std::string localPath = (fsIdx == 0 ? "/sd/apps/" : "/local/apps/") + pkgName + "/app.json";
-                                if (FileSystem::exists(localPath.c_str())) {
-                                    std::string localJson = FileSystem::readTextFile(localPath.c_str());
-                                    if (localJson.length() > 0) {
-                                        std::string localVer = FileSystem::parseJsonValue(localJson, "version");
-                                        if (compareVersions(currentApps[selectedAppIndex].version, localVer) > 0) {
-                                            isUpdateMode = true;
-                                        }
+                            storeState = 4;
+                            drawDialog();
+                            return;
+                        }
+                        currentApps[selectedAppIndex].name = doc["name"] | currentApps[selectedAppIndex].id;
+                        currentApps[selectedAppIndex].description = doc["description"] | "No description.";
+                        currentApps[selectedAppIndex].author = doc["author"] | "Unknown";
+                        currentApps[selectedAppIndex].version = doc["version"] | "1.0.0";
+                        
+                        // Check if installed and if this is an update
+                        isUpdateMode = false;
+                        std::string pkgName = doc["packageName"] | currentApps[selectedAppIndex].id;
+                        for (int fsIdx=0; fsIdx<2; fsIdx++) {
+                            std::string localPath = (fsIdx == 0 ? "/sd/apps/" : "/local/apps/") + pkgName + "/app.json";
+                            if (FileSystem::exists(localPath.c_str())) {
+                                std::string localJson = FileSystem::readTextFile(localPath.c_str());
+                                if (localJson.length() > 0) {
+                                    std::string localVer = FileSystem::parseJsonValue(localJson, "version");
+                                    if (compareVersions(currentApps[selectedAppIndex].version, localVer) > 0) {
+                                        isUpdateMode = true;
                                     }
                                 }
                             }
-                            
-                            if (isUpdateMode) {
-                                std::string changelog = doc["changelog"] | "";
-                                if (changelog.length() > 0) {
-                                    currentApps[selectedAppIndex].description = changelog;
-                                } else {
-                                    currentApps[selectedAppIndex].description = "Update available!";
-                                }
+                        }
+                        
+                        if (isUpdateMode) {
+                            std::string changelog = doc["changelog"] | "";
+                            if (changelog.length() > 0) {
+                                currentApps[selectedAppIndex].description = changelog;
+                            } else {
+                                currentApps[selectedAppIndex].description = "Update available!";
                             }
                         }
-                        file.close();
-                        LittleFS.remove(tmpPath.c_str());
                     }
                 }
                 
@@ -733,57 +695,50 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
                 selectedAppIndex = selectedIndex;
                 
                 // Fetch Meta for details
-                std::string tmpPath = "/tmp_meta.json";
-                if (downloadFile(currentApps[selectedAppIndex].metaUrl, tmpPath, "Loading details...")) {
-                    File file = LittleFS.open(tmpPath.c_str(), "r");
-                    if (file) {
-                        JsonDocument doc;
-                        if (!deserializeJson(doc, file)) {
-                            int appApi = doc["api"] | 1;
-                            if (appApi > KRYONOS_API_LEVEL) {
-                                file.close();
-                                LittleFS.remove(tmpPath.c_str());
-                                if (isUpdateMode) {
-                                    dialogMessage = "API " + std::to_string(appApi) + " needed to update.\nPlease update OS first!";
-                                } else {
-                                    dialogMessage = "This App Requires KryonOS API " + std::to_string(appApi) + "\nPlease update OS!";
-                                }
-                                storeState = 4;
-                                drawDialog();
-                                return;
+                std::string body;
+                if (fetchJson(currentApps[selectedAppIndex].metaUrl, "Loading details...", body)) {
+                    JsonDocument doc;
+                    if (!deserializeJson(doc, body)) {
+                        int appApi = doc["api"] | 1;
+                        if (appApi > KRYONOS_API_LEVEL) {
+                            if (isUpdateMode) {
+                                dialogMessage = "API " + std::to_string(appApi) + " needed to update.\nPlease update OS first!";
+                            } else {
+                                dialogMessage = "This App Requires KryonOS API " + std::to_string(appApi) + "\nPlease update OS!";
                             }
-                            currentApps[selectedAppIndex].name = doc["name"] | currentApps[selectedAppIndex].id;
-                            currentApps[selectedAppIndex].description = doc["description"] | "No description.";
-                            currentApps[selectedAppIndex].author = doc["author"] | "Unknown";
-                            currentApps[selectedAppIndex].version = doc["version"] | "1.0.0";
-                            
-                            // Check if installed and if this is an update
-                            isUpdateMode = false;
-                            std::string pkgName = doc["packageName"] | currentApps[selectedAppIndex].id;
-                            for (int fsIdx=0; fsIdx<2; fsIdx++) {
-                                std::string localPath = (fsIdx == 0 ? "/sd/apps/" : "/local/apps/") + pkgName + "/app.json";
-                                if (FileSystem::exists(localPath.c_str())) {
-                                    std::string localJson = FileSystem::readTextFile(localPath.c_str());
-                                    if (localJson.length() > 0) {
-                                        std::string localVer = FileSystem::parseJsonValue(localJson, "version");
-                                        if (compareVersions(currentApps[selectedAppIndex].version, localVer) > 0) {
-                                            isUpdateMode = true;
-                                        }
+                            storeState = 4;
+                            drawDialog();
+                            return;
+                        }
+                        currentApps[selectedAppIndex].name = doc["name"] | currentApps[selectedAppIndex].id;
+                        currentApps[selectedAppIndex].description = doc["description"] | "No description.";
+                        currentApps[selectedAppIndex].author = doc["author"] | "Unknown";
+                        currentApps[selectedAppIndex].version = doc["version"] | "1.0.0";
+                        
+                        // Check if installed and if this is an update
+                        isUpdateMode = false;
+                        std::string pkgName = doc["packageName"] | currentApps[selectedAppIndex].id;
+                        for (int fsIdx=0; fsIdx<2; fsIdx++) {
+                            std::string localPath = (fsIdx == 0 ? "/sd/apps/" : "/local/apps/") + pkgName + "/app.json";
+                            if (FileSystem::exists(localPath.c_str())) {
+                                std::string localJson = FileSystem::readTextFile(localPath.c_str());
+                                if (localJson.length() > 0) {
+                                    std::string localVer = FileSystem::parseJsonValue(localJson, "version");
+                                    if (compareVersions(currentApps[selectedAppIndex].version, localVer) > 0) {
+                                        isUpdateMode = true;
                                     }
                                 }
                             }
-                            
-                            if (isUpdateMode) {
-                                std::string changelog = doc["changelog"] | "";
-                                if (changelog.length() > 0) {
-                                    currentApps[selectedAppIndex].description = changelog;
-                                } else {
-                                    currentApps[selectedAppIndex].description = "Update available!";
-                                }
+                        }
+                        
+                        if (isUpdateMode) {
+                            std::string changelog = doc["changelog"] | "";
+                            if (changelog.length() > 0) {
+                                currentApps[selectedAppIndex].description = changelog;
+                            } else {
+                                currentApps[selectedAppIndex].description = "Update available!";
                             }
                         }
-                        file.close();
-                        LittleFS.remove(tmpPath.c_str());
                     }
                 }
                 

@@ -103,7 +103,7 @@ std::string TimeManager::getFormattedDate() {
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
     
-    char buffer[16];
+    char buffer[32];
     // DD/MM/YYYY format
     snprintf(buffer, sizeof(buffer), "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
     return std::string(buffer);

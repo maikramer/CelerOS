@@ -1,4 +1,5 @@
 #include "InstallerUI.h"
+#include <cctype>
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Kernel/Core/HarixKernel.h"
@@ -356,7 +357,7 @@ void InstallerUI::drawFileList() {
                 tftInstance->drawString(("> " + displayName).c_str(), UI::sx(15), UI::sy(yPos + 12), UI::font(2));
             } else {
                 // Normal Item
-                uint16_t textColor = TFT_WHITE;
+                uint32_t textColor = TFT_WHITE;
                 if (hasUp && listIndex != 0) {
                     int fileIdx = listIndex - (hasUp ? 1 : 0);
                     if (isAppPackage[fileIdx]) textColor = TFT_GREEN;
@@ -885,7 +886,7 @@ void InstallerUI::handleTouch(uint16_t x, uint16_t y) {
                 bool validPkg = true;
                 if (pkg.length() == 0 || kstr::indexOf(pkg, ' ') != -1 || kstr::indexOf(pkg, '.') == -1) validPkg = false;
                 for (int c = 0; c < (int)pkg.length(); c++) {
-                    if (isUpperCase(pkg[c])) validPkg = false;
+                    if (isupper((unsigned char)pkg[c])) validPkg = false;
                 }
                 
                 if (!validPkg) {
