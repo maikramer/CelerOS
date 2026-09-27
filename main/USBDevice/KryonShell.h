@@ -23,4 +23,27 @@ public:
     static constexpr int MAX_LINE = 256;
 };
 
+// Editor de linha minimalista compartilhado pelos consoles (UART e CDC):
+// eco, backspace e devolve a linha completa no Enter.
+class LineEditor {
+public:
+    typedef KryonShell::PrintFn PrintFn;
+
+    explicit LineEditor(PrintFn echo, void* ctx) : m_echo(echo), m_ctx(ctx) {}
+
+    // Alimenta um byte; retorna true quando uma linha foi completada
+    // (disponivel em line, ja NUL-terminada). Bytes nao-imprimiveis que
+    // nao sao Enter/Backspace sao ignorados (permite coexistir com
+    // protocolos binarios no mesmo canal).
+    bool feed(uint8_t byte, char* line, size_t maxLen);
+
+    void reset() { m_len = 0; }
+
+private:
+    PrintFn m_echo;
+    void* m_ctx;
+    char m_buf[KryonShell::MAX_LINE];
+    size_t m_len = 0;
+};
+
 #endif // KRYON_SHELL_H

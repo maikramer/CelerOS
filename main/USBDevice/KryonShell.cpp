@@ -92,14 +92,16 @@ int cmdLs(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     }
     for (int i = 0; i < n; i++) {
         std::string full = entries[i].path;
-        struct stat st = {0};
+        struct stat st;
+        memset(&st, 0, sizeof(st));
         size_t size = 0;
         time_t mtime = 0;
         if (stat(full.c_str(), &st) == 0) {
             size = (size_t)st.st_size;
             mtime = st.st_mtime;
         }
-        struct tm tminfo = {0};
+        struct tm tminfo;
+        memset(&tminfo, 0, sizeof(tminfo));
         char when[24] = "--------------------";
         if (mtime > 0 && localtime_r(&mtime, &tminfo) != nullptr) {
             strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tminfo);
@@ -290,6 +292,27 @@ const ShellCmd kCommands[] = {
 
 bool KryonShell::pathAllowed(const std::string& path) {
     return path.rfind("/local", 0) == 0 || path.rfind("/sd", 0) == 0;
+}
+
+bool LineEditor::feed(uint8_t byte, char* line, size_t maxLen) {
+    if (byte == '\r' || byte == '\n') {
+        size_t n = (m_len < maxLen - 1) ? m_len : maxLen - 1;
+        memcpy(line, m_buf, n);
+        line[n] = '\0';
+        m_len = 0;
+        return true;
+    }
+    if (byte == 0x08 || byte == 0x7F) {  // backspace
+        if (m_len > 0) {
+            m_len--;
+            m_echo(m_ctx, "\b \b");
+        }
+    } else if (byte >= 0x20 && byte < 0x7F && m_len < sizeof(m_buf) - 1) {
+        m_buf[m_len++] = (char)byte;
+        char echo = (char)byte;
+        m_echo(m_ctx, "%c", echo);
+    }
+    return false;
 }
 
 int KryonShell::execute(const char* line, PrintFn print, void* ctx) {

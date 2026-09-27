@@ -19,6 +19,10 @@
 #include "Kernel/TimeManager.h"
 #include "Launcher/AppStoreUI.h"
 #include "Launcher/HelpCenterUI.h"
+#include "USBDevice/SerialLink.h"
+#if CONFIG_KRYONOS_USB_NATIVE
+#include "USBDevice/USBDevice.h"
+#endif
 
 // Define states
 #define STATE_LAUNCHER 0
@@ -82,6 +86,13 @@ static void kryonSetup() {
         tft.drawString("FS Mount Warning!", UI::cx(), UI::sy(180), UI::font(2));
         delay(1000);
     }
+
+    // Console/shell + canal kryonctl na UART do console (CH340 no PC)
+    SerialLink::init();
+#if CONFIG_KRYONOS_USB_NATIVE
+    // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
+    USBDevice::init();
+#endif
 
     // Brilho do backlight (depois do FS: le /local/brightness.txt)
     Backlight::init(&tft);

@@ -1,9 +1,11 @@
 #include "KryonLink.h"
-#include "USBDevice.h"
 #include "KryonShell.h"
+#include "FileSystem/FileSystem.h"
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
+#include <string>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -24,14 +26,19 @@
 
 namespace {
 
+// transporte injetado (default: CDC nativo do USBDevice)
+KryonLink::WriteFn s_writer = nullptr;
+KryonLink::BaudFn s_baudHook = nullptr;
+
 // ---------------------------------------------------------------- utilidades
 
 void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
+    if (s_writer == nullptr) return;  // nenhum transporte instalado
     uint8_t head[4] = {0x4B, cmd, (uint8_t)(dataLen + 1), (uint8_t)((dataLen + 1) >> 8)};
-    USBDevice::linkWrite(head, sizeof(head));
-    USBDevice::linkWrite(&status, 1);
+    s_writer(head, sizeof(head));
+    s_writer(&status, 1);
     if (data != nullptr && dataLen > 0) {
-        USBDevice::linkWrite((const uint8_t*)data, dataLen);
+        s_writer((const uint8_t*)data, dataLen);
     }
 }
 
@@ -191,7 +198,8 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     while ((ent = readdir(dir)) != nullptr) {
         if (ent->d_name[0] == '.') continue;
         std::string full = std::string(path) + "/" + ent->d_name;
-        struct stat st = {0};
+        struct stat st;
+        memset(&st, 0, sizeof(st));
         bool isDir = false;
         uint32_t size = 0, mtime = 0;
         if (stat(full.c_str(), &st) == 0) {
@@ -220,11 +228,11 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     uint8_t frameHead[4] = {0x4B, KL_LS, (uint8_t)bodyLen, (uint8_t)(bodyLen >> 8)};
     uint8_t cnt[2];
     le16(cnt, count);
-    USBDevice::linkWrite(frameHead, 4);
+    s_writer(frameHead, 4);
     uint8_t status = 0;
-    USBDevice::linkWrite(&status, 1);
-    USBDevice::linkWrite(cnt, 2);
-    USBDevice::linkWrite((const uint8_t*)out.data(), (uint16_t)out.size());
+    s_writer(&status, 1);
+    s_writer(cnt, 2);
+    s_writer((const uint8_t*)out.data(), (uint16_t)out.size());
 }
 
 void handleStat(const uint8_t* payload, uint16_t len) {
@@ -233,7 +241,8 @@ void handleStat(const uint8_t* payload, uint16_t len) {
         respondError(KL_STAT, "caminho invalido");
         return;
     }
-    struct stat st = {0};
+    struct stat st;
+    memset(&st, 0, sizeof(st));
     if (stat(path, &st) != 0) {
         respond(KL_STAT, 0, "\x00", 1);  // exists=0
         return;
@@ -360,12 +369,12 @@ void handleExec(const uint8_t* payload, uint16_t len) {
     le32(rec + 1, outLen);
     respond(KL_EXEC, 0, rec, sizeof(rec));
     if (outLen > 0) {
-        // saida grande e enviada como frames de continuacao com o mesmo opcode
+        // saida grande e enviada como frames de continuacao
         size_t off = 0;
         while (off < ctx.out.size()) {
             size_t n = ctx.out.size() - off;
             if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
-            respond(0x0E /* KL_EXEC_CONT */, 0, ctx.out.data() + off, (uint16_t)n);
+            respond(KL_EXEC_CONT, 0, ctx.out.data() + off, (uint16_t)n);
             off += n;
         }
     }
@@ -377,6 +386,20 @@ void handleReboot() {
     respond(KL_REBOOT, 0, rec, sizeof(rec));
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
+}
+
+void handleSetBaud(const uint8_t* payload, uint16_t len) {
+    uint32_t baud = 0;
+    if (!takeU32(payload, len, baud) || s_baudHook == nullptr) {
+        respondError(KL_SET_BAUD, "troca de baud nao suportada neste canal");
+        return;
+    }
+    uint8_t rec[4];
+    le32(rec, baud);
+    respond(KL_SET_BAUD, 0, rec, sizeof(rec));
+    // da tempo do ACK sair da FIFO antes de mudar o baud
+    vTaskDelay(pdMS_TO_TICKS(20));
+    s_baudHook(baud);
 }
 
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
@@ -394,59 +417,68 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_RENAME: handleRename(payload, len); break;
         case KL_EXEC: handleExec(payload, len); break;
         case KL_REBOOT: handleReboot(); break;
+        case KL_SET_BAUD: handleSetBaud(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }
 
 }  // namespace
 
-void KryonLink::run(StreamBufferHandle_t rx) {
+void KryonLink::setWriter(WriteFn fn) {
+    s_writer = fn;
+}
+
+void KryonLink::setBaudHook(BaudFn fn) {
+    s_baudHook = fn;
+}
+
+// Maquina de estados de frames alimentada byte a byte.
+void KryonLink::feed(uint8_t byte) {
     static uint8_t payload[MAX_PAYLOAD];
+    static enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } state = WANT_MAGIC;
+    static uint8_t cmd = 0;
+    static uint16_t need = 0, got = 0;
 
-    enum State { WANT_MAGIC, WANT_CMD, WANT_LEN, WANT_PAYLOAD } state = WANT_MAGIC;
-    uint8_t cmd = 0;
-    uint16_t need = 0, got = 0;
+    switch (state) {
+        case WANT_MAGIC:
+            if (byte == 0x4B) state = WANT_CMD;
+            break;
+        case WANT_CMD:
+            cmd = byte;
+            state = WANT_LEN_LO;
+            break;
+        case WANT_LEN_LO:
+            need = byte;
+            state = WANT_LEN_HI;
+            break;
+        case WANT_LEN_HI:
+            need |= (uint16_t)byte << 8;
+            got = 0;
+            if (need == 0) {
+                dispatch(cmd, payload, 0);
+                state = WANT_MAGIC;
+            } else if (need <= MAX_PAYLOAD) {
+                state = WANT_PAYLOAD;
+            } else {
+                respondError(cmd, "payload grande demais");
+                state = WANT_MAGIC;
+            }
+            break;
+        case WANT_PAYLOAD:
+            payload[got++] = byte;
+            if (got >= need) {
+                dispatch(cmd, payload, need);
+                got = 0;
+                state = WANT_MAGIC;
+            }
+            break;
+    }
+}
 
+void KryonLink::run(StreamBufferHandle_t rx) {
     for (;;) {
         uint8_t byte;
         if (xStreamBufferReceive(rx, &byte, 1, portMAX_DELAY) == 0) continue;
-
-        switch (state) {
-            case WANT_MAGIC:
-                if (byte == 0x4B) state = WANT_CMD;
-                break;
-            case WANT_CMD:
-                cmd = byte;
-                state = WANT_LEN;
-                break;
-            case WANT_LEN:
-                // len e little-endian: primeiro byte baixo
-                if (got == 0) {
-                    need = byte;
-                    got = 1;
-                } else {
-                    need |= (uint16_t)byte << 8;
-                    got = 0;
-                    if (need == 0) {
-                        dispatch(cmd, payload, 0);
-                        state = WANT_MAGIC;
-                    } else if (need <= MAX_PAYLOAD) {
-                        state = WANT_PAYLOAD;
-                    } else {
-                        // frame grande demais: descarta e responde erro
-                        respondError(cmd, "payload grande demais");
-                        state = WANT_MAGIC;
-                    }
-                }
-                break;
-            case WANT_PAYLOAD:
-                payload[got++] = byte;
-                if (got >= need) {
-                    dispatch(cmd, payload, need);
-                    got = 0;
-                    state = WANT_MAGIC;
-                }
-                break;
-        }
+        feed(byte);
     }
 }
