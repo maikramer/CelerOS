@@ -8,7 +8,7 @@
 #include "../WebManager/WebManager.h"
 #include "../Launcher/LauncherUI.h"
 #include "../OTA/OtaManager.h"
-#include "../WebManager/CaptivePortal.h"
+#include "../WebManager/WifiSetupPortal.h"
 #include "esp_rom_md5.h"
 #include "../Display/Backlight.h"
 #include "../Utils/StrUtils.h"
@@ -231,7 +231,7 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
                 : (x >= UI::sx(40) && x <= UI::sx(200));
             if (hitPortal) {
                 WebManager::stopWebServer();  // libera a porta 80 para o portal
-                CaptivePortal::runBlocking(tftInstance);
+                WifiSetupPortal::runBlocking(tftInstance);
                 WebManager::enable();         // restaura STA + servidor conforme o resultado
                 drawWiFi();
                 return;
