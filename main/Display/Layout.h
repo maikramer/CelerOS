@@ -1,7 +1,7 @@
 #ifndef KRYONOS_LAYOUT_H
 #define KRYONOS_LAYOUT_H
 
-#include "Display.h"
+#include "Boards/Board.h"
 
 // ============================================================================
 // Layout adaptativo do KryonOS.

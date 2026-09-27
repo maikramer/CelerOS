@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <duktape.h>
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 
 class JSBindings {
 public:

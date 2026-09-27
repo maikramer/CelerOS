@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <string>
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 #include <ArduinoJson.h>
 
 class HelpCenterUI {

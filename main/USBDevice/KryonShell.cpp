@@ -1,5 +1,6 @@
 #include "KryonShell.h"
 #include "FileSystem/FileSystem.h"
+#include "Boards/Board.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,13 +27,7 @@
 namespace {
 
 const char* boardName() {
-#if defined(KRYONOS_BOARD_CYD)
-    return "cyd (ESP32-2432S028R)";
-#elif defined(KRYONOS_BOARD_SMARTDISPLAY_4IN)
-    return "smartdisplay_4in (ESP32-S3-4848S040)";
-#else
-    return "unknown";
-#endif
+    return Board::profile().name;
 }
 
 std::string humanSize(size_t bytes) {

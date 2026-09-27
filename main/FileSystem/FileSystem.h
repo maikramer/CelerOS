@@ -62,17 +62,8 @@ public:
     static bool formatSD();
     
 private:
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    static constexpr int KRYON_SD_CS = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
-    static constexpr int KRYON_SD_SCK    = 48;
-    static constexpr int KRYON_SD_MISO   = 41;
-    static constexpr int KRYON_SD_MOSI   = 47;
-#else
-    static constexpr int KRYON_SD_CS = 15;  // Cheap Yellow Display (HSPI dedicado)
-    static constexpr int KRYON_SD_SCK    = 14;
-    static constexpr int KRYON_SD_MISO   = 26;
-    static constexpr int KRYON_SD_MOSI   = 13;
-#endif
+    // Pinos do SD vem do perfil da placa (Boards/<placa>/Board.cpp) via
+    // Board::profile().sd — nao existem constantes de placa aqui.
 };
 
 #endif // FILE_SYSTEM_H

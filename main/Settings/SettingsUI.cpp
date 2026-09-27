@@ -1,5 +1,6 @@
 #include "SettingsUI.h"
 #include "../Display/Layout.h"
+#include "Boards/Board.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../FileSystem/FileSystem.h"
@@ -58,13 +59,13 @@ void SettingsUI::draw() {
     const char* icons[8] = { "wifi_on", "settings", "app", "time", "about", "update", "settings", "web" };
     const char* labels[8] = { "WiFi", "Calibrator", "Apps", "Time & Region", "About", "Updates", "Security", "Display" };
     int count = 8;
-#ifdef KRYONOS_TOUCH_CAPACITIVE
-    icons[1] = "settings";  // placeholder oculto abaixo
-    count = 7;
-    const int mapIdx[7] = { 0, 2, 3, 4, 5, 6, 7 };  // sem o calibrador
-#else
-    const int mapIdx[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
-#endif
+    const bool capacitive = Board::profile().capacitiveTouch;
+    int mapIdx[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    if (capacitive) {
+        icons[1] = "settings";  // placeholder oculto abaixo
+        count = 7;
+        for (int i = 0; i < 7; i++) mapIdx[i] = (i == 0) ? 0 : i + 1;  // sem o calibrador
+    }
 
     int n = count;
     int cols = 2;
@@ -99,10 +100,7 @@ void SettingsUI::handleTouch(uint16_t x, uint16_t y) {
     int hdr = UI::sy(56);
     int gap = UI::sx(12);
     int gridTop = hdr + UI::sy(10);
-    int n = 8;
-#ifdef KRYONOS_TOUCH_CAPACITIVE
-    n = 7;
-#endif
+    int n = Board::profile().capacitiveTouch ? 7 : 8;
     int cols = 2;
     int rows = (n + cols - 1) / cols;
     int areaH = UI::H - gridTop - UI::sy(14);
@@ -115,11 +113,11 @@ void SettingsUI::handleTouch(uint16_t x, uint16_t y) {
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
             int i = row * cols + col;
             if (i < n) {
-#ifdef KRYONOS_TOUCH_CAPACITIVE
-                int dests[7] = { 6, 8, 9, 7, 12, 15, 16 };      // WiFi, Apps, Time, About, Updates, Security, Display
-#else
-                int dests[8] = { 6, 4, 8, 9, 7, 12, 15, 16 };   // WiFi, Calibrator, Apps, Time, About, Updates, Security, Display
-#endif
+                // destinos na ordem dos itens visiveis (sem calibrador
+                // quando o touch da placa e capacitivo)
+                static const int destsCap[7] = { 6, 8, 9, 7, 12, 15, 16 };      // WiFi, Apps, Time, About, Updates, Security, Display
+                static const int destsAll[8] = { 6, 4, 8, 9, 7, 12, 15, 16 };   // + Calibrator
+                const int* dests = Board::profile().capacitiveTouch ? destsCap : destsAll;
                 currentState = dests[i];
                 return;
             }

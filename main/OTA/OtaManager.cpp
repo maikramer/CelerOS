@@ -4,15 +4,13 @@
 #include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Boards/Board.h"
 
 OtaUpdateInfo OtaManager::info;
 std::string OtaManager::lastError;
 
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-static const char* KRYONOS_UPDATE_CHANNEL = "smartdisplay_4848S040";
-#else
-static const char* KRYONOS_UPDATE_CHANNEL = "esp32";
-#endif
+// Canal de updates da placa (perfil em Boards/<placa>/Board.cpp)
+static const char* KRYONOS_UPDATE_CHANNEL = Board::profile().otaChannel;
 
 // Fonte canonica dos updates deste fork. Trocar aqui (ou usar
 // /local/ota_url.txt no dispositivo) para apontar outro servidor.

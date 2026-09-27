@@ -1,5 +1,6 @@
 #include "FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Boards/Board.h"
 
 #include <sys/stat.h>
 #include <dirent.h>
@@ -22,11 +23,9 @@ static const char* FS_TAG = "kryon.fs";
 static sdmmc_card_t* s_sd_card = nullptr;
 static bool s_spi_bus_ready = false;
 
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-  #define KRYONOS_SD_SPI_HOST SPI2_HOST  // FSPI (compartilhada com init 3-wire do painel)
-#else
-  #define KRYONOS_SD_SPI_HOST SPI2_HOST  // HSPI no ESP32 classico
-#endif
+// O barramento do SD e sempre o SPI2 (FSPI no S3, HSPI no ESP32 classico);
+// pinos e velocidade vem do perfil da placa (Boards/<placa>/Board.cpp).
+#define KRYONOS_SD_SPI_HOST SPI2_HOST
 
 bool FileSystem::init() {
     bool success = true;
@@ -61,10 +60,11 @@ bool FileSystem::mountSD() {
     if (s_sd_card != nullptr) return true;
 
     if (!s_spi_bus_ready) {
+        const SdConfig& sd = Board::profile().sd;
         spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = KRYON_SD_MOSI;
-        buscfg.miso_io_num = KRYON_SD_MISO;
-        buscfg.sclk_io_num = KRYON_SD_SCK;
+        buscfg.mosi_io_num = sd.mosi;
+        buscfg.miso_io_num = sd.miso;
+        buscfg.sclk_io_num = sd.sck;
         buscfg.quadwp_io_num = -1;
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 4092;
@@ -88,15 +88,14 @@ bool FileSystem::mountSD() {
 
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.host_id = (spi_host_device_t)KRYONOS_SD_SPI_HOST;
-    slot.gpio_cs = (gpio_num_t)KRYON_SD_CS;
+    slot.gpio_cs = (gpio_num_t)Board::profile().sd.cs;
     slot.gpio_cd = GPIO_NUM_NC;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = KRYONOS_SD_SPI_HOST;
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    // No SmartDisplay o barramento e compartilhado com o init do painel: 4MHz
-    host.max_freq_khz = 4000;
-#endif
+    if (Board::profile().sd.freqKhz > 0) {
+        host.max_freq_khz = Board::profile().sd.freqKhz;
+    }
 
     esp_vfs_fat_mount_config_t mountcfg = {};
     mountcfg.format_if_mount_failed = false;

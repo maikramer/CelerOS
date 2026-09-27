@@ -66,24 +66,11 @@ void Icon::draw(KryonDisplay* tft, const char* name, int x, int y) {
 }
 
 uint32_t Icon::appTileColor(const char* appName) {
-    // Paleta de acentos coerente com o tema
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+    // Paleta de acentos coerente com o tema (RGB888; o painel converte)
     static const uint32_t palette[] = {
         0x3B82F6, 0x8B5CF6, 0xEC4899, 0xF59E0B,
         0x10B981, 0x06B6D4, 0x6366F1, 0xEF4444,
     };
-#else
-    static const uint32_t palette[] = {
-        (((0x3B & 0xF8) << 8) | ((0x82 & 0xFC) << 3) | (0xF6 >> 3)),
-        (((0x8B & 0xF8) << 8) | ((0x5C & 0xFC) << 3) | (0xF6 >> 3)),
-        (((0xEC & 0xF8) << 8) | ((0x48 & 0xFC) << 3) | (0x99 >> 3)),
-        (((0xF5 & 0xF8) << 8) | ((0x9E & 0xFC) << 3) | (0x0B >> 3)),
-        (((0x10 & 0xF8) << 8) | ((0xB9 & 0xFC) << 3) | (0x81 >> 3)),
-        (((0x06 & 0xF8) << 8) | ((0xB6 & 0xFC) << 3) | (0xD4 >> 3)),
-        (((0x63 & 0xF8) << 8) | ((0x6F & 0xFC) << 3) | (0xF1 >> 3)),
-        (((0xEF & 0xF8) << 8) | ((0x44 & 0xFC) << 3) | (0x44 >> 3)),
-    };
-#endif
     uint32_t h = 0;
     for (const char* p = appName; p && *p; p++) h = h * 31 + (uint8_t)*p;
     return palette[h % 8];

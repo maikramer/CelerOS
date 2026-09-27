@@ -1,7 +1,7 @@
 #ifndef KRYONOS_WIFI_SETUP_PORTAL_H
 #define KRYONOS_WIFI_SETUP_PORTAL_H
 
-#include "../Display/Display.h"
+#include "../Boards/Board.h"
 
 // Captive portal do KryonOS sobre o componente Wifi/CaptivePortal: wrapper
 // fino que adiciona a tela no display (nome do AP, IP do portal, SKIP) e a

@@ -39,6 +39,21 @@ else()
     list(REMOVE_ITEM KRYONOS_SRCS "USBDevice/USBDevice.cpp")
 endif()
 
+# ---- HAL de placas: exatamente um Boards/<placa>/Board.cpp entra no build,
+# e o diretorio da placa entra no include path (BoardDisplay.h resolve para
+# a placa certa). Nenhum outro arquivo pode conter #ifdef de placa.
+if(NOT KRYONOS_BOARD)
+    set(KRYONOS_BOARD "smartdisplay" CACHE STRING "KryonOS target board: smartdisplay|cyd")
+endif()
+if(KRYONOS_BOARD STREQUAL "smartdisplay")
+    set(KRYONOS_BOARD_DIR Boards/smartdisplay)
+elseif(KRYONOS_BOARD STREQUAL "cyd")
+    set(KRYONOS_BOARD_DIR Boards/cyd)
+else()
+    message(FATAL_ERROR "KRYONOS_BOARD='${KRYONOS_BOARD}' desconhecida (opcoes: smartdisplay | cyd)")
+endif()
+list(APPEND KRYONOS_SRCS "${KRYONOS_BOARD_DIR}/Board.cpp")
+
 idf_component_register(
     SRCS
         ${KRYONOS_SRCS}
@@ -73,16 +88,9 @@ idf_component_register(
         ${KRYONOS_PRIV_REQUIRES}
 )
 
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/${KRYONOS_BOARD_DIR}")
+
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     KRYONOS_VERSION="1.1.0"
     KRYONOS_API_LEVEL=2
 )
-
-if(KRYONOS_BOARD STREQUAL "cyd")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE KRYONOS_BOARD_CYD=1)
-else()
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        KRYONOS_BOARD_SMARTDISPLAY_4IN=1
-        KRYONOS_TOUCH_CAPACITIVE=1
-    )
-endif()

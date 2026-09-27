@@ -77,6 +77,10 @@ void enterLinkMode() {
 void exitLinkMode() {
     if (s_mode != MODE_LINK) return;
     s_mode = MODE_CONSOLE;
+    // sessao encerrada sem LOG_OFF (timeout/Crash da tool): para o stream
+    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    s_logcat = false;
+    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
     uart_set_baudrate(K_UART, K_BAUD_DEFAULT);
     uartPrintRaw("\r\n[kryonctl desconectado]\r\nkryon> ");
 }
