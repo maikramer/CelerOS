@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+## Componente: Drivers
+## Drivers para bateria e stepper
+
+version: "1.0.0"
+description: "Drivers para hardware (bateria, stepper) no ESP-IDF"
+license: "MIT"
+
+# Dependências locais via path
+# Requer ESP-IDF v6.0 ou superior
+idf:
+  version: ">=6.0.0"

@@ -1,0 +1,40 @@
+dependencies:
+  bblanchon/arduinojson:
+    component_hash: 5e6aff2bc5bc988b36c8e90c01e637495ee895ad3af93911860c21ec6da79b6a
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 7.4.3
+  idf:
+    source:
+      type: idf
+    version: 6.1.0
+  johboh/nlohmann-json:
+    component_hash: 2a97e10124d755da820b0381e36a9a6504574328f262964ccea3f8b2f228fc66
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 3.12.0
+  joltwallet/esp_littlefs:
+    component_hash: 0d9c9a00ead24a9f3014b9ece17e1379701a03dc03660ac651d2f302761856ce
+    dependencies:
+    - name: idf
+      version: '>=5.0'
+    source:
+      git: https://github.com/joltwallet/esp_littlefs.git
+      path: .
+      type: git
+    version: bde79e13be971a1f06d5e5f55e6f3e8568fa32b5
+direct_dependencies:
+- bblanchon/arduinojson
+- idf
+- johboh/nlohmann-json
+- joltwallet/esp_littlefs
+manifest_hash: fb61a5298cebb61ea8ac323401ad148fb5088ef0a18185fc5f0a754e3dd5e051
+target: esp32s3
+version: 3.0.0

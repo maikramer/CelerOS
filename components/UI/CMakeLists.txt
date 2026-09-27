@@ -1,0 +1,28 @@
+idf_component_register(
+    SRCS
+        "src/LvglUtils.cpp"
+        "src/Layout.cpp"
+        "src/Theme.cpp"
+        "src/ThemeManager.cpp"
+        "src/Animation.cpp"
+        "src/BaseScreen.cpp"
+        "src/Navigator.cpp"
+        "src/GestureDetector.cpp"
+        "src/Dialog.cpp"
+        "src/Header.cpp"
+        "src/InfoList.cpp"
+        "src/InputField.cpp"
+        "src/ScrollableList.cpp"
+        "src/Card.cpp"
+        "src/Toast.cpp"
+        "src/ProgressRing.cpp"
+        "src/Gauge.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        lvgl
+        freertos
+        log
+        nvs_flash
+        esp_timer
+)

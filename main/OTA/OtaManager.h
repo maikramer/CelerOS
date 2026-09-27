@@ -1,0 +1,48 @@
+#ifndef KRYONOS_OTA_MANAGER_H
+#define KRYONOS_OTA_MANAGER_H
+
+#include <Arduino.h>
+#include <string>
+
+// Resultado de checkForUpdates(). "available" compara version com
+// KRYONOS_VERSION; "hasFirmware" indica se o canal publica firmware_url
+// (update.json v2) — sem ele a UI cai no fluxo legado do guia manual.
+struct OtaUpdateInfo {
+    bool fetchFailed = false;
+    bool available = false;
+    bool hasFirmware = false;
+    std::string version;
+    std::string firmwareUrl;
+    std::string changelog;
+    std::string guide;
+    std::string type;
+};
+
+class OtaManager {
+public:
+    // Preenchido por checkForUpdates(); lido pela UI do updater.
+    static OtaUpdateInfo info;
+
+    // Ultimo erro reportado por performUpdate().
+    static std::string lastError;
+
+    // URL do update.json do canal da placa. Ordem de precedencia:
+    //   1. /local/ota_url.txt (dev: servidor local; se nao terminar em
+    //      ".json", "/update.json" e anexado)
+    //   2. GitHub raw: updates/<canal>/update.json, onde canal e
+    //      smartdisplay_4848S040 ou esp32 conforme a placa
+    static std::string getUpdateJsonUrl();
+
+    // Baixa e interpreta o update.json. Retorna true se ha atualizacao
+    // disponivel (resultado completo em "info").
+    static bool checkForUpdates();
+
+    // Flashea o firmware da URL no slot OTA inativo com validacao de
+    // checksum (Update.end(true)) antes de ativa-lo. onProgress recebe
+    // percentuais 0-100. Retorna false e preenche lastError em caso de
+    // falha — nesse caso o slot atual permanece intacto.
+    static bool performUpdate(const std::string& firmwareUrl,
+                              void (*onProgress)(int percent) = nullptr);
+};
+
+#endif // KRYONOS_OTA_MANAGER_H
