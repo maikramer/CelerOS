@@ -31,6 +31,7 @@ set(KRYONOS_SRCS
     "USBDevice/KryonShell.cpp"
     "USBDevice/KryonLink.cpp"
     "USBDevice/SerialLink.cpp"
+    "UI/Kui.cpp"
 )
 set(KRYONOS_PRIV_REQUIRES esp_driver_uart)
 if(CONFIG_KRYONOS_USB_NATIVE)
