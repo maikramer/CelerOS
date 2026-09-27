@@ -14,9 +14,15 @@ isolada a partir da flash ou do SD, App Store com atualização over-the-air e
 uma ferramenta companheira via USB (`celerctl`) para o dia a dia de
 desenvolvimento.
 
-| SmartDisplay 4" (ESP32-S3, 480x480) | CYD (ESP32, 240x320) |
-| :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-home.jpg" width="300" alt="Home do CelerOS"/> | <img src="Documentation/assets/imgs/CYD2432S028R.jpg" width="300" alt="CYD"/> |
+## Screenshots
+
+| Splash de boot | Launcher | Terminal (teclado acoplado) |
+| :---: | :---: | :---: |
+| <img src="Documentation/assets/imgs/celeros-splash.png" width="260" alt="Splash de boot"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> |
+| **Settings → Sobre** | **Snake** | |
+| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="Sobre"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | *Screenshots da CYD em breve* |
+
+*Capturas do framebuffer real de uma SmartDisplay 4" via `celerctl screencap`.*
 
 ## Funcionalidades
 
@@ -31,6 +37,10 @@ desenvolvimento.
 * **Gerenciador de arquivos** — explorador e editor de texto no LittleFS e no cartão SD.
 
 ## Placas Suportadas
+
+| SmartDisplay 4" | CYD |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/celeros-home.jpg" width="300" alt="SmartDisplay rodando o CelerOS"/> | <img src="Documentation/assets/imgs/CYD2432S028R.jpg" width="300" alt="CYD"/> |
 
 | Placa | SoC | Display | Toque | Observações |
 |---|---|---|---|---|

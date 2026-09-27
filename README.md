@@ -13,9 +13,15 @@ Duktape JS engine running sandboxed apps from flash or SD, an App Store with
 over-the-air updates, and a USB companion tool (`celerctl`) for day-to-day
 development.
 
-| SmartDisplay 4" (ESP32-S3, 480x480) | CYD (ESP32, 240x320) |
-| :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-home.jpg" width="300" alt="CelerOS home"/> | <img src="Documentation/assets/imgs/CYD2432S028R.jpg" width="300" alt="CYD"/> |
+## Screenshots
+
+| Boot splash | Launcher | Terminal (docked keyboard) |
+| :---: | :---: | :---: |
+| <img src="Documentation/assets/imgs/celeros-splash.png" width="260" alt="Boot splash"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> |
+| **Settings → About** | **Snake** | |
+| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="About"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | *CYD screenshots coming soon* |
+
+*Screenshots captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
 
 ## Features
 
@@ -30,6 +36,10 @@ development.
 * **File management** — file explorer and text editor over LittleFS and SD card.
 
 ## Supported Boards
+
+| SmartDisplay 4" | CYD |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/celeros-home.jpg" width="300" alt="SmartDisplay running CelerOS"/> | <img src="Documentation/assets/imgs/CYD2432S028R.jpg" width="300" alt="CYD"/> |
 
 | Board | SoC | Display | Touch | Notes |
 |---|---|---|---|---|
