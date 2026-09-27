@@ -25,3 +25,6 @@ CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
 
 # Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+
+# OTA dev via HTTP puro na LAN (tools/ota_server.py); HTTPS segue valendo
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y

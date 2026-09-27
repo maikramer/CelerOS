@@ -1,7 +1,6 @@
 #include "OtaManager.h"
 #include <string>
-#include "esp_https_ota.h"
-#include "esp_crt_bundle.h"
+#include "WifiOta.h"
 #include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
@@ -100,59 +99,28 @@ bool OtaManager::checkForUpdates() {
     return info.available;
 }
 
+// Flash via componente WifiOta (esp_https_ota + eventos). O Event<int>
+// onProgress alimenta o callback C usado pela barra do SettingsUI.
+static WifiOta s_wifiOta;
+static void (*s_progressCb)(int) = nullptr;
+static bool s_otaBound = false;
+
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
+    s_progressCb = onProgress;
 
-    esp_http_client_config_t httpCfg = {};
-    httpCfg.url = firmwareUrl.c_str();
-    httpCfg.timeout_ms = 30000;
-    httpCfg.keep_alive_enable = true;
-    if (kstr::startsWith(firmwareUrl, "https:")) {
-        httpCfg.crt_bundle_attach = esp_crt_bundle_attach;
-        // TLS do canal do OS usa bundle de CA embutido; o escape insecure do
-        // sdkconfig cobre os casos sem bundle.
+    if (!s_otaBound) {
+        s_otaBound = true;
+        s_wifiOta.onProgress.addHandler([](int pct) {
+            if (s_progressCb != nullptr) s_progressCb(pct);
+        });
     }
 
-    esp_https_ota_config_t otaCfg = {};
-    otaCfg.http_config = &httpCfg;
-
-    esp_https_ota_handle_t handle = nullptr;
-    esp_err_t err = esp_https_ota_begin(&otaCfg, &handle);
-    if (err != ESP_OK) {
-        lastError = std::string("OTA begin: ") + esp_err_to_name(err);
+    // Bloqueante; falha deixa o slot atual intacto (checksum no finish)
+    ErrorCode err = s_wifiOta.startUpdate(firmwareUrl);
+    if (err != CommonErrorCodes::None) {
+        lastError = "OTA failed: " + err.description();
         return false;
     }
-
-    int lastPct = -1;
-    while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
-        int total = (int)esp_https_ota_get_image_size(handle);
-        int read = (int)esp_https_ota_get_image_len_read(handle);
-        if (total > 0 && onProgress) {
-            int pct = (read * 100) / total;
-            if (pct != lastPct) {
-                onProgress(pct);
-                lastPct = pct;
-            }
-        }
-    }
-
-    if (err != ESP_OK) {
-        lastError = std::string("OTA perform: ") + esp_err_to_name(err);
-        esp_https_ota_abort(handle);
-        return false;
-    }
-    if (!esp_https_ota_is_complete_data_received(handle)) {
-        lastError = "Download incomplete";
-        esp_https_ota_abort(handle);
-        return false;
-    }
-
-    err = esp_https_ota_finish(handle);
-    if (err != ESP_OK) {
-        // ESP_ERR_OTA_VALIDATE_FAILED: imagem corrompida — slot permanece intacto
-        lastError = std::string("Image verify failed: ") + esp_err_to_name(err);
-        return false;
-    }
-
     return true;
 }
