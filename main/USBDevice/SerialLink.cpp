@@ -31,6 +31,15 @@ vprintf_like_t s_defaultVprintf = nullptr;
 
 LineEditor* s_editor = nullptr;
 
+// ---- ring de logs + logcat ------------------------------------------------
+constexpr size_t K_LOG_RING = 8192;
+char s_logRing[K_LOG_RING];
+volatile size_t s_logHead = 0;  // posicao de escrita
+volatile size_t s_logTail = 0;  // posicao de leitura
+SemaphoreHandle_t s_logMutex = nullptr;
+SemaphoreHandle_t s_writeMutex = nullptr;
+bool s_logcat = false;
+
 // ------------------------------------------------------------ saida UART
 
 void uartPrintRaw(const char* s) {
@@ -50,30 +59,24 @@ void consolePrint(void* ctx, const char* fmt, ...) {
     }
 }
 
-// ------------------------------------------------- supressao de logs (link)
+// ------------------------------------------------- hook permanente de logs
 
-int suppressedVprintf(const char* fmt, va_list args) {
-    (void)fmt;
-    (void)args;
+// Hook instalado no init: todo ESP_LOG* passa pelo LogSink (ring/logcat e,
+// fora de sessoes kryonctl, segue para a UART como antes).
+int logHookVprintf(const char* fmt, va_list args) {
+    kryon_log_vprintf(fmt, args);
     return 0;
 }
 
 void enterLinkMode() {
     if (s_mode == MODE_LINK) return;
     s_mode = MODE_LINK;
-    // logs ESP_LOG* sao desviados para o nada enquanto durar a sessao
-    s_defaultVprintf = esp_log_set_vprintf(suppressedVprintf);
-    s_defaultVprintfSaved = true;
     ESP_LOGI(TAG, "kryonctl conectado (logs seriais suspensos)");
 }
 
 void exitLinkMode() {
     if (s_mode != MODE_LINK) return;
     s_mode = MODE_CONSOLE;
-    if (s_defaultVprintfSaved) {
-        esp_log_set_vprintf(s_defaultVprintf);
-        s_defaultVprintfSaved = false;
-    }
     uart_set_baudrate(K_UART, K_BAUD_DEFAULT);
     uartPrintRaw("\r\n[kryonctl desconectado]\r\nkryon> ");
 }
@@ -157,6 +160,17 @@ bool SerialLink::init() {
 
     static LineEditor editor(consolePrint, nullptr);
     s_editor = &editor;
+    s_writeMutex = xSemaphoreCreateMutex();
+    s_logMutex = xSemaphoreCreateMutex();
+    if (s_writeMutex == nullptr || s_logMutex == nullptr) {
+        ESP_LOGE(TAG, "sem memoria para mutexes do console");
+        return false;
+    }
+
+    // hook permanente: ESP_LOG* passa pelo LogSink (ring + logcat), mantendo
+    // a saida normal na UART fora de sessoes kryonctl
+    s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
+    s_defaultVprintfSaved = true;
 
     KryonLink::setWriter(&SerialLink::writeFrame);
     KryonLink::setBaudHook(&SerialLink::setBaud);
@@ -170,7 +184,13 @@ bool SerialLink::init() {
 }
 
 bool SerialLink::writeFrame(const uint8_t* data, size_t len) {
+    // escrita atomica por chamada: frames de resposta (task link) e de
+    // logcat (tasks arbitrarias) nunca se intercalam
+    if (s_writeMutex != nullptr && xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return false;
+    }
     uart_write_bytes(K_UART, (const char*)data, len);
+    if (s_writeMutex != nullptr) xSemaphoreGive(s_writeMutex);
     return true;
 }
 
@@ -190,9 +210,51 @@ bool kryon_log_silent(void) {
     return s_mode == MODE_LINK;
 }
 
+namespace {
+
+void ringPush(const char* s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        s_logRing[s_logHead] = s[i];
+        s_logHead = (s_logHead + 1) % K_LOG_RING;
+        if (s_logHead == s_logTail) s_logTail = (s_logTail + 1) % K_LOG_RING;  // sobrescreve antigo
+    }
+}
+
+void logFrameSend(const char* line, size_t n) {
+    // frame KL_LOG_DATA montado e escrito de uma vez (mutex do writeFrame)
+    if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
+    uint8_t frame[4 + 1 + KryonLink::MAX_PAYLOAD];
+    uint16_t total = (uint16_t)(1 + n);
+    frame[0] = 0x4B;
+    frame[1] = KL_LOG_DATA;
+    frame[2] = (uint8_t)total;
+    frame[3] = (uint8_t)(total >> 8);
+    frame[4] = 0;
+    memcpy(frame + 5, line, n);
+    SerialLink::writeFrame(frame, (size_t)(4 + total));
+}
+
+}  // namespace
+
 void kryon_log_vprintf(const char* fmt, va_list args) {
-    if (s_mode == MODE_LINK) return;  // nao intercala na sessao do kryonctl
-    vprintf(fmt, args);
+    char line[256];
+    int n = vsnprintf(line, sizeof(line), fmt, args);
+    if (n <= 0) return;
+    if (n > (int)sizeof(line) - 1) n = (int)sizeof(line) - 1;
+    // normaliza fim de linha
+    if (n == 0 || line[n - 1] != '\n') {
+        if (n < (int)sizeof(line) - 1) line[n++] = '\n';
+    }
+
+    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    if (s_logcat) {
+        logFrameSend(line, (size_t)n);
+    } else {
+        ringPush(line, (size_t)n);
+    }
+    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+
+    if (s_mode != MODE_LINK) printf("%.*s", n, line);
 }
 
 void kryon_log_printf(const char* fmt, ...) {
@@ -200,4 +262,27 @@ void kryon_log_printf(const char* fmt, ...) {
     va_start(args, fmt);
     kryon_log_vprintf(fmt, args);
     va_end(args);
+}
+
+void kryon_logcat_set(bool on) {
+    if (s_logMutex == nullptr) return;
+    xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    if (on) {
+        // drena o ring acumulado antes de ligar o stream ao vivo
+        while (s_logTail != s_logHead) {
+            char chunk[1024];
+            size_t n = 0;
+            while (s_logTail != s_logHead && n < sizeof(chunk) - 1) {
+                chunk[n++] = s_logRing[s_logTail];
+                s_logTail = (s_logTail + 1) % K_LOG_RING;
+            }
+            logFrameSend(chunk, n);
+        }
+    }
+    s_logcat = on;
+    xSemaphoreGive(s_logMutex);
+}
+
+bool kryon_logcat_active(void) {
+    return s_logcat;
 }

@@ -1,5 +1,6 @@
 #include "KryonLink.h"
 #include "KryonShell.h"
+#include "LogSink.h"
 #include "FileSystem/FileSystem.h"
 
 #include <stdio.h>
@@ -12,10 +13,17 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
 #include "esp_idf_version.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
+#include "Display/Display.h"
+// display global criado no main.cpp (captura de tela)
+extern KryonDisplay tft;
+#endif
 
 #if !defined(KRYONOS_VERSION)
 #define KRYONOS_VERSION "?"
@@ -34,12 +42,19 @@ KryonLink::BaudFn s_baudHook = nullptr;
 
 void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
     if (s_writer == nullptr) return;  // nenhum transporte instalado
-    uint8_t head[4] = {0x4B, cmd, (uint8_t)(dataLen + 1), (uint8_t)((dataLen + 1) >> 8)};
-    s_writer(head, sizeof(head));
-    s_writer(&status, 1);
+    // frame inteiro numa unica escrita: logs concorrentes (logcat) nunca
+    // intercalam bytes no meio de uma resposta
+    static uint8_t frame[4 + 1 + KryonLink::MAX_PAYLOAD];
+    uint16_t total = (uint16_t)(1 + dataLen);
+    frame[0] = 0x4B;
+    frame[1] = cmd;
+    frame[2] = (uint8_t)total;
+    frame[3] = (uint8_t)(total >> 8);
+    frame[4] = status;
     if (data != nullptr && dataLen > 0) {
-        s_writer((const uint8_t*)data, dataLen);
+        memcpy(frame + 5, data, dataLen);
     }
+    s_writer(frame, (size_t)(4 + total));
 }
 
 void respondError(uint8_t cmd, const char* msg) {
@@ -220,19 +235,22 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     closedir(dir);
 
     // resposta num frame unico: u8 status + u16 n + entradas
-    size_t bodyLen = 3 + out.size();
-    if (bodyLen > 0xFFFF) {
+    size_t bodyLen = 2 + out.size();
+    if (bodyLen + 5 > 0xFFFF) {
         respondError(KL_LS, "diretorio grande demais");
         return;
     }
-    uint8_t frameHead[4] = {0x4B, KL_LS, (uint8_t)bodyLen, (uint8_t)(bodyLen >> 8)};
-    uint8_t cnt[2];
-    le16(cnt, count);
-    s_writer(frameHead, 4);
-    uint8_t status = 0;
-    s_writer(&status, 1);
-    s_writer(cnt, 2);
-    s_writer((const uint8_t*)out.data(), (uint16_t)out.size());
+    std::string frame;
+    frame.resize(4 + 1 + bodyLen);
+    frame[0] = 0x4B;
+    frame[1] = KL_LS;
+    frame[2] = (uint8_t)(bodyLen + 1);
+    frame[3] = (uint8_t)((bodyLen + 1) >> 8);
+    frame[4] = 0;  // status OK
+    frame[5] = (uint8_t)count;
+    frame[6] = (uint8_t)(count >> 8);
+    memcpy(frame.data() + 7, out.data(), out.size());
+    if (s_writer != nullptr) s_writer((const uint8_t*)frame.data(), frame.size());
 }
 
 void handleStat(const uint8_t* payload, uint16_t len) {
@@ -402,6 +420,118 @@ void handleSetBaud(const uint8_t* payload, uint16_t len) {
     s_baudHook(baud);
 }
 
+// ------------------------------------------------------------------- logcat
+
+void handleLogOn() {
+    kryon_logcat_set(true);
+    respond(KL_LOG_ON, 0);
+}
+
+void handleLogOff() {
+    kryon_logcat_set(false);
+    respond(KL_LOG_OFF, 0);
+}
+
+// ---------------------------------------------------------------------- OTA
+
+esp_ota_handle_t s_ota = 0;
+const esp_partition_t* s_otaPart = nullptr;
+uint32_t s_otaWritten = 0;
+
+void handleOtaBegin() {
+    if (s_ota != 0) {
+        esp_ota_abort(s_ota);
+        s_ota = 0;
+    }
+    s_otaPart = esp_ota_get_next_update_partition(nullptr);
+    if (s_otaPart == nullptr) {
+        respondError(KL_OTA_BEGIN, "sem particao OTA disponivel");
+        return;
+    }
+    esp_err_t err = esp_ota_begin(s_otaPart, OTA_SIZE_UNKNOWN, &s_ota);
+    if (err != ESP_OK) {
+        s_ota = 0;
+        respondError(KL_OTA_BEGIN, esp_err_to_name(err));
+        return;
+    }
+    s_otaWritten = 0;
+    respond(KL_OTA_BEGIN, 0, s_otaPart->label, (uint16_t)strlen(s_otaPart->label));
+}
+
+void handleOtaChunk(const uint8_t* payload, uint16_t len) {
+    if (s_ota == 0) {
+        respondError(KL_OTA_CHUNK, "OTA nao iniciada");
+        return;
+    }
+    if (len > 0 && esp_ota_write(s_ota, payload, len) != ESP_OK) {
+        esp_ota_abort(s_ota);
+        s_ota = 0;
+        respondError(KL_OTA_CHUNK, "falha ao gravar particao");
+        return;
+    }
+    s_otaWritten += len;
+    respond(KL_OTA_CHUNK, 0);
+}
+
+void handleOtaEnd() {
+    if (s_ota == 0) {
+        respondError(KL_OTA_END, "OTA nao iniciada");
+        return;
+    }
+    esp_err_t errEnd = esp_ota_end(s_ota);
+    s_ota = 0;
+    if (errEnd != ESP_OK) {
+        respondError(KL_OTA_END, esp_err_to_name(errEnd));
+        return;
+    }
+    if (esp_ota_set_boot_partition(s_otaPart) != ESP_OK) {
+        respondError(KL_OTA_END, "falha ao marcar boot partition");
+        return;
+    }
+    uint8_t rec[4];
+    le32(rec, s_otaWritten);
+    respond(KL_OTA_END, 0, rec, sizeof(rec));  // reboot fica por conta do host
+}
+
+void handleOtaAbort() {
+    if (s_ota != 0) {
+        esp_ota_abort(s_ota);
+        s_ota = 0;
+    }
+    respond(KL_OTA_ABORT, 0);
+}
+
+// ---------------------------------------------------------------- screenshot
+
+void handleScreenshot() {
+    uint16_t w = 0, h = 0;
+#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
+    w = (uint16_t)tft.width();
+    h = (uint16_t)tft.height();
+#endif
+    size_t bytes = (size_t)w * h * 2;
+    uint16_t* fb = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (fb == nullptr) {
+        respondError(KL_SCREENSHOT, "sem memoria para captura");
+        return;
+    }
+#if defined(KRYONOS_BOARD_SMARTDISPLAY_4IN) || defined(KRYONOS_BOARD_CYD)
+    tft.readRect(0, 0, w, h, fb);  // RGB565 do framebuffer
+#endif
+    uint8_t head[4] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8)};
+    respond(KL_SCREENSHOT, 0, head, sizeof(head));
+
+    const uint8_t* src = (const uint8_t*)fb;
+    size_t off = 0;
+    while (off < bytes && s_writer != nullptr) {
+        size_t n = bytes - off;
+        if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
+        respond(KL_SCR_DATA, 0, src + off, (uint16_t)n);
+        off += n;
+    }
+    heap_caps_free(fb);
+}
+
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     switch (cmd) {
         case KL_HELLO: handleHello(payload, len); break;
@@ -418,6 +548,13 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_EXEC: handleExec(payload, len); break;
         case KL_REBOOT: handleReboot(); break;
         case KL_SET_BAUD: handleSetBaud(payload, len); break;
+        case KL_LOG_ON: handleLogOn(); break;
+        case KL_LOG_OFF: handleLogOff(); break;
+        case KL_OTA_BEGIN: handleOtaBegin(); break;
+        case KL_OTA_CHUNK: handleOtaChunk(payload, len); break;
+        case KL_OTA_END: handleOtaEnd(); break;
+        case KL_OTA_ABORT: handleOtaAbort(); break;
+        case KL_SCREENSHOT: handleScreenshot(); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }

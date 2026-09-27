@@ -59,6 +59,17 @@ existir, ele substitui o canal do GitHub — apague-o para voltar ao normal.
 A versão publicada vem do `KRYONOS_VERSION` do `platformio.ini`; para o
 dispositivo "ver" a atualização, a versão precisa ser maior que a instalada.
 
+## Testar pelo cabo USB (sem rede e sem esptool)
+
+Com a placa ligada no cabo serial, o `kryonctl` grava o firmware direto
+na partição OTA inativa e reinicia:
+
+```bash
+python3 tools/kryonctl.py -b 921600 ota push build/KryonOS.bin
+```
+
+Detalhes em [README_USBTOOL.md](README_USBTOOL.md).
+
 ## Limitações conhecidas
 
 - TLS sem validação de certificado (`setInsecure`), herdado do updater
