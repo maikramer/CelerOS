@@ -146,6 +146,26 @@ Componentes de terceiros resolvem sozinhos pelo component manager
 (ArduinoJson, esp_littlefs, nlohmann); o LovyanGFX e um git submodule
 (`git clone --recurse-submodules`).
 
+## USB/Serial Debugging (`kryonctl`)
+
+An adb-style companion tool talks to the firmware over the USB serial link
+(the CH340 port on supported boards): interactive shell, file push/pull,
+live logcat, in-place firmware update and screen capture — no esptool
+needed for day-to-day development:
+
+```bash
+pip install -r tools/requirements.txt
+python3 tools/kryonctl.py devices
+python3 tools/kryonctl.py shell            # interactive shell on the device
+python3 tools/kryonctl.py -b 921600 push app.zip /local/tmp_download/app.zip
+python3 tools/kryonctl.py logcat           # live logs (also replays boot)
+python3 tools/kryonctl.py ota push build/KryonOS.bin
+python3 tools/kryonctl.py screencap tela.png
+```
+
+See [tools/README_USBTOOL.md](./tools/README_USBTOOL.md) for the full
+command reference and how the link coexists with the serial console.
+
 ## Documentation & Community
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Haris16-code/KryonOS)
 * [App Development Guide](./Documentation/App_Development_Guide.md) - Learn how to build and structure JavaScript applications for KryonOS.

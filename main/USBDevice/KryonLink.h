@@ -52,8 +52,17 @@ constexpr uint8_t KL_RENAME = 0x0B;       // from\0 + to\0
 constexpr uint8_t KL_EXEC = 0x0C;         // cmdline -> u8 exitCode + u32 len + saida
 constexpr uint8_t KL_REBOOT = 0x0D;       // ack e reinicia
 constexpr uint8_t KL_SET_BAUD = 0x0F;     // u32 baud -> troca o baud do canal (UART)
+constexpr uint8_t KL_LOG_ON = 0x10;       // liga o stream de logs (logcat)
+constexpr uint8_t KL_LOG_OFF = 0x11;      // desliga o stream de logs
+constexpr uint8_t KL_OTA_BEGIN = 0x13;    // -> abre escrita na proxima particao OTA
+constexpr uint8_t KL_OTA_CHUNK = 0x14;    // payload -> esp_ota_write
+constexpr uint8_t KL_OTA_END = 0x15;      // -> fecha, valida e marca boot (sem reiniciar)
+constexpr uint8_t KL_OTA_ABORT = 0x16;    // cancela escrita OTA
+constexpr uint8_t KL_SCREENSHOT = 0x17;   // -> u16 w + u16 h, depois chunks KL_SCR_DATA
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)
+constexpr uint8_t KL_LOG_DATA = 0x12;     // linha de log (texto, com \n)
+constexpr uint8_t KL_SCR_DATA = 0x18;     // continuacao do screenshot (RGB565 cru)
 
 #endif // KRYON_LINK_H
