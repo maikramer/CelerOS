@@ -60,6 +60,7 @@ idf_component_register(
         Wifi
         Connection
         Http
+        System
         esp_https_ota
         app_update
         nvs_flash
