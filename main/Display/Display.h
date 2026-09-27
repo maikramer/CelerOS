@@ -24,6 +24,7 @@
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
+#include "Touch_GT911_IDF.h"
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 
@@ -89,7 +90,7 @@ public:
     lgfx::Bus_RGB     _bus;
     KryonPanel        _panel;
     lgfx::Light_PWM   _light;
-    lgfx::Touch_GT911 _touch;
+    lgfx::Touch_GT911_IDF _touch;  // driver i2c_master oficial (LL do LovyanGFX falha no IDF 6.1)
 
     KryonGFX(void) {
         {
