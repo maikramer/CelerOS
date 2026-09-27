@@ -5,6 +5,6 @@
   "author": "CelerOS",
   "description": "Shell estilo bash sobre o FS real: ls, cat, echo, mkdir, neofetch, js (eval) e mais. Teclado acoplado do OS (API 5).",
   "type": "App",
-  "category": "Utilities",
+  "category": "Utility",
   "api": 5
 }

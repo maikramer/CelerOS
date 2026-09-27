@@ -1,0 +1,11 @@
+{
+  "name": "Cronometro",
+  "packageName": "celeros.cronometro",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Cronometro com centesimos, voltas e total de cada intervalo.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 3,
+  "changelog": "1.0.0 - primeiro lancamento"
+}

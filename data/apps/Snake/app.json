@@ -5,6 +5,6 @@
   "author": "CelerOS",
   "description": "Classico da cobrinha: deslize o dedo para virar, coma as frutas, acelere e bata o recorde (salvo no littlefs).",
   "type": "Game",
-  "category": "Games",
+  "category": "Arcade",
   "api": 3
 }
