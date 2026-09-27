@@ -16,25 +16,49 @@ static const char* SY1_ROWS[3] = {"1234567890", "@#$%&-+()/", "*\"':;!?"};
 static const char* SY2_ROWS[3] = {"~`|\\_<>[]{", "}=^*\"'-+/", "*\"'=+!?"};
 
 // ---- glifos desenhados (fontes nativas nao tem setas) ----------------------
+// Setinha de shift (contorno, cheia quando ativo) e backspace classico
+// (pentagono com X), dimensionados pela menor face da tecla.
 
-static void drawShiftGlyph(Canvas& c, const Rect& r, uint32_t col) {
-    int cx = r.x + r.w / 2;
-    int cy = r.y + r.h / 2;
-    int half = r.h / 3;
-    if (half > r.w / 2) half = r.w / 2;
-    c.drawLine(cx - half, cy, cx, cy - half, col);      // chevron
-    c.drawLine(cx, cy - half, cx + half, cy, col);
-    c.drawLine(cx, cy - half + 1, cx, cy + half, col);   // haste
+static void drawShiftGlyph(Canvas& c, const Rect& r, uint32_t col, bool filled) {
+    const int cx = r.x + r.w / 2;
+    const int cy = r.y + r.h / 2;
+    const int s = r.w < r.h ? r.w : r.h;
+    const int hw = s * 3 / 10;   // meia-largura da cabeca
+    const int hh = s * 3 / 10;   // altura da cabeca
+    const int sw = s / 8;        // meia-largura da haste
+    const int sh = s * 3 / 10;   // profundidade da haste
+    if (filled) {
+        c.fillTriangle(cx, cy - hh, cx - hw, cy + sw, cx + hw, cy + sw, col);
+        c.fillRect({cx - sw, cy, 2 * sw, sh}, col);
+        return;
+    }
+    c.drawLine(cx, cy - hh, cx - hw, cy, col);           // ombro esquerdo
+    c.drawLine(cx - hw, cy, cx - sw, cy, col);
+    c.drawLine(cx - sw, cy, cx - sw, cy + sh, col);      // desce a haste
+    c.drawLine(cx - sw, cy + sh, cx + sw, cy + sh, col);
+    c.drawLine(cx + sw, cy + sh, cx + sw, cy, col);      // sobe a haste
+    c.drawLine(cx + sw, cy, cx + hw, cy, col);
+    c.drawLine(cx + hw, cy, cx, cy - hh, col);           // ombro direito
 }
 
 static void drawBackGlyph(Canvas& c, const Rect& r, uint32_t col) {
-    int cx = r.x + r.w / 2;
-    int cy = r.y + r.h / 2;
-    int half = r.h / 3;
-    if (half > r.w / 2) half = r.w / 2;
-    c.drawLine(cx - half / 2, cy, cx + half, cy, col);                 // corpo
-    c.drawLine(cx - half / 2, cy, cx - half / 2 + half / 2, cy - half / 2, col);  // ponta
-    c.drawLine(cx - half / 2, cy, cx - half / 2 + half / 2, cy + half / 2, col);
+    const int cy = r.y + r.h / 2;
+    const int s = r.w < r.h ? r.w : r.h;
+    const int gw = s * 3 / 4;   // largura total do glifo
+    const int hh = s / 4;       // meia-altura do corpo
+    const int tip = s / 5;      // profundidade da ponta
+    const int x0 = r.x + (r.w - gw) / 2;  // ponta (esquerda)
+    const int xb = x0 + tip;              // inicio do corpo
+    const int x1 = x0 + gw;               // direita
+    c.drawLine(x0, cy, xb, cy - hh, col);
+    c.drawLine(xb, cy - hh, x1, cy - hh, col);
+    c.drawLine(x1, cy - hh, x1, cy + hh, col);
+    c.drawLine(x1, cy + hh, xb, cy + hh, col);
+    c.drawLine(xb, cy + hh, x0, cy, col);
+    const int ccx = (xb + x1) / 2;        // X dentro do corpo
+    const int k = s / 8;
+    c.drawLine(ccx - k, cy - k, ccx + k, cy + k, col);
+    c.drawLine(ccx - k, cy + k, ccx + k, cy - k, col);
 }
 
 // ============================================================ KeyboardScreen
@@ -63,20 +87,18 @@ void KeyboardScreen::rebuild() {
     const int u = (UI::W - 2 * UI::sx(4) - 9 * g) / 10;
     if (u < 4) return;  // display impossivel: sem keys, so field
 
-    int top;
     const int rowGap = UI::sy(2);
-    int keyH;
-    if (m_showField) {
-        Rect f = fieldRect();
-        top = f.y + f.h + UI::sy(5);
-        keyH = (UI::H - top - UI::sy(2) - 3 * rowGap) / 4;
-        if (keyH < 12) keyH = 12;
-    } else {
-        // acoplado (System.keypad*): teclado compacto, ancorado no rodape —
-        // sobra o resto da tela para o app (System.keypadRect)
-        keyH = UI::sy(32);
-        top = UI::H - UI::sy(4) - (4 * keyH + 3 * rowGap);
-        if (top < 0) top = 0;
+    // Tecla com proporcao fixa (~1.25x a largura), bloco ancorado no rodape:
+    // preencher o resto da tela virava tecla de 90px+ (teclado comendo a tela
+    // no 480x480). O espaco que sobra fica entre o campo e as teclas.
+    const int bottom = UI::H - UI::sy(4);
+    int keyH = u + u / 4;
+    int top = bottom - (4 * keyH + 3 * rowGap);
+    const int minTop = m_showField ? fieldRect().y + fieldRect().h + UI::sy(5) : UI::sy(2);
+    if (top < minTop) {  // pouco espaco: encolhe as teclas para caber
+        top = minTop;
+        keyH = (bottom - top - 3 * rowGap) / 4;
+        if (keyH < 12) keyH = 12;  // display minimo: deixa transbordar
     }
     m_keysTop = top;
 
@@ -185,7 +207,7 @@ void KeyboardScreen::draw(Canvas& c) {
             case KShift:
                 c.fillRoundRect(r, UI::sx(3), (m_mode == Upper || flash) ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
-                drawShiftGlyph(c, r, m_mode == Upper ? THEME_TEXT : THEME_TEXT_DIM);
+                drawShiftGlyph(c, r, m_mode == Upper ? THEME_TEXT : THEME_TEXT_DIM, m_mode == Upper);
                 break;
             case KSymPage:
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_CARD);
