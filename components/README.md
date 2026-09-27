@@ -1,45 +1,52 @@
 # Componentes do KryonOS
 
-Componentes ESP-IDF internos do projeto — no mesmo nível dos futuros
-componentes do próprio KryonOS (Kernel, Launcher, Settings, ...), sem
-dependência de pacote externo. Importados da biblioteca compartilhada
-`esp_components` (satisfaction-hub) em 2026-09-27 e nivelados para viver
-dentro deste repo:
+Componentes ESP-IDF internos do projeto — vendados da lib compartilhada
+`esp_components` (satisfaction-hub) e **nivelados**: os `idf_component.yml`
+declaram apenas dependências de registry (ex.: `johboh/nlohmann-json`);
+dependências entre irmãos ficam nos `REQUIRES` dos CMakeLists, sem `path:`.
 
-- `idf_component.yml` de cada um declara **apenas** dependências de registry
-  (ex.: `johboh/nlohmann-json`). Dependências entre componentes irmãos são
-  resolvidas pelos `REQUIRES` dos CMakeLists — nada de `path: ../...`.
-- Documentação original de cada módulo (`*.md` dentro do componente) foi
-  mantida.
+## Mapa de adoção (quem usa o quê no main/)
 
-## Componentes
-
-| Componente | O que dá | Requer (irmãos) |
+| Componente | Usado por | Como |
 |---|---|---|
-| `Utility` | `Event<T>` pub/sub, `Singleton`, `Timeout`, helpers | — (nlohmann via registry) |
-| `ErrorCodes` | Sistema tipado de `ErrorCode` + `CommonErrorCodes` | Utility |
-| `JsonModels` | Modelos/serialização sobre nlohmann/json | — (nlohmann via registry) |
-| `Http` | `HttpClient` — wrapper de `esp_http_client` com headers/timeout | — |
-| `Storage` | `Storage` (KV texto com fallback NVS), `NVS`, `Flash`, `SdCard` | Utility, JsonModels |
-| `Connection` | `NetworkManager` (connect/scan/roaming/auto-reconnect), `NetworkCredentialStore` (multi-redes em NVS), `NetworkSelector` | Utility, JsonModels, ErrorCodes, Storage |
-| `Wifi` | `WifiConnection`, `WifiOta` (OTA via `esp_https_ota` com eventos de progresso), `OtaManager` (check de versão + facade), `CaptivePortal` (AP + DNS + portal), `WifiAP` | Utility, Connection, ErrorCodes, Storage, Http |
-| `System` | `SystemInfo` — chip, MAC, heap, flash, uptime | — |
+| `Connection` | `WebManager` | **NetworkManager** é o dono do rádio: boot (`init(true)` + `connectToKnown`), reconnect/roaming pela background task, scans; **NetworkCredentialStore** guarda as credenciais em NVS (import one-shot do `wifi.txt` legado) |
+| `Wifi` | `WebManager`, `WifiSetupPortal`, `OTA/OtaManager` | **WifiConnection** (via NM), **WifiAP** (AP do portal, com coexistência APSTA), **CaptivePortal** (página+DNS+httpd do portal; ver patch abaixo), **WifiOta** (flash OTA com `Event<int> onProgress`) |
+| `Http` | `OTA`, `JSBindings Net.*`, `AppStoreUI`, `HelpCenterUI` | `HttpClient` para GET/POST/downloads com progresso |
+| `System` | `JSBindings System.getInfo`, `SettingsUI::drawAbout` | `SystemInfo` (chip/heap/PSRAM/uptime/reset reason/MAC) |
+| `Utility` | (transitivo, todos) | `Event<>` pub/sub usado por NM/WifiOta/portal — handlers rodam sob mutex: só tocam flags |
+| `ErrorCodes` | (transitivo) | `ErrorCode`/`CommonErrorCodes` |
+| `JsonModels` | (transitivo p/ Connection/Storage) | modelos nlohmann |
+| `Storage` | — (só a classe `NVS` é utilizável de graça) | **`Storage::initialize()` NÃO é chamado**: ele montaria SPIFFS na partição `spiffs` que o KryonOS usa como LittleFS (`esp_littlefs`, ponto de montagem `/local`). O FileSystem do OS é próprio (`main/FileSystem`, POSIX VFS) |
 
-## Não importados (por enquanto)
+Não usados pelo `Wifi` do satisfaction-hub: `WifiServer`, `WifiClient`, `Telnet`.
 
-`Time` (o KryonOS tem `TimeManager` próprio), `Supabase`, `UI` (LVGL),
-`BluetoothServer`, `SafeContainers` (ninguém inclui), `Drivers`, `IoUtility`,
-`UserManaging`. Se precisar de um deles, copie do `esp_components` e aplique
-o mesmo nivelamento de yml.
+## Patches KryonOS nos componentes (divergem do esp_components)
+
+- **`Wifi/CaptivePortal`**: ganhou `PortalConnState` + `reportConnectionState()`
+  e a rota `GET /status` com polling na página — o `/connect` segue apenas
+  entregando credenciais via evento; quem conecta é o hospedeiro
+  (`WifiSetupPortal`, no loop do modal — nunca no handler httpd).
+- **`Wifi/WifiAP`**: `start()` promove para `WIFI_MODE_APSTA` quando o STA está
+  ativo (portal aberto por um dispositivo conectado não derruba a estação) e o
+  `stop()` preserva o STA em vez de parar o rádio inteiro.
+
+## Fora do build (vendados para o futuro)
+
+`BluetoothServer` (precisa `h2zero/esp-nimble-cpp`), `Drivers`, `IoUtility`
+(precisa `espressif/button`), `SafeContainers`, `Supabase`, `UI` (precisa
+`lvgl ^9`), `UserManaging`, `Time` (o KryonOS tem `TimeManager` próprio com
+config em arquivo). A lista vive no `EXCLUDE_COMPONENTS` do `CMakeLists.txt`
+raiz — para ativar um, remova-o da lista e garanta as dependências do
+`idf_component.yml` dele.
 
 ## Requisitos no projeto raiz
-
-Estes componentes assumem opções de sdkconfig do projeto raiz:
 
 ```
 CONFIG_COMPILER_CXX_EXCEPTIONS=y      # JsonModels/OtaManager usam try/catch
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y     # OTA dev via HTTP na LAN
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y  # HTTPS geral
+CONFIG_ESP_TLS_INSECURE / SKIP_CERT_VERIFY  # (dev) TODO endurecer p/ producao
 ```
 
-E partições com slots `ota_0`/`ota_1` + `otadata` para o fluxo de OTA.
+Partições com `nvs` (credential store) + `ota_0`/`ota_1` + `otadata` — ver
+`partitions_16MB.csv` / `partitions_4MB.csv`. `config/projectConfig.h` e
+`config/priorities.h` suprem includes que os componentes esperam.

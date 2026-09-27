@@ -1,8 +1,8 @@
 # Atualização OTA do KryonOS
 
 O KryonOS tem dois mecanismos de atualização de firmware, ambos portados do
-conceito do [satisfaction-hub](https://github.com/maikramer) e adaptados ao
-Arduino:
+conceito do [satisfaction-hub](https://github.com/maikramer) e hoje nativos do
+ESP-IDF:
 
 1. **OTA pelo canal de updates** — o dispositivo consulta um `update.json`,
    compara versões e flashea o firmware sozinho com barra de progresso
@@ -10,10 +10,12 @@ Arduino:
 2. **Upload web** — com o servidor web ligado, a página `/update` do file
    manager flashea um `firmware.bin` enviado pelo navegador.
 
-As partições das duas envs (`min_spiffs.csv` e `default_16MB.csv`) já têm
-slots `ota_0`/`ota_1`, então não há configuração extra de partição. O flash é
-escrito no slot inativo e só é ativado depois de validado (`Update.end(true)`
-verifica o checksum) — se algo falhar no meio, o sistema atual continua no ar.
+As tabelas de partição (`partitions_16MB.csv` SmartDisplay e
+`partitions_4MB.csv` CYD) já têm slots `ota_0`/`ota_1` + `otadata`. O flash é
+feito pelo componente `WifiOta` (`esp_https_ota`): gravado no slot inativo e só
+ativado depois de validado (checksum no `esp_https_ota_finish`) — se algo
+falhar no meio, o sistema atual continua no ar. Credenciais WiFi não se perdem
+com update: vivem no NVS (NetworkCredentialStore).
 
 ## Esquema do update.json (v2)
 
