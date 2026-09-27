@@ -15,6 +15,17 @@ public:
     static void scanLocalApps();
     static bool needsRescan;
 
+    // Acesso para o LauncherScreen (Kui) e telas novas
+    static int appEntryCount();               // apps do usuario (sem os 4 de sistema)
+    static const std::string& appEntryPath(int i);
+    static const std::string& appEntryName(int i);
+    static bool appEntryIsFolder(int i);
+    static void launchApp(int index);          // executa app (sincrono; W7d = task)
+    static int gridCols();
+    static int gridRows();
+    static int gridTotalEntries();             // 4 apps de sistema + usuario
+    static int gridTotalPages();
+
 private:
     static KryonDisplay *tftInstance;
     static void runApp(KryonDisplay *tft, const std::string& path, bool isFolder);

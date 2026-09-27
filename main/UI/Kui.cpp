@@ -1,5 +1,6 @@
 #include "Kui.h"
 
+#include "../Display/Icon.h"
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 
@@ -9,23 +10,18 @@ namespace kui {
 
 Canvas::Canvas(KryonDisplay& dev) : m_dev(dev) {}
 
-void Canvas::begin() {
-    if (m_sprite == nullptr) {
-        // Sprite full-screen quando cabe (PSRAM no S3; no CYD tenta o heap
-        // e cai no modo direto se nao houver memoria)
-        m_sprite = new KryonSprite(&m_dev);
-        m_sprite->setColorDepth(16);
-        if (m_sprite->createSprite(m_dev.width(), m_dev.height()) == nullptr) {
-            delete m_sprite;
-            m_sprite = nullptr;
-        }
-    }
+Canvas::~Canvas() {
+    delete m_sprite;  // LGFX_Sprite libera o buffer no destrutor
+}
+
+void Canvas::begin(bool direct) {
+    (void)direct;
+    // Painel RGB (S3) ja desenha no framebuffer sem flicker: modo direto.
+    // Sprite full-screen fica como otimizacao futura para paineis SPI
+    // (CYD) — na validacao W7c o pushSprite apresentou cores incorretas
+    // neste painel e o beneficio nao se aplica ao framebuffer RGB.
     m_active = true;
-    if (m_sprite != nullptr) {
-        m_sprite->fillScreen(THEME_BG);
-    } else {
-        m_dev.fillScreen(THEME_BG);
-    }
+    m_dev.fillScreen(THEME_BG);
 }
 
 void Canvas::end() {
@@ -58,6 +54,14 @@ void Canvas::drawLine(int x0, int y0, int x1, int y1, uint32_t color) {
 void Canvas::drawCircle(int cx, int cy, int r, uint32_t color) { target()->drawCircle(cx, cy, r, color); }
 
 void Canvas::fillCircle(int cx, int cy, int r, uint32_t color) { target()->fillCircle(cx, cy, r, color); }
+
+void Canvas::pushImage(int x, int y, int w, int h, const uint16_t* data) {
+    target()->pushImage(x, y, w, h, data);
+}
+
+void Canvas::drawIcon(const char* name, int x, int y) {
+    Icon::draw(target(), name, x, y);
+}
 
 void Canvas::text(const char* s, int x, int y, uint8_t font, uint32_t color, int datum) {
     lgfx::LGFXBase* t = target();
@@ -207,6 +211,123 @@ bool Dialog::onTouch(const TouchEvent& ev, Rect myRect) {
     return true;
 }
 
+// ============================================================ TouchInjector ==
+
+namespace {
+
+constexpr size_t K_INJ_Q = 24;
+
+struct InjectSlot {
+    TouchInjector::Sample s;
+    uint32_t dueMs = 0;
+    bool armed = false;
+};
+
+InjectSlot s_injQ[K_INJ_Q];
+size_t s_injHead = 0, s_injCount = 0;
+portMUX_TYPE s_injMux = portMUX_INITIALIZER_UNLOCKED;
+
+}  // namespace
+
+bool TouchInjector::push(const Sample* samples, size_t n) {
+    if (samples == nullptr || n == 0) return false;
+    bool ok = true;
+    portENTER_CRITICAL(&s_injMux);
+    for (size_t i = 0; i < n; i++) {
+        if (s_injCount >= K_INJ_Q) {
+            ok = false;
+            break;
+        }
+        size_t tail = (s_injHead + s_injCount) % K_INJ_Q;
+        s_injQ[tail].s = samples[i];
+        s_injQ[tail].armed = false;
+        s_injCount++;
+    }
+    portEXIT_CRITICAL(&s_injMux);
+    return ok;
+}
+
+bool TouchInjector::active() {
+    portENTER_CRITICAL(&s_injMux);
+    bool a = s_injCount > 0;
+    portEXIT_CRITICAL(&s_injMux);
+    return a;
+}
+
+bool TouchInjector::take(Sample& out) {
+    uint32_t now = millis();
+    portENTER_CRITICAL(&s_injMux);
+    bool got = false;
+    if (s_injCount > 0) {
+        InjectSlot& slot = s_injQ[s_injHead];
+        if (!slot.armed) {  // delay conta a partir da primeira olhada
+            slot.armed = true;
+            slot.dueMs = now + slot.s.delayMs;
+        }
+        if ((int32_t)(now - slot.dueMs) >= 0) {
+            out = slot.s;
+            s_injHead = (s_injHead + 1) % K_INJ_Q;
+            s_injCount--;
+            got = true;
+        }
+    }
+    portEXIT_CRITICAL(&s_injMux);
+    return got;
+}
+
+// ============================================================ TouchPump =====
+
+void TouchPump::poll(const Handler& onEvent) {
+    uint16_t x = 0, y = 0;
+    bool down;
+    if (TouchInjector::active()) {
+        // gesto injetado (kryonctl): a fila dita o estado do dedo
+        TouchInjector::Sample s;
+        if (!TouchInjector::take(s)) return;  // amostra ainda em espera
+        down = s.down;
+        x = s.x;
+        y = s.y;
+    } else {
+        down = Board::display().getTouch(&x, &y) != 0;
+    }
+
+    TouchEvent ev;
+    if (down && !m_down) {
+        // press
+        m_down = true;
+        m_lastX = x;
+        m_lastY = y;
+        m_pressX = x;
+        m_pressY = y;
+        m_pressMs = millis();
+        ev.type = TouchEvent::Press;
+        ev.x = x; ev.y = y; ev.startX = x; ev.startY = y; ev.prevX = x; ev.prevY = y;
+        ev.holdMs = 0;
+        onEvent(ev);
+    } else if (down && m_down) {
+        if (abs((int)x - m_lastX) > 2 || abs((int)y - m_lastY) > 2) {
+            ev.type = TouchEvent::Drag;
+            ev.x = x; ev.y = y;
+            ev.startX = m_pressX; ev.startY = m_pressY;
+            ev.prevX = m_lastX; ev.prevY = m_lastY;
+            ev.holdMs = millis() - m_pressMs;
+            m_lastX = x; m_lastY = y;
+            onEvent(ev);
+        }
+    } else if (!down && m_down) {
+        // release com as ULTIMAS coordenadas validas (getTouch nao escreve
+        // x/y quando solto — usar coordenadas velhas era o bug dos toques
+        // aleatorios do launcher antigo)
+        m_down = false;
+        ev.type = TouchEvent::Release;
+        ev.x = m_lastX; ev.y = m_lastY;
+        ev.startX = m_pressX; ev.startY = m_pressY;
+        ev.prevX = m_lastX; ev.prevY = m_lastY;
+        ev.holdMs = millis() - m_pressMs;
+        onEvent(ev);
+    }
+}
+
 // ============================================================ Navigator ====
 
 namespace {
@@ -217,15 +338,11 @@ Dialog* s_dialog = nullptr;
 std::vector<Toast> s_toasts;
 bool s_repaint = true;
 uint32_t s_lastTickMs = 0;
-
-// estado do toque (pump de eventos)
-bool s_down = false;
-int s_lastX = 0, s_lastY = 0, s_pressX = 0, s_pressY = 0, s_prevX = 0, s_prevY = 0;
-uint32_t s_pressMs = 0;
+TouchPump s_pump;
 
 void drawFrame() {
     if (s_canvas == nullptr || s_stack.empty()) return;
-    s_canvas->begin();
+    s_canvas->begin(s_stack.back()->wantsDirectDraw());
     s_stack.back()->draw(*s_canvas);
     if (s_dialog != nullptr) s_dialog->draw(*s_canvas);
     if (!s_toasts.empty()) {
@@ -323,42 +440,7 @@ void Navigator::toast(const std::string& message, uint32_t color, uint32_t durat
 void Navigator::repaint() { s_repaint = true; }
 
 void Navigator::pumpEvents() {
-    uint16_t x = 0, y = 0;
-    bool down = Board::display().getTouch(&x, &y) != 0;
-
-    TouchEvent ev;
-    if (down && !s_down) {
-        // press
-        s_down = true;
-        s_lastX = s_prevX = s_pressX = x;
-        s_lastY = s_prevY = s_pressY = y;
-        s_pressMs = millis();
-        ev.type = TouchEvent::Press;
-        ev.x = x; ev.y = y; ev.startX = x; ev.startY = y; ev.prevX = x; ev.prevY = y;
-        ev.holdMs = 0;
-        dispatchTouch(ev);
-    } else if (down && s_down) {
-        if (abs((int)x - s_lastX) > 2 || abs((int)y - s_lastY) > 2) {
-            ev.type = TouchEvent::Drag;
-            ev.x = x; ev.y = y;
-            ev.startX = s_pressX; ev.startY = s_pressY;
-            ev.prevX = s_lastX; ev.prevY = s_lastY;
-            ev.holdMs = millis() - s_pressMs;
-            s_lastX = x; s_lastY = y;
-            dispatchTouch(ev);
-        }
-    } else if (!down && s_down) {
-        // release com as ULTIMAS coordenadas validas (getTouch nao escreve
-        // x/y quando solto — usar coordenadas velhas era o bug dos toques
-        // aleatorios do launcher antigo)
-        s_down = false;
-        ev.type = TouchEvent::Release;
-        ev.x = s_lastX; ev.y = s_lastY;
-        ev.startX = s_pressX; ev.startY = s_pressY;
-        ev.prevX = s_lastX; ev.prevY = s_lastY;
-        ev.holdMs = millis() - s_pressMs;
-        dispatchTouch(ev);
-    }
+    s_pump.poll(dispatchTouch);
 }
 
 void Navigator::tick() {

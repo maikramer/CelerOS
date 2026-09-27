@@ -20,6 +20,11 @@ static const BoardProfile s_profile = {
 
 void init() {
     s_display.init();
+    // Arrays RGB565 padrao (icones, BMPs de apps JS) e o readRect (screencap)
+    // exigem conversao de ordem de bytes: o barramento SPI envia MSB-first,
+    // formato nativo 565 trocado (rgb565_2Byte do LovyanGFX). Sem isso o
+    // pushImage copia cru e as cores saem trocadas no vidro.
+    s_display.setSwapBytes(true);
 }
 
 KryonDisplay& display() {

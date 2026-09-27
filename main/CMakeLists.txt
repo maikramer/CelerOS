@@ -18,7 +18,6 @@ set(KRYONOS_SRCS
     "OTA/OtaManager.cpp"
     "Kernel/Core/HarixKernel.cpp"
     "Kernel/TimeManager.cpp"
-    "Keyboard/MyKeyboard.cpp"
     "Launcher/LauncherUI.cpp"
     "Launcher/InstallerUI.cpp"
     "Launcher/AppStoreUI.cpp"
@@ -32,6 +31,8 @@ set(KRYONOS_SRCS
     "USBDevice/KryonLink.cpp"
     "USBDevice/SerialLink.cpp"
     "UI/Kui.cpp"
+    "UI/Keyboard.cpp"
+    "Launcher/Screens.cpp"
 )
 set(KRYONOS_PRIV_REQUIRES esp_driver_uart)
 if(CONFIG_KRYONOS_USB_NATIVE)

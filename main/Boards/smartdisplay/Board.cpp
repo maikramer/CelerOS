@@ -20,6 +20,11 @@ static const BoardProfile s_profile = {
 
 void init() {
     s_display.init();
+    // Arrays RGB565 padrao (icones, BMPs de apps JS) e o readRect (screencap)
+    // exigem a conversao de ordem de bytes: o framebuffer nativo do LCD_CAM
+    // e 565 com bytes trocados (rgb565_2Byte do LovyanGFX). Sem isso o
+    // pushImage copia cru e as cores saem trocadas no vidro.
+    s_display.setSwapBytes(true);
 }
 
 KryonDisplay& display() {

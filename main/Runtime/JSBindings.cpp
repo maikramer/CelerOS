@@ -1,7 +1,7 @@
 #include "JSBindings.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
-#include "../Keyboard/MyKeyboard.h"
+#include "../UI/Keyboard.h"
 #include "../WebManager/WebManager.h"
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
@@ -944,7 +944,7 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     const char *initialText = "";
     if (duk_is_string(ctx, 1)) initialText = duk_require_string(ctx, 1);
 
-    std::string result = MyKeyboard::getString(initialText, promptMsg);
+    std::string result = kui::getString(initialText, promptMsg);
     
     duk_push_string(ctx, result.c_str());
     

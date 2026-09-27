@@ -21,6 +21,10 @@ public:
     // conhecida. Sobe o servidor web se existir /local/web_on.txt.
     // Retorna true se conectou.
     static bool init();
+    // Boot assincrono: prepara NVS/credenciais/eventos e deixa a task de
+    // reconexao do NetworkManager conectar sozinha (elimina a race do scan
+    // concorrente do boot antigo). Nunca bloqueia; estado via isActive().
+    static bool startAsync();
 
     // Liga o WiFi em tempo de execucao (mesmo efeito do init() no boot)
     static bool enable();
