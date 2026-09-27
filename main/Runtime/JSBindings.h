@@ -112,6 +112,32 @@ private:
     // Keyboard Bindings
     static duk_ret_t js_prompt(duk_context *ctx);
 
+    // System nivel 3 (apps de sistema em JS — W8)
+    static duk_ret_t js_setBrightness(duk_context *ctx);
+    static duk_ret_t js_getBrightness(duk_context *ctx);
+    static duk_ret_t js_backlightSupported(duk_context *ctx);
+    static duk_ret_t js_openWifiSetup(duk_context *ctx);
+    static duk_ret_t js_exitApp(duk_context *ctx);
+    static duk_ret_t js_wifiStatus(duk_context *ctx);
+    static duk_ret_t js_md5(duk_context *ctx);
+    static duk_ret_t js_rescanApps(duk_context *ctx);
+    static duk_ret_t js_factoryReset(duk_context *ctx);
+    static duk_ret_t js_otaCheck(duk_context *ctx);
+    static duk_ret_t js_otaStart(duk_context *ctx);
+    static duk_ret_t js_setTimezone(duk_context *ctx);
+    static duk_ret_t js_setManualTime(duk_context *ctx);
+    static duk_ret_t js_set24hFormat(duk_context *ctx);
+    static duk_ret_t js_get24hFormat(duk_context *ctx);
+    static duk_ret_t js_setNtpEnabled(duk_context *ctx);
+    static duk_ret_t js_getNtpEnabled(duk_context *ctx);
+    static duk_ret_t js_webActive(duk_context *ctx);
+    static duk_ret_t js_webSetActive(duk_context *ctx);
+
+    // Net nivel 3 (WiFi)
+    static duk_ret_t js_wifiScan(duk_context *ctx);
+    static duk_ret_t js_wifiConnect(duk_context *ctx);
+    static duk_ret_t js_wifiDisconnect(duk_context *ctx);
+
     // Helper
     static void fatalErrorHandler(void *udata, const char *msg);
 };
