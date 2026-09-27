@@ -5,7 +5,7 @@ Welcome to the **KryonOS JavaScript API Reference**. This document provides deep
 ---
 ## KryonOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 2
+### API Level: 3
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -418,3 +418,98 @@ if (quote === null) {
     System.print("USD/BRL: " + quote.USDBRL.bid);
 }
 ```
+
+## 12. API Level 3 — System Apps (W8)
+
+Introduced with the W8 rework: the system screens (Settings, App Store,
+Installer, Help, Web Server) are now JS apps living in LittleFS. Level 3
+adds the bindings they need — theme colors, file copy, OTA control and the
+app package format.
+
+### 12.1 Theme & Icons
+
+#### `System.theme()`
+- **Returns:** Object `{bg, card, raised, stroke, accent, accentD, onAccent, text, textDim, ok, warn, err}` — the OS theme palette as RGB565 values, ready to pass to any drawing call. System apps use it to inherit the KryonOS look on every board.
+
+#### `System.textWidth(str, font)`
+- **Parameters:** `str` (String), `font` (Number, default 2)
+- **Returns:** Number — string width in pixels in the virtual 240x320 space. `System.drawString` uses top-left datum; center manually: `x = 120 - (System.textWidth(s, 2) >> 1)`.
+
+#### `System.drawIcon(name, x, y)`
+- **Parameters:** `name` (String: `appstore`, `installer`, `settings`, `help`, `web`, `time`, `about`, `update`, `app`, `wifi_on`, `wifi_off`), position in virtual space
+- **Description:** Draws a 64x64 icon from `/local/icons/<name>.bin` with alpha blending.
+
+### 12.2 App Lifecycle
+
+#### `System.exitApp()`
+Closes the app and returns to the launcher (same as touching the top-right corner).
+
+#### `System.rescanApps()`
+Asks the launcher to rescan `/local/apps` and `/sd/apps`. Call after installing/removing apps.
+
+#### `System.openWifiSetup()`
+Pushes the native WiFi setup screen. Since JS apps run synchronously, call `System.exitApp()` right after — the setup screen takes over when the script yields.
+
+### 12.3 Hardware & System
+
+#### `System.setBrightness(level)` / `System.getBrightness()` / `System.backlightSupported()`
+Backlight control (5–100). `setBrightness` persists to `/local/brightness.txt`. On boards without PWM backlight `backlightSupported()` returns `false` and the setters are no-ops.
+
+#### `System.wifiStatus()`
+- **Returns:** `{connected, ip, webServer, savedNetworks}` (Booleans/String).
+
+#### `System.webActive()` / `System.webSetActive(bool)`
+Web server (file manager + web upload) state and toggle — live, no reboot.
+
+#### `System.md5(str)`
+- **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`; compatible with the legacy `/local/settings_pin.txt`).
+
+#### `System.otaCheck()`
+- **Returns:** `{fetchFailed, available, hasFirmware, version, url, changelog, guide, type}` — result of the device's update channel manifest.
+
+#### `System.otaStart(url, progressCallback)`
+- **Parameters:** `url` from `otaCheck()`, callback receiving `percent` (0–100) during the flash
+- **Returns:** `{ok, error?}` — flashes the inactive OTA slot; on success the app should offer `System.restart()`.
+
+#### `System.setTimezone(tz)` / `System.setManualTime(year, month, day, hour, minute)` / `System.set24hFormat(bool)` / `System.get24hFormat()` / `System.setNtpEnabled(bool)` / `System.getNtpEnabled()`
+Time configuration (persisted by TimeManager).
+
+#### `System.factoryReset(mode)`
+- `"configs"` — clears configuration files in `/local` and saved WiFi networks, **keeps** apps and icons.
+- `"total"` — formats the whole LittleFS partition (**apps are erased**; recovery requires `tools/flash_data.sh` or `kryonctl apps install`). Always confirm twice in the UI.
+
+### 12.4 WiFi (Net)
+
+- `Net.wifiScan()` → array `[{ssid, rssi, secure}]` (blocking, ~2s).
+- `Net.wifiConnect(ssid, password)` → Boolean (blocking, up to 15s; saves credentials).
+- `Net.wifiDisconnect()` — disconnects STA, keeps saved networks.
+
+### 12.5 File copy (FS)
+
+- `FS.copyFile(src, dst)` → Boolean — binary safe.
+- `FS.copyDirectory(srcDir, dstDir)` → Boolean — recursive copy.
+- `FS.removeDirectory(path)` → Boolean — **recursive** delete (unlike `FS.rmdir`, which requires an empty dir).
+
+### 12.6 App package (app.json)
+
+```json
+{
+  "name": "My App",
+  "packageName": "kryonos.myapp",
+  "version": "1.0.0",
+  "author": "you",
+  "description": "...",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 3,
+  "system": true,
+  "order": 30,
+  "icon": "settings"
+}
+```
+
+- `system: true` — system app: sorted first in the launcher grid (native system screens are apps like this now).
+- `order` — position among system apps.
+- `icon` — icon name in `/local/icons`. **Preferred:** ship `icon.bin` (same v2 64x64 RGB565+A4 format, 10240 bytes) inside the app folder — it overrides the name and travels with the package when installed via SD/kryonctl.
+- `packageName` — identity used by the launcher dedup, installer and App Store.
+- Install paths: `/local/apps/<Name>/` (LittleFS) or `/sd/apps/<Name>/` (SD card). Reinstall/update with `kryonctl apps install <folder> [--sd]`.
