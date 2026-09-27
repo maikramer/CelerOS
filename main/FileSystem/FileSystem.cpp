@@ -14,6 +14,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "driver/gpio.h"
 
 static const char* FS_TAG = "kryon.fs";
 
@@ -75,16 +76,27 @@ bool FileSystem::mountSD() {
         s_spi_bus_ready = true;
     }
 
+    // IDF 6: esp_vfs_fat_sdspi_mount continua "all-in-one" — anexa o
+    // dispositivo do slot_config no bus indicado por host.slot. O detalhe
+    // critico e slot.host_id: com zero-init vai para o SPI1 (flash!) e falha
+    // com "invalid host".
+    static bool s_isr_installed = false;
+    if (!s_isr_installed) {
+        gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+        s_isr_installed = true;
+    }
+
+    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot.host_id = (spi_host_device_t)KRYONOS_SD_SPI_HOST;
+    slot.gpio_cs = (gpio_num_t)KRYON_SD_CS;
+    slot.gpio_cd = GPIO_NUM_NC;
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = KRYONOS_SD_SPI_HOST;
 #ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
     // No SmartDisplay o barramento e compartilhado com o init do painel: 4MHz
     host.max_freq_khz = 4000;
 #endif
-
-    sdspi_device_config_t slot = {};
-    slot.gpio_cs = (gpio_num_t)KRYON_SD_CS;
-    slot.gpio_cd = GPIO_NUM_NC;
 
     esp_vfs_fat_mount_config_t mountcfg = {};
     mountcfg.format_if_mount_failed = false;
