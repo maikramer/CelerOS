@@ -5,13 +5,15 @@ Pipeline:
   1. text2d (FLUX.2 Klein local) gera as artes 512x512 em tools/icons_src/
      a partir de tools/icons.json — pulando o que ja existe (use --regen
      para forcar).
-  2. Pillow po-processa: recorte quadrado, Lanczos para 64x64, conversao
-     para RGB565 little-endian com arredondamento + dithering Floyd-Steinberg
-     (gradientes suaves sem banding) e mascara de transparencia 4-bit do
-     quadrado arredondado (AA por supersampling 4x).
-  3. Saida em data/icons/<id>.bin no formato v2 do firmware (Icon.h):
-     RGB565 [64*64*2] + A4 [64*64/2] = 10240 bytes. O firmware compoe o
-     alpha por software — cantos transparentes de verdade, em qualquer fundo.
+  2. Pillow po-processa: recorte quadrado, Lanczos para 64x64, quantizacao
+     RGB565 com arredondamento + dithering Floyd-Steinberg (gradientes
+     suaves sem banding) e alpha de 8 bits do quadrado arredondado
+     (supersampling 4x).
+  3. Saida em data/icons/<id>.png (RGBA): pixels ja quantizados RGB565
+     re-expandidos por replicacao de bits (round-trip exato no decode) +
+     alpha 256 niveis. O firmware decodifica o PNG no load (pngle do
+     LovyanGFX) para o cache RGB565+A4 — ~2,5x menor em disco que o .bin
+     antigo, que segue aceito como legado.
   4. Gera a folha de contato docs/assets/icons_preview.png.
 
 Se quiser substituir uma arte: apague tools/icons_src/<id>.png, edite o
@@ -37,8 +39,10 @@ RADIUS = 14
 THEME_BG = (13, 17, 23)
 
 
-def rgb565_dither(img: Image.Image) -> bytes:
-    """RGB -> RGB565 LE com arredondamento e Floyd-Steinberg.
+def rgb565_dither(img: Image.Image) -> Image.Image:
+    """Quantiza RGB->RGB565 com arredondamento e Floyd-Steinberg e devolve a
+    arte como RGB888 com os valores 565 re-expandidos por replicacao de bits
+    (round-trip exato: o firmware recupera o valor quantizado com >>3/>>2).
 
     Truncamento simples transformava os gradientes/glow das artes em faixas
     visiveis (banding); a difusao de erro distribui a quantizacao como ruido
@@ -46,7 +50,8 @@ def rgb565_dither(img: Image.Image) -> bytes:
     """
     w, h = img.size
     work = [list(c) for c in img.convert("RGB").getdata()]
-    out = bytearray()
+    out = Image.new("RGB", (w, h))
+    px = out.load()
     for y in range(h):
         for x in range(w):
             i = y * w + x
@@ -54,7 +59,7 @@ def rgb565_dither(img: Image.Image) -> bytes:
             qr = round(r * 31 / 255)
             qg = round(g * 63 / 255)
             qb = round(b * 31 / 255)
-            out += ((qr << 11) | (qg << 5) | qb).to_bytes(2, "little")
+            px[x, y] = ((qr << 3) | (qr >> 2), (qg << 2) | (qg >> 4), (qb << 3) | (qb >> 2))
             errs = (r - qr * 255 / 31, g - qg * 255 / 63, b - qb * 255 / 31)
             for dx, dy, f in ((1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16)):
                 nx, ny = x + dx, y + dy
@@ -63,31 +68,24 @@ def rgb565_dither(img: Image.Image) -> bytes:
                     work[j][0] += errs[0] * f
                     work[j][1] += errs[1] * f
                     work[j][2] += errs[2] * f
-    return bytes(out)
+    return out
 
 
-def alpha4_mask() -> bytes:
-    """Mascara A4 (2 px/byte, nibble alto = esquerda) do quadrado arredondado.
+def alpha8_mask() -> bytes:
+    """Mascara de 8 bits (256 niveis) do quadrado arredondado.
 
-    Desenha em 4x e reduz com BOX: cada byte-alvo acumula a cobertura exata
-    de um bloco 4x4 -> 16 niveis de anti-aliasing por pixel.
+    Desenha em 4x e reduz com BOX: cada pixel-alvo acumula a cobertura exata
+    de um bloco 4x4. O firmware quantiza para A4 (a>>4) no decode do PNG.
     """
     ss = 4
     big = Image.new("L", (SIZE * ss, SIZE * ss), 0)
     ImageDraw.Draw(big).rounded_rectangle(
         (0, 0, SIZE * ss - 1, SIZE * ss - 1), radius=RADIUS * ss, fill=255
     )
-    cov = big.resize((SIZE, SIZE), Image.BOX)
-    out = bytearray()
-    for y in range(SIZE):
-        for xb in range(SIZE // 2):
-            hi = cov.getpixel((xb * 2, y)) >> 4
-            lo = cov.getpixel((xb * 2 + 1, y)) >> 4
-            out.append((hi << 4) | lo)
-    return bytes(out)
+    return big.resize((SIZE, SIZE), Image.BOX).tobytes()
 
 
-def process(src_png: Path, dst_bin: Path, mask: bytes) -> None:
+def process(src_png: Path, dst_png: Path, mask: bytes) -> None:
     img = Image.open(src_png).convert("RGB")
     # Recorte quadrado central
     side = min(img.size)
@@ -96,8 +94,10 @@ def process(src_png: Path, dst_bin: Path, mask: bytes) -> None:
     img = img.crop((left, top, left + side, top + side))
     img = img.resize((SIZE, SIZE), Image.LANCZOS)
 
-    dst_bin.parent.mkdir(parents=True, exist_ok=True)
-    dst_bin.write_bytes(rgb565_dither(img) + mask)
+    out = rgb565_dither(img).convert("RGBA")
+    out.putalpha(Image.frombytes("L", (SIZE, SIZE), mask))
+    dst_png.parent.mkdir(parents=True, exist_ok=True)
+    out.save(dst_png, compress_level=9)
 
 
 def contact_sheet(items: list) -> None:
@@ -106,7 +106,7 @@ def contact_sheet(items: list) -> None:
     rows = (len(items) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * cell, rows * cell + 16), THEME_BG)
     d = ImageDraw.Draw(sheet)
-    mask = alpha4_mask()
+    mask = alpha8_mask()
     from PIL import ImageFont
     try:
         font = ImageFont.truetype(
@@ -121,9 +121,7 @@ def contact_sheet(items: list) -> None:
         icon = Image.open(png).convert("RGB")
         side = min(icon.size)
         icon = icon.crop((0, 0, side, side)).resize((SIZE, SIZE), Image.LANCZOS)
-        icon.putalpha(Image.frombytes("L", (SIZE, SIZE), bytes(
-            m for p in mask for m in ((p >> 4) * 17, (p & 0x0F) * 17)
-        )))
+        icon.putalpha(Image.frombytes("L", (SIZE, SIZE), mask))
         bgc = Image.new("RGB", (SIZE, SIZE), THEME_BG)
         icon = Image.alpha_composite(bgc.convert("RGBA"), icon.convert("RGBA"))
         icon = icon.convert("RGB").resize((96, 96), Image.NEAREST)
@@ -158,31 +156,38 @@ def main() -> None:
         )
 
     OUT.mkdir(parents=True, exist_ok=True)
-    mask = alpha4_mask()  # geometria igual para todos os icones
+    mask = alpha8_mask()  # geometria igual para todos os icones
     for it in items:
         src_png = SRC / it["output"]
         if not src_png.exists():
             print(f"AVISO: {src_png} ausente, pulando {it['id']}")
             continue
-        dst = OUT / f"{it['id']}.bin"
+        dst = OUT / f"{it['id']}.png"
         process(src_png, dst, mask)
         print(f"ok  {dst.relative_to(ROOT)}")
+    for old in OUT.glob("*.bin"):  # legado do formato v2
+        old.unlink()
+        print(f"rm  {old.relative_to(ROOT)}")
     contact_sheet(items)
 
     # Icones de pacote: apps de sistema (data/apps/<Nome>/) carregam a
-    # propria arte (icon.bin) — mesmo .bin do /local/icons correspondente,
+    # propria arte (icon.png) — mesmo PNG do /local/icons correspondente,
     # copiado para o pacote virar artefato instalavel/atualizavel.
     for app_name, icon_id in APP_PKG_ICONS.items():
-        src_bin = OUT / f"{icon_id}.bin"
-        if not src_bin.exists():
-            print(f"AVISO: {src_bin} ausente, pacote de '{app_name}' sem icone")
+        src_png = OUT / f"{icon_id}.png"
+        if not src_png.exists():
+            print(f"AVISO: {src_png} ausente, pacote de '{app_name}' sem icone")
             continue
         pkg_dir = ROOT / "data" / "apps" / app_name
         if not (pkg_dir / "app.json").exists():
             print(f"AVISO: {pkg_dir} sem app.json, pulando icone")
             continue
-        (pkg_dir / "icon.bin").write_bytes(src_bin.read_bytes())
-        print(f"ok  {(pkg_dir / 'icon.bin').relative_to(ROOT)}")
+        (pkg_dir / "icon.png").write_bytes(src_png.read_bytes())
+        print(f"ok  {(pkg_dir / 'icon.png').relative_to(ROOT)}")
+        old_bin = pkg_dir / "icon.bin"
+        if old_bin.exists():  # legado do formato v2
+            old_bin.unlink()
+            print(f"rm  {old_bin.relative_to(ROOT)}")
 
 
 # Apps de sistema e o id do icone /local/icons usado como arte do pacote

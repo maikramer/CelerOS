@@ -93,6 +93,12 @@ Os apps de sistema (Settings, App Store, Installer, Help, Web Server) agora
 vivem no LittleFS e não são afetados por OTA — atualize-os com
 `kryonctl apps install data/apps/<Nome>` ou pela própria App Store.
 
+> Publicar 1.2.0 no canal: os manifests em `updates/` seguem em 1.1.0 até
+> que as placas CYD em campo tenham feito a migração por cabo acima (um
+> firmware novo com tabela antiga até caberia no slot, mas o LittleFS de
+> 128 KB não comporta os apps de sistema). Quando for publicar, atualize
+> `version`/`firmware_url` do manifest do canal da placa.
+
 ## Limitações conhecidas
 
 - TLS sem validação de certificado (`setInsecure`), herdado do updater

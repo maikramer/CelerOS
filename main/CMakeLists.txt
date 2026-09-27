@@ -88,6 +88,6 @@ idf_component_register(
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/${KRYONOS_BOARD_DIR}")
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    KRYONOS_VERSION="1.1.0"
-    KRYONOS_API_LEVEL=3
+    KRYONOS_VERSION="1.2.0"
+    KRYONOS_API_LEVEL=4
 )

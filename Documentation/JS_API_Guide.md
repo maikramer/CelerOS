@@ -190,6 +190,10 @@ The ESP32 TFT uses the high-performance **16-bit RGB565** color format. You can 
 - **Parameters:** `path` (String), `x` (Int), `y` (Int)
 - **Returns:** `Boolean` (`true` if successful, `false` if unsupported or file missing)
 - **Description:** Reads a 16-bit, 24-bit, or 32-bit `.bmp` image from the FileSystem (`/sd/` or `/local/`) and streams the pixel data directly to the TFT display at coordinates `x, y`. Bypasses JavaScript RAM entirely for high-speed rendering. Automatically handles `RGB565` 16-bit translation and ignores alpha channels on 32-bit files.
+#### `System.drawPNG(path, x, y)`
+- **Parameters:** `path` (String), `x` (Int), `y` (Int)
+- **Returns:** `Boolean` (`true` if successful, `false` if path/decode failed)
+- **Description:** Draws a `.png` image from the FileSystem (`/sd/` or `/local/`) at `x, y`, decoded in streaming line-by-line (no full-framebuffer RAM spike; only the ~44 KB deflate window during decode). PNG alpha is blended over the existing background. Draw size is the PNG's native pixel size — coordinates follow the same virtual 240x320 canvas scaling as other draw calls. Interlaced PNGs are supported. Ideal for backgrounds and photos; use `System.drawIcon()` for launcher-style 64x64 icons.
 
 #### `System.drawCircle(x, y, radius, color)`
 #### `System.fillCircle(x, y, radius, color)`
