@@ -1,0 +1,12 @@
+version: "1.0.0"
+description: "Supabase client for ESP32 - Complete Supabase integration including Auth and PostgREST"
+url: "https://github.com/maikeu/esp_components"
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c3
+  - esp32c6
+dependencies:
+  idf:
+    version: ">=5.0.0"

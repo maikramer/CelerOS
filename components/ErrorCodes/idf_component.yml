@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+## Componente: ErrorCodes
+## Sistema de códigos de erro padronizado
+
+version: "1.0.0"
+description: "Sistema de códigos de erro padronizado para ESP-IDF"
+license: "MIT"
+
+# Dependências locais via path
+# Requer ESP-IDF v6.0 ou superior
+idf:
+  version: ">=6.0.0"

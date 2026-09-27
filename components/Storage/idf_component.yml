@@ -1,0 +1,13 @@
+## IDF Component Manager Manifest File
+## Componente: Storage
+## Armazenamento (NVS, Flash, SD Card)
+
+version: "1.0.0"
+description: "Sistema de armazenamento para ESP-IDF (NVS, Flash, SD Card)"
+license: "MIT"
+
+# Dependências locais via path
+# Removido UserManaging para evitar dependência circular
+# Requer ESP-IDF v6.0 ou superior
+idf:
+  version: ">=6.0.0"

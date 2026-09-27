@@ -1,0 +1,6 @@
+version: "1.0.0"
+description: "System information utilities for ESP32 (chip, memory, MAC, uptime)"
+url: "https://github.com/maikramer/esp_components"
+dependencies:
+  idf:
+    version: ">=5.0.0"

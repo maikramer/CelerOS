@@ -1,0 +1,6 @@
+version: "1.0.0"
+description: "Reusable UI components for ESP32 LVGL applications"
+url: "https://github.com/maikeu/esp_components"
+dependencies:
+  lvgl/lvgl:
+    version: "^9.0.0"

@@ -11,6 +11,12 @@ KryonOS is an **open-source**, lightweight, high-performance **GUI** Operating S
 * **JavaScript App Runtime:** Execute interactive JS apps natively on the ESP32 using the optimized Duktape engine.
 * **Rich UI & Graphics:** Built-in graphics library with double-buffering support for smooth, tear-free 2D and 3D rendering.
 * **App Store & Installer:** Browse, download, and install JavaScript apps and updates dynamically over Wi-Fi.
+* **Over-the-Air Updates:** Firmware updates straight from the device (Settings → System Updates → INSTALL) or via browser upload on the web file manager (`/update`). See [tools/README_OTA.md](tools/README_OTA.md).
+* **Captive Portal Wi-Fi Setup:** No credentials? The device opens a `KryonOS-Setup-XXXX` access point and you configure Wi-Fi from your phone's browser.
+* **Wi-Fi Auto-Reconnect:** If the router drops, KryonOS reconnects by itself (no reboot needed).
+* **JS Networking (`Net.*`):** HTTP GET/POST/JSON from JavaScript apps (API level 2) — see the [JS API Guide](Documentation/JS_API_Guide.md).
+* **Settings PIN Lock:** Optional numeric PIN protects the Settings area (MD5-hashed, 60 s unlock session).
+* **Brightness Control:** Adjustable backlight with persistent level on the SmartDisplay 4" board.
 * **File Management:** Fully functional file explorer and text editor utilizing the SD Card for storage.
 * **Hardware API:** Easy-to-use JavaScript APIs for controlling GPIO, reading touch input, accessing the SD card, and reading sensors.
 * **Multitasking Feel:** Launch, suspend, and switch between utility apps, games, and hardware monitors.

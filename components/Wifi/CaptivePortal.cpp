@@ -1,0 +1,755 @@
+#include "CaptivePortal.h"
+
+#include "esp_log.h"
+#include "esp_http_server.h"
+#include "esp_wifi.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include <cstring>
+#include <cstdio>
+#include <algorithm>
+
+// HTML template for the configuration page
+static const char* HTML_TEMPLATE = R"rawhtml(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>%s</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+            min-height: 100vh; padding: 20px;
+        }
+        .container { 
+            max-width: 400px; margin: 0 auto; 
+            background: white; border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+            color: white; padding: 24px; text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 14px; }
+        .content { padding: 24px; }
+        .network-list { 
+            max-height: 200px; overflow-y: auto;
+            border: 1px solid #e0e0e0; border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        .network { 
+            padding: 12px 16px; cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex; justify-content: space-between;
+            align-items: center; transition: background 0.2s;
+        }
+        .network:hover { background: #f5f5f5; }
+        .network:last-child { border-bottom: none; }
+        .network.selected { background: #e8f0fe; }
+        .network-name { font-weight: 500; }
+        .network-signal { 
+            font-size: 12px; color: #666;
+            display: flex; align-items: center; gap: 4px;
+        }
+        .signal-icon { font-size: 16px; }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; margin-bottom: 6px; font-weight: 500; color: #333; }
+        input[type="text"], input[type="password"] {
+            width: 100%%; padding: 12px 16px;
+            border: 2px solid #e0e0e0; border-radius: 8px;
+            font-size: 16px; transition: border-color 0.2s;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        .btn {
+            width: 100%%; padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+            color: white; border: none; border-radius: 8px;
+            font-size: 16px; font-weight: 600; cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        .btn:active { transform: translateY(0); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-scan { 
+            background: #f5f5f5; color: #333; margin-bottom: 16px;
+        }
+        .btn-scan:hover { background: #e8e8e8; box-shadow: none; }
+        .status { 
+            margin-top: 16px; padding: 12px; border-radius: 8px;
+            text-align: center; font-size: 14px; display: none;
+        }
+        .status.error { background: #fde8e8; color: #c53030; display: block; }
+        .status.success { background: #e8fde8; color: #2f855a; display: block; }
+        .status.info { background: #e8f4fd; color: #2b6cb0; display: block; }
+        .loading { display: none; text-align: center; padding: 20px; }
+        .spinner {
+            width: 40px; height: 40px; margin: 0 auto 12px;
+            border: 3px solid #f3f3f3; border-top: 3px solid #667eea;
+            border-radius: 50%%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0%% { transform: rotate(0deg); } 100%% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>%s</h1>
+            <p>%s</p>
+        </div>
+        <div class="content">
+            <div id="main-form">
+                <button class="btn btn-scan" onclick="scanNetworks()">Buscar Redes</button>
+                <div class="network-list" id="network-list">
+                    <div style="padding: 20px; text-align: center; color: #666;">
+                        Clique em "Buscar Redes" para ver redes disponíveis
+                    </div>
+                </div>
+                <form id="wifi-form" onsubmit="return connectWifi(event)">
+                    <div class="form-group">
+                        <label for="ssid">Nome da Rede (SSID)</label>
+                        <input type="text" id="ssid" name="ssid" required placeholder="Selecione ou digite">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Senha</label>
+                        <input type="password" id="password" name="password" placeholder="Senha da rede">
+                    </div>
+                    <button type="submit" class="btn" id="connect-btn">Conectar</button>
+                </form>
+                <div id="status" class="status"></div>
+            </div>
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Conectando...</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        let selectedNetwork = null;
+        
+        function scanNetworks() {
+            document.getElementById('network-list').innerHTML = 
+                '<div style="padding: 20px; text-align: center;"><div class="spinner"></div>Buscando...</div>';
+            
+            fetch('/scan')
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('network-list');
+                    if (data.networks.length === 0) {
+                        list.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Nenhuma rede encontrada</div>';
+                        return;
+                    }
+                    list.innerHTML = data.networks.map(n => 
+                        `<div class="network" onclick="selectNetwork('${n.ssid.replace(/'/g, "\\'")}', ${n.rssi})">
+                            <span class="network-name">${n.ssid}</span>
+                            <span class="network-signal">
+                                <span class="signal-icon">${getSignalIcon(n.rssi)}</span>
+                                ${n.rssi} dBm
+                            </span>
+                        </div>`
+                    ).join('');
+                })
+                .catch(e => {
+                    document.getElementById('network-list').innerHTML = 
+                        '<div style="padding: 20px; text-align: center; color: #c53030;">Erro ao buscar redes</div>';
+                });
+        }
+        
+        function getSignalIcon(rssi) {
+            if (rssi > -50) return '📶';
+            if (rssi > -70) return '📶';
+            return '📶';
+        }
+        
+        function selectNetwork(ssid, rssi) {
+            document.querySelectorAll('.network').forEach(n => n.classList.remove('selected'));
+            event.currentTarget.classList.add('selected');
+            document.getElementById('ssid').value = ssid;
+            selectedNetwork = ssid;
+        }
+        
+        function connectWifi(e) {
+            e.preventDefault();
+            const ssid = document.getElementById('ssid').value;
+            const password = document.getElementById('password').value;
+            
+            if (!ssid) {
+                showStatus('Por favor, selecione ou digite uma rede', 'error');
+                return false;
+            }
+            
+            document.getElementById('main-form').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            
+            fetch('/connect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(password)}`
+            })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('main-form').style.display = 'block';
+                
+                if (data.success) {
+                    showStatus(`Conectado! IP: ${data.ip}`, 'success');
+                } else {
+                    showStatus(data.message || 'Falha na conexão', 'error');
+                }
+            })
+            .catch(e => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('main-form').style.display = 'block';
+                showStatus('Erro de comunicação', 'error');
+            });
+            
+            return false;
+        }
+        
+        function showStatus(msg, type) {
+            const status = document.getElementById('status');
+            status.textContent = msg;
+            status.className = 'status ' + type;
+        }
+    </script>
+</body>
+</html>
+)rawhtml";
+
+CaptivePortal::CaptivePortal() :
+    _state(CaptivePortalState::Stopped),
+    _httpServer(nullptr),
+    _dnsSocket(nullptr),
+    _dnsTask(nullptr),
+    _dnsRunning(false) {
+}
+
+CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
+    _config(config),
+    _state(CaptivePortalState::Stopped),
+    _httpServer(nullptr),
+    _dnsSocket(nullptr),
+    _dnsTask(nullptr),
+    _dnsRunning(false) {
+}
+
+CaptivePortal::~CaptivePortal() {
+    stop();
+}
+
+bool CaptivePortal::start() {
+    return start(_config.apSsid, _config.apPassword);
+}
+
+bool CaptivePortal::start(const std::string& apSsid, const std::string& apPassword) {
+    if (_state == CaptivePortalState::Running) {
+        ESP_LOGW(TAG, "Portal already running");
+        return true;
+    }
+
+    _config.apSsid = apSsid;
+    _config.apPassword = apPassword;
+    setState(CaptivePortalState::Starting);
+
+    ESP_LOGI(TAG, "Starting Captive Portal: %s", _config.apSsid.c_str());
+
+    // Start Access Point
+    auto& ap = WifiAP::instance();
+    if (!ap.start(_config.apSsid, _config.apPassword)) {
+        ESP_LOGE(TAG, "Failed to start AP");
+        setState(CaptivePortalState::Error);
+        return false;
+    }
+
+    // Scan for networks if configured
+    if (_config.scanOnStart) {
+        scanNetworks();
+    }
+
+    // Start DNS server (for captive portal redirect)
+    if (!startDnsServer()) {
+        ESP_LOGE(TAG, "Failed to start DNS server");
+        ap.stop();
+        setState(CaptivePortalState::Error);
+        return false;
+    }
+
+    // Start HTTP server
+    if (!startHttpServer()) {
+        ESP_LOGE(TAG, "Failed to start HTTP server");
+        stopDnsServer();
+        ap.stop();
+        setState(CaptivePortalState::Error);
+        return false;
+    }
+
+    setState(CaptivePortalState::Running);
+    ESP_LOGI(TAG, "Captive Portal running on http://%s", ap.getIPAddress().c_str());
+    
+    onStarted.trigger();
+    return true;
+}
+
+bool CaptivePortal::stop() {
+    if (_state == CaptivePortalState::Stopped) {
+        return true;
+    }
+
+    setState(CaptivePortalState::Stopping);
+    ESP_LOGI(TAG, "Stopping Captive Portal...");
+
+    stopHttpServer();
+    stopDnsServer();
+    WifiAP::instance().stop();
+
+    setState(CaptivePortalState::Stopped);
+    onStopped.trigger();
+
+    ESP_LOGI(TAG, "Captive Portal stopped");
+    return true;
+}
+
+int CaptivePortal::scanNetworks() {
+    ESP_LOGI(TAG, "Scanning for networks...");
+    
+    _scannedNetworks.clear();
+
+    // Configure scan
+    wifi_scan_config_t scan_config = {};
+    scan_config.ssid = nullptr;
+    scan_config.bssid = nullptr;
+    scan_config.channel = 0;
+    scan_config.show_hidden = false;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_config.scan_time.active.min = 100;
+    scan_config.scan_time.active.max = 300;
+
+    // Start scan (blocking)
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+
+    // Get results
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+
+    if (ap_count == 0) {
+        ESP_LOGW(TAG, "No networks found");
+        return 0;
+    }
+
+    std::vector<wifi_ap_record_t> ap_records(ap_count);
+    esp_wifi_scan_get_ap_records(&ap_count, ap_records.data());
+
+    // Process results (filter duplicates and empty SSIDs)
+    std::vector<std::string> seen_ssids;
+    for (const auto& record : ap_records) {
+        std::string ssid = reinterpret_cast<const char*>(record.ssid);
+        
+        // Skip empty or invalid SSIDs
+        if (ssid.empty() || ssid[0] == '\0') {
+            continue;
+        }
+
+        // Skip duplicates
+        if (std::find(seen_ssids.begin(), seen_ssids.end(), ssid) != seen_ssids.end()) {
+            continue;
+        }
+
+        seen_ssids.push_back(ssid);
+        _scannedNetworks.push_back({ssid, record.rssi});
+    }
+
+    // Sort by signal strength
+    std::sort(_scannedNetworks.begin(), _scannedNetworks.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    ESP_LOGI(TAG, "Found %zu networks", _scannedNetworks.size());
+    return static_cast<int>(_scannedNetworks.size());
+}
+
+bool CaptivePortal::startDnsServer() {
+    ESP_LOGI(TAG, "Starting DNS server on port %d", _config.dnsPort);
+
+    _dnsRunning = true;
+
+    // Create DNS task
+    BaseType_t ret = xTaskCreate(
+        dnsTaskFunc,
+        "dns_server",
+        4096,
+        this,
+        5,
+        reinterpret_cast<TaskHandle_t*>(&_dnsTask)
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create DNS task");
+        _dnsRunning = false;
+        return false;
+    }
+
+    return true;
+}
+
+void CaptivePortal::stopDnsServer() {
+    _dnsRunning = false;
+    
+    if (_dnsSocket != nullptr) {
+        close(reinterpret_cast<intptr_t>(_dnsSocket));
+        _dnsSocket = nullptr;
+    }
+
+    if (_dnsTask != nullptr) {
+        vTaskDelay(pdMS_TO_TICKS(100));  // Give task time to exit
+        _dnsTask = nullptr;
+    }
+}
+
+void CaptivePortal::dnsTaskFunc(void* param) {
+    CaptivePortal* self = static_cast<CaptivePortal*>(param);
+    
+    // Create UDP socket
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create DNS socket");
+        self->_dnsRunning = false;
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    self->_dnsSocket = reinterpret_cast<void*>(static_cast<intptr_t>(sock));
+
+    // Set socket timeout
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Bind to port
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(self->_config.dnsPort);
+
+    if (bind(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        ESP_LOGE(TAG, "Failed to bind DNS socket");
+        close(sock);
+        self->_dnsSocket = nullptr;
+        self->_dnsRunning = false;
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    ESP_LOGI(TAG, "DNS server started");
+
+    // Get AP IP for responses
+    std::string ap_ip = WifiAP::instance().getIPAddress();
+    uint32_t ip_addr = 0;
+    
+    // Parse IP address
+    int ip_parts[4];
+    if (sscanf(ap_ip.c_str(), "%d.%d.%d.%d", 
+               &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) == 4) {
+        ip_addr = (ip_parts[0]) | (ip_parts[1] << 8) | 
+                  (ip_parts[2] << 16) | (ip_parts[3] << 24);
+    }
+
+    uint8_t buffer[512];
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+
+    while (self->_dnsRunning) {
+        int len = recvfrom(sock, buffer, sizeof(buffer), 0,
+                          (struct sockaddr*)&client_addr, &client_len);
+        
+        if (len < 12) {
+            continue;  // Invalid DNS packet or timeout
+        }
+
+        // Build DNS response (redirect all queries to AP IP)
+        // Simple response: copy query and add answer pointing to AP IP
+        
+        // Set response flags
+        buffer[2] = 0x81;  // Response, recursion desired
+        buffer[3] = 0x80;  // Recursion available
+        buffer[6] = 0x00;  // Answer count high
+        buffer[7] = 0x01;  // Answer count low
+
+        // Find end of query
+        int query_end = 12;
+        while (query_end < len && buffer[query_end] != 0) {
+            query_end += buffer[query_end] + 1;
+        }
+        query_end += 5;  // Skip null + qtype + qclass
+
+        // Add answer
+        int answer_start = query_end;
+        buffer[answer_start++] = 0xC0;  // Pointer to name
+        buffer[answer_start++] = 0x0C;  // Offset 12
+        buffer[answer_start++] = 0x00;  // Type A
+        buffer[answer_start++] = 0x01;
+        buffer[answer_start++] = 0x00;  // Class IN
+        buffer[answer_start++] = 0x01;
+        buffer[answer_start++] = 0x00;  // TTL
+        buffer[answer_start++] = 0x00;
+        buffer[answer_start++] = 0x00;
+        buffer[answer_start++] = 0x3C;  // 60 seconds
+        buffer[answer_start++] = 0x00;  // Data length
+        buffer[answer_start++] = 0x04;  // 4 bytes
+        
+        // IP address (already in network byte order)
+        memcpy(&buffer[answer_start], &ip_addr, 4);
+        answer_start += 4;
+
+        // Send response
+        sendto(sock, buffer, answer_start, 0,
+               (struct sockaddr*)&client_addr, client_len);
+    }
+
+    close(sock);
+    self->_dnsSocket = nullptr;
+    ESP_LOGI(TAG, "DNS server stopped");
+    vTaskDelete(nullptr);
+}
+
+bool CaptivePortal::startHttpServer() {
+    ESP_LOGI(TAG, "Starting HTTP server on port %d", _config.httpPort);
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = _config.httpPort;
+    config.max_uri_handlers = 8;
+    config.stack_size = 8192;
+    config.lru_purge_enable = true;
+
+    httpd_handle_t server = nullptr;
+    esp_err_t err = httpd_start(&server, &config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    _httpServer = server;
+
+    // Register handlers
+    CaptivePortal* self = this;
+
+    // Root handler - serves the configuration page
+    httpd_uri_t root_uri = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
+            std::string html = portal->generateHtml();
+            httpd_resp_set_type(req, "text/html");
+            httpd_resp_send(req, html.c_str(), html.length());
+            return ESP_OK;
+        },
+        .user_ctx = self
+    };
+    httpd_register_uri_handler(server, &root_uri);
+
+    // Scan handler
+    httpd_uri_t scan_uri = {
+        .uri = "/scan",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
+            portal->scanNetworks();
+            std::string json = portal->generateScanJson();
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, json.c_str(), json.length());
+            return ESP_OK;
+        },
+        .user_ctx = self
+    };
+    httpd_register_uri_handler(server, &scan_uri);
+
+    // Connect handler
+    httpd_uri_t connect_uri = {
+        .uri = "/connect",
+        .method = HTTP_POST,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
+            
+            // Read POST data
+            char buf[256];
+            int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+            if (ret <= 0) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+                return ESP_FAIL;
+            }
+            buf[ret] = '\0';
+
+            // Parse ssid and password
+            std::string data(buf);
+            std::string ssid, password;
+            
+            size_t ssid_pos = data.find("ssid=");
+            size_t pass_pos = data.find("password=");
+            
+            if (ssid_pos != std::string::npos) {
+                size_t end = data.find('&', ssid_pos);
+                ssid = urlDecode(data.substr(ssid_pos + 5, 
+                    end != std::string::npos ? end - ssid_pos - 5 : std::string::npos));
+            }
+            
+            if (pass_pos != std::string::npos) {
+                size_t end = data.find('&', pass_pos);
+                password = urlDecode(data.substr(pass_pos + 9,
+                    end != std::string::npos ? end - pass_pos - 9 : std::string::npos));
+            }
+
+            ESP_LOGI(TAG, "Connection request for: %s", ssid.c_str());
+
+            // Trigger event
+            WiFiCredentials creds;
+            creds.ssid = ssid;
+            creds.password = password;
+            portal->onCredentialsReceived.trigger(creds);
+            portal->onConnecting.trigger(ssid);
+
+            // Simple response - actual connection should be handled by event subscriber
+            std::string response = "{\"success\":true,\"message\":\"Credenciais recebidas\",\"ip\":\"Verificar na rede\"}";
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, response.c_str(), response.length());
+            
+            return ESP_OK;
+        },
+        .user_ctx = self
+    };
+    httpd_register_uri_handler(server, &connect_uri);
+
+    // Captive portal detection handlers
+    const char* captive_uris[] = {
+        "/generate_204",           // Android
+        "/gen_204",                // Android
+        "/hotspot-detect.html",    // Apple
+        "/library/test/success.html", // Apple
+        "/ncsi.txt",               // Windows
+        "/connecttest.txt",        // Windows
+        "/fwlink"                  // Microsoft
+    };
+
+    for (const char* uri : captive_uris) {
+        httpd_uri_t captive_uri = {
+            .uri = uri,
+            .method = HTTP_GET,
+            .handler = [](httpd_req_t* req) -> esp_err_t {
+                // Redirect to root
+                httpd_resp_set_status(req, "302 Found");
+                httpd_resp_set_hdr(req, "Location", "/");
+                httpd_resp_send(req, nullptr, 0);
+                return ESP_OK;
+            },
+            .user_ctx = nullptr
+        };
+        httpd_register_uri_handler(server, &captive_uri);
+    }
+
+    ESP_LOGI(TAG, "HTTP server started");
+    return true;
+}
+
+void CaptivePortal::stopHttpServer() {
+    if (_httpServer != nullptr) {
+        httpd_stop(static_cast<httpd_handle_t>(_httpServer));
+        _httpServer = nullptr;
+        ESP_LOGI(TAG, "HTTP server stopped");
+    }
+}
+
+std::string CaptivePortal::generateHtml() {
+    // HTML template is about 5200 bytes, buffer needs extra space
+    std::string html(HTML_TEMPLATE);
+    
+    // Replace placeholders manually (snprintf had buffer issues)
+    size_t pos;
+    
+    // First %s - title in <title> tag
+    pos = html.find("%s");
+    if (pos != std::string::npos) {
+        html.replace(pos, 2, _config.title);
+    }
+    
+    // Second %s - title in h1
+    pos = html.find("%s");
+    if (pos != std::string::npos) {
+        html.replace(pos, 2, _config.title);
+    }
+    
+    // Third %s - device name in p
+    pos = html.find("%s");
+    if (pos != std::string::npos) {
+        html.replace(pos, 2, _config.deviceName);
+    }
+    
+    return html;
+}
+
+std::string CaptivePortal::generateScanJson() {
+    std::string json = "{\"networks\":[";
+    
+    bool first = true;
+    for (const auto& network : _scannedNetworks) {
+        if (!first) json += ",";
+        first = false;
+        
+        // Escape SSID for JSON
+        std::string escaped_ssid;
+        for (char c : network.first) {
+            if (c == '"') escaped_ssid += "\\\"";
+            else if (c == '\\') escaped_ssid += "\\\\";
+            else if (c >= 32 && c < 127) escaped_ssid += c;
+        }
+        
+        char entry[128];
+        snprintf(entry, sizeof(entry), 
+                 "{\"ssid\":\"%s\",\"rssi\":%d}",
+                 escaped_ssid.c_str(), network.second);
+        json += entry;
+    }
+    
+    json += "]}";
+    return json;
+}
+
+void CaptivePortal::setState(CaptivePortalState newState) {
+    if (_state != newState) {
+        ESP_LOGD(TAG, "State: %d -> %d", static_cast<int>(_state), static_cast<int>(newState));
+        _state = newState;
+    }
+}
+
+std::string CaptivePortal::urlDecode(const std::string& str) {
+    std::string result;
+    result.reserve(str.length());
+    
+    for (size_t i = 0; i < str.length(); i++) {
+        if (str[i] == '%' && i + 2 < str.length()) {
+            int value;
+            if (sscanf(str.substr(i + 1, 2).c_str(), "%x", &value) == 1) {
+                result += static_cast<char>(value);
+                i += 2;
+            } else {
+                result += str[i];
+            }
+        } else if (str[i] == '+') {
+            result += ' ';
+        } else {
+            result += str[i];
+        }
+    }
+    
+    return result;
+}

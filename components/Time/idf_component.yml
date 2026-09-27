@@ -1,0 +1,6 @@
+version: "1.0.0"
+description: "NTP time synchronization and timezone management for ESP32"
+url: "https://github.com/maikramer/esp_components"
+dependencies:
+  idf:
+    version: ">=5.0.0"
