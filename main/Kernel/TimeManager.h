@@ -9,6 +9,9 @@ class TimeManager {
 public:
     static void init();
     static void syncNTP();
+    // Retentativa de SNTP enquanto a hora for invalida (chamar no loop)
+    static void tick(bool networkUp);
+    static bool isTimeValid();
     static void setManualTime(int year, int month, int day, int hour, int minute);
     static void setTimezone(const std::string& tzOffset);
     static void setTimeFormat(bool use24h);

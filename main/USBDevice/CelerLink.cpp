@@ -1,5 +1,5 @@
-#include "KryonLink.h"
-#include "KryonShell.h"
+#include "CelerLink.h"
+#include "CelerShell.h"
 #include "LogSink.h"
 #include "FileSystem/FileSystem.h"
 
@@ -20,20 +20,20 @@
 #include "freertos/task.h"
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
-#include "../UI/Kui.h"     // TouchInjector (injecao de touch do kryonctl)
+#include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
 
-#if !defined(KRYONOS_VERSION)
-#define KRYONOS_VERSION "?"
+#if !defined(CELEROS_VERSION)
+#define CELEROS_VERSION "?"
 #endif
-#if !defined(KRYONOS_API_LEVEL)
-#define KRYONOS_API_LEVEL 0
+#if !defined(CELEROS_API_LEVEL)
+#define CELEROS_API_LEVEL 0
 #endif
 
 namespace {
 
 // transporte injetado (default: CDC nativo do USBDevice)
-KryonLink::WriteFn s_writer = nullptr;
-KryonLink::BaudFn s_baudHook = nullptr;
+CelerLink::WriteFn s_writer = nullptr;
+CelerLink::BaudFn s_baudHook = nullptr;
 
 // ---------------------------------------------------------------- utilidades
 
@@ -41,9 +41,9 @@ void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t d
     if (s_writer == nullptr) return;  // nenhum transporte instalado
     // frame inteiro numa unica escrita: logs concorrentes (logcat) nunca
     // intercalam bytes no meio de uma resposta
-    static uint8_t frame[4 + 1 + KryonLink::MAX_PAYLOAD];
+    static uint8_t frame[4 + 1 + CelerLink::MAX_PAYLOAD];
     uint16_t total = (uint16_t)(1 + dataLen);
-    frame[0] = 0x4B;
+    frame[0] = 0x43;
     frame[1] = cmd;
     frame[2] = (uint8_t)total;
     frame[3] = (uint8_t)(total >> 8);
@@ -147,7 +147,7 @@ void execPrint(void* ctx, const char* fmt, ...) {
 
 void handleHello(const uint8_t* payload, uint16_t len) {
     char id[64];
-    snprintf(id, sizeof(id), "KRYONOS %s|%s|api %d|proto 1", KRYONOS_VERSION, boardId(), KRYONOS_API_LEVEL);
+    snprintf(id, sizeof(id), "CELEROS %s|%s|api %d|proto 1", CELEROS_VERSION, boardId(), CELEROS_API_LEVEL);
     respond(KL_HELLO, 0, id, (uint16_t)strlen(id));
 }
 
@@ -179,7 +179,7 @@ void handleInfo() {
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
              "\"fs\":{\"/local\":{\"total\":%u,\"used\":%u},\"/sd\":{\"total\":%u,\"used\":%u}}}",
-             KRYONOS_VERSION, boardId(), KRYONOS_API_LEVEL,
+             CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              hasIp ? ip : "", hasSd ? "true" : "false",
@@ -189,7 +189,7 @@ void handleInfo() {
 
 void handleLs(const uint8_t* payload, uint16_t len) {
     char path[256];
-    if (!takeString(payload, len, path, sizeof(path)) || !KryonShell::pathAllowed(path)) {
+    if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_LS, "caminho invalido");
         return;
     }
@@ -233,7 +233,7 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     }
     std::string frame;
     frame.resize(4 + 1 + bodyLen);
-    frame[0] = 0x4B;
+    frame[0] = 0x43;
     frame[1] = KL_LS;
     frame[2] = (uint8_t)(bodyLen + 1);
     frame[3] = (uint8_t)((bodyLen + 1) >> 8);
@@ -246,7 +246,7 @@ void handleLs(const uint8_t* payload, uint16_t len) {
 
 void handleStat(const uint8_t* payload, uint16_t len) {
     char path[256];
-    if (!takeString(payload, len, path, sizeof(path)) || !KryonShell::pathAllowed(path)) {
+    if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_STAT, "caminho invalido");
         return;
     }
@@ -268,18 +268,18 @@ void handleRead(const uint8_t* payload, uint16_t len) {
     char path[256];
     uint32_t offset = 0, want = 0;
     if (!takeString(payload, len, path, sizeof(path)) || !takeU32(payload, len, offset) ||
-        !takeU32(payload, len, want) || !KryonShell::pathAllowed(path)) {
+        !takeU32(payload, len, want) || !CelerShell::pathAllowed(path)) {
         respondError(KL_READ, "pedido malformado");
         return;
     }
-    if (want > KryonLink::MAX_PAYLOAD) want = KryonLink::MAX_PAYLOAD;
+    if (want > CelerLink::MAX_PAYLOAD) want = CelerLink::MAX_PAYLOAD;
 
     FILE* f = fopen(path, "rb");
     if (f == nullptr) {
         respondError(KL_READ, "nao abriu");
         return;
     }
-    static uint8_t buf[KryonLink::MAX_PAYLOAD];
+    static uint8_t buf[CelerLink::MAX_PAYLOAD];
     size_t got = 0;
     if (fseek(f, (long)offset, SEEK_SET) == 0) {
         got = fread(buf, 1, want, f);
@@ -291,7 +291,7 @@ void handleRead(const uint8_t* payload, uint16_t len) {
 
 void handleWriteBegin(const uint8_t* payload, uint16_t len) {
     char path[256];
-    if (!takeString(payload, len, path, sizeof(path)) || !KryonShell::pathAllowed(path)) {
+    if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_WRITE_BEGIN, "caminho invalido");
         return;
     }
@@ -302,7 +302,7 @@ void handleWriteBegin(const uint8_t* payload, uint16_t len) {
         respondError(KL_WRITE_BEGIN, "nao abriu para escrita");
         return;
     }
-    strncpy(s_wrPath, path, sizeof(s_wrPath) - 1);
+    snprintf(s_wrPath, sizeof(s_wrPath), "%s", path);
     s_wrTotal = 0;
     respond(KL_WRITE_BEGIN, 0);
 }
@@ -335,7 +335,7 @@ void handleWriteEnd() {
 
 void handleDelete(const uint8_t* payload, uint16_t len) {
     char path[256];
-    if (!takeString(payload, len, path, sizeof(path)) || !KryonShell::pathAllowed(path)) {
+    if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_DELETE, "caminho invalido");
         return;
     }
@@ -344,7 +344,7 @@ void handleDelete(const uint8_t* payload, uint16_t len) {
 
 void handleMkdir(const uint8_t* payload, uint16_t len) {
     char path[256];
-    if (!takeString(payload, len, path, sizeof(path)) || !KryonShell::pathAllowed(path)) {
+    if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_MKDIR, "caminho invalido");
         return;
     }
@@ -355,7 +355,7 @@ void handleMkdir(const uint8_t* payload, uint16_t len) {
 void handleRename(const uint8_t* payload, uint16_t len) {
     char from[256], to[256];
     if (!takeString(payload, len, from, sizeof(from)) || !takeString(payload, len, to, sizeof(to)) ||
-        !KryonShell::pathAllowed(from) || !KryonShell::pathAllowed(to)) {
+        !CelerShell::pathAllowed(from) || !CelerShell::pathAllowed(to)) {
         respondError(KL_RENAME, "caminho invalido");
         return;
     }
@@ -370,7 +370,7 @@ void handleExec(const uint8_t* payload, uint16_t len) {
     line[len] = '\0';
 
     ExecCtx ctx;
-    int code = KryonShell::execute(line, execPrint, &ctx);
+    int code = CelerShell::execute(line, execPrint, &ctx);
 
     uint8_t rec[5];
     rec[0] = (uint8_t)code;
@@ -382,7 +382,7 @@ void handleExec(const uint8_t* payload, uint16_t len) {
         size_t off = 0;
         while (off < ctx.out.size()) {
             size_t n = ctx.out.size() - off;
-            if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
+            if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
             respond(KL_EXEC_CONT, 0, ctx.out.data() + off, (uint16_t)n);
             off += n;
         }
@@ -414,12 +414,12 @@ void handleSetBaud(const uint8_t* payload, uint16_t len) {
 // ------------------------------------------------------------------- logcat
 
 void handleLogOn() {
-    kryon_logcat_set(true);
+    celer_logcat_set(true);
     respond(KL_LOG_ON, 0);
 }
 
 void handleLogOff() {
-    kryon_logcat_set(false);
+    celer_logcat_set(false);
     respond(KL_LOG_OFF, 0);
 }
 
@@ -495,7 +495,7 @@ void handleOtaAbort() {
 // ---------------------------------------------------------------- screenshot
 
 void handleScreenshot() {
-    KryonDisplay& tft = Board::display();
+    CelerDisplay& tft = Board::display();
     uint16_t w = (uint16_t)tft.width();
     uint16_t h = (uint16_t)tft.height();
     size_t bytes = (size_t)w * h * 2;
@@ -512,7 +512,7 @@ void handleScreenshot() {
     size_t off = 0;
     while (off < bytes && s_writer != nullptr) {
         size_t n = bytes - off;
-        if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
+        if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
         respond(KL_SCR_DATA, 0, src + off, (uint16_t)n);
         off += n;
     }
@@ -578,16 +578,16 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 
 }  // namespace
 
-void KryonLink::setWriter(WriteFn fn) {
+void CelerLink::setWriter(WriteFn fn) {
     s_writer = fn;
 }
 
-void KryonLink::setBaudHook(BaudFn fn) {
+void CelerLink::setBaudHook(BaudFn fn) {
     s_baudHook = fn;
 }
 
 // Maquina de estados de frames alimentada byte a byte.
-void KryonLink::feed(uint8_t byte) {
+void CelerLink::feed(uint8_t byte) {
     static uint8_t payload[MAX_PAYLOAD];
     static enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } state = WANT_MAGIC;
     static uint8_t cmd = 0;
@@ -595,7 +595,7 @@ void KryonLink::feed(uint8_t byte) {
 
     switch (state) {
         case WANT_MAGIC:
-            if (byte == 0x4B) state = WANT_CMD;
+            if (byte == 0x43) state = WANT_CMD;
             break;
         case WANT_CMD:
             cmd = byte;
@@ -629,7 +629,7 @@ void KryonLink::feed(uint8_t byte) {
     }
 }
 
-void KryonLink::run(StreamBufferHandle_t rx) {
+void CelerLink::run(StreamBufferHandle_t rx) {
     for (;;) {
         uint8_t byte;
         if (xStreamBufferReceive(rx, &byte, 1, portMAX_DELAY) == 0) continue;

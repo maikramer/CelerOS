@@ -1,3 +1,3 @@
-# Dependencias das ferramentas Python do KryonOS (tools/)
-# kryonctl requer pyserial; make_icons.py requer Pillow
+# Dependencias das ferramentas Python do CelerOS (tools/)
+# celerctl requer pyserial; make_icons.py requer Pillow
 pyserial>=3.5

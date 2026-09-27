@@ -19,7 +19,7 @@
 #include "filemanager_html.h"
 #include "ota_upload_html.h"
 
-static const char* WM_TAG = "kryon.web";
+static const char* WM_TAG = "celer.web";
 
 static httpd_handle_t s_server = nullptr;
 static bool s_nmEventsBound = false;
@@ -213,7 +213,7 @@ void WebManager::disconnect() {
     nm().disconnect();
 }
 
-int WebManager::scanNetworks(KryonScanEntry* out, int maxN) {
+int WebManager::scanNetworks(CelerScanEntry* out, int maxN) {
     if (out == nullptr || maxN <= 0) return 0;
     if (nm().init(true) != CommonErrorCodes::None) return 0;
 
@@ -244,11 +244,11 @@ bool WebManager::startScanAsync() {
            nm().startScan(false) == CommonErrorCodes::None;
 }
 
-std::vector<KryonScanEntry> WebManager::getLastScan() {
-    std::vector<KryonScanEntry> out;
+std::vector<CelerScanEntry> WebManager::getLastScan() {
+    std::vector<CelerScanEntry> out;
     for (const auto& net : nm().getLastScanResults()) {
         if (net.ssid[0] == '\0') continue;
-        KryonScanEntry e;
+        CelerScanEntry e;
         e.ssid = net.ssid;
         e.rssi = net.rssi;
         e.secure = net.authMode != WIFI_AUTH_OPEN;

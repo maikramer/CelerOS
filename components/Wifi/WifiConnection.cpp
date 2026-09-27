@@ -184,8 +184,11 @@ ErrorCode WifiConnection::connect(const std::string &ssid, const std::string &pa
 
     // Configure WiFi connection
     wifi_config_t wifi_config = {};
-    std::strncpy((char *) wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid));
-    std::strncpy((char *) wifi_config.sta.password, password.c_str(), sizeof(wifi_config.sta.password));
+    // SSID de 32 e PSK de 64 caracteres ocupam o campo inteiro sem '\0' (o IDF
+    // aceita); o resto ja e zero pelo {} acima. memcpy limitado = sem truncagem.
+    std::memcpy(wifi_config.sta.ssid, ssid.data(), std::min(ssid.size(), sizeof(wifi_config.sta.ssid)));
+    std::memcpy(wifi_config.sta.password, password.data(),
+                std::min(password.size(), sizeof(wifi_config.sta.password)));
 
     esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (ret != ESP_OK) {

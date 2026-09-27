@@ -27,7 +27,7 @@ void init() {
     s_display.setSwapBytes(true);
 }
 
-KryonDisplay& display() {
+CelerDisplay& display() {
     return s_display;
 }
 

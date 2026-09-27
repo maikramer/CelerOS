@@ -1,5 +1,5 @@
-#ifndef KRYONOS_TOUCH_GT911_IDF_H
-#define KRYONOS_TOUCH_GT911_IDF_H
+#ifndef CELEROS_TOUCH_GT911_IDF_H
+#define CELEROS_TOUCH_GT911_IDF_H
 
 // Touch GT911 sobre o driver i2c_master oficial do ESP-IDF.
 //
@@ -64,7 +64,7 @@ namespace lgfx
             uint8_t r = 0;
             if (writeRead(rate, 2, &r, 1)) _refresh_rate = 5 + (r & 0x0F);
             _inited = true;
-            ESP_LOGI("kryon.touch", "GT911 init OK (addr 0x%02X refresh %ums id=%c%c%c)",
+            ESP_LOGI("celer.touch", "GT911 init OK (addr 0x%02X refresh %ums id=%c%c%c)",
                      (unsigned)_cfg.i2c_addr, (unsigned)_refresh_rate,
                      productId[0], productId[1], productId[2]);
             return true;
@@ -74,7 +74,7 @@ namespace lgfx
         if (_cfg.i2c_addr == default_addr_2) _cfg.i2c_addr = default_addr_1;
         else _cfg.i2c_addr = default_addr_2;
       }
-      ESP_LOGE("kryon.touch", "GT911 nao respondeu em nenhum endereco");
+      ESP_LOGE("celer.touch", "GT911 nao respondeu em nenhum endereco");
       return false;
     }
 
@@ -217,4 +217,4 @@ namespace lgfx
  }
 }
 
-#endif // KRYONOS_TOUCH_GT911_IDF_H
+#endif // CELEROS_TOUCH_GT911_IDF_H

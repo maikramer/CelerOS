@@ -85,14 +85,22 @@ uint16_t* Icon::loadBin(FILE* f, uint8_t** alphaOut) {
 // draw nao conhece PNG). O pngle usa ~44 KB de heap durante o decode (janela
 // do deflate) e e destruido em seguida — transitório até no CYD sem PSRAM.
 namespace {
+// O pngle entrega o MESMO user_data aos callbacks de leitura e de desenho:
+// o contexto carrega o FILE* e os buffers juntos (passar so o FILE* fazia o
+// pngDrawCb escrever dentro da struct FILE — boot loop com icon.png real).
 struct PngIconCtx {
+    FILE* f;
     uint16_t* px;
     uint8_t* a4;
     bool ok;
 };
 
 uint32_t pngReadCb(void* user, uint8_t* buf, uint32_t len) {
-    return (uint32_t)fread(buf, 1, len, (FILE*)user);
+    FILE* f = ((PngIconCtx*)user)->f;
+    if (buf == nullptr) {  // pngle pede para PULAR len bytes (chunks ignorados)
+        return fseek(f, (long)len, SEEK_CUR) == 0 ? len : 0;
+    }
+    return (uint32_t)fread(buf, 1, len, f);
 }
 
 void pngDrawCb(void* user, uint32_t x, uint32_t y, uint_fast8_t div_x, size_t len,
@@ -125,12 +133,12 @@ uint16_t* Icon::loadPng(FILE* f, uint8_t** alphaOut) {
     if (a == nullptr) a = (uint8_t*)malloc(PX / 2);
 
     bool ok = false;
+    PngIconCtx ctx = {f, buf, a, true};
     if (buf != nullptr && a != nullptr &&
-        lgfx_pngle_prepare(pngle, pngReadCb, f) >= 0 &&
+        lgfx_pngle_prepare(pngle, pngReadCb, &ctx) >= 0 &&
         lgfx_pngle_get_width(pngle) == (uint32_t)SIZE &&
         lgfx_pngle_get_height(pngle) == (uint32_t)SIZE) {
         memset(a, 0, PX / 2);
-        PngIconCtx ctx = {buf, a, true};
         ok = lgfx_pngle_decomp(pngle, pngDrawCb) >= 0 && ctx.ok;
     }
     lgfx_pngle_destroy(pngle);  // devolve os ~44 KB da janela do deflate
@@ -332,7 +340,7 @@ void Icon::drawAppTile(lgfx::LGFXBase* tft, const char* appName, int x, int y) {
         }
     }
     char s[2] = {letter, 0};
-    tft->setTextColor(0xFFFFFF);  // transparente sobre o gradiente
+    tft->setTextColor((uint32_t)0xFFFFFF);  // transparente sobre o gradiente
     tft->setTextDatum(MC_DATUM);
     tft->drawString(s, x + SIZE / 2, y + SIZE / 2 + 1, &lgfx::fonts::FreeSansBold18pt7b);
 }

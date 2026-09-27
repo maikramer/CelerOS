@@ -1,7 +1,7 @@
-#ifndef KRYONOS_SCREENS_H
-#define KRYONOS_SCREENS_H
+#ifndef CELEROS_SCREENS_H
+#define CELEROS_SCREENS_H
 
-// Telas Kui do KryonOS (W7c). O LauncherScreen e a base da pilha do
+// Telas Kui do CelerOS (W7c). O LauncherScreen e a base da pilha do
 // Navigator; as telas antigas (ainda nao portadas) rodam embrulhadas em
 // LegacyScreen ate sua migracao.
 
@@ -102,4 +102,4 @@ private:
     kui::Button m_btnBack, m_btnScan, m_btnWeb;
 };
 
-#endif  // KRYONOS_SCREENS_H
+#endif  // CELEROS_SCREENS_H

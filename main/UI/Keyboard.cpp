@@ -63,11 +63,22 @@ void KeyboardScreen::rebuild() {
     const int u = (UI::W - 2 * UI::sx(4) - 9 * g) / 10;
     if (u < 4) return;  // display impossivel: sem keys, so field
 
-    Rect f = fieldRect();
-    const int top = f.y + f.h + UI::sy(5);
+    int top;
     const int rowGap = UI::sy(2);
-    int keyH = (UI::H - top - UI::sy(2) - 3 * rowGap) / 4;
-    if (keyH < 12) keyH = 12;
+    int keyH;
+    if (m_showField) {
+        Rect f = fieldRect();
+        top = f.y + f.h + UI::sy(5);
+        keyH = (UI::H - top - UI::sy(2) - 3 * rowGap) / 4;
+        if (keyH < 12) keyH = 12;
+    } else {
+        // acoplado (System.keypad*): teclado compacto, ancorado no rodape —
+        // sobra o resto da tela para o app (System.keypadRect)
+        keyH = UI::sy(32);
+        top = UI::H - UI::sy(4) - (4 * keyH + 3 * rowGap);
+        if (top < 0) top = 0;
+    }
+    m_keysTop = top;
 
     const bool letters = isLetters(m_mode);
     const char* const* rows = (m_mode == Sym1) ? SY1_ROWS : (m_mode == Sym2) ? SY2_ROWS : LET_ROWS;
@@ -112,37 +123,39 @@ char KeyboardScreen::labelChar(char ch) const {
 }
 
 void KeyboardScreen::draw(Canvas& c) {
-    // cabecalho: prompt (esquerda, cortado se nao couber) + X cancelar
-    Rect xr = cancelRect();
-    c.fillRoundRect(xr, UI::sx(6), THEME_CARD);
-    c.drawRoundRect(xr, UI::sx(6), THEME_STROKE);
-    c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
-
     Rect f = fieldRect();
-    if (!m_prompt.empty()) {
-        std::string p = m_prompt;
-        int avail = xr.x - UI::sx(8);
-        while (!p.empty() && c.textWidth(p.c_str(), UI::font(1)) > avail) p.pop_back();
-        c.text(p, UI::sx(4), f.y / 2, UI::font(1), THEME_TEXT_DIM, ML_DATUM);
-    }
+    if (m_showField) {
+        // cabecalho: prompt (esquerda, cortado se nao couber) + X cancelar
+        Rect xr = cancelRect();
+        c.fillRoundRect(xr, UI::sx(6), THEME_CARD);
+        c.drawRoundRect(xr, UI::sx(6), THEME_STROKE);
+        c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
 
-    // campo de texto com cursor piscando; texto longo mostra o final
-    c.fillRoundRect(f, UI::sx(6), THEME_CARD);
-    c.drawRoundRect(f, UI::sx(6), THEME_STROKE);
-    const int pad = UI::sx(8);
-    const int avail = f.w - 2 * pad - UI::sx(4);
-    std::string shown = m_text;
-    while (!shown.empty() && c.textWidth(shown.c_str(), UI::font(2)) > avail) {
-        shown.erase(shown.begin());
-    }
-    int ty = f.y + f.h / 2;
-    if (!shown.empty()) {
-        c.text(shown, f.x + pad, ty, UI::font(2), THEME_TEXT, ML_DATUM);
-    }
-    if (m_cursorOn) {
-        int tw = c.textWidth(shown.c_str(), UI::font(2));
-        int ch = c.fontHeight(KryonFont(UI::font(2)));
-        c.fillRect({f.x + pad + tw + UI::sx(1), ty - ch / 2, UI::sx(2), ch}, THEME_ACCENT);
+        if (!m_prompt.empty()) {
+            std::string p = m_prompt;
+            int avail = xr.x - UI::sx(8);
+            while (!p.empty() && c.textWidth(p.c_str(), UI::font(1)) > avail) p.pop_back();
+            c.text(p, UI::sx(4), f.y / 2, UI::font(1), THEME_TEXT_DIM, ML_DATUM);
+        }
+
+        // campo de texto com cursor piscando; texto longo mostra o final
+        c.fillRoundRect(f, UI::sx(6), THEME_CARD);
+        c.drawRoundRect(f, UI::sx(6), THEME_STROKE);
+        const int pad = UI::sx(8);
+        const int avail = f.w - 2 * pad - UI::sx(4);
+        std::string shown = m_text;
+        while (!shown.empty() && c.textWidth(shown.c_str(), UI::font(2)) > avail) {
+            shown.erase(shown.begin());
+        }
+        int ty = f.y + f.h / 2;
+        if (!shown.empty()) {
+            c.text(shown, f.x + pad, ty, UI::font(2), THEME_TEXT, ML_DATUM);
+        }
+        if (m_cursorOn) {
+            int tw = c.textWidth(shown.c_str(), UI::font(2));
+            int ch = c.fontHeight(CelerFont(UI::font(2)));
+            c.fillRect({f.x + pad + tw + UI::sx(1), ty - ch / 2, UI::sx(2), ch}, THEME_ACCENT);
+        }
     }
 
     // teclas
@@ -224,13 +237,20 @@ void KeyboardScreen::handleKey(int idx) {
                     m_mode = Lower;
                     rebuild();
                 }
+                if (onChange) onChange();
             }
             break;
         case KSpace:
-            if ((int)m_text.size() < m_maxLen) m_text += ' ';
+            if ((int)m_text.size() < m_maxLen) {
+                m_text += ' ';
+                if (onChange) onChange();
+            }
             break;
         case KBksp:
-            if (!m_text.empty()) m_text.pop_back();
+            if (!m_text.empty()) {
+                m_text.pop_back();
+                if (onChange) onChange();
+            }
             break;
         case KShift:
             m_mode = (m_mode == Upper) ? Lower : Upper;
@@ -245,7 +265,19 @@ void KeyboardScreen::handleKey(int idx) {
             rebuild();
             break;
         case KOk:
-            finish(true);
+            if (m_persistent) {
+                // acoplado: OK executa, nao encerra — o buffer zera e o
+                // teclado segue aberto para o proximo comando/linha
+                if (onEnter) onEnter(m_text);
+                m_text.clear();
+                if (m_mode == Upper) {  // shift nao "gruda" p/ a proxima linha
+                    m_mode = Lower;
+                    rebuild();
+                }
+                markDirty();
+            } else {
+                finish(true);
+            }
             break;
     }
 }

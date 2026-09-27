@@ -1,5 +1,5 @@
-#ifndef KRYONOS_OTA_UPLOAD_HTML_H
-#define KRYONOS_OTA_UPLOAD_HTML_H
+#ifndef CELEROS_OTA_UPLOAD_HTML_H
+#define CELEROS_OTA_UPLOAD_HTML_H
 
 // Pagina de flash de firmware pelo navegador (POST /update), no mesmo estilo
 // do file manager. Conceito ElegantOTA sem dependencia externa.
@@ -8,7 +8,7 @@ static const char ota_upload_html[] PROGMEM = R"html(<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KryonOS Firmware Update</title>
+<title>CelerOS Firmware Update</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
@@ -39,7 +39,7 @@ font-weight:600;cursor:pointer}
 </head>
 <body>
 <div class="container">
-<div class="header"><h1>⚙️ KryonOS Firmware Update</h1>
+<div class="header"><h1>⚙️ CelerOS Firmware Update</h1>
 <p>Upload a firmware.bin — the device flashes and reboots</p></div>
 <div class="content">
 <div class="file-zone" id="zone" onclick="document.getElementById('f').click()">
@@ -89,4 +89,4 @@ x.send(fd);
 </body>
 </html>)html";
 
-#endif // KRYONOS_OTA_UPLOAD_HTML_H
+#endif // CELEROS_OTA_UPLOAD_HTML_H

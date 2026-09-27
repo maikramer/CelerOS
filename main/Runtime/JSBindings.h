@@ -7,11 +7,16 @@
 
 class JSBindings {
 public:
-    static void init(duk_context *ctx, KryonDisplay *tft);
+    static void init(duk_context *ctx, CelerDisplay *tft);
+
+    // Alvo de desenho do app (sprite do app > quadro automatico > display)
+    static lgfx::LGFXBase* gfx();
+    // Leva o quadro automatico ao vidro se houve desenho desde o ultimo
+    static void present();
 
 private:
-    static KryonDisplay *tftInstance;
-    static KryonSprite *tftSprite;
+    static CelerDisplay *tftInstance;
+    static CelerSprite *tftSprite;
 
     // Double Buffering
     static duk_ret_t js_createSprite(duk_context *ctx);
@@ -113,8 +118,17 @@ private:
     // Keyboard Bindings
     static duk_ret_t js_prompt(duk_context *ctx);
 
+    // Keyboard acoplado (System.keypad*, API level 5 — sessao nao-bloqueante)
+    static duk_ret_t js_keypadOpen(duk_context *ctx);
+    static duk_ret_t js_keypadPoll(duk_context *ctx);
+    static duk_ret_t js_keypadText(duk_context *ctx);
+    static duk_ret_t js_keypadRect(duk_context *ctx);
+    static duk_ret_t js_keypadDraw(duk_context *ctx);
+    static duk_ret_t js_keypadClose(duk_context *ctx);
+
     // System nivel 3 (apps de sistema em JS — W8)
     static duk_ret_t js_textWidth(duk_context *ctx);
+    static duk_ret_t js_fontHeight(duk_context *ctx);
     static duk_ret_t js_theme(duk_context *ctx);
     static duk_ret_t js_drawIcon(duk_context *ctx);
     static duk_ret_t js_copyFile(duk_context *ctx);
@@ -125,6 +139,10 @@ private:
     static duk_ret_t js_backlightSupported(duk_context *ctx);
     static duk_ret_t js_openWifiSetup(duk_context *ctx);
     static duk_ret_t js_exitApp(duk_context *ctx);
+    static duk_ret_t js_present(duk_context *ctx);
+    static duk_ret_t js_setClip(duk_context *ctx);
+    static duk_ret_t js_clearClip(duk_context *ctx);
+    static duk_ret_t js_isBuffered(duk_context *ctx);
     static duk_ret_t js_wifiStatus(duk_context *ctx);
     static duk_ret_t js_md5(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);

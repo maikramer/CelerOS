@@ -17,7 +17,13 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # GPIO19/20 desta placa NAO estao livres para o USB-OTG nativo (19 = SDA do
 # touch GT911, 20 = linha G1 do display; o conector USB e apenas CH340). O
 # console secundario JTAG-USB fica desligado para nao remuxar o GPIO19, e o
-# kryonctl roda sobre a UART do CH340 (SerialLink). O USB nativo (CDC dupla
-# via TinyUSB) existe no codigo atras de CONFIG_KRYONOS_USB_NATIVE para
+# celerctl roda sobre a UART do CH340 (SerialLink). O USB nativo (CDC dupla
+# via TinyUSB) existe no codigo atras de CONFIG_CELEROS_USB_NATIVE para
 # placas futuras com 19/20 livres.
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Desempenho: 16MB de flash sobram (slot OTA ~6MB, binario ~1.7MB) — o
+# interpretador JS (Duktape) e o desenho ganham com -O2. A CYD (4MB) segue
+# em -Os pelo sdkconfig.defaults comum.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# CONFIG_COMPILER_OPTIMIZATION_SIZE is not set

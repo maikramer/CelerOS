@@ -25,18 +25,14 @@
 // para a tela fisica (UI::sx/sy) e converte cores RGB565 -> formato nativo.
 // No alvo classico os fatores sao 1:1 e a camada e transparente.
 // ---------------------------------------------------------------------------
-static KryonDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
+static CelerDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
 
 static inline uint32_t jsc(uint32_t c) {
-    // Painel 16-bit (RGB565 nativo): cor passa direto; caso contrario
-    // expande RGB565 -> RGB888 (determinado pelo display em runtime)
-    if (s_jsTft == nullptr || s_jsTft->getColorDepth() == 16) {
-        return c;
-    }
+    // Cores JS sao RGB565. No LovyanGFX o TIPO decide o formato: uint32_t e
+    // lido como RGB888 — passar o 565 cru (como antes, "painel 16-bit")
+    // trocava as cores. Expande sempre para 888; o LGFX converte ao nativo.
     uint32_t r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
-    return ((((r << 3) | (r >> 2)) & 0xFF) << 16)
-         | ((((g << 2) | (g >> 4)) & 0xFF) << 8)
-         | (((b << 3) | (b >> 2)) & 0xFF);
+    return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
 }
 static inline int jsx(int v) { return UI::sx(v); }
 static inline int jsy(int v) { return UI::sy(v); }
@@ -44,7 +40,7 @@ static inline int jsu(int v) { return (UI::sx(v) + UI::sy(v)) / 2; }  // uniform
 
 // Wrapper stdio para o drawPngFile do LGFX (a especializacao DataWrapperT<FILE>
 // do upstream so ativa com macros do newlib que nao estao definidas no IDF)
-struct KryonFileWrapper : public lgfx::DataWrapper {
+struct CelerFileWrapper : public lgfx::DataWrapper {
     bool open(const char* path) override {
         while (nullptr == (_fp = fopen(path, "rb")) && path[0] == '/') ++path;
         return _fp != nullptr;
@@ -64,9 +60,40 @@ private:
     FILE* _fp = nullptr;
 };
 
-KryonDisplay* JSBindings::tftInstance = nullptr;
-KryonSprite* JSBindings::tftSprite = nullptr;
+CelerDisplay* JSBindings::tftInstance = nullptr;
+
+// ---------------------------------------------------------------------------
+// Quadro automatico (double buffer transparente para o app).
+//
+// Com PSRAM, TODO desenho do app vai para um sprite do tamanho da tela e so
+// aparece no vidro quando o script "cede" (delay/getTouch/prompt ou antes de
+// uma chamada bloqueante — rede, OTA, scan). Apps que fazem fillScreen +
+// redesenho completo a cada evento deixam de piscar sem mudar uma linha.
+// Sem PSRAM (CYD) o desenho segue direto no display, como antes.
+// Prioridade do alvo: sprite do app (bindSprite) > quadro > display.
+// ---------------------------------------------------------------------------
+static CelerSprite* s_frame = nullptr;
+static bool s_frameDirty = false;
+
+CelerSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
+
+
+lgfx::LGFXBase* JSBindings::gfx() {
+    if (useSprite && tftSprite) return tftSprite;
+    if (s_frame != nullptr) {
+        s_frameDirty = true;
+        return s_frame;
+    }
+    return tftInstance;
+}
+
+void JSBindings::present() {
+    if (s_frame != nullptr && s_frameDirty && tftInstance != nullptr) {
+        s_frame->pushSprite(tftInstance, 0, 0);
+        s_frameDirty = false;
+    }
+}
 
 void JSBindings::fatalErrorHandler(void *udata, const char *msg) {
     (void) udata;
@@ -76,9 +103,9 @@ void JSBindings::fatalErrorHandler(void *udata, const char *msg) {
     if (msg && strstr(msg, "alloc")) {
         Serial.println("out of memory");
         if (tftInstance) {
-            if (useSprite && tftSprite) tftSprite->fillScreen(TFT_RED); else tftInstance->fillScreen(TFT_RED);
-            if (useSprite && tftSprite) tftSprite->setTextColor(TFT_WHITE, TFT_RED); else tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-            if (useSprite && tftSprite) tftSprite->drawString("OUT OF MEMORY", 10, 10, 4); else tftInstance->drawString("OUT OF MEMORY", 10, 10, 4);
+            tftInstance->fillScreen(TFT_RED);
+            tftInstance->setTextColor(TFT_WHITE, TFT_RED);
+            tftInstance->drawString("OUT OF MEMORY", 10, 10, 4);
         }
     }
     
@@ -157,7 +184,7 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
         tftSprite = nullptr;
     }
 
-    tftSprite = new KryonSprite(tftInstance);
+    tftSprite = new CelerSprite(tftInstance);
     // Prefere PSRAM quando disponivel (sem PSRAM o LovyanGFX usa o heap)
     tftSprite->setPsram(true);
 
@@ -200,7 +227,12 @@ duk_ret_t JSBindings::js_pushSprite(duk_context *ctx) {
     if (!tftInstance || !tftSprite) return 0;
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
-    tftSprite->pushSprite(jsx(x), jsy(y));
+    if (s_frame != nullptr) {
+        tftSprite->pushSprite(s_frame, jsx(x), jsy(y));
+        s_frameDirty = true;
+    } else {
+        tftSprite->pushSprite(jsx(x), jsy(y));
+    }
     return 0;
 }
 
@@ -217,8 +249,7 @@ duk_ret_t JSBindings::js_drawFastVLine(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int h = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
-    else tftInstance->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
+    gfx()->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
     return 0;
 }
 
@@ -228,8 +259,7 @@ duk_ret_t JSBindings::js_drawFastHLine(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int w = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawFastHLine(jsx(x), jsy(y), jsx(w), jsc(color));
-    else tftInstance->drawFastHLine(jsx(x), jsy(y), jsx(w), jsc(color));
+    gfx()->drawFastHLine(jsx(x), jsy(y), jsx(w), jsc(color));
     return 0;
 }
 
@@ -240,7 +270,7 @@ duk_ret_t JSBindings::js_drawFastHLine(duk_context *ctx) {
 duk_ret_t JSBindings::js_fillScreen(duk_context *ctx) {
     if (!tftInstance) return 0;
     uint32_t color = duk_require_uint(ctx, 0);
-    if (useSprite && tftSprite) tftSprite->fillScreen(jsc(color)); else tftInstance->fillScreen(jsc(color));
+    gfx()->fillScreen(jsc(color));
     return 0;
 }
 
@@ -251,7 +281,7 @@ duk_ret_t JSBindings::js_fillRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color)); else tftInstance->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
+    gfx()->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
     return 0;
 }
 
@@ -262,7 +292,7 @@ duk_ret_t JSBindings::js_drawRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color)); else tftInstance->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
+    gfx()->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
     return 0;
 }
 
@@ -273,7 +303,7 @@ duk_ret_t JSBindings::js_drawLine(duk_context *ctx) {
     int x1 = duk_require_int(ctx, 2);
     int y1 = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    if (useSprite && tftSprite) tftSprite->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color)); else tftInstance->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color));
+    gfx()->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color));
     return 0;
 }
 
@@ -282,7 +312,7 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
     uint32_t color = duk_require_uint(ctx, 2);
-    if (useSprite && tftSprite) tftSprite->drawPixel(jsx(x), jsy(y), jsc(color)); else tftInstance->drawPixel(jsx(x), jsy(y), jsc(color));
+    gfx()->drawPixel(jsx(x), jsy(y), jsc(color));
     return 0;
 }
 
@@ -292,7 +322,7 @@ duk_ret_t JSBindings::js_drawCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color)); else tftInstance->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color));
+    gfx()->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
 
@@ -302,7 +332,7 @@ duk_ret_t JSBindings::js_fillCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    if (useSprite && tftSprite) tftSprite->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color)); else tftInstance->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color));
+    gfx()->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
 
@@ -315,7 +345,7 @@ duk_ret_t JSBindings::js_drawTriangle(duk_context *ctx) {
     int x2 = duk_require_int(ctx, 4);
     int y2 = duk_require_int(ctx, 5);
     uint32_t color = duk_require_uint(ctx, 6);
-    if (useSprite && tftSprite) tftSprite->drawTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color)); else tftInstance->drawTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
+    gfx()->drawTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
     return 0;
 }
 
@@ -328,7 +358,7 @@ duk_ret_t JSBindings::js_fillTriangle(duk_context *ctx) {
     int x2 = duk_require_int(ctx, 4);
     int y2 = duk_require_int(ctx, 5);
     uint32_t color = duk_require_uint(ctx, 6);
-    if (useSprite && tftSprite) tftSprite->fillTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color)); else tftInstance->fillTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
+    gfx()->fillTriangle(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsx(x2), jsy(y2), jsc(color));
     return 0;
 }
 
@@ -340,7 +370,7 @@ duk_ret_t JSBindings::js_drawRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    if (useSprite && tftSprite) tftSprite->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color)); else tftInstance->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
+    gfx()->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
     return 0;
 }
 
@@ -352,145 +382,30 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    if (useSprite && tftSprite) tftSprite->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color)); else tftInstance->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
+    gfx()->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
     return 0;
 }
 
-// Helper functions for BMP parsing
-static uint16_t read16(FILE *f) {
-  uint16_t result;
-  ((uint8_t *)&result)[0] = fgetc(f); // LSB
-  ((uint8_t *)&result)[1] = fgetc(f); // MSB
-  return result;
-}
-
-static uint32_t read32(FILE *f) {
-  uint32_t result;
-  ((uint8_t *)&result)[0] = fgetc(f); // LSB
-  ((uint8_t *)&result)[1] = fgetc(f);
-  ((uint8_t *)&result)[2] = fgetc(f);
-  ((uint8_t *)&result)[3] = fgetc(f); // MSB
-  return result;
+// Caminhos de imagem aceitos: pontos de montagem reais do VFS
+static bool imagePathOk(const char* path) {
+    return strncmp(path, "/sd", 3) == 0 || strncmp(path, "/local", 6) == 0;
 }
 
 duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
+    // Decoder do LovyanGFX (16/24/32 bpp, RLE) com a escala do canvas
+    // virtual: a imagem ocupa na tela fisica o mesmo espaco que no 240x320.
     if (!tftInstance) return 0;
     const char *path = duk_require_string(ctx, 0);
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
-
-    // /sd e /local sao pontos de montagem reais no VFS: abre o caminho original
-    if (strncmp(path, "/sd", 3) != 0 && strncmp(path, "/local", 6) != 0) {
+    if (!imagePathOk(path)) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
-
-    FILE *bmpFS = fopen(path, "rb");
-    if (!bmpFS) { Serial.printf("BMP ERR: Could not open file %s\n", path); duk_push_boolean(ctx, 0); return 1; }
-
-    uint16_t sig = read16(bmpFS);
-    if (sig != 0x4D42) { // "BM" signature
-        Serial.printf("BMP ERR: Invalid signature: 0x%04X\n", sig);
-        fclose(bmpFS);
-        duk_push_boolean(ctx, 0);
-        return 1;
-    }
-
-    read32(bmpFS); // File size
-    read32(bmpFS); // Creator bytes
-    uint32_t imageOffset = read32(bmpFS); // Pixel data offset
-    read32(bmpFS); // DIB header size
-    int32_t bmpWidth = read32(bmpFS);
-    int32_t bmpHeight = read32(bmpFS);
-    
-    uint16_t planes = read16(bmpFS);
-    if (planes != 1) { // Planes must be 1
-        Serial.printf("BMP ERR: Invalid planes: %d\n", planes);
-        fclose(bmpFS);
-        duk_push_boolean(ctx, 0);
-        return 1;
-    }
-    
-    uint16_t bmpDepth = read16(bmpFS);
-    if (bmpDepth != 16 && bmpDepth != 24 && bmpDepth != 32) { // 16, 24, 32-bit BMPs supported
-        Serial.printf("BMP ERR: Unsupported depth: %d\n", bmpDepth);
-        fclose(bmpFS);
-        duk_push_boolean(ctx, 0);
-        return 1;
-    }
-
-    uint32_t comp = read32(bmpFS);
-    if (comp != 0 && comp != 3) { // 0=BI_RGB, 3=BI_BITFIELDS
-        Serial.printf("BMP ERR: Unsupported compression: %lu\n", comp);
-        fclose(bmpFS);
-        duk_push_boolean(ctx, 0);
-        return 1;
-    }
-
-    // Determine row size and padding
-    bool flip = true;
-    if (bmpHeight < 0) {
-        bmpHeight = -bmpHeight;
-        flip = false;
-    }
-
-    uint32_t bytesPerPixel = bmpDepth / 8;
-    uint32_t rowSize = (bmpWidth * bytesPerPixel + 3) & ~3;
-    uint8_t sdbuffer[4 * 64]; // Read buffer (max 4 bytes per pixel * 64 pixels)
-    uint16_t tftbuffer[64];   // Convert to 16-bit 565 colors
-
-    fseek(bmpFS, imageOffset, SEEK_SET);
-
-    // Draw row by row
-    for (int row = 0; row < bmpHeight; row++) {
-        int drawY = flip ? (jsy(y) + (int)((bmpHeight - 1 - row) * (float)UI::H / 320.0f)) : (jsy(y) + (int)(row * (float)UI::H / 320.0f));
-        
-        // Skip drawing if out of bounds
-        if (drawY < 0 || drawY >= tftInstance->height()) {
-            fseek(bmpFS, (long)rowSize, SEEK_CUR);
-            continue;
-        }
-
-        uint32_t pixelsRead = 0;
-        while (pixelsRead < bmpWidth) {
-            uint32_t pixelsToRead = bmpWidth - pixelsRead;
-            if (pixelsToRead > 64) pixelsToRead = 64;
-            fread(sdbuffer, 1, pixelsToRead * bytesPerPixel, bmpFS);
-            
-            for (uint32_t i = 0; i < pixelsToRead; i++) {
-                if (bmpDepth == 24) {
-                    uint8_t b = sdbuffer[i*3];
-                    uint8_t g = sdbuffer[i*3+1];
-                    uint8_t r = sdbuffer[i*3+2];
-                    tftbuffer[i] = tftInstance->color565(r, g, b);
-                } else if (bmpDepth == 32) {
-                    uint8_t b = sdbuffer[i*4];
-                    uint8_t g = sdbuffer[i*4+1];
-                    uint8_t r = sdbuffer[i*4+2];
-                    tftbuffer[i] = tftInstance->color565(r, g, b);
-                } else if (bmpDepth == 16) {
-                    uint8_t b1 = sdbuffer[i*2];
-                    uint8_t b2 = sdbuffer[i*2+1];
-                    tftbuffer[i] = (b2 << 8) | b1;
-                }
-            }
-
-            int drawX = jsx(x) + (int)(pixelsRead * (float)UI::W / 240.0f);
-            tftInstance->pushImage(drawX, drawY, (int)(pixelsToRead * (float)UI::W / 240.0f), 1, tftbuffer);
-            
-            pixelsRead += pixelsToRead;
-        }
-
-        // Skip padding
-        uint32_t padding = rowSize - (bmpWidth * bytesPerPixel);
-        if (padding > 0) {
-            uint8_t padBuffer[4];
-            fread(padBuffer, 1, padding, bmpFS);
-        }
-    }
-
-    fclose(bmpFS);
-    duk_push_boolean(ctx, 1);
+    CelerFileWrapper file;
+    bool ok = gfx()->drawBmpFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
+                                 (float)UI::W / 240.0f, (float)UI::H / 320.0f);
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -504,8 +419,8 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
-    tftInstance->setTextDatum(TL_DATUM);
-    if (useSprite && tftSprite) tftSprite->drawString(str, jsx(x), jsy(y), KryonFont(UI::font(font))); else tftInstance->drawString(str, jsx(x), jsy(y), UI::font(font));
+    gfx()->setTextDatum(TL_DATUM);
+    gfx()->drawString(str, jsx(x), jsy(y), CelerFont(UI::font(font)));
     return 0;
 }
 
@@ -515,9 +430,9 @@ duk_ret_t JSBindings::js_setTextColor(duk_context *ctx) {
     // Optional background color (defaults to foreground = transparent)
     if (duk_is_number(ctx, 1)) {
         uint32_t bg = duk_require_uint(ctx, 1);
-        if (useSprite && tftSprite) tftSprite->setTextColor(jsc(fg), jsc(bg)); else tftInstance->setTextColor(jsc(fg), jsc(bg));
+        gfx()->setTextColor(jsc(fg), jsc(bg));
     } else {
-        if (useSprite && tftSprite) tftSprite->setTextColor(jsc(fg)); else tftInstance->setTextColor(jsc(fg));
+        gfx()->setTextColor(jsc(fg));
     }
     return 0;
 }
@@ -525,7 +440,7 @@ duk_ret_t JSBindings::js_setTextColor(duk_context *ctx) {
 duk_ret_t JSBindings::js_setTextSize(duk_context *ctx) {
     if (!tftInstance) return 0;
     int size = duk_require_int(ctx, 0);
-    if (useSprite && tftSprite) tftSprite->setTextSize(size); else tftInstance->setTextSize(size);
+    gfx()->setTextSize(size);
     return 0;
 }
 
@@ -570,8 +485,9 @@ duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
 duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     uint16_t tx = 0, ty = 0;
     bool touched = false;
+    present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
     if (tftInstance) {
-        touched = tftInstance->getTouch(&tx, &ty);
+        touched = kui::readTouch(&tx, &ty);
         
         // Hidden OS Exit Button (Top Right Corner)
         if (touched && UI::hitExit(tx, ty)) {
@@ -609,12 +525,20 @@ duk_ret_t JSBindings::js_micros(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_delay(duk_context *ctx) {
     int ms = duk_require_int(ctx, 0);
-    if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
-        delay(ms);
+    present();
+    uint32_t t0 = millis();
+    // Mark-and-sweep completo (so ciclos; o resto e refcount) custa ms em
+    // heaps grandes: antes rodava a CADA delay (loops de 20 ms gastavam boa
+    // parte do tempo aqui). Agora no maximo 1x/s, ou ja se o heap aperta.
+    static uint32_t lastGcMs = 0;
+    if (t0 - lastGcMs > 1000 || ESP.getMaxAllocHeap() < 24 * 1024) {
+        duk_gc(ctx, 0);
+        lastGcMs = t0;
     }
-    // Perform manual garbage collection while the system is theoretically "idle"
-    // This aggressively prevents memory fragmentation and 'alloc failed' errors on ESP32
-    duk_gc(ctx, 0);
+    if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
+        uint32_t spent = millis() - t0;
+        if ((uint32_t)ms > spent) delay(ms - spent);
+    }
     return 0;
 }
 
@@ -705,6 +629,7 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_restart(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     ESP.restart();
     return 0;
 }
@@ -745,12 +670,12 @@ duk_ret_t JSBindings::js_getTimezone(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_getOSVersion(duk_context *ctx) {
-    duk_push_string(ctx, KRYONOS_VERSION);
+    duk_push_string(ctx, CELEROS_VERSION);
     return 1;
 }
 
 duk_ret_t JSBindings::js_getAPILevel(duk_context *ctx) {
-    duk_push_int(ctx, KRYONOS_API_LEVEL);
+    duk_push_int(ctx, CELEROS_API_LEVEL);
     return 1;
 }
 
@@ -780,6 +705,7 @@ duk_ret_t JSBindings::js_isWiFiActive(duk_context *ctx) {
 // Executa GET/POST e devolve o body em "out". Sem WiFi conectado: duk_error
 // (o script ve um erro legivel em vez de um null silencioso).
 static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
+    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
     if (!WebManager::isWifiConnected()) {
         duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
         return false;
@@ -874,8 +800,8 @@ duk_ret_t JSBindings::js_fileExists(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    std::string files[30];
-    int count = FileSystem::listDir(path, files, 30);
+    std::vector<std::string> files(128);
+    int count = FileSystem::listDir(path, files.data(), (int)files.size());
     
     duk_push_array(ctx);
     for (int i = 0; i < count; i++) {
@@ -948,12 +874,14 @@ duk_ret_t JSBindings::js_getFreeSpace(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_getFileMD5(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char *path = duk_require_string(ctx, 0);
     duk_push_string(ctx, FileSystem::getFileMD5(path).c_str());
     return 1;
 }
 
 duk_ret_t JSBindings::js_mountSD(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     duk_push_boolean(ctx, FileSystem::mountSD());
     return 1;
 }
@@ -974,11 +902,181 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     const char *initialText = "";
     if (duk_is_string(ctx, 1)) initialText = duk_require_string(ctx, 1);
 
+    present();
     std::string result = kui::getString(initialText, promptMsg);
-    
+    // o teclado desenhou direto no display: o proximo present repoe o app
+    s_frameDirty = true;
+
     duk_push_string(ctx, result.c_str());
-    
+
     return 1;
+}
+
+// =====================================================
+// Keyboard acoplado (API level 5) — sessao NAO-bloqueante
+//
+// O app abre o teclado (keypadOpen), bombeia com keypadPoll no proprio loop
+// e desenha em volta: o teclado vai no MESMO alvo do app (gfx(): sprite do
+// app > quadro PSRAM > display) e sobrevive ao present(). Eventos chegam um
+// por poll: change (buffer mudou), enter (OK: texto em ev.text) e cancel
+// (X — encerra a sessao sozinho). O canto de saida do OS segue valendo.
+// =====================================================
+
+static kui::KeyboardScreen *s_kb = nullptr;
+static kui::TouchPump s_kbPump;
+static uint32_t s_kbLastPollMs = 0;
+enum KbEvent { KB_EV_NONE = 0, KB_EV_CHANGE, KB_EV_ENTER, KB_EV_CANCEL };
+static int s_kbEvent = KB_EV_NONE;
+static std::string s_kbEnterText;
+
+static void keypadCloseSession() {
+    if (s_kb) {
+        delete s_kb;
+        s_kb = nullptr;
+    }
+    s_kbEvent = KB_EV_NONE;
+    s_kbEnterText.clear();
+    s_frameDirty = true;  // proximo present restaura o frame do app
+}
+
+duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
+    if (!tftInstance) {
+        duk_push_false(ctx);
+        return 1;
+    }
+    if (s_kb) {  // so uma sessao por vez
+        duk_push_false(ctx);
+        return 1;
+    }
+
+    std::string title, initial;
+    int maxLen = 64;
+    bool field = true;
+    if (duk_is_object(ctx, 0)) {
+        if (duk_get_prop_string(ctx, 0, "title") && duk_is_string(ctx, -1)) title = duk_get_string(ctx, -1);
+        duk_pop(ctx);
+        if (duk_get_prop_string(ctx, 0, "initial") && duk_is_string(ctx, -1)) initial = duk_get_string(ctx, -1);
+        duk_pop(ctx);
+        if (duk_get_prop_string(ctx, 0, "maxLen") && duk_is_number(ctx, -1)) maxLen = duk_get_int(ctx, -1);
+        duk_pop(ctx);
+        if (duk_get_prop_string(ctx, 0, "field") && duk_is_boolean(ctx, -1)) field = duk_get_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
+    }
+    if (maxLen < 1) maxLen = 1;
+
+    present();
+    s_kb = new kui::KeyboardScreen(title, initial, maxLen);
+    s_kb->setPersistent(true);
+    s_kb->setShowField(field);
+    s_kb->onChange = [] { s_kbEvent = KB_EV_CHANGE; };
+    s_kb->onEnter = [](const std::string& t) {
+        s_kbEnterText = t;
+        s_kbEvent = KB_EV_ENTER;
+    };
+    s_kb->onResult = [](const std::string&, bool ok) {
+        if (!ok) s_kbEvent = KB_EV_CANCEL;  // X (so existe com field)
+    };
+    s_kbEvent = KB_EV_NONE;
+    s_kbEnterText.clear();
+    s_kbLastPollMs = millis();
+
+    {
+        kui::Canvas c(*tftInstance, JSBindings::gfx());
+        s_kb->draw(c);
+    }
+    duk_push_boolean(ctx, true);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
+    if (!s_kb || !tftInstance) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    present();
+
+    uint16_t tx = 0, ty = 0;
+    if (kui::readTouch(&tx, &ty) && UI::hitExit(tx, ty)) {
+        keypadCloseSession();
+        duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
+        return 0;
+    }
+
+    s_kbEvent = KB_EV_NONE;
+    s_kbPump.poll([](const kui::TouchEvent& ev) {
+        s_kb->onTouch(ev);
+        if (ev.type != kui::TouchEvent::Drag) s_kb->markDirty();  // tecla "afunda"
+    });
+    uint32_t now = millis();
+    uint32_t dt = now - s_kbLastPollMs;
+    if (dt > 100) dt = 100;
+    s_kbLastPollMs = now;
+    s_kb->onTick(dt);
+    if (s_kb->consumeDirty()) {
+        kui::Canvas c(*tftInstance, JSBindings::gfx());
+        s_kb->draw(c);
+    }
+
+    if (s_kbEvent == KB_EV_NONE) {
+        duk_push_null(ctx);
+        return 1;
+    }
+
+    duk_push_object(ctx);
+    if (s_kbEvent == KB_EV_ENTER) {
+        duk_push_string(ctx, "enter");
+        duk_put_prop_string(ctx, -2, "type");
+        duk_push_string(ctx, s_kbEnterText.c_str());
+        duk_put_prop_string(ctx, -2, "text");
+        s_kbEnterText.clear();
+    } else if (s_kbEvent == KB_EV_CHANGE) {
+        duk_push_string(ctx, "change");
+        duk_put_prop_string(ctx, -2, "type");
+    } else {  // cancel: o X encerrou a sessao
+        duk_push_string(ctx, "cancel");
+        duk_put_prop_string(ctx, -2, "type");
+        keypadCloseSession();
+    }
+    return 1;
+}
+
+duk_ret_t JSBindings::js_keypadText(duk_context *ctx) {
+    duk_push_string(ctx, s_kb ? s_kb->text().c_str() : "");
+    return 1;
+}
+
+duk_ret_t JSBindings::js_keypadRect(duk_context *ctx) {
+    // Area das teclas no espaco virtual 240x320; fechado: faixa nula no rodape
+    int topV = 320;
+    if (s_kb && tftInstance) {
+        topV = (int)((long)s_kb->keysTop() * 320 / tftInstance->height());
+        if (topV < 0) topV = 0;
+        if (topV > 320) topV = 320;
+    }
+    duk_push_object(ctx);
+    duk_push_int(ctx, 0);
+    duk_put_prop_string(ctx, -2, "x");
+    duk_push_int(ctx, topV);
+    duk_put_prop_string(ctx, -2, "y");
+    duk_push_int(ctx, 240);
+    duk_put_prop_string(ctx, -2, "w");
+    duk_push_int(ctx, 320 - topV);
+    duk_put_prop_string(ctx, -2, "h");
+    return 1;
+}
+
+duk_ret_t JSBindings::js_keypadDraw(duk_context *ctx) {
+    // App redesenhou a tela: repoe o teclado por cima (mesmo alvo do app)
+    if (s_kb && tftInstance) {
+        kui::Canvas c(*tftInstance, JSBindings::gfx());
+        s_kb->draw(c);
+    }
+    return 0;
+}
+
+duk_ret_t JSBindings::js_keypadClose(duk_context *ctx) {
+    keypadCloseSession();
+    return 0;
 }
 
 duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
@@ -988,6 +1086,16 @@ duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
     int w = tftInstance->textWidth(str, UI::font(font));
     // devolve no espaco virtual 240x320 (inverso do jsx())
     duk_push_int(ctx, (int)((long)w * 240 / tftInstance->width()));
+    return 1;
+}
+
+duk_ret_t JSBindings::js_fontHeight(duk_context *ctx) {
+    // Altura da fonte no canvas virtual (para centralizar texto de verdade:
+    // as fontes proporcionais nao tem a altura fixa das numericas antigas)
+    if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
+    int font = duk_get_int_default(ctx, 0, 2);
+    int h = tftInstance->fontHeight(CelerFont(UI::font(font)));
+    duk_push_int(ctx, (int)((long)h * 320 / tftInstance->height()));
     return 1;
 }
 
@@ -1020,7 +1128,7 @@ duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
     const char* name = duk_require_string(ctx, 0);
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
-    Icon::draw(tftInstance, name, jsx(x), jsy(y));
+    Icon::draw(gfx(), name, jsx(x), jsy(y));
     return 0;
 }
 
@@ -1032,22 +1140,24 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
-    // /sd e /local sao pontos de montagem reais no VFS (mesma regra do drawBMP)
-    if (strncmp(path, "/sd", 3) != 0 && strncmp(path, "/local", 6) != 0) {
+    if (!imagePathOk(path)) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
-    KryonFileWrapper file;
-    duk_push_boolean(ctx, tftInstance->drawPngFile(&file, path, jsx(x), jsy(y)));
+    CelerFileWrapper file;
+    duk_push_boolean(ctx, gfx()->drawPngFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
+                                            (float)UI::W / 240.0f, (float)UI::H / 320.0f));
     return 1;
 }
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     duk_push_boolean(ctx, FileSystem::copyFile(duk_require_string(ctx, 0),
                                                duk_require_string(ctx, 1)) ? 1 : 0);
     return 1;
 }
 
 duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     duk_push_boolean(ctx, FileSystem::copyDirectory(duk_require_string(ctx, 0),
                                                     duk_require_string(ctx, 1)) ? 1 : 0);
     return 1;
@@ -1070,6 +1180,7 @@ static bool removeTree(const std::string& dir) {
 }
 
 duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     duk_push_boolean(ctx, removeTree(duk_require_string(ctx, 0)) ? 1 : 0);
     return 1;
 }
@@ -1094,6 +1205,7 @@ duk_ret_t JSBindings::js_backlightSupported(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     // Empilha a tela nativa de WiFi. Como o app JS roda sincrono, a tela
     // so entra em cena quando o script devolver o controle ao loop do Kui
     // (o app deve chamar System.exitApp() logo em seguida).
@@ -1101,9 +1213,34 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     return 0;
 }
 
+duk_ret_t JSBindings::js_setClip(duk_context *ctx) {
+    // Recorte no canvas virtual: desenho fora de (x,y,w,h) e descartado
+    gfx()->setClipRect(jsx(duk_require_int(ctx, 0)), jsy(duk_require_int(ctx, 1)),
+                       jsx(duk_require_int(ctx, 2)), jsy(duk_require_int(ctx, 3)));
+    return 0;
+}
+
+duk_ret_t JSBindings::js_clearClip(duk_context *ctx) {
+    (void)ctx;
+    gfx()->clearClipRect();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_present(duk_context *ctx) {
+    // Apresentacao explicita do quadro (animacoes/loops sem delay/getTouch)
+    (void)ctx;
+    present();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_isBuffered(duk_context *ctx) {
+    duk_push_boolean(ctx, s_frame != nullptr ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_exitApp(duk_context *ctx) {
     // Mesmo protocolo do canto superior direito: erro "OS_EXIT" e
-    // interceptado como saida limpa pelo HarixKernel.
+    // interceptado como saida limpa pelo CelerKernel.
     duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
     return 0;  // unreachable
 }
@@ -1144,11 +1281,12 @@ duk_ret_t JSBindings::js_rescanApps(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* mode = duk_is_string(ctx, 0) ? duk_require_string(ctx, 0) : "configs";
 
     if (strcmp(mode, "total") == 0) {
         // LittleFS inteiro (apps + icones + configs). Recuperacao exige
-        // reflashe de data/ (tools/flash_data.sh) ou kryonctl apps install.
+        // reflashe de data/ (tools/flash_data.sh) ou celerctl apps install.
         WebManager::forgetAllNetworks();
         FileSystem::formatLittleFS();
         duk_push_boolean(ctx, 1);
@@ -1168,6 +1306,7 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     OtaManager::checkForUpdates();
     const OtaUpdateInfo& info = OtaManager::info;
     duk_push_object(ctx);
@@ -1202,9 +1341,11 @@ static void otaProgressTrampoline(int percent) {
         duk_pcall(s_otaCtx, 1);
     }
     duk_pop_2(s_otaCtx);
+    JSBindings::present();
 }
 
 duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* url = duk_require_string(ctx, 0);
     bool hasCb = duk_is_function(ctx, 1) ? true : false;
 
@@ -1290,8 +1431,9 @@ duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
 // --- Net nivel 3 (WiFi) ---
 
 duk_ret_t JSBindings::js_wifiScan(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     // Scan bloqueante (~2s) — mesmo comportamento da tela nativa.
-    KryonScanEntry entries[20];
+    CelerScanEntry entries[20];
     int n = WebManager::scanNetworks(entries, 20);
 
     duk_push_array(ctx);
@@ -1309,6 +1451,7 @@ duk_ret_t JSBindings::js_wifiScan(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_wifiConnect(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* ssid = duk_require_string(ctx, 0);
     const char* pass = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
     duk_push_boolean(ctx, WebManager::connect(ssid, pass) ? 1 : 0);
@@ -1324,9 +1467,43 @@ duk_ret_t JSBindings::js_wifiDisconnect(duk_context *ctx) {
 // Init - Register ALL bindings
 // =====================================================
 
-void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
+void JSBindings::init(duk_context *ctx, CelerDisplay *tft) {
     s_jsTft = tft;
     tftInstance = tft;
+
+    // Estado grafico limpo por app: o sprite de um app anterior (que saiu
+    // sem deleteSprite) vazava e ainda capturava o desenho do proximo.
+    if (tftSprite) {
+        tftSprite->deleteSprite();
+        delete tftSprite;
+        tftSprite = nullptr;
+    }
+    useSprite = false;
+
+    // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
+    keypadCloseSession();
+
+    // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
+    if (s_frame == nullptr && Board::profile().hasPsram) {
+        s_frame = new CelerSprite(tft);
+        s_frame->setPsram(true);
+        s_frame->setColorDepth(16);
+        s_frame->setSwapBytes(true);  // mesma convencao do display (icones, readRect)
+        if (s_frame->createSprite(tft->width(), tft->height()) == nullptr) {
+            delete s_frame;
+            s_frame = nullptr;
+        }
+    }
+    if (s_frame != nullptr) {
+        s_frame->fillScreen(TFT_BLACK);  // mesmo fundo que o launcher pinta antes do app
+        s_frame->setTextColor(TFT_WHITE);
+        s_frame->setTextSize(1);
+        s_frame->setTextDatum(TL_DATUM);
+        s_frame->clearClipRect();
+    }
+    tft->clearClipRect();
+    s_frameDirty = false;
+    tft->setTextSize(1);
 
     // --- System Object ---
     duk_push_global_object(ctx);
@@ -1408,6 +1585,8 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_put_prop_string(ctx, -2, "setTextSize");
     duk_push_c_function(ctx, js_textWidth, 2);
     duk_put_prop_string(ctx, -2, "textWidth");
+    duk_push_c_function(ctx, js_fontHeight, 1);
+    duk_put_prop_string(ctx, -2, "fontHeight");
 
     // --- Utility ---
     duk_push_c_function(ctx, js_color, 3);
@@ -1470,6 +1649,20 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_push_c_function(ctx, js_prompt, 2);
     duk_put_prop_string(ctx, -2, "prompt");
 
+    // --- Keyboard acoplado (API level 5): sessao nao-bloqueante p/ apps ---
+    duk_push_c_function(ctx, js_keypadOpen, 1);
+    duk_put_prop_string(ctx, -2, "keypadOpen");
+    duk_push_c_function(ctx, js_keypadPoll, 0);
+    duk_put_prop_string(ctx, -2, "keypadPoll");
+    duk_push_c_function(ctx, js_keypadText, 0);
+    duk_put_prop_string(ctx, -2, "keypadText");
+    duk_push_c_function(ctx, js_keypadRect, 0);
+    duk_put_prop_string(ctx, -2, "keypadRect");
+    duk_push_c_function(ctx, js_keypadDraw, 0);
+    duk_put_prop_string(ctx, -2, "keypadDraw");
+    duk_push_c_function(ctx, js_keypadClose, 0);
+    duk_put_prop_string(ctx, -2, "keypadClose");
+
     // --- System nivel 3 (apps de sistema em JS) ---
     duk_push_c_function(ctx, js_setBrightness, 1);
     duk_put_prop_string(ctx, -2, "setBrightness");
@@ -1481,6 +1674,14 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     duk_put_prop_string(ctx, -2, "openWifiSetup");
     duk_push_c_function(ctx, js_exitApp, 0);
     duk_put_prop_string(ctx, -2, "exitApp");
+    duk_push_c_function(ctx, js_setClip, 4);
+    duk_put_prop_string(ctx, -2, "setClip");
+    duk_push_c_function(ctx, js_clearClip, 0);
+    duk_put_prop_string(ctx, -2, "clearClip");
+    duk_push_c_function(ctx, js_present, 0);
+    duk_put_prop_string(ctx, -2, "present");
+    duk_push_c_function(ctx, js_isBuffered, 0);
+    duk_put_prop_string(ctx, -2, "isBuffered");
     duk_push_c_function(ctx, js_wifiStatus, 0);
     duk_put_prop_string(ctx, -2, "wifiStatus");
     duk_push_c_function(ctx, js_md5, 1);
@@ -1585,16 +1786,16 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex
-    duk_push_uint(ctx, 0x0000);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "BLACK");
-    duk_push_uint(ctx, 0xFFFF);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "WHITE");
-    duk_push_uint(ctx, 0xF800);  // RGB565 (convencao JS)     duk_put_prop_string(ctx, -2, "RED");
-    duk_push_uint(ctx, 0x07E0);  // RGB565 (convencao JS)   duk_put_prop_string(ctx, -2, "GREEN");
-    duk_push_uint(ctx, 0x001F);  // RGB565 (convencao JS)    duk_put_prop_string(ctx, -2, "BLUE");
-    duk_push_uint(ctx, 0xFFE0);  // RGB565 (convencao JS)  duk_put_prop_string(ctx, -2, "YELLOW");
-    duk_push_uint(ctx, 0x07FF);  // RGB565 (convencao JS)    duk_put_prop_string(ctx, -2, "CYAN");
-    duk_push_uint(ctx, 0xF81F);  // RGB565 (convencao JS) duk_put_prop_string(ctx, -2, "MAGENTA");
-    duk_push_uint(ctx, 0xFDA0);  // RGB565 (convencao JS)  duk_put_prop_string(ctx, -2, "ORANGE");
-    duk_push_uint(ctx, 0x7BEF);  // RGB565 (convencao JS)duk_put_prop_string(ctx, -2, "DARKGREY");
+    duk_push_uint(ctx, 0x0000); duk_put_prop_string(ctx, -2, "BLACK");
+    duk_push_uint(ctx, 0xFFFF); duk_put_prop_string(ctx, -2, "WHITE");
+    duk_push_uint(ctx, 0xF800); duk_put_prop_string(ctx, -2, "RED");
+    duk_push_uint(ctx, 0x07E0); duk_put_prop_string(ctx, -2, "GREEN");
+    duk_push_uint(ctx, 0x001F); duk_put_prop_string(ctx, -2, "BLUE");
+    duk_push_uint(ctx, 0xFFE0); duk_put_prop_string(ctx, -2, "YELLOW");
+    duk_push_uint(ctx, 0x07FF); duk_put_prop_string(ctx, -2, "CYAN");
+    duk_push_uint(ctx, 0xF81F); duk_put_prop_string(ctx, -2, "MAGENTA");
+    duk_push_uint(ctx, 0xFDA0); duk_put_prop_string(ctx, -2, "ORANGE");
+    duk_push_uint(ctx, 0x7BEF); duk_put_prop_string(ctx, -2, "DARKGREY");
 
     duk_pop(ctx); // pop global object
 }

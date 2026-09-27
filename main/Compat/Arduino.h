@@ -1,11 +1,11 @@
-#ifndef KRYON_COMPAT_ARDUINO_H
-#define KRYON_COMPAT_ARDUINO_H
+#ifndef CELER_COMPAT_ARDUINO_H
+#define CELER_COMPAT_ARDUINO_H
 
 // ============================================================================
-// Shim minimo de Arduino.h para o KryonOS em ESP-IDF puro.
+// Shim minimo de Arduino.h para o CelerOS em ESP-IDF puro.
 //
 // NAO e uma camada Arduino: so existem aqui as primitivas que o codigo do
-// KryonOS usa (delay/millis, GPIO, Serial/ESP.* , map/constrain). Nao ha
+// CelerOS usa (delay/millis, GPIO, Serial/ESP.* , map/constrain). Nao ha
 // classe String — o projeto usa std::string (Utils/StrUtils.h).
 //
 // Este header vive em main/Compat/ e e privado do componente main, portanto
@@ -64,36 +64,36 @@ inline void yield(void) { taskYIELD(); }
 float temperatureRead(void);
 
 // --- Serial (console UART0) --------------------------------------------------
-// Toda saida passa pelo LogSink (kryon_log_printf): sessoes kryonctl em
+// Toda saida passa pelo LogSink (celer_log_printf): sessoes celerctl em
 // andamento (modo link) nao podem receber texto intercalado nos frames.
-class KryonSerial {
+class CelerSerial {
 public:
     void begin(unsigned long baud) { (void)baud; }
-    void print(const char* s)      { kryon_log_printf("%s", s); }
-    void print(const std::string& s) { kryon_log_printf("%s", s.c_str()); }
-    void print(char c)             { kryon_log_printf("%c", c); }
-    void print(int v)              { kryon_log_printf("%d", v); }
-    void print(unsigned int v)     { kryon_log_printf("%u", v); }
-    void print(long v)             { kryon_log_printf("%ld", v); }
-    void print(unsigned long v)    { kryon_log_printf("%lu", v); }
-    void print(float v)            { kryon_log_printf("%f", v); }
-    void print(double v)           { kryon_log_printf("%f", v); }
-    void println(void)             { kryon_log_printf("\n"); }
-    void println(const char* s)    { kryon_log_printf("%s\n", s); }
-    void println(const std::string& s) { kryon_log_printf("%s\n", s.c_str()); }
-    void println(char c)           { kryon_log_printf("%c\n", c); }
-    void println(int v)            { kryon_log_printf("%d\n", v); }
-    void println(unsigned int v)   { kryon_log_printf("%u\n", v); }
-    void println(long v)           { kryon_log_printf("%ld\n", v); }
-    void println(unsigned long v)  { kryon_log_printf("%lu\n", v); }
-    void println(float v)          { kryon_log_printf("%f\n", v); }
-    void println(double v)         { kryon_log_printf("%f\n", v); }
+    void print(const char* s)      { celer_log_printf("%s", s); }
+    void print(const std::string& s) { celer_log_printf("%s", s.c_str()); }
+    void print(char c)             { celer_log_printf("%c", c); }
+    void print(int v)              { celer_log_printf("%d", v); }
+    void print(unsigned int v)     { celer_log_printf("%u", v); }
+    void print(long v)             { celer_log_printf("%ld", v); }
+    void print(unsigned long v)    { celer_log_printf("%lu", v); }
+    void print(float v)            { celer_log_printf("%f", v); }
+    void print(double v)           { celer_log_printf("%f", v); }
+    void println(void)             { celer_log_printf("\n"); }
+    void println(const char* s)    { celer_log_printf("%s\n", s); }
+    void println(const std::string& s) { celer_log_printf("%s\n", s.c_str()); }
+    void println(char c)           { celer_log_printf("%c\n", c); }
+    void println(int v)            { celer_log_printf("%d\n", v); }
+    void println(unsigned int v)   { celer_log_printf("%u\n", v); }
+    void println(long v)           { celer_log_printf("%ld\n", v); }
+    void println(unsigned long v)  { celer_log_printf("%lu\n", v); }
+    void println(float v)          { celer_log_printf("%f\n", v); }
+    void println(double v)         { celer_log_printf("%f\n", v); }
     void printf(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 };
-extern KryonSerial Serial;
+extern CelerSerial Serial;
 
 // --- ESP.* (info do chip / heap / restart) ----------------------------------
-class KryonEsp {
+class CelerEsp {
 public:
     void restart(void);
     uint32_t getHeapSize(void);
@@ -108,6 +108,6 @@ public:
     uint8_t getChipRevision(void);
     uint32_t getFlashChipSize(void);
 };
-extern KryonEsp ESP;
+extern CelerEsp ESP;
 
-#endif // KRYON_COMPAT_ARDUINO_H
+#endif // CELER_COMPAT_ARDUINO_H

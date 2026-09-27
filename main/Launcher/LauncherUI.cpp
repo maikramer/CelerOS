@@ -1,12 +1,12 @@
 #include "LauncherUI.h"
-#include "../Kernel/Core/HarixKernel.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Layout.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../Utils/StrUtils.h"
 
-KryonDisplay *LauncherUI::tftInstance = nullptr;
+CelerDisplay *LauncherUI::tftInstance = nullptr;
 std::string LauncherUI::appPaths[50];
 std::string LauncherUI::appNames[50];
 std::string LauncherUI::appPkg[50];
@@ -22,7 +22,7 @@ void LauncherUI::requestRescan() {
     needsRescan = true;
 }
 
-void LauncherUI::init(KryonDisplay *tft) {
+void LauncherUI::init(CelerDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -184,7 +184,7 @@ int LauncherUI::gridTotalPages() { return totalPages(); }
 // ---------------------------------------------------------------------------
 // Execucao de app JS
 // ---------------------------------------------------------------------------
-void LauncherUI::runApp(KryonDisplay* tft, const std::string& path, bool isFolder) {
+void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder) {
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
 
@@ -197,11 +197,7 @@ void LauncherUI::runApp(KryonDisplay* tft, const std::string& path, bool isFolde
         filePath = path;
     }
 
-    HarixKernel::runFile(filePath.c_str());
-
-    // Botao de saida (canto superior direito)
-    tft->fillRoundRect(UI::exitX(), UI::exitY(), UI::exitW(), UI::exitH(), UI::sx(5), THEME_ERR);
-    tft->setTextColor(THEME_TEXT, THEME_ERR);
-    tft->setTextDatum(MC_DATUM);
-    tft->drawString("X", UI::exitX() + UI::exitW() / 2, UI::exitY() + UI::exitH() / 2, UI::font(2));
+    CelerKernel::runFile(filePath.c_str());
+    // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
+    // coberto na hora pelo launcher — removido)
 }
