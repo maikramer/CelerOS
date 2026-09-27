@@ -19,6 +19,9 @@
 #include <string.h>
 #include <string>
 #include <utility>
+#include <stdarg.h>
+
+#include "USBDevice/LogSink.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -60,29 +63,31 @@ inline void yield(void) { taskYIELD(); }
 // --- Temperatura interna do chip (driver temperature_sensor) ---------------
 float temperatureRead(void);
 
-// --- Serial (console UART0 via printf) --------------------------------------
+// --- Serial (console UART0) --------------------------------------------------
+// Toda saida passa pelo LogSink (kryon_log_printf): sessoes kryonctl em
+// andamento (modo link) nao podem receber texto intercalado nos frames.
 class KryonSerial {
 public:
     void begin(unsigned long baud) { (void)baud; }
-    void print(const char* s)      { printf("%s", s); }
-    void print(const std::string& s) { printf("%s", s.c_str()); }
-    void print(char c)             { putchar(c); }
-    void print(int v)              { printf("%d", v); }
-    void print(unsigned int v)     { printf("%u", v); }
-    void print(long v)             { printf("%ld", v); }
-    void print(unsigned long v)    { printf("%lu", v); }
-    void print(float v)            { printf("%f", v); }
-    void print(double v)           { printf("%f", v); }
-    void println(void)             { printf("\n"); }
-    void println(const char* s)    { printf("%s\n", s); }
-    void println(const std::string& s) { printf("%s\n", s.c_str()); }
-    void println(char c)           { printf("%c\n", c); }
-    void println(int v)            { printf("%d\n", v); }
-    void println(unsigned int v)   { printf("%u\n", v); }
-    void println(long v)           { printf("%ld\n", v); }
-    void println(unsigned long v)  { printf("%lu\n", v); }
-    void println(float v)          { printf("%f\n", v); }
-    void println(double v)         { printf("%f\n", v); }
+    void print(const char* s)      { kryon_log_printf("%s", s); }
+    void print(const std::string& s) { kryon_log_printf("%s", s.c_str()); }
+    void print(char c)             { kryon_log_printf("%c", c); }
+    void print(int v)              { kryon_log_printf("%d", v); }
+    void print(unsigned int v)     { kryon_log_printf("%u", v); }
+    void print(long v)             { kryon_log_printf("%ld", v); }
+    void print(unsigned long v)    { kryon_log_printf("%lu", v); }
+    void print(float v)            { kryon_log_printf("%f", v); }
+    void print(double v)           { kryon_log_printf("%f", v); }
+    void println(void)             { kryon_log_printf("\n"); }
+    void println(const char* s)    { kryon_log_printf("%s\n", s); }
+    void println(const std::string& s) { kryon_log_printf("%s\n", s.c_str()); }
+    void println(char c)           { kryon_log_printf("%c\n", c); }
+    void println(int v)            { kryon_log_printf("%d\n", v); }
+    void println(unsigned int v)   { kryon_log_printf("%u\n", v); }
+    void println(long v)           { kryon_log_printf("%ld\n", v); }
+    void println(unsigned long v)  { kryon_log_printf("%lu\n", v); }
+    void println(float v)          { kryon_log_printf("%f\n", v); }
+    void println(double v)         { kryon_log_printf("%f\n", v); }
     void printf(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 };
 extern KryonSerial Serial;

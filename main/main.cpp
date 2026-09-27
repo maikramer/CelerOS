@@ -12,7 +12,7 @@
 #include "Settings/TouchCalibrator.h"
 #include "Keyboard/MyKeyboard.h"
 #include "WebManager/WebManager.h"
-#include "WebManager/CaptivePortal.h"
+#include "WebManager/WifiSetupPortal.h"
 #include "Runtime/JSBindings.h"
 #include "Kernel/Core/HarixKernel.h"
 #include "WebServerApp/WebServerAppUI.h"
@@ -140,7 +140,7 @@ static void kryonSetup() {
                 delay(20);
             }
 
-            if (doSetup && CaptivePortal::runBlocking(&tft)) {
+            if (doSetup && WifiSetupPortal::runBlocking(&tft)) {
                 WebManager::init();  // NTP + servidor web, se habilitados
             }
         }
