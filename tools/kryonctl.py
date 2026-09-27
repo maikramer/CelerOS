@@ -574,6 +574,103 @@ def cmd_swipe(args):
     time.sleep((args.duration + 200) / 1000.0)
 
 
+# ------------------------------------------------------------------- apps ---
+
+def _app_meta(link, base, dirname):
+    """Le <base>/<dirname>/app.json no dispositivo; None se invalido."""
+    import json as _json
+    path = f"{base}/{dirname}/app.json"
+    try:
+        st = link.stat(path)
+    except KryonError:
+        return None
+    if st is None or st["dir"] or st["size"] > 16384:
+        return None
+    raw = b""
+    while len(raw) < st["size"]:
+        chunk = link.read_chunk(path, len(raw), min(CHUNK, st["size"] - len(raw)))
+        if not chunk:
+            return None
+        raw += chunk
+    try:
+        meta = _json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    meta.setdefault("name", dirname)
+    meta.setdefault("version", "?")
+    meta["_base"] = base
+    meta["_dir"] = dirname
+    return meta
+
+
+def _rm_tree(link, path):
+    for e in link.ls(path):
+        child = f"{path}/{e['name']}"
+        if e["dir"]:
+            _rm_tree(link, child)
+        else:
+            link.simple("DELETE", child.encode() + b"\0")
+    link.simple("DELETE", path.encode() + b"\0")
+
+
+def cmd_apps(args):
+    link = open_link(args)
+    try:
+        if args.action == "list":
+            found = []
+            for base in ("/local/apps", "/sd/apps"):
+                try:
+                    entries = link.ls(base)
+                except KryonError:
+                    continue
+                for e in entries:
+                    if not e["dir"]:
+                        continue
+                    meta = _app_meta(link, base, e["name"]) or {"name": e["name"], "_base": base}
+                    found.append(meta)
+            if not found:
+                print("nenhum app instalado")
+                return
+            found.sort(key=lambda m: (not m.get("system"), m.get("name", "").lower()))
+            tag_width = 8
+            for m in found:
+                where = "sd" if m["_base"].startswith("/sd") else "local"
+                tag = "sistema" if m.get("system") else where
+                pkg = m.get("packageName", m["_dir"])
+                print(f"{tag:<{tag_width}} {m.get('name', '?'):<16} v{m.get('version', '?'):<10} api {m.get('api', '?'):<3} {pkg}")
+        elif args.action == "install":
+            src = Path(args.folder).resolve()
+            if not (src / "app.json").is_file():
+                die(f"{src} nao tem app.json")
+            base = "/sd/apps" if args.sd else "/local/apps"
+            dest = f"{base}/{src.name}"
+            files = [f for f in sorted(src.rglob("*")) if f.is_file()]
+            link.simple("MKDIR", dest.encode() + b"\0")
+            for f in files:
+                rel = f.relative_to(src).parent
+                if str(rel) != ".":
+                    d = dest + "/" + rel.as_posix()
+                    link.simple("MKDIR", d.encode() + b"\0")
+            for f in files:
+                link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}")
+            link.exec("rescan")
+            print(f"instalado: {dest} ({len(files)} arquivos)")
+        elif args.action == "rm":
+            base = "/sd/apps" if args.sd else "/local/apps"
+            target = f"{base}/{args.name}"
+            st = link.stat(target)
+            if st is None or not st["dir"]:
+                die(f"{target} nao existe")
+            meta = _app_meta(link, base, args.name)
+            if meta and meta.get("system") and not args.force:
+                die(f"'{args.name}' e app do sistema; use --force para remover")
+            _rm_tree(link, target)
+            link.exec("rescan")
+            print(f"removido: {target}")
+    finally:
+        link.close()
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
@@ -656,6 +753,18 @@ def main():
     p.add_argument("y1", type=int)
     p.add_argument("duration", nargs="?", type=int, default=250, help="duracao em ms (default 250)")
     p.set_defaults(func=cmd_swipe)
+
+    p = sub.add_parser("apps", help="gerencia apps instalados no dispositivo")
+    apps_sub = p.add_subparsers(dest="action", required=True)
+    a = apps_sub.add_parser("list", help="lista apps de /local/apps e /sd/apps")
+    a = apps_sub.add_parser("install", help="instala uma pasta de app local")
+    a.add_argument("folder", help="pasta com app.json + main.js (+ icon.bin)")
+    a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
+    a = apps_sub.add_parser("rm", help="remove um app instalado")
+    a.add_argument("name", help="nome da pasta do app")
+    a.add_argument("--sd", action="store_true", help="remove de /sd/apps")
+    a.add_argument("--force", action="store_true", help="permite remover app de sistema")
+    p.set_defaults(func=cmd_apps)
 
     args = parser.parse_args()
     if args.command == "pull" and args.local is None:
