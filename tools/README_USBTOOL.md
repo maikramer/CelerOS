@@ -32,6 +32,10 @@ python3 tools/kryonctl.py ota push build/KryonOS.bin   # firmware sem esptool
 python3 tools/kryonctl.py screencap tela.png # captura do display -> PNG
 python3 tools/kryonctl.py tap 120 160        # injeta um toque (navegar via USB)
 python3 tools/kryonctl.py swipe 120 400 120 40  # injeta um arrasto (scroll)
+python3 tools/kryonctl.py apps list             # apps instalados (local + sd)
+python3 tools/kryonctl.py apps install "data/apps/Web Server"  # instala pasta
+python3 tools/kryonctl.py apps install meuapp --sd             # no cartão
+python3 tools/kryonctl.py apps rm "Touch Test"                  # desinstala
 ```
 
 ### Iterar na UI sem tocar na placa

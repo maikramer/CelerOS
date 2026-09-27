@@ -14,7 +14,8 @@ KryonOS is an **open-source**, lightweight, high-performance **GUI** Operating S
 * **Over-the-Air Updates:** Firmware updates straight from the device (Settings → System Updates → INSTALL) or via browser upload on the web file manager (`/update`). See [tools/README_OTA.md](tools/README_OTA.md).
 * **Captive Portal Wi-Fi Setup:** No credentials? The device opens a `KryonOS-Setup-XXXX` access point and you configure Wi-Fi from your phone's browser.
 * **Wi-Fi Auto-Reconnect:** If the router drops, KryonOS reconnects by itself (no reboot needed).
-* **JS Networking (`Net.*`):** HTTP GET/POST/JSON from JavaScript apps (API level 2) — see the [JS API Guide](Documentation/JS_API_Guide.md).
+* **JS Networking (`Net.*`):** HTTP GET/POST/JSON and WiFi scan/connect from JavaScript apps (API level 3) — see the [JS API Guide](Documentation/JS_API_Guide.md).
+* **System apps in JS (W8):** Settings, App Store, Installer, Help and Web Server are JS apps stored in the LittleFS partition — the firmware carries only the core (OTA got ~330 KB smaller on the CYD). Install/update them over USB with `kryonctl apps install data/apps/<Nome> [--sd]`, from the SD card (Installer) or over the air (App Store).
 * **Settings PIN Lock:** Optional numeric PIN protects the Settings area (MD5-hashed, 60 s unlock session).
 * **Brightness Control:** Adjustable backlight with persistent level on the SmartDisplay 4" board.
 * **File Management:** Fully functional file explorer and text editor utilizing the SD Card for storage.
@@ -135,7 +136,7 @@ idf.py -B build-cyd -DSDKCONFIG=build-cyd/sdkconfig \
   -DKRYONOS_BOARD=cyd set-target esp32
 idf.py -B build-cyd build
 
-# Gravar o LittleFS de data/ (icones + app demo) na particao "littlefs"
+# Gravar o LittleFS de data/ (icones + apps de sistema + demos) na particao "littlefs"
 tools/flash_data.sh smartdisplay /dev/ttyUSB0    # ou: cyd <porta>
 
 # Servidor OTA local de testes (firma na LAN)

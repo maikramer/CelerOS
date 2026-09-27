@@ -70,6 +70,29 @@ python3 tools/kryonctl.py -b 921600 ota push build/KryonOS.bin
 
 Detalhes em [README_USBTOOL.md](README_USBTOOL.md).
 
+## Migração W8 (tabela de partições nova na CYD) — reflash por cabo
+
+O W8 encolheu o core (telas de sistema viraram apps JS no LittleFS) e a
+tabela da CYD mudou (`partitions_4MB.csv`): slots OTA de 1,875 MB → 1,75 MB
+cada e LittleFS de 128 KB → 384 KB. **OTA em rede não reescreve tabela de
+partições** — a migração de um firmware com tabela antiga é uma única vez,
+por cabo:
+
+```bash
+idf.py -B build-cyd build
+python3 -m esptool --chip esp32 -p /dev/ttyUSB0 -b 460800 write-flash \
+  0x1000 build-cyd/bootloader/bootloader.bin 0x8000 build-cyd/partition_table/partition-table.bin \
+  0xe000 build-cyd/ota_data_initial.bin 0x10000 build-cyd/KryonOS.bin
+tools/flash_data.sh cyd /dev/ttyUSB0    # LittleFS: ícones + apps de sistema
+```
+
+Depois disso as OTAs normais (rede, web ou `kryonctl ota push`) voltam a
+funcionar sem cabo. O SmartDisplay 4" (16 MB) não mudou de tabela.
+
+Os apps de sistema (Settings, App Store, Installer, Help, Web Server) agora
+vivem no LittleFS e não são afetados por OTA — atualize-os com
+`kryonctl apps install data/apps/<Nome>` ou pela própria App Store.
+
 ## Limitações conhecidas
 
 - TLS sem validação de certificado (`setInsecure`), herdado do updater
