@@ -15,5 +15,13 @@ CONFIG_ESP_TLS_SKIP_CERT_VERIFY=y
 
 CONFIG_FREERTOS_HZ=1000
 
+# Handlers de evento (WifiConnection/NetworkManager) rodam na task sys_evt;
+# a stack padrao (4KB) transborda com os handlers encadeados -> stack overflow
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
+
+# vTaskList (comando ps do shell kryonctl/console)
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+
 # Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y

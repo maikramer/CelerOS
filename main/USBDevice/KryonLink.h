@@ -18,9 +18,21 @@
 
 class KryonLink {
 public:
-    // Loop da task: consome bytes do stream buffer da CDC1, monta frames,
-    // executa e responde. Nunca retorna.
+    // Funcao de escrita no canal (CDC nativo, UART do CH340, ...)
+    typedef bool (*WriteFn)(const uint8_t* data, size_t len);
+    // Hook de troca de baud (so faz sentido em canais com baud, ex. UART)
+    typedef void (*BaudFn)(uint32_t baud);
+
+    static void setWriter(WriteFn fn);
+    static void setBaudHook(BaudFn fn);
+
+    // Loop da task do canal CDC (USB nativo): consome o stream buffer e
+    // alimenta a maquina de frames. Nunca retorna.
     static void run(StreamBufferHandle_t rx);
+
+    // Maquina de estados alimentada byte a byte (UART e outros canais).
+    // Ao completar um frame, executa e responde.
+    static void feed(uint8_t byte);
 
     static constexpr uint16_t MAX_PAYLOAD = 4096;  // maior payload aceitado
 };
@@ -39,6 +51,7 @@ constexpr uint8_t KL_MKDIR = 0x0A;        // path
 constexpr uint8_t KL_RENAME = 0x0B;       // from\0 + to\0
 constexpr uint8_t KL_EXEC = 0x0C;         // cmdline -> u8 exitCode + u32 len + saida
 constexpr uint8_t KL_REBOOT = 0x0D;       // ack e reinicia
+constexpr uint8_t KL_SET_BAUD = 0x0F;     // u32 baud -> troca o baud do canal (UART)
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

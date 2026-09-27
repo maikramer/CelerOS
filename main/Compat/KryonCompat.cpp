@@ -14,6 +14,7 @@
 #include "esp_flash.h"
 #include "esp_private/esp_clk.h"
 #include "esp_heap_caps.h"
+#include "USBDevice/LogSink.h"
 
 KryonSerial Serial;
 KryonEsp ESP;
@@ -208,7 +209,9 @@ float temperatureRead(void) {
 void KryonSerial::printf(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vprintf(fmt, args);
+    // passa pelo LogSink: sessoes kryonctl (modo link) nao podem receber
+    // texto de log intercalado nos frames binarios
+    kryon_log_vprintf(fmt, args);
     va_end(args);
 }
 

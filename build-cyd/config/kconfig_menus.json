@@ -5051,6 +5051,24 @@
     {
         "children": [
             {
+                "children": [],
+                "depends_on": "IDF_TARGET_ESP32S3",
+                "help": "Usa o periferico USB-OTG (GPIO19/20) com CDC dupla. Requer estes\npinos livres e um conector USB ligado a eles.\n\nNAO use na SmartDisplay 4848S040: o GPIO19 e o SDA do touch GT911\ne o GPIO20 e a linha G1 do display RGB; o conector USB da placa e\napenas CH340. Nessas placas o kryonctl roda sobre a UART do CH340\n(SerialLink), que e o comportamento padrao.\n\nAo ativar, habilite tambem no sdkconfig do board:\n  CONFIG_TINYUSB_CDC_ENABLED=y\n  CONFIG_TINYUSB_CDC_COUNT=2",
+                "id": "KRYONOS_USB_NATIVE",
+                "name": "KRYONOS_USB_NATIVE",
+                "range": null,
+                "title": "Ativar USB nativo (TinyUSB: CDC dupla shell+kryonctl)",
+                "type": "bool"
+            }
+        ],
+        "depends_on": null,
+        "id": "kryonos-media-maikeu-b1e73891-ddde-49a0-9382-903accb68b49-GitClones-KryonOS-main-Kconfig.projbuild-1",
+        "title": "KryonOS",
+        "type": "menu"
+    },
+    {
+        "children": [
+            {
                 "children": [
                     {
                         "children": [],

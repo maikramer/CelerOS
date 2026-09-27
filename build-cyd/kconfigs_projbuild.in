@@ -4,3 +4,4 @@ source "/home/maikeu/esp/v6.1/esp-idf/components/esp_app_format/Kconfig.projbuil
 source "/home/maikeu/esp/v6.1/esp-idf/components/esp_rom/Kconfig.projbuild"
 source "/home/maikeu/esp/v6.1/esp-idf/components/esptool_py/Kconfig.projbuild"
 source "/home/maikeu/esp/v6.1/esp-idf/components/partition_table/Kconfig.projbuild"
+source "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/main/Kconfig.projbuild"

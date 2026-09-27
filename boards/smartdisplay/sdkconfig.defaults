@@ -13,3 +13,11 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# GPIO19/20 desta placa NAO estao livres para o USB-OTG nativo (19 = SDA do
+# touch GT911, 20 = linha G1 do display; o conector USB e apenas CH340). O
+# console secundario JTAG-USB fica desligado para nao remuxar o GPIO19, e o
+# kryonctl roda sobre a UART do CH340 (SerialLink). O USB nativo (CDC dupla
+# via TinyUSB) existe no codigo atras de CONFIG_KRYONOS_USB_NATIVE para
+# placas futuras com 19/20 livres.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

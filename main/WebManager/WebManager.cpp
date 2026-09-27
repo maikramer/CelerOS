@@ -140,6 +140,9 @@ bool WebManager::isServerRunning() {
 }
 
 void WebManager::tick() {
+    // (Re)conexao e responsabilidade da background task do NetworkManager;
+    // aqui so o reboot diferido do upload web de firmware.
+
     if (s_rebootPending) {
         s_rebootPending = false;
         Serial.println("Rebooting after web OTA...");
