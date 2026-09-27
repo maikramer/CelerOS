@@ -53,7 +53,15 @@ idf_component_register(
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    KRYONOS_VERSION="1.0.0"
-    KRYONOS_API_LEVEL=1
-    KRYONOS_BOARD_SMARTDISPLAY_4IN=1
+    KRYONOS_VERSION="1.1.0"
+    KRYONOS_API_LEVEL=2
 )
+
+if(KRYONOS_BOARD STREQUAL "cyd")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE KRYONOS_BOARD_CYD=1)
+else()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        KRYONOS_BOARD_SMARTDISPLAY_4IN=1
+        KRYONOS_TOUCH_CAPACITIVE=1
+    )
+endif()

@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}
