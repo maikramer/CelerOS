@@ -11,6 +11,8 @@ idf_component_register(
         "FileSystem/FileSystem.cpp"
         "Display/Backlight.cpp"
         "Display/Icon.cpp"
+        "WebManager/WebManager.cpp"
+        "WebManager/CaptivePortal.cpp"
     INCLUDE_DIRS
         "."
         "Compat"
@@ -26,6 +28,15 @@ idf_component_register(
         sdmmc
         joltwallet__esp_littlefs
         mbedtls
+        Wifi
+        Http
+        esp_https_ota
+        app_update
+        nvs_flash
+        esp_wifi
+        bblanchon__arduinojson
+        lwip
+        esp_netif
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

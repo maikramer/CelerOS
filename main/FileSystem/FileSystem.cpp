@@ -61,9 +61,9 @@ bool FileSystem::mountSD() {
 
     if (!s_spi_bus_ready) {
         spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = SD_MOSI;
-        buscfg.miso_io_num = SD_MISO;
-        buscfg.sclk_io_num = SD_SCK;
+        buscfg.mosi_io_num = KRYON_SD_MOSI;
+        buscfg.miso_io_num = KRYON_SD_MISO;
+        buscfg.sclk_io_num = KRYON_SD_SCK;
         buscfg.quadwp_io_num = -1;
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 4092;
@@ -83,7 +83,7 @@ bool FileSystem::mountSD() {
 #endif
 
     sdspi_device_config_t slot = {};
-    slot.gpio_cs = (gpio_num_t)SD_CS_PIN;
+    slot.gpio_cs = (gpio_num_t)KRYON_SD_CS;
     slot.gpio_cd = GPIO_NUM_NC;
 
     esp_vfs_fat_mount_config_t mountcfg = {};

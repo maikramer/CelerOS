@@ -1,391 +1,125 @@
 #include "WebManager.h"
 #include <string>
-#include <WiFi.h>
-#include <SD.h>
-#include <LittleFS.h>
-#include <ESPAsyncWebServer.h>
-#include <ArduinoJson.h>
-#include <Update.h>
+#include <cstring>
+#include <cstdio>
+#include <vector>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "ArduinoJson.h"
+
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Kernel/TimeManager.h"
 #include "filemanager_html.h"
 #include "ota_upload_html.h"
-#include "../Kernel/TimeManager.h"
 
-AsyncWebServer server(80);
-bool isWiFiConnected = false;
-static bool serverConfigured = false;
-static bool serverRunning = false;
-static WiFiEventId_t wifiEventId = 0;
-static unsigned long reconnectGateUntil = 0;  // auto-reconnect suspenso ate este ms
-static volatile bool rebootPending = false;   // setado pelo /update, consumido por tick()
+static const char* WM_TAG = "kryon.web";
 
-// Auto-reconnect com backoff de 10s: se o roteador cair, o KryonOS tenta
-// voltar sozinho (antes era preciso reboot). So age em modo STA puro —
-// durante o captive portal (AP_STA) e na janela pos-disable() fica mudo.
-void WebManager::onWifiEvent(arduino_event_id_t event) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-        isWiFiConnected = false;
-        if (WiFi.getMode() == WIFI_MODE_STA && millis() > reconnectGateUntil) {
-            static unsigned long lastTry = 0;
+static WifiConnection s_wifi;
+static httpd_handle_t s_server = nullptr;
+static bool s_eventsBound = false;
+static volatile bool s_rebootPending = false;
+static unsigned long s_reconnectGateUntil = 0;  // auto-reconnect suspenso ate este ms
+static unsigned long s_lastReconnectTry = 0;
+static std::string s_savedSsid;
+static std::string s_savedPass;
+
+// ---------------------------------------------------------------------------
+// WifiConnection glue
+// ---------------------------------------------------------------------------
+
+WifiConnection& WebManager::wifi() { return s_wifi; }
+
+void WebManager::onStateChanged(WifiConnection* conn, WiFiConnectionState /*oldState*/, WiFiConnectionState newState) {
+    if (newState == WiFiConnectionState::Connected) {
+        ESP_LOGI(WM_TAG, "WiFi conectado: %s IP=%s", conn->getSSID().c_str(), conn->getIPAddress().toString().c_str());
+        TimeManager::syncNTP();
+    } else if (newState == WiFiConnectionState::Error) {
+        // Auto-reconnect com backoff de 10s (mesmo comportamento do porte
+        // Arduino), suspenso na janela pos-disable() e durante o portal.
+        if (millis() > s_reconnectGateUntil && !s_savedSsid.empty()) {
             unsigned long now = millis();
-            if (now - lastTry >= 10000) {
-                lastTry = now;
-                Serial.println("WiFi lost, reconnecting...");
-                WiFi.reconnect();
+            if (now - s_lastReconnectTry >= 10000) {
+                s_lastReconnectTry = now;
+                ESP_LOGI(WM_TAG, "WiFi caiu, reconectando...");
+                conn->connect(s_savedSsid, s_savedPass, true);  // async
             }
         }
-    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-        isWiFiConnected = true;
     }
 }
 
-// Helper to get FS based on path
-fs::FS* getFSFromPath(std::string& path) {
-    if (kstr::startsWith(path, "/sd")) {
-        path = path.substr(3);
-        if (path == "") path = "/";
-        return &SD;
-    } else if (kstr::startsWith(path, "/littlefs")) {
-        path = path.substr(9);
-        if (path == "") path = "/";
-        return &LittleFS;
+static bool loadCredentials(std::string& ssid, std::string& pass) {
+    std::string content;
+    if (FileSystem::exists("/sd/wifi.txt")) {
+        content = FileSystem::readTextFile("/sd/wifi.txt");
+    } else if (FileSystem::exists("/local/wifi.txt")) {
+        content = FileSystem::readTextFile("/local/wifi.txt");
+    } else {
+        Serial.println("No wifi.txt found on SD card or LittleFS.");
+        return false;
     }
-    return nullptr;
+
+    int nl = kstr::indexOf(content, '\n');
+    if (nl < 0) {
+        ssid = kstr::trim(content);
+        pass = "";
+    } else {
+        ssid = kstr::trim(content.substr(0, nl));
+        pass = kstr::trim(content.substr(nl + 1));
+    }
+    return !ssid.empty();
 }
 
 bool WebManager::init() {
-    // Registra o auto-reconnect uma unica vez, antes de qualquer early-return
-    if (wifiEventId == 0) {
-        wifiEventId = WiFi.onEvent(onWifiEvent);
+    if (!s_eventsBound) {
+        s_eventsBound = true;
+        nvs_flash_init();  // exigido pelo esp_wifi ( phy calib ); idempotente
+        s_wifi.setConnectionTimeout(10000);
+        s_wifi.setMaxRetries(3);
+        s_wifi.onStateChanged.addHandler(
+            [](WifiConnection* conn, WiFiConnectionState o, WiFiConnectionState n) {
+                WebManager::onStateChanged(conn, o, n);
+            });
     }
 
-    File wifiFile = SD.open("/wifi.txt", FILE_READ);
-    if (!wifiFile) {
-        // Fallback to LittleFS
-        wifiFile = LittleFS.open("/wifi.txt", FILE_READ);
-        if (!wifiFile) {
-            Serial.println("No wifi.txt found on SD card or LittleFS.");
-            return false;
-        }
-    }
-
-    std::string ssid = wifiFile.readStringUntil('\n').c_str();
-    std::string pass = wifiFile.readStringUntil('\n').c_str();
-    wifiFile.close();
-
-    ssid = kstr::trim(ssid);
-    pass = kstr::trim(pass);
-
-    if (ssid.length() == 0) {
-        Serial.println("wifi.txt is empty.");
-        return false;
-    }
+    std::string ssid, pass;
+    if (!loadCredentials(ssid, pass)) return false;
+    s_savedSsid = ssid;
+    s_savedPass = pass;
 
     Serial.print("Connecting to WiFi: ");
     Serial.println(ssid.c_str());
 
-    if (pass.length() > 0) {
-        WiFi.begin(ssid.c_str(), pass.c_str());
-    } else {
-        WiFi.begin(ssid.c_str());
+    ErrorCode err = s_wifi.init();
+    if (err != CommonErrorCodes::None) {
+        Serial.println("WiFi subsystem init failed.");
+        return false;
     }
-    
-    // Try to connect for up to 10 seconds
-    unsigned long startAttemptTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
-        isWiFiConnected = true;
-        Serial.println("WiFi connected!");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-
-        // Sync NTP Time
-        TimeManager::syncNTP();
-
-        // Check if Web Server is enabled by user
-        if (!FileSystem::exists("/local/web_on.txt")) {
-            Serial.println("Web Server disabled by user (web_on.txt not found).");
-            return true; // WiFi is connected, but server is not started
-        }
-
-        // Configure Web Server (handlers registrados apenas uma vez)
-        if (serverConfigured) {
-            if (!serverRunning) {
-                server.begin();
-                serverRunning = true;
-                Serial.println("Async Web Server started on port 80");
-            }
-            return true;
-        }
-        server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-            request->send(200, "text/html", filemanager_html);
-        });
-
-        server.on("/api/list", HTTP_GET, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("dir")) {
-                request->send(400, "text/plain", "Missing dir parameter");
-                return;
-            }
-            std::string path = request->getParam("dir")->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs) {
-                request->send(400, "text/plain", "Invalid storage");
-                return;
-            }
-
-            File dir = fs->open(path.c_str());
-            if (!dir || !dir.isDirectory()) {
-                request->send(404, "text/plain", "Not a directory");
-                return;
-            }
-
-            JsonDocument doc;
-            JsonArray array = doc.to<JsonArray>();
-
-            File file = dir.openNextFile();
-            while (file) {
-                JsonObject item = array.add<JsonObject>();
-                item["name"] = std::string(file.name());  // copia (ArduinoJson nao copia const char*)
-                item["type"] = file.isDirectory() ? "dir" : "file";
-                item["size"] = file.size();
-                file.close();
-                file = dir.openNextFile();
-            }
-            dir.close();
-
-            std::string response;
-            serializeJson(doc, response);
-            request->send(200, "application/json", response.c_str());
-        });
-
-        server.on("/api/edit", HTTP_GET, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("path")) {
-                request->send(400, "text/plain", "Missing path");
-                return;
-            }
-            std::string path = request->getParam("path")->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs || !fs->exists(path.c_str())) {
-                request->send(404, "text/plain", "File not found");
-                return;
-            }
-            request->send(*fs, path.c_str(), "text/plain");
-        });
-
-        server.on("/api/edit", HTTP_POST, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("path", true) || !request->hasParam("content", true)) {
-                request->send(400, "text/plain", "Missing parameters");
-                return;
-            }
-            std::string path = request->getParam("path", true)->value().c_str();
-            std::string content = request->getParam("content", true)->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs) {
-                request->send(400, "text/plain", "Invalid storage");
-                return;
-            }
-
-            File f = fs->open(path.c_str(), FILE_WRITE);
-            if (f) {
-                f.print(content.c_str());
-                f.close();
-                request->send(200, "text/plain", "OK");
-            } else {
-                request->send(500, "text/plain", "Failed to write file");
-            }
-        });
-
-        server.on("/api/download", HTTP_GET, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("path")) {
-                request->send(400, "text/plain", "Missing path");
-                return;
-            }
-            std::string path = request->getParam("path")->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs || !fs->exists(path.c_str())) {
-                request->send(404, "text/plain", "File not found");
-                return;
-            }
-            AsyncWebServerResponse *response = request->beginResponse(*fs, path.c_str(), "application/octet-stream", true);
-            request->send(response);
-        });
-
-        server.on("/api/delete", HTTP_DELETE, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("path", true)) {
-                request->send(400, "text/plain", "Missing path");
-                return;
-            }
-            std::string path = request->getParam("path", true)->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs) {
-                request->send(400, "text/plain", "Invalid storage");
-                return;
-            }
-
-            File f = fs->open(path.c_str());
-            bool isDir = false;
-            if (f) {
-                isDir = f.isDirectory();
-                f.close();
-            }
-
-            if (isDir) {
-                fs->rmdir(path.c_str());
-            } else {
-                fs->remove(path.c_str());
-            }
-            request->send(200, "text/plain", "OK");
-        });
-
-        server.on("/api/create", HTTP_POST, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("path", true) || !request->hasParam("type", true)) {
-                request->send(400, "text/plain", "Missing parameters");
-                return;
-            }
-            std::string path = request->getParam("path", true)->value().c_str();
-            std::string type = request->getParam("type", true)->value().c_str();
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs) {
-                request->send(400, "text/plain", "Invalid storage");
-                return;
-            }
-
-            if (type == "folder") {
-                fs->mkdir(path.c_str());
-            } else {
-                File f = fs->open(path.c_str(), FILE_WRITE);
-                if (f) f.close();
-            }
-            request->send(200, "text/plain", "OK");
-        });
-
-        server.on("/api/rename", HTTP_POST, [](AsyncWebServerRequest *request){
-            if (!request->hasParam("oldPath", true) || !request->hasParam("newPath", true)) {
-                request->send(400, "text/plain", "Missing parameters");
-                return;
-            }
-            std::string oldPath = request->getParam("oldPath", true)->value().c_str();
-            std::string newPath = request->getParam("newPath", true)->value().c_str();
-
-            std::string oldFsPath = oldPath;
-            std::string newFsPath = newPath;
-            fs::FS* fs1 = getFSFromPath(oldFsPath);
-            fs::FS* fs2 = getFSFromPath(newFsPath);
-
-            if (fs1 != fs2 || !fs1) {
-                request->send(400, "text/plain", "Cannot rename across different storages or invalid");
-                return;
-            }
-
-            if (fs1->rename(oldFsPath.c_str(), newFsPath.c_str())) {
-                request->send(200, "text/plain", "OK");
-            } else {
-                request->send(500, "text/plain", "Rename failed");
-            }
-        });
-
-        // Handle file uploads
-        server.on("/api/upload", HTTP_POST, [](AsyncWebServerRequest *request){
-            request->send(200, "text/plain", "Upload Complete");
-        }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-            std::string path = filename.c_str();
-
-            // Intercept app uploads and respect default installation location
-            if (kstr::startsWith(path, "/local/apps/") || kstr::startsWith(path, "/sd/apps/")) {
-                bool defaultSD = FileSystem::exists("/local/config_install_sd.txt");
-                int appsIndex = kstr::indexOf(path, "/apps/");
-                std::string relativePath = path.substr(appsIndex + 6);
-
-                if (defaultSD && FileSystem::exists("/sd/")) {
-                    path = "/sd/apps/" + relativePath;
-                } else {
-                    path = "/local/apps/" + relativePath;
-                }
-            }
-
-            // filemanager.html appends the destination path to the filename in FormData
-            // So filename here is the absolute path.
-            fs::FS* fs = getFSFromPath(path);
-            if (!fs) return;
-
-            if (!index) {
-                // Ensure parent directories exist
-                int pos = 0;
-                while ((pos = kstr::indexOf(path, '/', pos + 1)) > 0) {
-                    std::string dirPath = path.substr(0, pos);
-                    if (!fs->exists(dirPath.c_str())) {
-                        fs->mkdir(dirPath.c_str());
-                    }
-                }
-
-                // Open file for writing
-                request->_tempFile = fs->open(path.c_str(), FILE_WRITE);
-            }
-            if (request->_tempFile) {
-                if (len) {
-                    request->_tempFile.write(data, len);
-                }
-                if (final) {
-                    request->_tempFile.close();
-                }
-            }
-        });
-
-        // Flash de firmware pelo navegador (estilo ElegantOTA). O reboot e
-        // diferido para o tick() do loop principal — nao se pode reiniciar
-        // dentro do handler do AsyncWebServer.
-        server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request){
-            request->send(200, "text/html", ota_upload_html);
-        });
-
-        server.on("/update", HTTP_POST,
-            [](AsyncWebServerRequest *request){
-                bool ok = !Update.hasError();
-                if (ok) {
-                    request->send(200, "text/plain", "OK - rebooting");
-                    rebootPending = true;
-                } else {
-                    request->send(500, "text/plain", Update.errorString());
-                }
-            },
-            [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-                if (index == 0) {
-                    Serial.println("OTA web upload: " + filename);
-                    Update.begin(UPDATE_SIZE_UNKNOWN);
-                }
-                if (len) {
-                    if (Update.write(data, len) != len) {
-                        Serial.printf("OTA write failed: %s\n", Update.errorString());
-                    }
-                }
-                if (final) {
-                    if (Update.end(true)) {
-                        Serial.println("OTA web upload flashed OK");
-                    } else {
-                        Serial.printf("OTA end failed: %s\n", Update.errorString());
-                    }
-                }
-            });
-
-        // Required CORS for API usage if needed
-        DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-
-        serverConfigured = true;
-        server.begin();
-        serverRunning = true;
-        Serial.println("Async Web Server started on port 80");
-        
-        return true;
-    } else {
+    err = s_wifi.connect(ssid, pass, false);  // bloqueante (timeout interno 10s)
+    if (err != CommonErrorCodes::None || !s_wifi.isConnected()) {
         Serial.println("WiFi connection failed.");
         return false;
     }
+
+    Serial.println("WiFi connected!");
+    Serial.print("IP Address: ");
+    Serial.println(s_wifi.getIPAddress().toString().c_str());
+
+    // NTP e sincronizado pelo handler de estado Connected
+
+    if (!FileSystem::exists("/local/web_on.txt")) {
+        Serial.println("Web Server disabled by user (web_on.txt not found).");
+        return true;  // WiFi conectado, servidor nao sobe
+    }
+
+    startWebServerIfNeeded();
+    return true;
 }
 
 bool WebManager::enable() {
@@ -393,31 +127,28 @@ bool WebManager::enable() {
 }
 
 void WebManager::disable() {
-    // Silencia o auto-reconnect por uns segundos para nao religar o WiFi
-    // logo apos um desligamento intencional
-    reconnectGateUntil = millis() + 8000;
-    if (serverRunning) {
-        server.end();
-        serverRunning = false;
-        Serial.println("Async Web Server stopped");
-    }
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    isWiFiConnected = false;
+    s_reconnectGateUntil = millis() + 8000;  // silencia o auto-reconnect
+    stopWebServer();
+    s_wifi.disconnect();
+    esp_wifi_stop();
     Serial.println("WiFi disabled at runtime");
 }
 
 void WebManager::stopWebServer() {
-    if (serverRunning) {
-        server.end();
-        serverRunning = false;
-        Serial.println("Async Web Server paused");
+    if (s_server != nullptr) {
+        httpd_stop(s_server);
+        s_server = nullptr;
+        Serial.println("Web Server stopped");
     }
 }
 
+bool WebManager::isServerRunning() {
+    return s_server != nullptr;
+}
+
 void WebManager::tick() {
-    if (rebootPending) {
-        rebootPending = false;
+    if (s_rebootPending) {
+        s_rebootPending = false;
         Serial.println("Rebooting after web OTA...");
         delay(500);  // da tempo para a resposta HTTP chegar ao navegador
         ESP.restart();
@@ -425,12 +156,635 @@ void WebManager::tick() {
 }
 
 bool WebManager::isActive() {
-    return isWiFiConnected;
+    return s_wifi.isConnected();
+}
+
+bool WebManager::isWifiConnected() {
+    return s_wifi.isConnected();
 }
 
 std::string WebManager::getIPAddress() {
-    if (isWiFiConnected) {
-        return WiFi.localIP().toString().c_str();
+    if (s_wifi.isConnected()) {
+        return s_wifi.getIPAddress().toString();
     }
     return "";
+}
+
+bool WebManager::connect(const std::string& ssid, const std::string& password,
+                          bool saveCreds, uint32_t timeoutMs) {
+    if (ssid.empty() || ssid.length() > 32 || password.length() > 64) return false;
+
+    s_wifi.setConnectionTimeout(timeoutMs);
+    ErrorCode err = s_wifi.init();
+    if (err != CommonErrorCodes::None) return false;
+
+    err = s_wifi.connect(ssid, password, false);
+    bool ok = (err == CommonErrorCodes::None) && s_wifi.isConnected();
+    if (ok && saveCreds) {
+        s_savedSsid = ssid;
+        s_savedPass = password;
+        std::string creds = ssid + "\n" + password;
+        if (FileSystem::exists("/sd/")) {
+            FileSystem::writeTextFile("/sd/wifi.txt", creds.c_str());
+        } else {
+            FileSystem::writeTextFile("/local/wifi.txt", creds.c_str());
+        }
+    }
+    s_wifi.setConnectionTimeout(10000);
+    return ok;
+}
+
+void WebManager::disconnect() {
+    s_wifi.disconnect();
+}
+
+int WebManager::scanNetworks(KryonScanEntry* out, int maxN) {
+    if (out == nullptr || maxN <= 0) return 0;
+    s_wifi.init();
+
+    wifi_ap_record_t aps[20];
+    int n = s_wifi.scan(aps, 20);
+    if (n <= 0) return 0;
+
+    int count = 0;
+    for (int i = 0; i < n && count < maxN; i++) {
+        std::string ssid = (const char*)aps[i].ssid;
+        if (ssid.empty()) continue;
+        // dedup por SSID (o scan ja vem ordenado por RSSI)
+        bool dup = false;
+        for (int j = 0; j < count; j++) {
+            if (out[j].ssid == ssid) { dup = true; break; }
+        }
+        if (dup) continue;
+        out[count].ssid = ssid;
+        out[count].rssi = aps[i].rssi;
+        out[count].secure = aps[i].authmode != WIFI_AUTH_OPEN;
+        count++;
+    }
+    return count;
+}
+
+bool WebManager::startScanAsync() {
+    return s_wifi.init() == CommonErrorCodes::None &&
+           s_wifi.startScanAsync() == CommonErrorCodes::None;
+}
+
+std::vector<KryonScanEntry> WebManager::getLastScan() {
+    std::vector<KryonScanEntry> out;
+    WiFiScanResult result = s_wifi.getLastScanResults();
+    for (const auto& net : result.networks) {
+        if (net.ssid[0] == '\0') continue;
+        KryonScanEntry e;
+        e.ssid = net.ssid;
+        e.rssi = net.rssi;
+        e.secure = net.authMode != WIFI_AUTH_OPEN;
+        out.push_back(e);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// esp_http_server — helpers
+// ---------------------------------------------------------------------------
+
+// Prefixos aceitos; "/littlefs" (alias antigo do SPA) vira "/local"
+static std::string normalizePath(const std::string& in) {
+    if (kstr::startsWith(in, "/littlefs")) {
+        return "/local" + in.substr(9);
+    }
+    return in;
+}
+
+static bool pathAllowed(const std::string& p) {
+    return kstr::startsWith(p, "/local") || kstr::startsWith(p, "/sd");
+}
+
+static void addCORS(httpd_req_t* req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+}
+
+static std::string urlDecode(const std::string& str) {
+    std::string out;
+    out.reserve(str.length());
+    for (size_t i = 0; i < str.length(); i++) {
+        if (str[i] == '%' && i + 2 < str.length()) {
+            int v = strtol(str.substr(i + 1, 2).c_str(), nullptr, 16);
+            if (v > 0) { out += (char)v; i += 2; continue; }
+        }
+        out += (str[i] == '+') ? ' ' : str[i];
+    }
+    return out;
+}
+
+static bool getQueryParam(httpd_req_t* req, const char* key, std::string& out) {
+    char query[512];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) return false;
+    char value[400];
+    if (httpd_query_key_value(query, key, value, sizeof(value)) != ESP_OK) return false;
+    out = urlDecode(value);
+    return true;
+}
+
+// Le o corpo inteiro (urlencoded, ate limit bytes)
+static std::string readBody(httpd_req_t* req, size_t limit = 8192) {
+    size_t remaining = req->content_len;
+    if (remaining > limit) return "";
+    std::string body(remaining, '\0');
+    size_t got = 0;
+    while (got < remaining) {
+        int r = httpd_req_recv(req, &body[got], remaining - got);
+        if (r <= 0) return "";
+        got += (size_t)r;
+    }
+    return body;
+}
+
+static bool bodyParam(const std::string& body, const char* key, std::string& out) {
+    std::string needle = std::string(key) + "=";
+    int idx = kstr::indexOf(body, needle);
+    if (idx < 0) return false;
+    std::string val = body.substr(idx + needle.length());
+    int amp = kstr::indexOf(val, '&');
+    if (amp >= 0) val = val.substr(0, amp);
+    out = urlDecode(val);
+    return true;
+}
+
+static void sendText(httpd_req_t* req, int code, const char* text) {
+    httpd_resp_set_status(req, code == 200 ? "200 OK" :
+                                code == 400 ? "400 Bad Request" :
+                                code == 404 ? "404 Not Found" :
+                                code == 500 ? "500 Server Error" : "418 I'm a teapot");
+    httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
+    addCORS(req);
+    httpd_resp_send(req, text, strlen(text));
+}
+
+// Envia arquivo em chunks (download/editor)
+static void sendFile(httpd_req_t* req, const std::string& path, const char* type, bool attachment) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        sendText(req, 404, "File not found");
+        return;
+    }
+    httpd_resp_set_type(req, type);
+    addCORS(req);
+    if (attachment) {
+        std::string basename = path;
+        int slash = kstr::lastIndexOf(basename, '/');
+        if (slash >= 0) basename = basename.substr(slash + 1);
+        std::string cd = "attachment; filename=\"" + basename + "\"";
+        httpd_resp_set_hdr(req, "Content-Disposition", cd.c_str());
+    }
+    char buf[2048];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) {
+            fclose(f);
+            return;
+        }
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Rotas
+// ---------------------------------------------------------------------------
+
+static esp_err_t handler_index(httpd_req_t* req) {
+    addCORS(req);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, filemanager_html, strlen(filemanager_html));
+    return ESP_OK;
+}
+
+static esp_err_t handler_list(httpd_req_t* req) {
+    std::string dirPath;
+    if (!getQueryParam(req, "dir", dirPath)) {
+        sendText(req, 400, "Missing dir parameter");
+        return ESP_OK;
+    }
+    dirPath = normalizePath(dirPath);
+    if (!pathAllowed(dirPath) || !FileSystem::isDirectory(dirPath.c_str())) {
+        sendText(req, 404, "Not a directory");
+        return ESP_OK;
+    }
+
+    FileEntry entries[64];
+    int count = FileSystem::listDirectory(dirPath.c_str(), entries, 64);
+
+    JsonDocument doc;
+    JsonArray array = doc.to<JsonArray>();
+    for (int i = 0; i < count; i++) {
+        JsonObject item = array.add<JsonObject>();
+        item["name"] = entries[i].name;
+        item["type"] = entries[i].isDir ? "dir" : "file";
+        item["size"] = entries[i].isDir ? 0 : FileSystem::getFileSize(entries[i].path.c_str());
+    }
+
+    std::string response;
+    serializeJson(doc, response);
+    httpd_resp_set_type(req, "application/json");
+    addCORS(req);
+    httpd_resp_send(req, response.c_str(), response.length());
+    return ESP_OK;
+}
+
+static esp_err_t handler_edit_get(httpd_req_t* req) {
+    std::string path;
+    if (!getQueryParam(req, "path", path)) {
+        sendText(req, 400, "Missing path parameter");
+        return ESP_OK;
+    }
+    path = normalizePath(path);
+    if (!pathAllowed(path) || !FileSystem::exists(path.c_str())) {
+        sendText(req, 404, "File not found");
+        return ESP_OK;
+    }
+    sendFile(req, path, "text/plain", false);
+    return ESP_OK;
+}
+
+static esp_err_t handler_edit_post(httpd_req_t* req) {
+    std::string body = readBody(req);
+    std::string path, content;
+    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, "content", content)) {
+        sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    path = normalizePath(path);
+    if (!pathAllowed(path)) {
+        sendText(req, 400, "Invalid storage");
+        return ESP_OK;
+    }
+    bool ok = FileSystem::writeTextFile(path.c_str(), content.c_str());
+    sendText(req, ok ? 200 : 500, ok ? "OK" : "Failed to write file");
+    return ESP_OK;
+}
+
+static esp_err_t handler_download(httpd_req_t* req) {
+    std::string path;
+    if (!getQueryParam(req, "path", path)) {
+        sendText(req, 400, "Missing path parameter");
+        return ESP_OK;
+    }
+    path = normalizePath(path);
+    if (!pathAllowed(path) || !FileSystem::exists(path.c_str())) {
+        sendText(req, 404, "File not found");
+        return ESP_OK;
+    }
+    sendFile(req, path, "application/octet-stream", true);
+    return ESP_OK;
+}
+
+static esp_err_t handler_delete(httpd_req_t* req) {
+    std::string path;
+    if (!getQueryParam(req, "path", path)) {
+        sendText(req, 400, "Missing path parameter");
+        return ESP_OK;
+    }
+    path = normalizePath(path);
+    if (!pathAllowed(path)) {
+        sendText(req, 400, "Invalid storage");
+        return ESP_OK;
+    }
+
+    bool ok;
+    if (FileSystem::isDirectory(path.c_str())) {
+        ok = FileSystem::rmdir(path.c_str());
+    } else {
+        ok = FileSystem::deleteFile(path.c_str());
+    }
+    sendText(req, ok ? 200 : 500, ok ? "OK" : "Delete failed");
+    return ESP_OK;
+}
+
+static esp_err_t handler_create(httpd_req_t* req) {
+    std::string body = readBody(req);
+    std::string path, type;
+    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, "type", type)) {
+        sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    path = normalizePath(path);
+    if (!pathAllowed(path)) {
+        sendText(req, 400, "Invalid storage");
+        return ESP_OK;
+    }
+
+    bool ok;
+    if (type == "folder") {
+        ok = FileSystem::mkdir(path.c_str());
+    } else {
+        ok = FileSystem::writeTextFile(path.c_str(), "");
+    }
+    sendText(req, ok ? 200 : 500, ok ? "OK" : "Create failed");
+    return ESP_OK;
+}
+
+static esp_err_t handler_rename(httpd_req_t* req) {
+    std::string body = readBody(req);
+    std::string oldPath, newPath;
+    if (body.empty() || !bodyParam(body, "oldPath", oldPath) || !bodyParam(body, "newPath", newPath)) {
+        sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    oldPath = normalizePath(oldPath);
+    newPath = normalizePath(newPath);
+    if (!pathAllowed(oldPath) || !pathAllowed(newPath)) {
+        sendText(req, 400, "Invalid storage");
+        return ESP_OK;
+    }
+
+    // Mesmo ponto de montagem (rename cross-device nao existe em POSIX)
+    bool sameMount = (kstr::startsWith(oldPath, "/sd") == kstr::startsWith(newPath, "/sd"));
+    if (!sameMount) {
+        sendText(req, 400, "Cannot rename across different storages");
+        return ESP_OK;
+    }
+    bool ok = FileSystem::renameFile(oldPath.c_str(), newPath.c_str());
+    sendText(req, ok ? 200 : 500, ok ? "OK" : "Rename failed");
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Parser multipart compartilhado (upload de arquivos e firmware web)
+// ---------------------------------------------------------------------------
+
+struct MultipartCtx {
+    std::string boundary;      // ja com "--" prefixo
+    std::string tail;
+    enum State { PREAMBLE, HEADERS, DATA, DONE } state = PREAMBLE;
+
+    // destino
+    FILE* file = nullptr;
+    std::string filePath;
+    bool isFirmware = false;
+    esp_ota_handle_t ota = 0;
+    const esp_partition_t* part = nullptr;
+    bool errored = false;
+    std::string error;
+
+    void fail(const std::string& msg) {
+        if (!errored) {
+            errored = true;
+            error = msg;
+            ESP_LOGE(WM_TAG, "multipart: %s", msg.c_str());
+        }
+    }
+
+    void openDest(const std::string& fieldName, std::string fname) {
+        if (fieldName == "firmware") {
+            isFirmware = true;
+            part = esp_ota_get_next_update_partition(nullptr);
+            if (part == nullptr) { fail("no ota partition"); return; }
+            esp_err_t err = esp_ota_begin(part, OTA_SIZE_UNKNOWN, &ota);
+            if (err != ESP_OK) { fail(esp_err_to_name(err)); return; }
+            ESP_LOGI(WM_TAG, "OTA web: escrevendo em %s", part->label);
+            return;
+        }
+
+        // Upload de arquivo comum: filename do form e o caminho absoluto
+        filePath = normalizePath(fname);
+        if (!pathAllowed(filePath)) { fail("invalid path " + filePath); return; }
+
+        // Intercepta apps e respeita o local padrao de instalacao
+        if (kstr::startsWith(filePath, "/local/apps/") || kstr::startsWith(filePath, "/sd/apps/")) {
+            bool defaultSD = FileSystem::exists("/local/config_install_sd.txt");
+            int appsIndex = kstr::indexOf(filePath, "/apps/");
+            std::string relativePath = filePath.substr(appsIndex + 6);
+            if (defaultSD && FileSystem::exists("/sd/")) {
+                filePath = "/sd/apps/" + relativePath;
+            } else {
+                filePath = "/local/apps/" + relativePath;
+            }
+        }
+
+        // Garante diretorios pais
+        int pos = 0;
+        while ((pos = kstr::indexOf(filePath, '/', pos + 1)) > 0) {
+            std::string dirPath = filePath.substr(0, pos);
+            if (!FileSystem::exists(dirPath.c_str())) {
+                FileSystem::mkdir(dirPath.c_str());
+            }
+        }
+
+        file = fopen(filePath.c_str(), "wb");
+        if (file == nullptr) fail("cannot open " + filePath);
+    }
+
+    void writeData(const char* data, size_t len) {
+        if (errored || len == 0) return;
+        if (isFirmware) {
+            if (esp_ota_write(ota, data, len) != ESP_OK) fail("ota write");
+        } else if (file != nullptr) {
+            if (fwrite(data, 1, len, file) != len) fail("file write");
+        }
+    }
+
+    void closeDest(bool finished) {
+        if (file != nullptr) {
+            fclose(file);
+            file = nullptr;
+            if (errored) remove(filePath.c_str());  // nao deixa parcial
+        }
+        if (isFirmware && ota != 0) {
+            if (errored || !finished) {
+                esp_ota_abort(ota);
+            } else if (esp_ota_end(ota) != ESP_OK) {
+                fail("esp_ota_end");
+            } else if (esp_ota_set_boot_partition(part) != ESP_OK) {
+                fail("set_boot_partition");
+            } else {
+                ESP_LOGI(WM_TAG, "OTA web: flash OK, agendando reboot");
+                s_rebootPending = true;
+            }
+            ota = 0;
+        }
+    }
+};
+
+// Processa um chunk do corpo multipart
+static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
+    if (ctx.errored) return;
+    ctx.tail.append(data, len);
+
+    // Limite de seguranca do buffer de headers
+    while (!ctx.errored) {
+        if (ctx.state == MultipartCtx::PREAMBLE) {
+            int pos = kstr::indexOf(ctx.tail, ctx.boundary);
+            if (pos < 0) {
+                // descarta tudo exceto um possivel boundary parcial no fim
+                if (ctx.tail.size() > ctx.boundary.size() + 4) {
+                    ctx.tail.erase(0, ctx.tail.size() - (ctx.boundary.size() + 4));
+                }
+                return;
+            }
+            ctx.tail.erase(0, pos + ctx.boundary.size());
+            // apos o boundary: "--" (fim) ou "\r\n" (headers)
+            if (kstr::startsWith(ctx.tail, "--")) { ctx.state = MultipartCtx::DONE; return; }
+            if (kstr::startsWith(ctx.tail, "\r\n")) ctx.tail.erase(0, 2);
+            ctx.state = MultipartCtx::HEADERS;
+
+        } else if (ctx.state == MultipartCtx::HEADERS) {
+            int sep = kstr::indexOf(ctx.tail, "\r\n\r\n");
+            if (sep < 0) {
+                if (ctx.tail.size() > 1024) ctx.fail("headers too large");
+                return;
+            }
+            std::string headers = ctx.tail.substr(0, sep);
+            ctx.tail.erase(0, sep + 4);
+
+            // Content-Disposition: form-data; name="x"; filename="y"
+            std::string fieldName, fileName;
+            int cd = kstr::indexOf(headers, "Content-Disposition:");
+            if (cd < 0) cd = kstr::indexOf(headers, "content-disposition:");
+            if (cd < 0) { ctx.fail("no content-disposition"); return; }
+
+            int nq = kstr::indexOf(headers, "name=\"", cd);
+            if (nq >= 0) {
+                int endq = kstr::indexOf(headers, '"', nq + 6);
+                if (endq > 0) fieldName = headers.substr(nq + 6, endq - nq - 6);
+            }
+            int fq = kstr::indexOf(headers, "filename=\"", cd);
+            if (fq >= 0) {
+                int endf = kstr::indexOf(headers, '"', fq + 10);
+                if (endf > 0) fileName = headers.substr(fq + 10, endf - fq - 10);
+            }
+
+            if (fieldName == "firmware" || (!fileName.empty() && fileName[0] == '/')) {
+                ctx.openDest(fieldName, fileName);
+                ctx.state = MultipartCtx::DATA;
+            } else {
+                // campo sem arquivo (ex: submit) — descarta ate o proximo boundary
+                ctx.state = MultipartCtx::DATA;
+                ctx.filePath = "";  // sem destino
+            }
+
+        } else if (ctx.state == MultipartCtx::DATA) {
+            std::string marker = "\r\n" + ctx.boundary;
+            int pos = kstr::indexOf(ctx.tail, marker);
+            if (pos < 0) {
+                // mantem apenas um tail suficiente p/ conter o marker parcial
+                size_t keep = marker.size() + 4;
+                if (ctx.tail.size() > keep) {
+                    size_t emit = ctx.tail.size() - keep;
+                    if (!ctx.filePath.empty() || ctx.isFirmware) ctx.writeData(ctx.tail.data(), emit);
+                    ctx.tail.erase(0, emit);
+                }
+                return;
+            }
+            // emite ate o marker
+            if (pos > 0 && (!ctx.filePath.empty() || ctx.isFirmware)) {
+                ctx.writeData(ctx.tail.data(), pos);
+            }
+            ctx.tail.erase(0, pos + marker.size());
+            ctx.closeDest(true);
+            ctx.isFirmware = false;
+            ctx.filePath = "";
+
+            if (kstr::startsWith(ctx.tail, "--")) { ctx.state = MultipartCtx::DONE; return; }
+            if (kstr::startsWith(ctx.tail, "\r\n")) ctx.tail.erase(0, 2);
+            ctx.state = MultipartCtx::HEADERS;
+
+        } else {  // DONE
+            return;
+        }
+    }
+}
+
+// Consome o corpo inteiro de um POST multipart
+static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg) {
+    char ct[160];
+    if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct)) != ESP_OK) {
+        sendText(req, 400, "Missing Content-Type");
+        return ESP_OK;
+    }
+    int bpos = kstr::indexOf(ct, "boundary=");
+    if (bpos < 0) {
+        sendText(req, 400, "Missing boundary");
+        return ESP_OK;
+    }
+    std::string bval = ct + bpos + 9;
+    int bend = kstr::indexOf(bval, ';');
+    if (bend > 0) bval = bval.substr(0, bend);
+    bval = kstr::trim(bval);
+
+    MultipartCtx ctx;
+    ctx.boundary = "--" + bval;
+
+    size_t remaining = req->content_len;
+    char buf[2048];
+    while (remaining > 0 && !ctx.errored) {
+        size_t want = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+        int got = httpd_req_recv(req, buf, want);
+        if (got <= 0) { ctx.fail("connection lost"); break; }
+        remaining -= (size_t)got;
+        multipartFeed(ctx, buf, (size_t)got);
+    }
+
+    // fecha o que ficou aberto (fim abrupto)
+    ctx.closeDest(!ctx.errored && ctx.state == MultipartCtx::DONE);
+
+    if (ctx.errored) {
+        sendText(req, 500, ctx.error.c_str());
+    } else {
+        sendText(req, 200, okMsg);
+    }
+    return ESP_OK;
+}
+
+static esp_err_t handler_upload(httpd_req_t* req) {
+    return handleMultipart(req, "Upload Complete");
+}
+
+static esp_err_t handler_update_get(httpd_req_t* req) {
+    addCORS(req);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, ota_upload_html, strlen(ota_upload_html));
+    return ESP_OK;
+}
+
+static esp_err_t handler_update_post(httpd_req_t* req) {
+    return handleMultipart(req, "OK - rebooting");
+}
+
+// ---------------------------------------------------------------------------
+// Servidor
+// ---------------------------------------------------------------------------
+
+void WebManager::startWebServerIfNeeded() {
+    if (s_server != nullptr) return;
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.stack_size = 16384;       // parser multipart + JSON na pilha do httpd
+    config.max_uri_handlers = 12;
+    config.lru_purge_enable = true;
+
+    if (httpd_start(&s_server, &config) != ESP_OK) {
+        s_server = nullptr;
+        Serial.println("Failed to start web server");
+        return;
+    }
+
+    const httpd_uri_t routes[] = {
+        {"/",             HTTP_GET,    handler_index,       nullptr},
+        {"/api/list",     HTTP_GET,    handler_list,        nullptr},
+        {"/api/edit",     HTTP_GET,    handler_edit_get,    nullptr},
+        {"/api/edit",     HTTP_POST,   handler_edit_post,   nullptr},
+        {"/api/download", HTTP_GET,    handler_download,    nullptr},
+        {"/api/delete",   HTTP_DELETE, handler_delete,      nullptr},
+        {"/api/create",   HTTP_POST,   handler_create,      nullptr},
+        {"/api/rename",   HTTP_POST,   handler_rename,      nullptr},
+        {"/api/upload",   HTTP_POST,   handler_upload,      nullptr},
+        {"/update",       HTTP_GET,    handler_update_get,  nullptr},
+        {"/update",       HTTP_POST,   handler_update_post, nullptr},
+    };
+    for (const auto& r : routes) {
+        httpd_register_uri_handler(s_server, &r);
+    }
+
+    Serial.println("Web Server started on port 80");
 }

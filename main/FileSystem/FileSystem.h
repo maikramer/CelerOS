@@ -63,15 +63,15 @@ public:
     
 private:
 #ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    static constexpr int SD_CS_PIN = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
-    static constexpr int SD_SCK    = 48;
-    static constexpr int SD_MISO   = 41;
-    static constexpr int SD_MOSI   = 47;
+    static constexpr int KRYON_SD_CS = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
+    static constexpr int KRYON_SD_SCK    = 48;
+    static constexpr int KRYON_SD_MISO   = 41;
+    static constexpr int KRYON_SD_MOSI   = 47;
 #else
-    static constexpr int SD_CS_PIN = 15;  // Cheap Yellow Display (HSPI dedicado)
-    static constexpr int SD_SCK    = 14;
-    static constexpr int SD_MISO   = 26;
-    static constexpr int SD_MOSI   = 13;
+    static constexpr int KRYON_SD_CS = 15;  // Cheap Yellow Display (HSPI dedicado)
+    static constexpr int KRYON_SD_SCK    = 14;
+    static constexpr int KRYON_SD_MISO   = 26;
+    static constexpr int KRYON_SD_MOSI   = 13;
 #endif
 };
 
