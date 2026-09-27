@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "Display/Display.h"
@@ -53,6 +54,23 @@ static void kryonSetup() {
     tft.init();
     tft.setRotation(0);
     UI::init(tft.width(), tft.height());
+    ESP_LOGI("kryon.lcd", "depth=%d rot=%d w=%d h=%d",
+             (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
+
+    // Cartao de teste de cores (~1.2s): R G B W Y C na metade de cima.
+    // Diagnostico visual da pipeline de cor do painel RGB.
+    {
+        int bw = tft.width() / 6;
+        uint32_t bars[6] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF, 0xFFFF00, 0x00FFFF};
+        for (int i = 0; i < 6; i++) {
+            tft.fillRect(i * bw, 0, bw, tft.height() / 2, bars[i]);
+        }
+        tft.setTextColor(0x000000, 0xFFFFFF);
+        tft.setTextDatum(TL_DATUM);
+        tft.drawString("COLOR TEST", 8, 8, 4);
+        delay(1200);
+    }
+
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
