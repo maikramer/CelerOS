@@ -307,7 +307,7 @@ function joinLog(log) { return log.join('\n'); }
     if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
     check('welcome', j.indexOf('CelerOS 1.2.0 terminal') >= 0);
     check('help lista comandos', j.indexOf('Comandos:') >= 0);
-    check('pwd mostra /local', j.indexOf('root@kos:/local$') >= 0);
+    check('pwd mostra /local', j.indexOf('root@celeros:/local$') >= 0);
     check('js 2+2 -> 4', j.split('\n').indexOf('4') >= 0);
     check('echo grava e cat le', j.indexOf('oi mundo') >= 0);
     check('ls lista apps', j.indexOf('apps') >= 0);

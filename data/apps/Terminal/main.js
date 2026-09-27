@@ -80,7 +80,7 @@ function tokenize(s) {
 }
 
 function promptStr() {
-    return "root@kos:" + cwd + "$ ";
+    return "root@celeros:" + cwd + "$ ";
 }
 
 // ------------------------------------------------------------- comandos ----
