@@ -90,6 +90,15 @@ bool WebManager::init() {
 
     importLegacyWifiTxt();
 
+    // Ja conectado (ex.: captive portal acabou de conectar): nao refaz
+    // connectToKnown, so garante o servidor se habilitado
+    if (nm().isConnected()) {
+        if (FileSystem::exists("/local/web_on.txt")) {
+            startWebServerIfNeeded();
+        }
+        return true;
+    }
+
     if (nm().getCredentialStore().getNetworkCount() == 0) {
         Serial.println("No saved networks (NVS store vazio).");
         return false;

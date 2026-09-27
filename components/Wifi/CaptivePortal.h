@@ -65,6 +65,19 @@ struct WiFiCredentials {
 };
 
 /**
+ * @enum PortalConnState
+ * @brief Estado da tentativa de conexao, reportado pelo hospedeiro (quem
+ * assina onCredentialsReceived e conecta de verdade). A pagina acompanha
+ * via GET /status.
+ */
+enum class PortalConnState {
+    Idle,           /**< Nenhuma tentativa em curso */
+    Connecting,     /**< Credenciais recebidas, conectando */
+    Connected,      /**< Conectado (ip preenchido) */
+    Failed          /**< Falha na tentativa */
+};
+
+/**
  * @class CaptivePortal
  * @brief Captive Portal for WiFi configuration.
  * 
@@ -164,6 +177,19 @@ public:
      */
     void setConfig(const CaptivePortalConfig& config) { _config = config; }
 
+    /**
+     * @brief O hospedeiro reporta o andamento da conexao iniciada por
+     * onCredentialsReceived; a pagina acompanha via GET /status.
+     * @param state Novo estado da tentativa.
+     * @param ip IP obtido (apenas para Connected).
+     */
+    void reportConnectionState(PortalConnState state, const std::string& ip = "");
+
+    /**
+     * @brief Estado atual da tentativa de conexao.
+     */
+    PortalConnState getConnectionState() const { return _connState; }
+
     // ========== Events ==========
 
     /**
@@ -259,6 +285,12 @@ private:
     void* _dnsSocket;       // Socket handle
     void* _dnsTask;         // TaskHandle_t
     volatile bool _dnsRunning;
+
+    // Estado da tentativa de conexao (escrito pelo hospedeiro via
+    // reportConnectionState, lido pelo handler de /status na task do httpd —
+    // race benigna de enum/ip curto)
+    volatile PortalConnState _connState;
+    std::string _connIp;
 
     static constexpr const char* TAG = "CaptivePortal";
 };

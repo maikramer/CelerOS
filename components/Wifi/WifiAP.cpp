@@ -96,8 +96,12 @@ bool WifiAP::start(const WifiAPConfig& config) {
     wifi_config.ap.beacon_interval = _config.beaconInterval;
     wifi_config.ap.pmf_cfg.required = false;
 
-    // Set mode to AP (or APSTA if station is needed)
-    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
+    // Set mode to AP — ou APSTA quando o STA ja esta ativo (captive portal
+    // aberto por um dispositivo conectado nao pode derrubar a estacao)
+    wifi_mode_t curMode = WIFI_MODE_NULL;
+    esp_wifi_get_mode(&curMode);
+    bool staActive = (curMode == WIFI_MODE_STA) || (curMode == WIFI_MODE_APSTA);
+    esp_err_t err = esp_wifi_set_mode(staActive ? WIFI_MODE_APSTA : WIFI_MODE_AP);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set WiFi mode: %s", esp_err_to_name(err));
         setState(WifiAPState::Error);
@@ -136,14 +140,23 @@ bool WifiAP::stop() {
     setState(WifiAPState::Stopping);
     ESP_LOGI(TAG, "Stopping AP...");
 
-    esp_err_t err = esp_wifi_stop();
+    // Em APSTA o STA continua de pe — so derruba o AP. So para o radio
+    // inteiro quando o AP era o unico modo ativo.
+    wifi_mode_t curMode = WIFI_MODE_NULL;
+    esp_wifi_get_mode(&curMode);
+    esp_err_t err;
+    if (curMode == WIFI_MODE_APSTA) {
+        err = esp_wifi_set_mode(WIFI_MODE_STA);
+    } else {
+        err = esp_wifi_stop();
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to stop WiFi: %s", esp_err_to_name(err));
     }
 
     setState(WifiAPState::Stopped);
     onStopped.trigger();
-    
+
     ESP_LOGI(TAG, "AP stopped");
     return true;
 }

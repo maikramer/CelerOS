@@ -179,37 +179,40 @@ static const char* HTML_TEMPLATE = R"rawhtml(
             e.preventDefault();
             const ssid = document.getElementById('ssid').value;
             const password = document.getElementById('password').value;
-            
+
             if (!ssid) {
                 showStatus('Por favor, selecione ou digite uma rede', 'error');
                 return false;
             }
-            
+
             document.getElementById('main-form').style.display = 'none';
             document.getElementById('loading').style.display = 'block';
-            
+
+            // O /connect apenas entrega as credenciais ao dispositivo; o
+            // resultado real chega pelo poll de /status (quem conecta e o app)
             fetch('/connect', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: `ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(password)}`
-            })
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('main-form').style.display = 'block';
-                
-                if (data.success) {
-                    showStatus(`Conectado! IP: ${data.ip}`, 'success');
-                } else {
-                    showStatus(data.message || 'Falha na conexão', 'error');
-                }
-            })
-            .catch(e => {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('main-form').style.display = 'block';
-                showStatus('Erro de comunicação', 'error');
-            });
-            
+            }).catch(() => {});
+
+            if (window._pollTimer) clearInterval(window._pollTimer);
+            window._pollTimer = setInterval(() => {
+                fetch('/status').then(r => r.json()).then(d => {
+                    if (d.state == 'connected') {
+                        clearInterval(window._pollTimer); window._pollTimer = null;
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('main-form').style.display = 'block';
+                        showStatus(`Conectado! IP: ${d.ip}`, 'success');
+                    } else if (d.state == 'failed') {
+                        clearInterval(window._pollTimer); window._pollTimer = null;
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('main-form').style.display = 'block';
+                        showStatus('Falha na conexão — confira a senha e tente de novo', 'error');
+                    }
+                }).catch(() => {});
+            }, 1000);
+
             return false;
         }
         
@@ -228,7 +231,8 @@ CaptivePortal::CaptivePortal() :
     _httpServer(nullptr),
     _dnsSocket(nullptr),
     _dnsTask(nullptr),
-    _dnsRunning(false) {
+    _dnsRunning(false),
+    _connState(PortalConnState::Idle) {
 }
 
 CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
@@ -237,7 +241,8 @@ CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
     _httpServer(nullptr),
     _dnsSocket(nullptr),
     _dnsTask(nullptr),
-    _dnsRunning(false) {
+    _dnsRunning(false),
+    _connState(PortalConnState::Idle) {
 }
 
 CaptivePortal::~CaptivePortal() {
@@ -375,6 +380,11 @@ int CaptivePortal::scanNetworks() {
 
     ESP_LOGI(TAG, "Found %zu networks", _scannedNetworks.size());
     return static_cast<int>(_scannedNetworks.size());
+}
+
+void CaptivePortal::reportConnectionState(PortalConnState state, const std::string& ip) {
+    _connState = state;
+    _connIp = (state == PortalConnState::Connected) ? ip : "";
 }
 
 bool CaptivePortal::startDnsServer() {
@@ -616,6 +626,7 @@ bool CaptivePortal::startHttpServer() {
             WiFiCredentials creds;
             creds.ssid = ssid;
             creds.password = password;
+            portal->_connState = PortalConnState::Connecting;  // /status
             portal->onCredentialsReceived.trigger(creds);
             portal->onConnecting.trigger(ssid);
 
@@ -629,6 +640,31 @@ bool CaptivePortal::startHttpServer() {
         .user_ctx = self
     };
     httpd_register_uri_handler(server, &connect_uri);
+
+    // Status handler — a pagina faz poll pos-/connect para ver o resultado
+    // da conexao (quem conecta e o hospedeiro, via onCredentialsReceived)
+    httpd_uri_t status_uri = {
+        .uri = "/status",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t* req) -> esp_err_t {
+            CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
+            const char* s = "idle";
+            switch (portal->_connState) {
+                case PortalConnState::Connecting: s = "connecting"; break;
+                case PortalConnState::Connected:  s = "connected"; break;
+                case PortalConnState::Failed:     s = "failed"; break;
+                default: break;
+            }
+            char buf[96];
+            snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"ip\":\"%s\"}",
+                     s, portal->_connIp.c_str());
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        },
+        .user_ctx = self
+    };
+    httpd_register_uri_handler(server, &status_uri);
 
     // Captive portal detection handlers
     const char* captive_uris[] = {
