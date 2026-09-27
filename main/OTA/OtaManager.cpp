@@ -1,8 +1,8 @@
 #include "OtaManager.h"
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <Update.h>
+#include <string>
+#include "esp_https_ota.h"
+#include "esp_crt_bundle.h"
+#include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 
@@ -60,34 +60,14 @@ bool OtaManager::checkForUpdates() {
     info = OtaUpdateInfo();
     std::string url = getUpdateJsonUrl();
 
-    HTTPClient http;
+    HttpClient http;
     http.setTimeout(20000);
-
-    // Clientes na pilha: precisam sobreviver enquanto "http" estiver em uso
-    WiFiClientSecure secureClient;
-
-    bool begun;
-    if (kstr::startsWith(url, "https:")) {
-        secureClient.setInsecure();
-        begun = http.begin(secureClient, url.c_str());
-    } else {
-        begun = http.begin(url.c_str());
-    }
-    if (!begun) {
+    HttpResponse resp = http.get(url);
+    if (!resp.isOk()) {
         info.fetchFailed = true;
         return false;
     }
-
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        info.fetchFailed = true;
-        http.end();
-        return false;
-    }
-
-    String raw = http.getString();
-    std::string payload(raw.c_str(), raw.length());
-    http.end();
+    std::string payload = resp.body;
 
     info.version = FileSystem::parseJsonValue(payload, "version");
     info.changelog = FileSystem::parseJsonValue(payload, "changelog");
@@ -123,83 +103,54 @@ bool OtaManager::checkForUpdates() {
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
 
-    HTTPClient http;
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    http.setTimeout(30000);
-
-    // Clientes na pilha: precisam sobreviver enquanto "http" estiver em uso
-    WiFiClientSecure secureClient;
-    WiFiClient plainClient;
-
-    bool begun;
+    esp_http_client_config_t httpCfg = {};
+    httpCfg.url = firmwareUrl.c_str();
+    httpCfg.timeout_ms = 30000;
+    httpCfg.keep_alive_enable = true;
     if (kstr::startsWith(firmwareUrl, "https:")) {
-        // Mesmo padrao do updater original: TLS sem validacao de certificado
-        secureClient.setInsecure();
-        begun = http.begin(secureClient, firmwareUrl.c_str());
-    } else {
-        begun = http.begin(plainClient, firmwareUrl.c_str());
+        httpCfg.crt_bundle_attach = esp_crt_bundle_attach;
+        // TLS do canal do OS usa bundle de CA embutido; o escape insecure do
+        // sdkconfig cobre os casos sem bundle.
     }
-    if (!begun) {
-        lastError = "HTTP init failed";
+
+    esp_https_ota_config_t otaCfg = {};
+    otaCfg.http_config = &httpCfg;
+
+    esp_https_ota_handle_t handle = nullptr;
+    esp_err_t err = esp_https_ota_begin(&otaCfg, &handle);
+    if (err != ESP_OK) {
+        lastError = std::string("OTA begin: ") + esp_err_to_name(err);
         return false;
     }
 
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        lastError = kstr::fmt("HTTP error %d", code);
-        http.end();
-        return false;
-    }
-
-    int totalLen = http.getSize();
-    if (totalLen <= 0) {
-        lastError = "Unknown firmware size";
-        http.end();
-        return false;
-    }
-
-    if (!Update.begin(totalLen)) {
-        lastError = std::string("Not enough space: ") + Update.errorString();
-        http.end();
-        return false;
-    }
-
-    WiFiClient *stream = http.getStreamPtr();
-    uint8_t buff[2048];
-    size_t written = 0;
     int lastPct = -1;
-
-    while (http.connected() && written < (size_t)totalLen) {
-        size_t avail = stream->available();
-        if (avail) {
-            size_t readLen = stream->readBytes(buff, (avail > sizeof(buff)) ? sizeof(buff) : avail);
-            if (readLen == 0) break;
-            if (Update.write(buff, readLen) != readLen) {
-                lastError = std::string("Flash write failed: ") + Update.errorString();
-                Update.abort();
-                http.end();
-                return false;
-            }
-            written += readLen;
-            int pct = (written * 100) / totalLen;
-            if (onProgress && pct != lastPct) {
+    while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+        int total = (int)esp_https_ota_get_image_size(handle);
+        int read = (int)esp_https_ota_get_image_len_read(handle);
+        if (total > 0 && onProgress) {
+            int pct = (read * 100) / total;
+            if (pct != lastPct) {
                 onProgress(pct);
                 lastPct = pct;
             }
-        } else {
-            delay(1);
         }
     }
-    http.end();
 
-    if (written != (size_t)totalLen) {
-        lastError = kstr::fmt("Download incomplete (%d/%d)", (int)written, totalLen);
-        Update.abort();
+    if (err != ESP_OK) {
+        lastError = std::string("OTA perform: ") + esp_err_to_name(err);
+        esp_https_ota_abort(handle);
+        return false;
+    }
+    if (!esp_https_ota_is_complete_data_received(handle)) {
+        lastError = "Download incomplete";
+        esp_https_ota_abort(handle);
         return false;
     }
 
-    if (!Update.end(true)) {
-        lastError = std::string("Image verify failed: ") + Update.errorString();
+    err = esp_https_ota_finish(handle);
+    if (err != ESP_OK) {
+        // ESP_ERR_OTA_VALIDATE_FAILED: imagem corrompida — slot permanece intacto
+        lastError = std::string("Image verify failed: ") + esp_err_to_name(err);
         return false;
     }
 

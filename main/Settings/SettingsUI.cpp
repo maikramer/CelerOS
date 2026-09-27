@@ -2,32 +2,17 @@
 #include "../Display/Layout.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
-#include <SD.h>
-#include <LittleFS.h>
 #include "../FileSystem/FileSystem.h"
 #include "../Kernel/TimeManager.h"
 #include "../Keyboard/MyKeyboard.h"
-#include <WiFi.h>
 #include "../WebManager/WebManager.h"
 #include "../Launcher/LauncherUI.h"
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include "../OTA/OtaManager.h"
 #include "../WebManager/CaptivePortal.h"
-#include <mbedtls/md5.h>
+#include "esp_rom_md5.h"
 #include "../Display/Backlight.h"
 #include "../Utils/StrUtils.h"
 
-// Compat mbedtls 2.x/3.x (mesmo padrao do FileSystem.cpp — macros locais)
-#if defined(MBEDTLS_VERSION_NUMBER) && MBEDTLS_VERSION_NUMBER >= 0x03000000
-#define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts_ret(c)
-#define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update_ret(c,b,l)
-#define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish_ret(c,h)
-#else
-#define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts(c)
-#define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update(c,b,l)
-#define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish(c,h)
-#endif
 
 KryonDisplay *SettingsUI::tftInstance = nullptr;
 bool showResetDialog = false;
@@ -301,12 +286,12 @@ void SettingsUI::drawAbout() {
     tftInstance->drawString("About Device", UI::sx(120), UI::sy(21), UI::font(2));
 
     // Get Storage Info
-    uint64_t fsTotal = LittleFS.totalBytes();
-    uint64_t fsUsed = LittleFS.usedBytes();
+    uint64_t fsTotal = FileSystem::getTotalSpace("/local");
+    uint64_t fsUsed = FileSystem::getUsedSpace("/local");
     uint64_t fsFree = fsTotal - fsUsed;
 
-    uint64_t sdTotal = SD.totalBytes();
-    uint64_t sdUsed = SD.usedBytes();
+    uint64_t sdTotal = FileSystem::getTotalSpace("/sd");
+    uint64_t sdUsed = FileSystem::getUsedSpace("/sd");
     uint64_t sdFree = sdTotal - sdUsed;
 
     tftInstance->setTextColor(TFT_CYAN, TFT_BLACK);
@@ -475,7 +460,7 @@ void SettingsUI::drawApps() {
         
         FileEntry entry = appEntries[listIndex];
         
-        uint16_t color = TFT_WHITE;
+        uint32_t color = TFT_WHITE;
         if (listIndex == appSelected) {
             tftInstance->fillRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(30), TFT_BLUE);
         } else {
@@ -939,11 +924,9 @@ void SettingsUI::scanAndConnectWiFi() {
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->drawString("Scanning for networks...", UI::sx(120), UI::sy(160), UI::font(2));
 
-    // Initialize WiFi in Station Mode and scan
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
-    int n = WiFi.scanNetworks();
+    // Scan via WebManager (bloqueante ~2s, dedup por SSID, ordem por RSSI)
+    KryonScanEntry nets[20];
+    int n = WebManager::scanNetworks(nets, 20);
 
     if (n == 0) {
         tftInstance->fillScreen(TFT_BLACK);
@@ -979,14 +962,14 @@ void SettingsUI::scanAndConnectWiFi() {
             // Draw button
             tftInstance->fillRoundRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(40), UI::sx(5), TFT_DARKGREY);
             
-            std::string ssid = WiFi.SSID(i).c_str();
+            std::string ssid = nets[i].ssid;
             if (ssid.length() > 18) ssid = ssid.substr(0, 15) + "..."; // Truncate long SSIDs
 
             tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
             tftInstance->drawString(ssid.c_str(), UI::sx(20), UI::sy(yPos + 10), UI::font(2));
 
             // Draw lock icon or open text
-            if (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
+            if (!nets[i].secure) {
                 tftInstance->setTextColor(TFT_GREEN, TFT_DARKGREY);
                 tftInstance->drawString("OPEN", UI::sx(180), UI::sy(yPos + 10), UI::font(2));
             } else {
@@ -1048,13 +1031,13 @@ void SettingsUI::scanAndConnectWiFi() {
         }
 
         if (tappedIndex != -1) {
-            std::string selectedSSID = WiFi.SSID(tappedIndex).c_str();
+            std::string selectedSSID = nets[tappedIndex].ssid;
             selectedSSID = kstr::trim(selectedSSID);
             std::string password = "";
             bool connected = false;
 
             while (!connected) {
-                if (WiFi.encryptionType(tappedIndex) != WIFI_AUTH_OPEN) {
+                if (nets[tappedIndex].secure) {
                     // Ask for password
                     std::string promptMsg = "Password for " + selectedSSID;
                     password = MyKeyboard::getString("", promptMsg, 64);
@@ -1070,26 +1053,13 @@ void SettingsUI::scanAndConnectWiFi() {
                 tftInstance->setTextDatum(MC_DATUM);
                 tftInstance->drawString("Testing Connection...", UI::sx(120), UI::sy(160), UI::font(2));
 
-                WiFi.disconnect(); // Reset state
-                delay(100);
-                WiFi.mode(WIFI_STA);
-                
-                if (password.length() > 0) {
-                    WiFi.begin(selectedSSID.c_str(), password.c_str());
-                } else {
-                    WiFi.begin(selectedSSID.c_str());
-                }
-                
-                int attempts = 0;
-                while (WiFi.status() != WL_CONNECTED && attempts < 30) { // Wait up to 15 seconds
-                    delay(500);
-                    attempts++;
-                }
-
-                if (WiFi.status() == WL_CONNECTED) {
+                // Conecta bloqueando ate 15s e grava /wifi.txt (SD ou
+                // LittleFS) somente se conectar — mesma sequencia do fluxo
+                // antigo de testar antes de salvar
+                if (WebManager::connect(selectedSSID, password)) {
                     connected = true;
                 } else {
-                    if (WiFi.encryptionType(tappedIndex) == WIFI_AUTH_OPEN) {
+                    if (!nets[tappedIndex].secure) {
                         tftInstance->fillScreen(TFT_BLACK);
                         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
                         tftInstance->drawString("Failed to Connect!", UI::sx(120), UI::sy(160), UI::font(2));
@@ -1110,12 +1080,7 @@ void SettingsUI::scanAndConnectWiFi() {
                 continue; // Go back to scanning list
             }
 
-            // Save and Reboot
-            if (FileSystem::exists("/sd/")) {
-                FileSystem::writeTextFile("/sd/wifi.txt", (selectedSSID + "\n" + password).c_str());
-            } else {
-                FileSystem::writeTextFile("/local/wifi.txt", (selectedSSID + "\n" + password).c_str());
-            }
+            // Credenciais ja gravadas em /wifi.txt pelo WebManager::connect()
 
             tftInstance->fillScreen(TFT_BLACK);
             tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
@@ -1156,7 +1121,7 @@ void SettingsUI::drawUpdater(bool isBootCheck) {
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!WebManager::isWifiConnected()) {
         tftInstance->setTextColor(TFT_RED, TFT_BLACK);
         tftInstance->setTextDatum(MC_DATUM);
         tftInstance->drawString("No WiFi Connection!", UI::sx(120), UI::sy(140), UI::font(2));
@@ -1376,13 +1341,12 @@ static const char* SETTINGS_PIN_FILE = "/local/settings_pin.txt";
 unsigned long SettingsUI::unlockedUntilMs = 0;
 
 std::string SettingsUI::md5String(const std::string& input) {
-    mbedtls_md5_context ctx;
-    mbedtls_md5_init(&ctx);
-    KRYONOS_MD5_STARTS(&ctx);
-    KRYONOS_MD5_UPDATE(&ctx, (const uint8_t*)input.c_str(), input.length());
+    // MD5 via ROM da Espressif (mesmo digest; mbedtls 3.x privatizou md5.h)
+    md5_context_t ctx;
+    esp_rom_md5_init(&ctx);
+    esp_rom_md5_update(&ctx, input.c_str(), (uint32_t)input.length());
     uint8_t hash[16];
-    KRYONOS_MD5_FINISH(&ctx, hash);
-    mbedtls_md5_free(&ctx);
+    esp_rom_md5_final(hash, &ctx);
 
     char out[33];
     for (int i = 0; i < 16; i++) sprintf(out + i * 2, "%02x", hash[i]);

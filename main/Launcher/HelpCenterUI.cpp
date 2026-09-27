@@ -2,9 +2,9 @@
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <LittleFS.h>
+#include <algorithm>
+#include "../WebManager/WebManager.h"
+#include "HttpClient.h"
 
 KryonDisplay* HelpCenterUI::tftInstance = nullptr;
 
@@ -169,7 +169,7 @@ void HelpCenterUI::drawList(const std::string& title) {
     
     // Scrollbar
     if (listCount > itemsPerPage) {
-        int thumbH = max(20, (230 * itemsPerPage) / listCount);
+        int thumbH = std::max(20, (230 * itemsPerPage) / listCount);
         int thumbY = 45 + (scrollOffset * (230 - thumbH)) / (listCount - itemsPerPage);
         tftInstance->fillRect(UI::sx(232), UI::sy(45), UI::sx(3), UI::sy(230), TFT_DARKGREY);
         tftInstance->fillRect(UI::sx(232), UI::sy(thumbY), UI::sx(3), UI::sy(thumbH), TFT_WHITE);
@@ -308,13 +308,10 @@ void HelpCenterUI::loadOfflineContent(int catIdx, int topicIdx) {
 }
 
 bool HelpCenterUI::downloadFile(const std::string& url, const std::string& destPath, const std::string& loadingMsg) {
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!WebManager::isWifiConnected()) {
         dialogMessage = "Please turn on WiFi first!";
         return false;
     }
-
-    HTTPClient http;
-    http.begin(url.c_str());
 
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
@@ -322,62 +319,37 @@ bool HelpCenterUI::downloadFile(const std::string& url, const std::string& destP
     tftInstance->drawString(loadingMsg.c_str(), UI::sx(120), UI::sy(140), UI::font(2));
     tftInstance->drawRect(UI::sx(30), UI::sy(160), UI::sx(180), UI::sy(20), TFT_WHITE);
 
-    int httpCode = http.GET();
-    if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
-        int totalLen = http.getSize();
-        int downloaded = 0;
+    HttpClient http;
+    http.setTimeout(10000);
+    http.setProgressCallback([](int64_t downloaded, int64_t totalLen) {
+        if (totalLen > 0) {
+            int progressWidth = map((long)downloaded, 0, (long)totalLen, 0, 176);
+            tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
+        }
+    });
 
-        File file = LittleFS.open(destPath.c_str(), "w");
-        if (!file) {
-            dialogMessage = "FS Write Failed!";
-            http.end();
-            return false;
-        }
-        
-        WiFiClient *stream = http.getStreamPtr();
-        uint8_t buff[512] = { 0 };
-        while ((http.connected() || stream->available() > 0) && (totalLen == -1 || downloaded < totalLen)) {
-            size_t size = stream->available();
-            if (size) {
-                int toRead = size > sizeof(buff) ? sizeof(buff) : size;
-                int readLen = stream->readBytes(buff, toRead);
-                if (readLen > 0) {
-                    file.write(buff, readLen);
-                    downloaded += readLen;
-                    
-                    if (totalLen > 0) {
-                        int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
-                    }
-                }
-            } else {
-                delay(1);
-            }
-        }
-        file.close();
-        http.end();
+    HttpResponse resp = http.downloadToFile(url, destPath);
+    if (resp.isOk()) {
         return true;
     }
-    dialogMessage = "Error HTTP " + std::to_string(httpCode);
-    http.end();
+    dialogMessage = "Error HTTP " + std::to_string(resp.statusCode);
     return false;
 }
 
 bool HelpCenterUI::fetchOnlineCategories() {
-    std::string tmpPath = "/tmp_download/h_idx.json";
+    std::string tmpPath = "/local/tmp_download/h_idx.json";
     if (!FileSystem::exists("/local/tmp_download/")) FileSystem::mkdir("/local/tmp_download/");
 
     if (!downloadFile("https://raw.githubusercontent.com/Haris16-code/KryonOS/refs/heads/main/help/index.json", tmpPath, "Fetching Index...")) {
         return false;
     }
 
-    File file = LittleFS.open(tmpPath.c_str(), "r");
-    if (!file) { dialogMessage = "Failed to open index"; return false; }
+    std::string body = FileSystem::readTextFile(tmpPath.c_str());
+    if (body.empty()) { dialogMessage = "Failed to open index"; return false; }
 
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, file);
-    file.close();
-    LittleFS.remove(tmpPath.c_str());
+    DeserializationError err = deserializeJson(doc, body);
+    FileSystem::deleteFile(tmpPath.c_str());
 
     if (err && err != DeserializationError::IncompleteInput) { dialogMessage = "Parse error!"; return false; }
 
@@ -402,16 +374,15 @@ bool HelpCenterUI::fetchOnlineCategories() {
 }
 
 bool HelpCenterUI::fetchOnlineTopics(const std::string& url) {
-    std::string tmpPath = "/tmp_download/h_cat.json";
+    std::string tmpPath = "/local/tmp_download/h_cat.json";
     if (!downloadFile(url, tmpPath, "Loading Topics...")) return false;
 
-    File file = LittleFS.open(tmpPath.c_str(), "r");
-    if (!file) { dialogMessage = "Failed to open cat"; return false; }
+    std::string body = FileSystem::readTextFile(tmpPath.c_str());
+    if (body.empty()) { dialogMessage = "Failed to open cat"; return false; }
 
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, file);
-    file.close();
-    LittleFS.remove(tmpPath.c_str());
+    DeserializationError err = deserializeJson(doc, body);
+    FileSystem::deleteFile(tmpPath.c_str());
 
     if (err && err != DeserializationError::IncompleteInput) { dialogMessage = "Parse error!"; return false; }
 
@@ -436,17 +407,16 @@ bool HelpCenterUI::fetchOnlineTopics(const std::string& url) {
 }
 
 bool HelpCenterUI::fetchOnlineContent(const std::string& url, const std::string& title) {
-    std::string tmpPath = "/tmp_download/h_art.json";
+    std::string tmpPath = "/local/tmp_download/h_art.json";
     if (!downloadFile(url, tmpPath, "Loading Article...")) return false;
 
-    File file = LittleFS.open(tmpPath.c_str(), "r");
-    if (!file) { dialogMessage = "Failed to open art"; return false; }
+    std::string body = FileSystem::readTextFile(tmpPath.c_str());
+    if (body.empty()) { dialogMessage = "Failed to open art"; return false; }
 
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, file);
-    file.close();
-    LittleFS.remove(tmpPath.c_str());
-    
+    DeserializationError err = deserializeJson(doc, body);
+    FileSystem::deleteFile(tmpPath.c_str());
+
     if (err && err != DeserializationError::IncompleteInput) { dialogMessage = "Parse error!"; return false; }
     
     currentViewerTitle = title;

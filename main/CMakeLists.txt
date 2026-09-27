@@ -6,13 +6,25 @@
 
 idf_component_register(
     SRCS
-        "spike_main.cpp"
+        "main.cpp"
         "Compat/KryonCompat.cpp"
         "FileSystem/FileSystem.cpp"
         "Display/Backlight.cpp"
         "Display/Icon.cpp"
         "WebManager/WebManager.cpp"
         "WebManager/CaptivePortal.cpp"
+        "OTA/OtaManager.cpp"
+        "Kernel/Core/HarixKernel.cpp"
+        "Kernel/TimeManager.cpp"
+        "Keyboard/MyKeyboard.cpp"
+        "Launcher/LauncherUI.cpp"
+        "Launcher/InstallerUI.cpp"
+        "Launcher/AppStoreUI.cpp"
+        "Launcher/HelpCenterUI.cpp"
+        "Runtime/JSBindings.cpp"
+        "Settings/SettingsUI.cpp"
+        "Settings/TouchCalibrator.cpp"
+        "WebServerApp/WebServerAppUI.cpp"
     INCLUDE_DIRS
         "."
         "Compat"
@@ -37,6 +49,7 @@ idf_component_register(
         bblanchon__arduinojson
         lwip
         esp_netif
+        duktape
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
