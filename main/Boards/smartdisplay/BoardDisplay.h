@@ -1,5 +1,5 @@
-#ifndef KRYON_BOARDS_SMARTDISPLAY_DISPLAY_H
-#define KRYON_BOARDS_SMARTDISPLAY_DISPLAY_H
+#ifndef CELER_BOARDS_SMARTDISPLAY_DISPLAY_H
+#define CELER_BOARDS_SMARTDISPLAY_DISPLAY_H
 
 // ----------------------------------------------------------------------------
 // Guition ESP32-S3-4848S040 "SmartDisplay ESP32-S3 4.0 inch"
@@ -20,7 +20,7 @@
 // O init do fabricante (embutido na lib) seleciona RGB666 (0x3A=0x60), mas o
 // framebuffer do LCD_CAM e 16-bit (RGB565) — com 0x60 as cores saem corrompidas.
 // Este painel reaproveita o init do fabricante e corrige o formato de cor.
-class KryonPanel : public lgfx::Panel_ST7701_guition_esp32_4848S040 {
+class CelerPanel : public lgfx::Panel_ST7701_guition_esp32_4848S040 {
 public:
     bool init(bool use_reset) override {
         if (!lgfx::Panel_ST7701_guition_esp32_4848S040::init(use_reset)) return false;
@@ -30,10 +30,10 @@ public:
     }
 };
 
-class BoardDisplay : public KryonDisplayBase {
+class BoardDisplay : public CelerDisplayBase {
 public:
     lgfx::Bus_RGB     _bus;
-    KryonPanel        _panel;
+    CelerPanel        _panel;
     lgfx::Light_PWM   _light;
     lgfx::Touch_GT911_IDF _touch;
 
@@ -127,4 +127,4 @@ public:
     // Touch capacitivo: calibracao do XPT2046 nao se aplica (base = no-op)
 };
 
-#endif  // KRYON_BOARDS_SMARTDISPLAY_DISPLAY_H
+#endif  // CELER_BOARDS_SMARTDISPLAY_DISPLAY_H

@@ -7,7 +7,7 @@
 
 class LauncherUI {
 public:
-    static void init(KryonDisplay *tft);
+    static void init(CelerDisplay *tft);
     static void requestRescan();
     static void scanLocalApps();
     static bool needsRescan;
@@ -28,8 +28,8 @@ public:
     static int gridTotalPages();
 
 private:
-    static KryonDisplay *tftInstance;
-    static void runApp(KryonDisplay *tft, const std::string& path, bool isFolder);
+    static CelerDisplay *tftInstance;
+    static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder);
 
     static std::string appPaths[50];   // Path to app folder or .js file
     static std::string appNames[50];   // Display name (from app.json or filename)

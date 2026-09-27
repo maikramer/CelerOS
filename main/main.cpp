@@ -12,12 +12,13 @@
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
 #include "Runtime/JSBindings.h"
-#include "Kernel/Core/HarixKernel.h"
+#include "Assets/SplashLogo.h"
+#include "Kernel/Core/CelerKernel.h"
 #include "Kernel/TimeManager.h"
 #include "Launcher/Screens.h"
 #include "USBDevice/SerialLink.h"
 #include "Boards/Board.h"
-#if CONFIG_KRYONOS_USB_NATIVE
+#if CONFIG_CELEROS_USB_NATIVE
 #include "USBDevice/USBDevice.h"
 #endif
 
@@ -28,24 +29,27 @@
 #define STATE_LAUNCHER 0
 
 int currentState = STATE_LAUNCHER;
-KryonDisplay& tft = Board::display();
+CelerDisplay& tft = Board::display();
 static LauncherScreen s_launcher;  // base da pilha do Navigator
 
-// Splash de boot no tema: logo + status + trilho da barra de progresso (a
-// barra e preenchida pelo scan de apps em (sx(20), sy(200), sx(200), sy(10))).
+// Splash de boot no tema: logo embutida (gerada por tools/make_splash.py) +
+// status + trilho da barra de progresso (a barra e preenchida pelo scan de
+// apps em (sx(20), sy(200), sx(200), sy(10))). O blit usa zoom do design
+// (ex.: 2x no 480x480), entao o asset fica so na resolucao 240.
 static void bootSplash(const char* status) {
     tft.fillScreen(THEME_BG);
+    const float zoom = (float)UI::W / 240.0f;
+    tft.pushImageRotateZoom(UI::cx(), UI::sy(115), SPLASH_LOGO_W / 2.0f, SPLASH_LOGO_H / 2.0f,
+                            0.0f, zoom, zoom, SPLASH_LOGO_W, SPLASH_LOGO_H, kSplashLogo);
     tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(THEME_TEXT);
-    tft.drawString("KryonOS", UI::cx(), UI::sy(140), UI::big ? &fonts::FreeSansBold24pt7b : &fonts::FreeSansBold18pt7b);
     tft.setTextColor(THEME_TEXT_DIM);
     tft.drawString(status, UI::cx(), UI::sy(175), UI::font(1));
     tft.fillRoundRect(UI::sx(20), UI::sy(200), UI::sx(200), UI::sy(10), UI::sy(5), THEME_CARD);
 }
 
-static void kryonSetup() {
+static void celerSetup() {
     Serial.begin(115200);
-    Serial.println("\n--- KryonOS Booting ---");
+    Serial.println("\n--- CelerOS Booting ---");
     Serial.printf("board: %s\n", Board::profile().name);
     if (Board::profile().hasPsram) {
         Serial.printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
@@ -55,7 +59,7 @@ static void kryonSetup() {
     Board::init();
     tft.setRotation(0);
     UI::init(tft.width(), tft.height());
-    ESP_LOGI("kryon.lcd", "depth=%d rot=%d w=%d h=%d",
+    ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
 
     bootSplash("Iniciando...");
@@ -68,9 +72,9 @@ static void kryonSetup() {
         delay(1000);
     }
 
-    // Console/shell + canal kryonctl na UART do console (CH340 no PC)
+    // Console/shell + canal celerctl na UART do console (CH340 no PC)
     SerialLink::init();
-#if CONFIG_KRYONOS_USB_NATIVE
+#if CONFIG_CELEROS_USB_NATIVE
     // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
     USBDevice::init();
 #endif
@@ -89,9 +93,9 @@ static void kryonSetup() {
     Serial.printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
-    Serial.println("DEBUG: Starting HarixKernel...");
-    HarixKernel::init(&tft);
-    Serial.println("HarixKernel initialized successfully.");
+    Serial.println("DEBUG: Starting CelerKernel...");
+    CelerKernel::init(&tft);
+    Serial.println("CelerKernel initialized successfully.");
     Serial.printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Init UI Components
@@ -124,20 +128,21 @@ static void kryonSetup() {
     Serial.println("DEBUG: Setup complete, entering loop!");
 }
 
-static void kryonLoop() {
+static void celerLoop() {
     // UI (input + redraw)
     kui::Navigator::tick();
 
     // Reboot diferido do upload web de firmware (/update)
     WebManager::tick();
+    TimeManager::tick(WebManager::isActive());
 
     delay(5);
 }
 
 // Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)
 extern "C" void app_main(void) {
-    kryonSetup();
+    celerSetup();
     while (true) {
-        kryonLoop();
+        celerLoop();
     }
 }

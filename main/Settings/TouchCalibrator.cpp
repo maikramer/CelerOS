@@ -3,9 +3,9 @@
 
 extern int currentState;
 
-KryonDisplay *TouchCalibrator::tftInstance = nullptr;
+CelerDisplay *TouchCalibrator::tftInstance = nullptr;
 
-void TouchCalibrator::init(KryonDisplay *tft) {
+void TouchCalibrator::init(CelerDisplay *tft) {
     tftInstance = tft;
 }
 

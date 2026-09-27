@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Servidor OTA de desenvolvimento para o KryonOS.
+"""Servidor OTA de desenvolvimento para o CelerOS.
 
 Serve o firmware.bin de uma build local + um update.json dinamico para a
 placa testar o fluxo de OTA over-the-air na LAN, sem precisar pushar nada
@@ -10,7 +10,7 @@ Uso tipico:
     pio run -e smartdisplay_4848S040
     python3 tools/ota_server.py --env smartdisplay_4848S040
 
-A versao publicada e lida do platformio.ini (KRYONOS_VERSION); para testar
+A versao publicada e lida do platformio.ini (CELEROS_VERSION); para testar
 a atualizacao, suba a versao la, rebuild e reinicie o servidor. No
 dispositivo, grave em /local/ota_url.txt a URL impressa no inicio:
 
@@ -44,10 +44,10 @@ def lan_ip() -> str:
 def read_version(repo_root: str, override: str | None) -> str:
     if override:
         return override
-    # project(KryonOS VERSION x.y.z) no CMakeLists.txt raiz
+    # project(CelerOS VERSION x.y.z) no CMakeLists.txt raiz
     with open(os.path.join(repo_root, "CMakeLists.txt")) as f:
         for line in f:
-            m = re.search(r"project\(\s*KryonOS\s+VERSION\s+(\S+)", line)
+            m = re.search(r"project\(\s*CelerOS\s+VERSION\s+(\S+)", line)
             if m:
                 return m.group(1).strip(")")
     return "0.0.0"
@@ -104,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--board", default="smartdisplay", help="board do ESP-IDF: smartdisplay|cyd (para achar o kryonos.bin)")
+    ap.add_argument("--board", default="smartdisplay", help="board do ESP-IDF: smartdisplay|cyd (para achar o CelerOS.bin)")
     ap.add_argument("--bin", help="caminho direto do firmware.bin (sobrepoe --env)")
     ap.add_argument("--port", type=int, default=10234)
     ap.add_argument("--version", help="versao a publicar (default: project(VERSION) do CMakeLists.txt)")
@@ -112,7 +112,7 @@ def main():
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     build_dir = "build-cyd" if args.board == "cyd" else "build"
-    bin_path = args.bin or os.path.join(repo_root, build_dir, "kryonos.bin")
+    bin_path = args.bin or os.path.join(repo_root, build_dir, "CelerOS.bin")
     if not os.path.isfile(bin_path):
         raise SystemExit(f"firmware nao encontrado: {bin_path} (rode pio run antes)")
 

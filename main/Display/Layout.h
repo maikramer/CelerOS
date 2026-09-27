@@ -1,10 +1,10 @@
-#ifndef KRYONOS_LAYOUT_H
-#define KRYONOS_LAYOUT_H
+#ifndef CELEROS_LAYOUT_H
+#define CELEROS_LAYOUT_H
 
 #include "Boards/Board.h"
 
 // ============================================================================
-// Layout adaptativo do KryonOS.
+// Layout adaptativo do CelerOS.
 //
 // O design de origem e 240x320 (retrato). Todas as telas derivam suas
 // coordenadas daqui para se adaptar a resolucao real do display:
@@ -80,4 +80,4 @@ inline bool hitExit(int x, int y) { return x >= exitX() && y <= sy(40); }
 
 }  // namespace UI
 
-#endif  // KRYONOS_LAYOUT_H
+#endif  // CELEROS_LAYOUT_H

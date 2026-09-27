@@ -1,14 +1,14 @@
-#ifndef KRYON_BOARDS_BOARD_H
-#define KRYON_BOARDS_BOARD_H
+#ifndef CELER_BOARDS_BOARD_H
+#define CELER_BOARDS_BOARD_H
 
 #include <stdint.h>
 #include "../Display/Display.h"
 #include "BoardDisplay.h"  // resolve para main/Boards/<placa>/ (include path do CMake)
 
 // ============================================================================
-// HAL de placas do KryonOS.
+// HAL de placas do CelerOS.
 //
-// O build seleciona exatamente uma placa (-DKRYONOS_BOARD=<smartdisplay|cyd>);
+// O build seleciona exatamente uma placa (-DCELEROS_BOARD=<smartdisplay|cyd>);
 // o CMake compila Boards/<placa>/Board.cpp e coloca o diretorio no include
 // path. Nenhum outro arquivo do firmware pode conter #ifdef de placa —
 // caracteristicas diferentes vivem no BoardProfile abaixo.
@@ -30,7 +30,7 @@ struct BoardProfile {
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).
-using KryonDisplay = BoardDisplay;
+using CelerDisplay = BoardDisplay;
 
 namespace Board {
 
@@ -38,10 +38,10 @@ namespace Board {
 void init();
 
 // Display global (valido apos init(); a instancia vive no Board.cpp da placa)
-KryonDisplay& display();
+CelerDisplay& display();
 
 const BoardProfile& profile();
 
 }  // namespace Board
 
-#endif  // KRYON_BOARDS_BOARD_H
+#endif  // CELER_BOARDS_BOARD_H

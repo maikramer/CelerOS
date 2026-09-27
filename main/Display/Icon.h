@@ -1,11 +1,11 @@
-#ifndef KRYONOS_ICON_H
-#define KRYONOS_ICON_H
+#ifndef CELEROS_ICON_H
+#define CELEROS_ICON_H
 
 #include "Boards/Board.h"
 #include <cstdio>
 
 // ============================================================================
-// Pacote de icones 64x64 do KryonOS.
+// Pacote de icones 64x64 do CelerOS.
 //
 // Os assets ficam em /local/icons/ na LittleFS (gerados por tools/make_icons.py
 // a partir de artes do text2d/FLUX.2). Icon::draw() carrega cada icone sob
@@ -74,4 +74,4 @@ private:
     static void drawFallback(lgfx::LGFXBase* tft, int x, int y);
 };
 
-#endif  // KRYONOS_ICON_H
+#endif  // CELEROS_ICON_H

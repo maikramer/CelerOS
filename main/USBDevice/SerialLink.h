@@ -1,16 +1,16 @@
-#ifndef KRYON_SERIAL_LINK_H
-#define KRYON_SERIAL_LINK_H
+#ifndef CELER_SERIAL_LINK_H
+#define CELER_SERIAL_LINK_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-// Transporte do KryonLink sobre a UART do console (UART0, o mesmo canal que
+// Transporte do CelerLink sobre a UART do console (UART0, o mesmo canal que
 // o CH340 expoe como USB no PC). Multiplexa dois modos no mesmo canal:
 //
 //   CONSOLE - shell interativo humano (minicom/idf.py monitor): eco, prompt
-//             "kryon> ", logs ESP_LOG/Serial visiveis
-//   LINK    - frames binarios KryonLink (kryonctl). Entrada no modo acontece
-//             ao receber um frame HELLO (0x4B 0x01 ...) - digitacao humana
+//             "celer> ", logs ESP_LOG/Serial visiveis
+//   LINK    - frames binarios CelerLink (celerctl). Entrada no modo acontece
+//             ao receber um frame HELLO (0x43 0x01 ...) - digitacao humana
 //             nao consegue produzir essa sequencia. Logs sao suprimidos
 //             enquanto o link esta ativo para nao intercalar nos frames.
 //
@@ -19,11 +19,11 @@ class SerialLink {
 public:
     static bool init();
 
-    // Writer/baud-hook instalados no KryonLink
+    // Writer/baud-hook instalados no CelerLink
     static bool writeFrame(const uint8_t* data, size_t len);
     static void setBaud(uint32_t baud);
 
     static bool linkActive();
 };
 
-#endif // KRYON_SERIAL_LINK_H
+#endif // CELER_SERIAL_LINK_H

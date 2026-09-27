@@ -1,8 +1,8 @@
-#ifndef KRYONOS_KUI_H
-#define KRYONOS_KUI_H
+#ifndef CELEROS_KUI_H
+#define CELEROS_KUI_H
 
 // ============================================================================
-// Kui — mini-framework de UI do KryonOS (W7).
+// Kui — mini-framework de UI do CelerOS (W7).
 //
 // Principios:
 //   1. UM dispatcher de input: o Navigator faz o unico poll de touch e
@@ -86,7 +86,7 @@ bool isPressed(const Rect& r);
 
 // ------------------------------------------------------------- Tipografia ----
 // Papeis tipograficos (escolhem a fonte certa para a densidade da tela).
-// Os numeros de fonte legados (1/2/4) seguem valendo via KryonFont().
+// Os numeros de fonte legados (1/2/4) seguem valendo via CelerFont().
 namespace type {
 const lgfx::IFont* caption();   // legendas, rotulos de icone
 const lgfx::IFont* body();      // texto corrido, itens de lista, botoes
@@ -101,7 +101,12 @@ class Canvas {
 public:
     enum Mode { Direct, FullFrame, Bands };
 
-    explicit Canvas(KryonDisplay& dev);
+    explicit Canvas(CelerDisplay& dev);
+
+    // Desenho direto num alvo arbitrario (Direct fixo, sem render()): usado
+    // pela ponte JS para compor widgets (teclado acoplado) no MESMO alvo do
+    // app — gfx(): quadro PSRAM, sprite do app ou display.
+    Canvas(CelerDisplay& dev, lgfx::LGFXBase* directTarget);
 
     // Compoe um frame: chama fn uma vez (FullFrame/Direct) ou uma vez por
     // faixa (Bands) e apresenta o resultado. direct=true desenha direto no
@@ -151,7 +156,7 @@ public:
     int height() const;
 
 private:
-    KryonDisplay& m_dev;
+    CelerDisplay& m_dev;
     lgfx::LGFXBase* m_target;
     int m_offY = 0;        // topo da faixa corrente (Bands)
     Mode m_mode = Direct;
@@ -278,6 +283,10 @@ public:
     uint32_t color = THEME_ACCENT;
 };
 
+// Leitura unica do touch (fisico ou injetado pelo celerctl). Todo consumidor
+// (TouchPump, apps JS) passa por aqui. Sem toque, x/y nao sao escritos.
+bool readTouch(uint16_t* x, uint16_t* y);
+
 // ------------------------------------------------------------- TouchPump ----
 // Classificador de touch: converte o estado bruto do display em eventos
 // Press/Drag/Release (com tap/swipe derivados no TouchEvent). O Navigator
@@ -297,10 +306,10 @@ private:
 };
 
 // ------------------------------------------------------------ TouchInjector ----
-// Fila de amostras de touch sinteticas (kryonctl tap/swipe). Os TouchPump
+// Fila de amostras de touch sinteticas (celerctl tap/swipe). Os TouchPump
 // consomem a fila durante o poll; enquanto houver amostras pendentes (ou
 // espera de timing), o touch fisico e ignorado — o gesto injetado e dono do
-// pump. Preenchida pela task do KryonLink, drenada pelo loop da UI.
+// pump. Preenchida pela task do CelerLink, drenada pelo loop da UI.
 class TouchInjector {
 public:
     struct Sample {
@@ -320,7 +329,7 @@ private:
 // -------------------------------------------------------------- Navigator ----
 class Navigator {
 public:
-    static void begin(KryonDisplay& dev);
+    static void begin(CelerDisplay& dev);
 
     // Pilha
     static void push(Screen* s);       // entra por cima (desenha s)
@@ -338,7 +347,7 @@ public:
     // Toasts (um por vez, fila)
     static void toast(const std::string& message, uint32_t color = THEME_ACCENT, uint32_t durationMs = 2500);
 
-    // Loop: poll de touch + tick + redraw. Chamar do kryonLoop.
+    // Loop: poll de touch + tick + redraw. Chamar do celerLoop.
     static void tick();
 
     // Redesenho forcado da tela do topo
@@ -352,4 +361,4 @@ private:
 
 }  // namespace kui
 
-#endif  // KRYONOS_KUI_H
+#endif  // CELEROS_KUI_H

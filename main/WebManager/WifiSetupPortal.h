@@ -1,9 +1,9 @@
-#ifndef KRYONOS_WIFI_SETUP_PORTAL_H
-#define KRYONOS_WIFI_SETUP_PORTAL_H
+#ifndef CELEROS_WIFI_SETUP_PORTAL_H
+#define CELEROS_WIFI_SETUP_PORTAL_H
 
 #include <string>
 
-// Captive portal do KryonOS sobre o componente Wifi/CaptivePortal.
+// Captive portal do CelerOS sobre o componente Wifi/CaptivePortal.
 // Ciclo nao-bloqueante (a tela Kui dirige do loop principal):
 //   begin()  -> sobe o AP + portal (nao bloqueia)
 //   poll()   -> processa credenciais entregues pela pagina; quando ha
@@ -20,4 +20,4 @@ public:
     static const char* apSsid();
 };
 
-#endif  // KRYONOS_WIFI_SETUP_PORTAL_H
+#endif  // CELEROS_WIFI_SETUP_PORTAL_H

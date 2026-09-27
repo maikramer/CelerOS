@@ -4,7 +4,7 @@
 #include "../Utils/StrUtils.h"
 #include "../Boards/Board.h"
 
-static KryonDisplay* blTft = nullptr;
+static CelerDisplay* blTft = nullptr;
 static const char* BRIGHTNESS_FILE = "/local/brightness.txt";
 
 static int currentLevel = 100;
@@ -25,7 +25,7 @@ void Backlight::set(int level, bool persist) {
     }
 }
 
-void Backlight::init(KryonDisplay* tft) {
+void Backlight::init(CelerDisplay* tft) {
     blTft = tft;
     std::string s = kstr::trim(FileSystem::readTextFile(BRIGHTNESS_FILE));
     int lvl = (int)kstr::toInt(s);

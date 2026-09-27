@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <time.h>
 
-// Camada de arquivos do KryonOS sobre VFS do ESP-IDF:
+// Camada de arquivos do CelerOS sobre VFS do ESP-IDF:
 //   /local/...  -> particao LittleFS ("littlefs") via esp_littlefs
 //   /sd/...     -> cartao SD via sdspi + esp_vfs_fat (FATFS)
 // Os prefixos que antes eram virtuais (traduzidos para fs::FS do Arduino)

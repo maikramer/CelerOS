@@ -7,7 +7,7 @@
 #include "esp_adc/adc_oneshot.h"
 #if CONFIG_IDF_TARGET_ESP32S3
   #include "driver/temperature_sensor.h"
-  #define KRYONOS_HAS_TSENS 1
+  #define CELEROS_HAS_TSENS 1
 #endif
 #include "esp_system.h"
 #include "esp_chip_info.h"
@@ -16,8 +16,8 @@
 #include "esp_heap_caps.h"
 #include "USBDevice/LogSink.h"
 
-KryonSerial Serial;
-KryonEsp ESP;
+CelerSerial Serial;
+CelerEsp ESP;
 
 // --- Tempo ------------------------------------------------------------------
 
@@ -112,12 +112,12 @@ int analogRead(int pin) {
 
 // --- analogWrite: LEDC com alocacao simples de canal -------------------------
 
-#define KRYON_LEDC_MAX_CH 8
-static int s_ledc_pin[KRYON_LEDC_MAX_CH] = {-1,-1,-1,-1,-1,-1,-1,-1};
+#define CELER_LEDC_MAX_CH 8
+static int s_ledc_pin[CELER_LEDC_MAX_CH] = {-1,-1,-1,-1,-1,-1,-1,-1};
 
 void analogWrite(int pin, int val) {
     int ch = -1;
-    for (int i = 0; i < KRYON_LEDC_MAX_CH; i++) {
+    for (int i = 0; i < CELER_LEDC_MAX_CH; i++) {
         if (s_ledc_pin[i] == pin) { ch = i; break; }
         if (s_ledc_pin[i] == -1 && ch < 0) ch = i;
     }
@@ -183,7 +183,7 @@ long map(long x, long in_min, long in_max, long out_min, long out_max) {
 // --- Temperatura interna (S3 tem sensor dedicado) ----------------------------
 
 float temperatureRead(void) {
-#if !KRYONOS_HAS_TSENS
+#if !CELEROS_HAS_TSENS
     return 53.33f;  // ESP32 classico nao tem sensor de temperatura
 #else
     static temperature_sensor_handle_t s_ts = nullptr;
@@ -206,50 +206,50 @@ float temperatureRead(void) {
 
 // --- Serial ------------------------------------------------------------------
 
-void KryonSerial::printf(const char* fmt, ...) {
+void CelerSerial::printf(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    // passa pelo LogSink: sessoes kryonctl (modo link) nao podem receber
+    // passa pelo LogSink: sessoes celerctl (modo link) nao podem receber
     // texto de log intercalado nos frames binarios
-    kryon_log_vprintf(fmt, args);
+    celer_log_vprintf(fmt, args);
     va_end(args);
 }
 
 // --- ESP.* --------------------------------------------------------------------
 
-void KryonEsp::restart(void) {
+void CelerEsp::restart(void) {
     esp_restart();
 }
 
-uint32_t KryonEsp::getHeapSize(void) {
+uint32_t CelerEsp::getHeapSize(void) {
     return heap_caps_get_total_size(MALLOC_CAP_8BIT);
 }
 
-uint32_t KryonEsp::getFreeHeap(void) {
+uint32_t CelerEsp::getFreeHeap(void) {
     return heap_caps_get_free_size(MALLOC_CAP_8BIT);
 }
 
-uint32_t KryonEsp::getMinFreeHeap(void) {
+uint32_t CelerEsp::getMinFreeHeap(void) {
     return heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
 }
 
-uint32_t KryonEsp::getMaxAllocHeap(void) {
+uint32_t CelerEsp::getMaxAllocHeap(void) {
     return (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 }
 
-uint32_t KryonEsp::getPsramSize(void) {
+uint32_t CelerEsp::getPsramSize(void) {
     return heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
 }
 
-uint32_t KryonEsp::getFreePsram(void) {
+uint32_t CelerEsp::getFreePsram(void) {
     return heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 }
 
-uint32_t KryonEsp::getCpuFreqMHz(void) {
+uint32_t CelerEsp::getCpuFreqMHz(void) {
     return (uint32_t)(esp_clk_cpu_freq() / 1000000);
 }
 
-const char* KryonEsp::getChipModel(void) {
+const char* CelerEsp::getChipModel(void) {
     static esp_chip_info_t info;
     esp_chip_info(&info);
     switch (info.model) {
@@ -261,19 +261,19 @@ const char* KryonEsp::getChipModel(void) {
     }
 }
 
-uint8_t KryonEsp::getChipCores(void) {
+uint8_t CelerEsp::getChipCores(void) {
     esp_chip_info_t info;
     esp_chip_info(&info);
     return info.cores;
 }
 
-uint8_t KryonEsp::getChipRevision(void) {
+uint8_t CelerEsp::getChipRevision(void) {
     esp_chip_info_t info;
     esp_chip_info(&info);
     return info.revision / 100u;
 }
 
-uint32_t KryonEsp::getFlashChipSize(void) {
+uint32_t CelerEsp::getFlashChipSize(void) {
     uint32_t size = 0;
     esp_flash_get_size(NULL, &size);
     return size;

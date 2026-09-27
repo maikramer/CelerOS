@@ -7,7 +7,7 @@
 #include "WifiConnection.h"
 
 // Resultado de scan para as UIs (SettingsUI/captive portal)
-struct KryonScanEntry {
+struct CelerScanEntry {
     std::string ssid;
     int32_t rssi = 0;
     bool secure = false;
@@ -60,12 +60,12 @@ public:
     static void disconnect();
 
     // Scan bloqueante (~2s). Preenche "out" (ate maxN) e retorna a quantidade.
-    static int scanNetworks(KryonScanEntry* out, int maxN);
+    static int scanNetworks(CelerScanEntry* out, int maxN);
 
     // Scan assincrono: dispara e entrega o resultado via callback no evento
     // do componente Connection.
     static bool startScanAsync();
-    static std::vector<KryonScanEntry> getLastScan();
+    static std::vector<CelerScanEntry> getLastScan();
 
     // Ha redes salvas? (store NVS ou wifi.txt legado ainda nao importado)
     static bool hasSavedNetworks();

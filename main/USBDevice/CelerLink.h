@@ -1,22 +1,22 @@
-#ifndef KRYON_LINK_H
-#define KRYON_LINK_H
+#ifndef CELER_LINK_H
+#define CELER_LINK_H
 
 #include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 
-// Protocolo KryonLink: canal binario da ferramenta kryonctl sobre a CDC1.
+// Protocolo CelerLink: canal binario da ferramenta celerctl sobre a CDC1.
 //
 // Frame (little-endian):
-//   [0x4B 'K'][cmd u8][len u16][payload de len bytes]
+//   [0x43 'C'][cmd u8][len u16][payload de len bytes]
 //
 // Resposta reusa o opcode do pedido; o payload de resposta comeca com
 // u8 status (0 = OK, 1 = erro; no erro o resto do payload e a mensagem).
 //
-// ESTE ARQUIVO E A FONTE UNICA DOS OPCODES: tools/kryonctl.py extrai os
+// ESTE ARQUIVO E A FONTE UNICA DOS OPCODES: tools/celerctl.py extrai os
 // valores por regex para manter os dois lados em sincronia.
 
-class KryonLink {
+class CelerLink {
 public:
     // Funcao de escrita no canal (CDC nativo, UART do CH340, ...)
     typedef bool (*WriteFn)(const uint8_t* data, size_t len);
@@ -38,7 +38,7 @@ public:
 };
 
 // --- opcodes host -> device ---
-constexpr uint8_t KL_HELLO = 0x01;        // payload "KRYONCTL1" -> identificacao do device
+constexpr uint8_t KL_HELLO = 0x01;        // payload "CELERCTL1" -> identificacao do device
 constexpr uint8_t KL_INFO = 0x02;         // -> JSON versao/board/heap/fs
 constexpr uint8_t KL_LS = 0x03;           // path -> u16 n + entradas {isDir,size,mtime,name}
 constexpr uint8_t KL_STAT = 0x04;         // path -> exists,isDir,u32 size,u32 mtime
@@ -66,4 +66,4 @@ constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados
 constexpr uint8_t KL_LOG_DATA = 0x12;     // linha de log (texto, com \n)
 constexpr uint8_t KL_SCR_DATA = 0x18;     // continuacao do screenshot (RGB565 cru)
 
-#endif // KRYON_LINK_H
+#endif // CELER_LINK_H

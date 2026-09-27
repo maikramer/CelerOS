@@ -1,5 +1,5 @@
-#ifndef KRYONOS_STR_UTILS_H
-#define KRYONOS_STR_UTILS_H
+#ifndef CELEROS_STR_UTILS_H
+#define CELEROS_STR_UTILS_H
 
 #include <string>
 #include <stdarg.h>
@@ -70,4 +70,4 @@ inline std::string fmt(const char* format, ...) {
 
 } // namespace kstr
 
-#endif // KRYONOS_STR_UTILS_H
+#endif // CELEROS_STR_UTILS_H

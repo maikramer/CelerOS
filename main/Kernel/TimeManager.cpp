@@ -2,6 +2,7 @@
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include <esp_sntp.h>
+#include "esp_netif_sntp.h"
 
 std::string TimeManager::currentTimezone = "UTC0";
 bool TimeManager::use24hFormat = true;
@@ -35,14 +36,35 @@ void TimeManager::init() {
     // Defer esp_sntp_init() until syncNTP() to prevent LwIP assertions
 }
 
+// SNTP via esp_netif_sntp (thread-safe: o syncNTP e chamado da task de
+// eventos de rede). O esp_sntp_stop/init cru rodava fora do lock do lwIP e,
+// em alguns boots, a hora nunca sincronizava (relogio parado em 00:00).
+static bool s_sntpStarted = false;
+
 void TimeManager::syncNTP() {
     if (!ntpEnabled) return;
-    // Configure and start SNTP only when WiFi is active
-    esp_sntp_stop();
-    esp_sntp_setoperatingmode((esp_sntp_operatingmode_t)SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_setservername(1, "time.nist.gov");
-    esp_sntp_init();
+    if (!s_sntpStarted) {
+        esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        cfg.start = true;
+        if (esp_netif_sntp_init(&cfg) == ESP_OK) s_sntpStarted = true;
+        return;
+    }
+    esp_netif_sntp_start();  // reconexao: pede nova sincronizacao ja
+}
+
+bool TimeManager::isTimeValid() {
+    return getYear() >= 2020;
+}
+
+void TimeManager::tick(bool networkUp) {
+    // Rede no ar e hora ainda invalida: insiste a cada 30 s (pacote UDP
+    // perdido, DNS lento no boot...) — o intervalo normal do SNTP e 1 h.
+    static uint32_t lastTryMs = 0;
+    if (!ntpEnabled || !networkUp || isTimeValid()) return;
+    uint32_t now = millis();
+    if (lastTryMs != 0 && now - lastTryMs < 30000) return;
+    lastTryMs = now;
+    syncNTP();
 }
 
 void TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {

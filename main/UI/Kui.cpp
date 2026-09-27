@@ -26,29 +26,43 @@ bool isPressed(const Rect& r) {
 // ============================================================ Tipografia ===
 
 namespace type {
-const lgfx::IFont* caption() { return UI::big ? (const lgfx::IFont*)&lgfx::fonts::FreeSans9pt7b : &lgfx::fonts::DejaVu9; }
-const lgfx::IFont* body() { return UI::big ? (const lgfx::IFont*)&lgfx::fonts::FreeSans12pt7b : &lgfx::fonts::DejaVu12; }
-const lgfx::IFont* title() { return UI::big ? &lgfx::fonts::FreeSansBold18pt7b : &lgfx::fonts::FreeSansBold12pt7b; }
-const lgfx::IFont* display() { return UI::big ? &lgfx::fonts::FreeSansBold24pt7b : &lgfx::fonts::FreeSansBold18pt7b; }
+// BoardTraits::largeUi e constexpr: na CYD os ramos da tela grande (e as
+// fontes deles) somem do binario
+const lgfx::IFont* caption() {
+    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSans9pt7b;
+    return &lgfx::fonts::DejaVu9;
+}
+const lgfx::IFont* body() {
+    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSans12pt7b;
+    return &lgfx::fonts::DejaVu12;
+}
+const lgfx::IFont* title() {
+    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSansBold18pt7b;
+    return &lgfx::fonts::FreeSansBold12pt7b;
+}
+const lgfx::IFont* display() {
+    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSansBold24pt7b;
+    return &lgfx::fonts::FreeSansBold18pt7b;
+}
 }  // namespace type
 
 // ============================================================ Canvas =======
 
 namespace {
 // Buffer unico de composicao (um loop de UI): alocado no primeiro render.
-KryonSprite* s_buf = nullptr;
+CelerSprite* s_buf = nullptr;
 Canvas::Mode s_bufMode = Canvas::Direct;
 bool s_bufTried = false;
 int s_bandH = 0;
 
 constexpr size_t BAND_BYTES = 16 * 1024;  // faixa na RAM interna (sem PSRAM)
 
-bool ensureBuffer(KryonDisplay& dev) {
+bool ensureBuffer(CelerDisplay& dev) {
     if (s_bufTried) return s_buf != nullptr;
     s_bufTried = true;
     const int w = dev.width(), h = dev.height();
 
-    s_buf = new KryonSprite(&dev);
+    s_buf = new CelerSprite(&dev);
     s_buf->setColorDepth(16);
     // Mesma convencao do display: arrays RGB565 LE (icones) e readRect
     s_buf->setSwapBytes(true);
@@ -76,7 +90,10 @@ bool ensureBuffer(KryonDisplay& dev) {
 }
 }  // namespace
 
-Canvas::Canvas(KryonDisplay& dev) : m_dev(dev), m_target(&dev) {}
+Canvas::Canvas(CelerDisplay& dev) : m_dev(dev), m_target(&dev) {}
+
+Canvas::Canvas(CelerDisplay& dev, lgfx::LGFXBase* directTarget)
+    : m_dev(dev), m_target(directTarget ? directTarget : &dev) {}
 
 void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
     if (direct || !ensureBuffer(m_dev)) {
@@ -176,7 +193,7 @@ void Canvas::dim() {
         }
         return;
     }
-    m_target->fillScreen(0x04060C);  // direto: sem leitura do fundo, cobre
+    m_target->fillScreen((uint32_t)0x04060C);  // direto: sem leitura do fundo, cobre
 }
 
 void Canvas::setClip(const Rect& r) { m_target->setClipRect(r.x, Y(r.y), r.w, r.h); }
@@ -194,14 +211,14 @@ void Canvas::text(const std::string& s, int x, int y, const lgfx::IFont* font, u
 }
 
 void Canvas::text(const char* s, int x, int y, uint8_t font, uint32_t color, int datum) {
-    text(s, x, y, KryonFont(font), color, datum);
+    text(s, x, y, CelerFont(font), color, datum);
 }
 
 void Canvas::text(const std::string& s, int x, int y, uint8_t font, uint32_t color, int datum) {
-    text(s.c_str(), x, y, KryonFont(font), color, datum);
+    text(s.c_str(), x, y, CelerFont(font), color, datum);
 }
 
-int Canvas::textWidth(const char* s, uint8_t font) { return m_target->textWidth(s, KryonFont(font)); }
+int Canvas::textWidth(const char* s, uint8_t font) { return m_target->textWidth(s, CelerFont(font)); }
 
 int Canvas::textWidth(const char* s, const lgfx::IFont* font) { return m_target->textWidth(s, font); }
 
@@ -529,11 +546,9 @@ bool TouchInjector::take(Sample& out) {
 
 // ============================================================ TouchPump =====
 
-void TouchPump::poll(const Handler& onEvent) {
-    uint16_t x = 0, y = 0;
-    bool down;
+bool readTouch(uint16_t* x, uint16_t* y) {
     if (TouchInjector::active()) {
-        // gesto sintetico (kryonctl) e dono do pump ate a fila esvaziar e soltar
+        // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e soltar
         TouchInjector::Sample smp;
         if (TouchInjector::take(smp)) {
             s_injDown = smp.down;
@@ -542,12 +557,18 @@ void TouchPump::poll(const Handler& onEvent) {
                 s_injY = smp.y;
             }
         }
-        down = s_injDown;
-        x = s_injX;
-        y = s_injY;
-    } else {
-        down = Board::display().getTouch(&x, &y) != 0;
+        if (s_injDown) {
+            *x = s_injX;
+            *y = s_injY;
+        }
+        return s_injDown;
     }
+    return Board::display().getTouch(x, y) != 0;
+}
+
+void TouchPump::poll(const Handler& onEvent) {
+    uint16_t x = 0, y = 0;
+    bool down = readTouch(&x, &y);
 
     TouchEvent ev;
     if (down && !m_down) {
@@ -655,7 +676,7 @@ void dispatchTouch(const TouchEvent& ev) {
 
 }  // namespace
 
-void Navigator::begin(KryonDisplay& dev) {
+void Navigator::begin(CelerDisplay& dev) {
     if (s_canvas == nullptr) s_canvas = new Canvas(dev);
 }
 

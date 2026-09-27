@@ -1,6 +1,6 @@
 #include "USBDevice.h"
 
-#if CONFIG_KRYONOS_USB_NATIVE
+#if CONFIG_CELEROS_USB_NATIVE
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -18,20 +18,20 @@
 #include "tinyusb_cdc_acm.h"
 #include "tusb.h"
 
-#include "KryonShell.h"
-#include "KryonLink.h"
+#include "CelerShell.h"
+#include "CelerLink.h"
 
 // Descritores de string do esp_tinyusb (usb_descriptors.c). Trocamos a string
 // de serial (indice 3) pela MAC do chip antes de instalar o driver, para o
-// kryonctl diferenciar varios dispositivos na mesma maquina.
+// celerctl diferenciar varios dispositivos na mesma maquina.
 extern const char* descriptor_str_default[];
 
 namespace {
 
-const char* TAG = "kryon.usb";
+const char* TAG = "celer.usb";
 
 constexpr tinyusb_cdcacm_itf_t CDC_SHELL = TINYUSB_CDC_ACM_0;  // terminal humano
-constexpr tinyusb_cdcacm_itf_t CDC_LINK = TINYUSB_CDC_ACM_1;   // protocolo kryonctl
+constexpr tinyusb_cdcacm_itf_t CDC_LINK = TINYUSB_CDC_ACM_1;   // protocolo celerctl
 
 StreamBufferHandle_t s_shellRx = nullptr;
 StreamBufferHandle_t s_linkRx = nullptr;
@@ -82,24 +82,24 @@ void shellPrint(void* ctx, const char* fmt, ...) {
 // Shell interativo na CDC0 (eco/backspace via LineEditor compartilhado).
 void usbShellTask(void*) {
     static LineEditor editor(shellPrint, nullptr);
-    char line[KryonShell::MAX_LINE];
+    char line[CelerShell::MAX_LINE];
 
     vTaskDelay(pdMS_TO_TICKS(100));  // deixa o terminal do host subir
-    shellPrint(nullptr, "\r\nKryonOS shell (digite help)\r\nkryon> ");
+    shellPrint(nullptr, "\r\nCelerOS shell (digite help)\r\nceler> ");
 
     for (;;) {
         uint8_t byte;
         if (xStreamBufferReceive(s_shellRx, &byte, 1, portMAX_DELAY) == 0) continue;
         if (editor.feed(byte, line, sizeof(line))) {
             shellPrint(nullptr, "\r\n");
-            if (line[0] != '\0') KryonShell::execute(line, shellPrint, nullptr);
-            shellPrint(nullptr, "kryon> ");
+            if (line[0] != '\0') CelerShell::execute(line, shellPrint, nullptr);
+            shellPrint(nullptr, "celer> ");
         }
     }
 }
 
 void usbLinkTask(void*) {
-    KryonLink::run(s_linkRx);
+    CelerLink::run(s_linkRx);
 }
 
 }  // namespace
@@ -141,14 +141,14 @@ bool USBDevice::init() {
     }
 
     s_shellRx = xStreamBufferCreate(2048, 1);
-    s_linkRx = xStreamBufferCreate(KryonLink::MAX_PAYLOAD * 2, 1);
+    s_linkRx = xStreamBufferCreate(CelerLink::MAX_PAYLOAD * 2, 1);
     s_writeMutex = xSemaphoreCreateMutex();
     if (s_shellRx == nullptr || s_linkRx == nullptr || s_writeMutex == nullptr) {
         ESP_LOGE(TAG, "sem memoria para buffers USB");
         return false;
     }
 
-    KryonLink::setWriter(&USBDevice::linkWrite);
+    CelerLink::setWriter(&USBDevice::linkWrite);
 
     if (xTaskCreate(usbShellTask, "usb_shell", 8192, nullptr, 3, nullptr) != pdPASS ||
         xTaskCreate(usbLinkTask, "usb_link", 12288, nullptr, 4, nullptr) != pdPASS) {
@@ -156,7 +156,7 @@ bool USBDevice::init() {
         return false;
     }
 
-    ESP_LOGI(TAG, "USB device pronto: CDC0 shell + CDC1 kryonctl");
+    ESP_LOGI(TAG, "USB device pronto: CDC0 shell + CDC1 celerctl");
     return true;
 }
 
@@ -185,7 +185,7 @@ bool USBDevice::isMounted() {
     return tud_ready();
 }
 
-#else  // USB nativo desativado: tudo no-op (kryonctl roda na UART via SerialLink)
+#else  // USB nativo desativado: tudo no-op (celerctl roda na UART via SerialLink)
 
 bool USBDevice::init() {
     return false;
@@ -199,4 +199,4 @@ bool USBDevice::isMounted() {
     return false;
 }
 
-#endif  // CONFIG_KRYONOS_USB_NATIVE
+#endif  // CONFIG_CELEROS_USB_NATIVE

@@ -1,5 +1,5 @@
-#ifndef KRYON_BOARDS_CYD_DISPLAY_H
-#define KRYON_BOARDS_CYD_DISPLAY_H
+#ifndef CELER_BOARDS_CYD_DISPLAY_H
+#define CELER_BOARDS_CYD_DISPLAY_H
 
 // ----------------------------------------------------------------------------
 // Cheap Yellow Display (ESP32-2432S028R e afins): ILI9341 240x320 no VSPI
@@ -14,7 +14,7 @@
 #include <lgfx/v1/platforms/esp32/Bus_SPI.hpp>
 #include <lgfx/v1/touch/Touch_XPT2046.hpp>
 
-class BoardDisplay : public KryonDisplayBase {
+class BoardDisplay : public CelerDisplayBase {
 public:
     lgfx::Bus_SPI       _bus;
     lgfx::Panel_ILI9341 _panel;
@@ -139,4 +139,4 @@ public:
     }
 };
 
-#endif  // KRYON_BOARDS_CYD_DISPLAY_H
+#endif  // CELER_BOARDS_CYD_DISPLAY_H

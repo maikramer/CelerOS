@@ -1,4 +1,4 @@
-# Componentes do KryonOS
+# Componentes do CelerOS
 
 Componentes ESP-IDF internos do projeto — vendados da lib compartilhada
 `esp_components` (satisfaction-hub) e **nivelados**: os `idf_component.yml`
@@ -16,11 +16,11 @@ dependências entre irmãos ficam nos `REQUIRES` dos CMakeLists, sem `path:`.
 | `Utility` | (transitivo, todos) | `Event<>` pub/sub usado por NM/WifiOta/portal — handlers rodam sob mutex: só tocam flags |
 | `ErrorCodes` | (transitivo) | `ErrorCode`/`CommonErrorCodes` |
 | `JsonModels` | (transitivo p/ Connection/Storage) | modelos nlohmann |
-| `Storage` | — (só a classe `NVS` é utilizável de graça) | **`Storage::initialize()` NÃO é chamado**: ele montaria SPIFFS na partição `spiffs` que o KryonOS usa como LittleFS (`esp_littlefs`, ponto de montagem `/local`). O FileSystem do OS é próprio (`main/FileSystem`, POSIX VFS) |
+| `Storage` | — (só a classe `NVS` é utilizável de graça) | **`Storage::initialize()` NÃO é chamado**: ele montaria SPIFFS na partição `spiffs` que o CelerOS usa como LittleFS (`esp_littlefs`, ponto de montagem `/local`). O FileSystem do OS é próprio (`main/FileSystem`, POSIX VFS) |
 
 Não usados pelo `Wifi` do satisfaction-hub: `WifiServer`, `WifiClient`, `Telnet`.
 
-## Patches KryonOS nos componentes (divergem do esp_components)
+## Patches CelerOS nos componentes (divergem do esp_components)
 
 - **`Wifi/CaptivePortal`**: ganhou `PortalConnState` + `reportConnectionState()`
   e a rota `GET /status` com polling na página — o `/connect` segue apenas
@@ -34,7 +34,7 @@ Não usados pelo `Wifi` do satisfaction-hub: `WifiServer`, `WifiClient`, `Telnet
 
 `BluetoothServer` (precisa `h2zero/esp-nimble-cpp`), `Drivers`, `IoUtility`
 (precisa `espressif/button`), `SafeContainers`, `Supabase`, `UI` (precisa
-`lvgl ^9`), `UserManaging`, `Time` (o KryonOS tem `TimeManager` próprio com
+`lvgl ^9`), `UserManaging`, `Time` (o CelerOS tem `TimeManager` próprio com
 config em arquivo). A lista vive no `EXCLUDE_COMPONENTS` do `CMakeLists.txt`
 raiz — para ativar um, remova-o da lista e garanta as dependências do
 `idf_component.yml` dele.

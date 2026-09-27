@@ -1,7 +1,7 @@
-menu "KryonOS"
+menu "CelerOS"
 
-config KRYONOS_USB_NATIVE
-    bool "Ativar USB nativo (TinyUSB: CDC dupla shell+kryonctl)"
+config CELEROS_USB_NATIVE
+    bool "Ativar USB nativo (TinyUSB: CDC dupla shell+celerctl)"
     depends on IDF_TARGET_ESP32S3
     default n
     help
@@ -10,7 +10,7 @@ config KRYONOS_USB_NATIVE
 
       NAO use na SmartDisplay 4848S040: o GPIO19 e o SDA do touch GT911
       e o GPIO20 e a linha G1 do display RGB; o conector USB da placa e
-      apenas CH340. Nessas placas o kryonctl roda sobre a UART do CH340
+      apenas CH340. Nessas placas o celerctl roda sobre a UART do CH340
       (SerialLink), que e o comportamento padrao.
 
       Ao ativar, habilite tambem no sdkconfig do board:

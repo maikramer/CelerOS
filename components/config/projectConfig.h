@@ -1,13 +1,13 @@
-#ifndef KRYONOS_PROJECT_CONFIG_H
-#define KRYONOS_PROJECT_CONFIG_H
+#ifndef CELEROS_PROJECT_CONFIG_H
+#define CELEROS_PROJECT_CONFIG_H
 
-// Configuracoes globais do projeto KryonOS.
+// Configuracoes globais do projeto CelerOS.
 //
 // Este componente existe porque os componentes internos (Storage, JsonModels,
 // ...) incluem "projectConfig.h" — no satisfaction-hub ele vinha do pacote
 // esp_components; aqui e do propio repo.
 //
-// O KryonOS nao usa o SdCard do componente Storage (o FileSystem do OS monta
+// O CelerOS nao usa o SdCard do componente Storage (o FileSystem do OS monta
 // o SD com os pinos da placa, ver main/FileSystem); os defines abaixo ficam
 // documentados caso o componente passe a ser usado.
 
@@ -18,4 +18,4 @@
 #define SD_MISO 41
 #define SD_MOSI 47
 
-#endif // KRYONOS_PROJECT_CONFIG_H
+#endif // CELEROS_PROJECT_CONFIG_H

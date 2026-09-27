@@ -25,12 +25,12 @@ bool WifiSetupPortal::begin() {
     // Sufixo do AP: 4 ultimos hex do MAC (softAP)
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    s_apSsid = "KryonOS-Setup-" + kstr::fmt("%X", mac[4]) + kstr::fmt("%X", mac[5]);
+    s_apSsid = "CelerOS-Setup-" + kstr::fmt("%X", mac[4]) + kstr::fmt("%X", mac[5]);
 
     CaptivePortalConfig cfg;
     cfg.apSsid = s_apSsid;
-    cfg.title = "KryonOS WiFi Setup";
-    cfg.deviceName = "KryonOS";
+    cfg.title = "CelerOS WiFi Setup";
+    cfg.deviceName = "CelerOS";
     cfg.scanOnStart = true;
     s_portal.setConfig(cfg);
 

@@ -5,11 +5,11 @@
 
 class TouchCalibrator {
 public:
-    static void init(KryonDisplay *tft);
+    static void init(CelerDisplay *tft);
     static void runCalibration();
 
 private:
-    static KryonDisplay *tftInstance;
+    static CelerDisplay *tftInstance;
 };
 
 #endif // TOUCH_CALIBRATOR_H

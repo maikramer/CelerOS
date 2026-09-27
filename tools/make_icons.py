@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gera o pacote de icones 64x64 do KryonOS.
+"""Gera o pacote de icones 64x64 do CelerOS.
 
 Pipeline:
   1. text2d (FLUX.2 Klein local) gera as artes 512x512 em tools/icons_src/

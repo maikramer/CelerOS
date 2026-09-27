@@ -1,8 +1,8 @@
-#ifndef KRYONOS_UI_KEYBOARD_H
-#define KRYONOS_UI_KEYBOARD_H
+#ifndef CELEROS_UI_KEYBOARD_H
+#define CELEROS_UI_KEYBOARD_H
 
 // ============================================================================
-// Keyboard — teclado QWERTY on-screen do KryonOS.
+// Keyboard — teclado QWERTY on-screen do CelerOS.
 //
 // Layout padrao de teclado virtual (Android/iOS): linhas escalonadas, shift
 // one-shot, duas paginas de simbolos, espaco/backspace/OK na linha de baixo
@@ -34,6 +34,22 @@ public:
     // o pop (modo 2) ou o loop da ponte sai (modo 1).
     std::function<void(const std::string& text, bool ok)> onResult;
 
+    // Modo acoplado (System.keypad* dos apps JS): OK nao encerra — dispara
+    // onEnter com o texto, limpa o buffer e segue aberto. Mudancas no buffer
+    // (tecla/backspace/espaco) disparam onChange para o app re-ecoar a linha.
+    std::function<void(const std::string& text)> onEnter;
+    std::function<void()> onChange;
+    void setPersistent(bool p) { m_persistent = p; }
+
+    // Teclado puro (System.keypadOpen({field:false})): sem cabecalho, campo
+    // nem X — as teclas comecam no topo e o cancelamento e por keypadClose().
+    void setShowField(bool s) { m_showField = s; }
+
+    // Topo da area das teclas (fisico): quem acopla o teclado nao desenha
+    // abaixo desta linha (System.keypadRect devolve o mesmo espaco em 240x320)
+    int keysTop() const { return m_keysTop; }
+    const std::string& text() const { return m_text; }
+
     void draw(Canvas& c) override;
     bool onTouch(const TouchEvent& ev) override;
     void onTick(uint32_t dtMs) override;
@@ -62,6 +78,9 @@ private:
     int m_maxLen;
     Mode m_mode = Lower;
     std::vector<Key> m_keys;
+    bool m_persistent = false;
+    bool m_showField = true;
+    int m_keysTop = 0;
     int m_flashKey = -1;       // feedback visual do ultimo toque
     uint32_t m_flashMs = 0;
     uint32_t m_blinkMs = 0;    // cursor piscando
@@ -75,4 +94,4 @@ std::string getString(const std::string& initialText, const std::string& promptM
 
 }  // namespace kui
 
-#endif  // KRYONOS_UI_KEYBOARD_H
+#endif  // CELEROS_UI_KEYBOARD_H

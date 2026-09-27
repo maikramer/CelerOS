@@ -10,12 +10,12 @@ OtaUpdateInfo OtaManager::info;
 std::string OtaManager::lastError;
 
 // Canal de updates da placa (perfil em Boards/<placa>/Board.cpp)
-static const char* KRYONOS_UPDATE_CHANNEL = Board::profile().otaChannel;
+static const char* CELEROS_UPDATE_CHANNEL = Board::profile().otaChannel;
 
-// Fonte canonica dos updates deste fork. Trocar aqui (ou usar
+// Fonte canonica dos updates do CelerOS (hub proprio). Trocar aqui (ou usar
 // /local/ota_url.txt no dispositivo) para apontar outro servidor.
-static const char* KRYONOS_UPDATE_BASE =
-    "https://raw.githubusercontent.com/maikramer/KryonOS/refs/heads/main/updates";
+static const char* CELEROS_UPDATE_BASE =
+    "https://os.celer.tec.br/updates";
 
 static bool isVersionGreater(const std::string& newVer, const std::string& oldVer) {
     int newParts[3] = {0,0,0}, oldParts[3] = {0,0,0};
@@ -50,7 +50,7 @@ std::string OtaManager::getUpdateJsonUrl() {
             return url_Override;
         }
     }
-    return std::string(KRYONOS_UPDATE_BASE) + "/" + KRYONOS_UPDATE_CHANNEL + "/update.json";
+    return std::string(CELEROS_UPDATE_BASE) + "/" + CELEROS_UPDATE_CHANNEL + "/update.json";
 }
 
 bool OtaManager::checkForUpdates() {
@@ -91,7 +91,7 @@ bool OtaManager::checkForUpdates() {
     }
     info.hasFirmware = info.firmwareUrl.length() > 0;
 
-    if (isVersionGreater(info.version, KRYONOS_VERSION)) {
+    if (isVersionGreater(info.version, CELEROS_VERSION)) {
         info.available = true;
     }
     return info.available;

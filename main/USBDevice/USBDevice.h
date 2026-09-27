@@ -1,12 +1,12 @@
-#ifndef KRYON_USB_DEVICE_H
-#define KRYON_USB_DEVICE_H
+#ifndef CELER_USB_DEVICE_H
+#define CELER_USB_DEVICE_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-// Subsistema USB device do KryonOS (exclusivo do ESP32-S3, que tem USB-OTG):
+// Subsistema USB device do CelerOS (exclusivo do ESP32-S3, que tem USB-OTG):
 //   CDC0 -> shell interativo (terminal humano: minicom/idf.py monitor)
-//   CDC1 -> protocolo binario KryonLink (ferramenta kryonctl)
+//   CDC1 -> protocolo binario CelerLink (ferramenta celerctl)
 // No CYD (ESP32 classico, sem periferico USB device) tudo vira no-op.
 
 class USBDevice {
@@ -22,4 +22,4 @@ public:
     static bool isMounted();
 };
 
-#endif // KRYON_USB_DEVICE_H
+#endif // CELER_USB_DEVICE_H

@@ -1,11 +1,11 @@
-#ifndef KRYONOS_OTA_MANAGER_H
-#define KRYONOS_OTA_MANAGER_H
+#ifndef CELEROS_OTA_MANAGER_H
+#define CELEROS_OTA_MANAGER_H
 
 #include <Arduino.h>
 #include <string>
 
 // Resultado de checkForUpdates(). "available" compara version com
-// KRYONOS_VERSION; "hasFirmware" indica se o canal publica firmware_url
+// CELEROS_VERSION; "hasFirmware" indica se o canal publica firmware_url
 // (update.json v2) — sem ele a UI cai no fluxo legado do guia manual.
 struct OtaUpdateInfo {
     bool fetchFailed = false;
@@ -45,4 +45,4 @@ public:
                               void (*onProgress)(int percent) = nullptr);
 };
 
-#endif // KRYONOS_OTA_MANAGER_H
+#endif // CELEROS_OTA_MANAGER_H

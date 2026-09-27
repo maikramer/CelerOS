@@ -1,4 +1,4 @@
-#include "KryonShell.h"
+#include "CelerShell.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
 #include "Boards/Board.h"
@@ -19,11 +19,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if !defined(KRYONOS_VERSION)
-#define KRYONOS_VERSION "?"
+#if !defined(CELEROS_VERSION)
+#define CELEROS_VERSION "?"
 #endif
-#if !defined(KRYONOS_API_LEVEL)
-#define KRYONOS_API_LEVEL 0
+#if !defined(CELEROS_API_LEVEL)
+#define CELEROS_API_LEVEL 0
 #endif
 
 namespace {
@@ -51,9 +51,9 @@ bool ipOf(char* out, size_t outLen) {
 
 // ------------------------------------------------------------------ comandos
 
-int cmdHelp(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx,
-        "KryonOS shell " KRYONOS_VERSION "\n"
+        "CelerOS shell " CELEROS_VERSION "\n"
         "comandos:\n"
         "  help            esta ajuda\n"
         "  ls [dir]        lista diretorio (default /)\n"
@@ -71,9 +71,9 @@ int cmdHelp(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdLs(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdLs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     std::string dir = (argc > 1) ? argv[1] : "/";
-    if (!KryonShell::pathAllowed(dir) && dir != "/") {
+    if (!CelerShell::pathAllowed(dir) && dir != "/") {
         print(ctx, "ls: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
@@ -110,13 +110,13 @@ int cmdLs(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdCat(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdCat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
         print(ctx, "uso: cat <arquivo>\n");
         return 1;
     }
     std::string path = argv[1];
-    if (!KryonShell::pathAllowed(path)) {
+    if (!CelerShell::pathAllowed(path)) {
         print(ctx, "cat: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
@@ -135,12 +135,12 @@ int cmdCat(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdRm(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdRm(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
         print(ctx, "uso: rm <arquivo>\n");
         return 1;
     }
-    if (!KryonShell::pathAllowed(argv[1])) {
+    if (!CelerShell::pathAllowed(argv[1])) {
         print(ctx, "rm: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
@@ -151,12 +151,12 @@ int cmdRm(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdMv(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdMv(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 3) {
         print(ctx, "uso: mv <de> <para>\n");
         return 1;
     }
-    if (!KryonShell::pathAllowed(argv[1]) || !KryonShell::pathAllowed(argv[2])) {
+    if (!CelerShell::pathAllowed(argv[1]) || !CelerShell::pathAllowed(argv[2])) {
         print(ctx, "mv: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
@@ -167,12 +167,12 @@ int cmdMv(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdMkdir(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdMkdir(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
         print(ctx, "uso: mkdir <dir>\n");
         return 1;
     }
-    if (!KryonShell::pathAllowed(argv[1])) {
+    if (!CelerShell::pathAllowed(argv[1])) {
         print(ctx, "mkdir: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
@@ -183,7 +183,7 @@ int cmdMkdir(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdDf(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdDf(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     struct {
         const char* path;
         const char* label;
@@ -204,20 +204,24 @@ int cmdDf(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdFree(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdFree(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx,
         "heap livre     : %s\r\n"
         "heap minimo    : %s\r\n"
         "maior bloco 8b : %s\r\n"
-        "PSRAM livre    : %s\r\n",
+        "PSRAM livre    : %s\r\n"
+        "interna livre  : %s (min %s, maior bloco %s)\r\n",
         humanSize(esp_get_free_heap_size()).c_str(),
         humanSize(esp_get_minimum_free_heap_size()).c_str(),
         humanSize(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)).c_str(),
-        humanSize(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)).c_str());
+        humanSize(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)).c_str(),
+        humanSize(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)).c_str(),
+        humanSize(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)).c_str(),
+        humanSize(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)).c_str());
     return 0;
 }
 
-int cmdPs(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdPs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     static char table[4096];
     vTaskList(table);
     print(ctx, "task            estado  prio  stack\r\n");
@@ -225,7 +229,7 @@ int cmdPs(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdUptime(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdUptime(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     uint64_t us = esp_timer_get_time();
     uint32_t secs = (uint32_t)(us / 1000000ULL);
     print(ctx, "up %uh %um %us (%llu s)\r\n", secs / 3600, (secs / 60) % 60, secs % 60,
@@ -233,7 +237,7 @@ int cmdUptime(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdInfo(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdInfo(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     char ip[16] = "";
     bool hasIp = ipOf(ip, sizeof(ip));
     uint8_t mac[6] = {0};
@@ -250,7 +254,7 @@ int cmdInfo(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     }
 
     print(ctx,
-        "KryonOS  : %s (API level %d)\r\n"
+        "CelerOS  : %s (API level %d)\r\n"
         "board    : %s\r\n"
         "SDK      : %s\r\n"
         "uptime   : %llus\r\n"
@@ -259,7 +263,7 @@ int cmdInfo(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
         "mac      : %02X:%02X:%02X:%02X:%02X:%02X\r\n"
         "/local   : %s\r\n"
         "/sd      : %s\r\n",
-        KRYONOS_VERSION, KRYONOS_API_LEVEL, boardName(), esp_get_idf_version(),
+        CELEROS_VERSION, CELEROS_API_LEVEL, boardName(), esp_get_idf_version(),
         (unsigned long long)(esp_timer_get_time() / 1000000ULL),
         humanSize(esp_get_free_heap_size()).c_str(),
         humanSize(esp_get_minimum_free_heap_size()).c_str(),
@@ -269,8 +273,8 @@ int cmdInfo(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
 }
 
 // Diagnostico de cor: desenha, le de volta e imprime o conteudo do fb
-int cmdColorBars(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
-    KryonDisplay& tft = Board::display();
+int cmdColorBars(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    CelerDisplay& tft = Board::display();
     char line[96];
     snprintf(line, sizeof(line), "depth=%u rot=%u w=%u h=%u\r\n",
              (unsigned)tft.getColorDepth(), (unsigned)tft.getRotation(),
@@ -308,14 +312,14 @@ int cmdColorBars(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-int cmdRescan(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdRescan(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     (void) argc; (void) argv;
     LauncherUI::requestRescan();
     print(ctx, "launcher rescaneando apps\r\n");
     return 0;
 }
 
-int cmdReboot(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
@@ -324,7 +328,7 @@ int cmdReboot(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
 
 struct ShellCmd {
     const char* name;
-    int (*fn)(int argc, char** argv, KryonShell::PrintFn print, void* ctx);
+    int (*fn)(int argc, char** argv, CelerShell::PrintFn print, void* ctx);
 };
 
 const ShellCmd kCommands[] = {
@@ -337,7 +341,7 @@ const ShellCmd kCommands[] = {
 
 }  // namespace
 
-bool KryonShell::pathAllowed(const std::string& path) {
+bool CelerShell::pathAllowed(const std::string& path) {
     return path.rfind("/local", 0) == 0 || path.rfind("/sd", 0) == 0;
 }
 
@@ -362,7 +366,7 @@ bool LineEditor::feed(uint8_t byte, char* line, size_t maxLen) {
     return false;
 }
 
-int KryonShell::execute(const char* line, PrintFn print, void* ctx) {
+int CelerShell::execute(const char* line, PrintFn print, void* ctx) {
     // copia para tokenizar
     char buf[MAX_LINE];
     strncpy(buf, line, MAX_LINE - 1);

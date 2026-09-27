@@ -17,7 +17,7 @@
 #include "driver/spi_common.h"
 #include "driver/gpio.h"
 
-static const char* FS_TAG = "kryon.fs";
+static const char* FS_TAG = "celer.fs";
 
 // Handle do cartao para unmount; bus SPI inicializada sob demanda
 static sdmmc_card_t* s_sd_card = nullptr;
@@ -25,7 +25,7 @@ static bool s_spi_bus_ready = false;
 
 // O barramento do SD e sempre o SPI2 (FSPI no S3, HSPI no ESP32 classico);
 // pinos e velocidade vem do perfil da placa (Boards/<placa>/Board.cpp).
-#define KRYONOS_SD_SPI_HOST SPI2_HOST
+#define CELEROS_SD_SPI_HOST SPI2_HOST
 
 bool FileSystem::init() {
     bool success = true;
@@ -68,7 +68,7 @@ bool FileSystem::mountSD() {
         buscfg.quadwp_io_num = -1;
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 4092;
-        esp_err_t err = spi_bus_initialize(KRYONOS_SD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+        esp_err_t err = spi_bus_initialize(CELEROS_SD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
         if (err != ESP_OK) {
             ESP_LOGE(FS_TAG, "spi_bus_initialize falhou: %s", esp_err_to_name(err));
             return false;
@@ -87,12 +87,12 @@ bool FileSystem::mountSD() {
     }
 
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.host_id = (spi_host_device_t)KRYONOS_SD_SPI_HOST;
+    slot.host_id = (spi_host_device_t)CELEROS_SD_SPI_HOST;
     slot.gpio_cs = (gpio_num_t)Board::profile().sd.cs;
     slot.gpio_cd = GPIO_NUM_NC;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = KRYONOS_SD_SPI_HOST;
+    host.slot = CELEROS_SD_SPI_HOST;
     if (Board::profile().sd.freqKhz > 0) {
         host.max_freq_khz = Board::profile().sd.freqKhz;
     }

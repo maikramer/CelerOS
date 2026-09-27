@@ -1,6 +1,6 @@
 #include "SerialLink.h"
-#include "KryonLink.h"
-#include "KryonShell.h"
+#include "CelerLink.h"
+#include "CelerShell.h"
 #include "LogSink.h"
 
 #include <stdio.h>
@@ -13,10 +13,10 @@
 
 namespace {
 
-const char* TAG = "kryon.dbg";
+const char* TAG = "celer.dbg";
 
-#if !defined(KRYONOS_VERSION)
-#define KRYONOS_VERSION "?"
+#if !defined(CELEROS_VERSION)
+#define CELEROS_VERSION "?"
 #endif
 
 constexpr uart_port_t K_UART = UART_NUM_0;
@@ -62,16 +62,16 @@ void consolePrint(void* ctx, const char* fmt, ...) {
 // ------------------------------------------------- hook permanente de logs
 
 // Hook instalado no init: todo ESP_LOG* passa pelo LogSink (ring/logcat e,
-// fora de sessoes kryonctl, segue para a UART como antes).
+// fora de sessoes celerctl, segue para a UART como antes).
 int logHookVprintf(const char* fmt, va_list args) {
-    kryon_log_vprintf(fmt, args);
+    celer_log_vprintf(fmt, args);
     return 0;
 }
 
 void enterLinkMode() {
     if (s_mode == MODE_LINK) return;
     s_mode = MODE_LINK;
-    ESP_LOGI(TAG, "kryonctl conectado (logs seriais suspensos)");
+    ESP_LOGI(TAG, "celerctl conectado (logs seriais suspensos)");
 }
 
 void exitLinkMode() {
@@ -82,17 +82,17 @@ void exitLinkMode() {
     s_logcat = false;
     if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
     uart_set_baudrate(K_UART, K_BAUD_DEFAULT);
-    uartPrintRaw("\r\n[kryonctl desconectado]\r\nkryon> ");
+    uartPrintRaw("\r\n[celerctl desconectado]\r\nceler> ");
 }
 
 // ------------------------------------------------------------ console shell
 
 void feedConsole(uint8_t byte) {
-    char line[KryonShell::MAX_LINE];
+    char line[CelerShell::MAX_LINE];
     if (s_editor->feed(byte, line, sizeof(line))) {
         consolePrint(nullptr, "\r\n");
-        if (line[0] != '\0') KryonShell::execute(line, consolePrint, nullptr);
-        consolePrint(nullptr, "kryon> ");
+        if (line[0] != '\0') CelerShell::execute(line, consolePrint, nullptr);
+        consolePrint(nullptr, "celer> ");
     }
 }
 
@@ -100,7 +100,7 @@ void feedConsole(uint8_t byte) {
 
 void linkTask(void*) {
     char banner[96];
-    snprintf(banner, sizeof(banner), "\r\nKryonOS %s console (help | kryonctl via USB)\r\nkryon> ", KRYONOS_VERSION);
+    snprintf(banner, sizeof(banner), "\r\nCelerOS %s console (help | celerctl via USB)\r\nceler> ", CELEROS_VERSION);
     uartPrintRaw(banner);
 
     uint8_t hold = 0;
@@ -125,18 +125,18 @@ void linkTask(void*) {
                 if (holding) {
                     holding = false;
                     if (b == KL_HELLO) {
-                        // sequencia 'K' + HELLO so vem de ferramenta: entra
+                        // sequencia 0x43 + HELLO so vem de ferramenta: entra
                         // no modo link e entrega os dois bytes ao parser
                         enterLinkMode();
                         s_lastFrame = xTaskGetTickCount();
-                        KryonLink::feed(hold);
-                        KryonLink::feed(b);
+                        CelerLink::feed(hold);
+                        CelerLink::feed(b);
                         continue;
                     }
                     // nao era frame: o byte retido vira caractere normal
                     feedConsole(hold);
                 }
-                if (b == 0x4B) {
+                if (b == 0x43) {
                     hold = b;
                     holding = true;
                     continue;
@@ -144,7 +144,7 @@ void linkTask(void*) {
                 feedConsole(b);
             } else {
                 s_lastFrame = xTaskGetTickCount();
-                KryonLink::feed(b);
+                CelerLink::feed(b);
             }
         }
     }
@@ -172,18 +172,18 @@ bool SerialLink::init() {
     }
 
     // hook permanente: ESP_LOG* passa pelo LogSink (ring + logcat), mantendo
-    // a saida normal na UART fora de sessoes kryonctl
+    // a saida normal na UART fora de sessoes celerctl
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
 
-    KryonLink::setWriter(&SerialLink::writeFrame);
-    KryonLink::setBaudHook(&SerialLink::setBaud);
+    CelerLink::setWriter(&SerialLink::writeFrame);
+    CelerLink::setBaudHook(&SerialLink::setBaud);
 
     if (xTaskCreate(linkTask, "dbg_link", 8192, nullptr, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task do console/link");
         return false;
     }
-    ESP_LOGI(TAG, "console/shell + kryonctl ativos na UART0");
+    ESP_LOGI(TAG, "console/shell + celerctl ativos na UART0");
     return true;
 }
 
@@ -210,7 +210,7 @@ bool SerialLink::linkActive() {
 
 // ------------------------------------------------------------------ LogSink
 
-bool kryon_log_silent(void) {
+bool celer_log_silent(void) {
     return s_mode == MODE_LINK;
 }
 
@@ -226,10 +226,10 @@ void ringPush(const char* s, size_t n) {
 
 void logFrameSend(const char* line, size_t n) {
     // frame KL_LOG_DATA montado e escrito de uma vez (mutex do writeFrame)
-    if (n > KryonLink::MAX_PAYLOAD - 1) n = KryonLink::MAX_PAYLOAD - 1;
-    uint8_t frame[4 + 1 + KryonLink::MAX_PAYLOAD];
+    if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
+    uint8_t frame[4 + 1 + CelerLink::MAX_PAYLOAD];
     uint16_t total = (uint16_t)(1 + n);
-    frame[0] = 0x4B;
+    frame[0] = 0x43;
     frame[1] = KL_LOG_DATA;
     frame[2] = (uint8_t)total;
     frame[3] = (uint8_t)(total >> 8);
@@ -240,7 +240,7 @@ void logFrameSend(const char* line, size_t n) {
 
 }  // namespace
 
-void kryon_log_vprintf(const char* fmt, va_list args) {
+void celer_log_vprintf(const char* fmt, va_list args) {
     char line[256];
     int n = vsnprintf(line, sizeof(line), fmt, args);
     if (n <= 0) return;
@@ -261,14 +261,14 @@ void kryon_log_vprintf(const char* fmt, va_list args) {
     if (s_mode != MODE_LINK) printf("%.*s", n, line);
 }
 
-void kryon_log_printf(const char* fmt, ...) {
+void celer_log_printf(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    kryon_log_vprintf(fmt, args);
+    celer_log_vprintf(fmt, args);
     va_end(args);
 }
 
-void kryon_logcat_set(bool on) {
+void celer_logcat_set(bool on) {
     if (s_logMutex == nullptr) return;
     xSemaphoreTake(s_logMutex, portMAX_DELAY);
     if (on) {
@@ -287,6 +287,6 @@ void kryon_logcat_set(bool on) {
     xSemaphoreGive(s_logMutex);
 }
 
-bool kryon_logcat_active(void) {
+bool celer_logcat_active(void) {
     return s_logcat;
 }
