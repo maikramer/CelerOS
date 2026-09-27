@@ -70,7 +70,7 @@ KryonOS requires an ILI9341 2.8 Inch Touch display with and an SD card module. T
 
 If your specific hardware setup uses different pins, you will need to recompile the OS:
 
-1.  **To change Display/Touch pins:** Open `platformio.ini` and modify the `build_flags` (e.g., `-D TFT_MOSI=23`).
+1.  **To change Display/Touch pins:** Edit `main/Display/Display.h` (the `KryonGFX` class of each board has the pins concentrated in the constructors).
 2.  **To change SD Card pins:** Open `src/FileSystem/FileSystem.cpp` and modify the `sdSPI.begin()` and `SD.begin()` lines.
 
 ---
@@ -110,25 +110,41 @@ pio run -e smartdisplay_4848S040 -t uploadfs    # LittleFS (demo app em data/)
 
 ## How to Flash
 
+> KryonOS 1.1+ e baseado em **ESP-IDF 6.1 puro** (sem Arduino/PlatformIO).
+
 ### Option 1: Using Precompiled Binaries
-You can download the latest precompiled firmware `.bin` files directly from our [Releases Page](https://github.com/Haris16-code/KryonOS/releases). 
+You can download the latest precompiled firmware `.bin` files directly from our [Releases Page](https://github.com/Haris16-code/KryonOS/releases).
 
-Use an ESP32 flasher tool (like `esptool.py` or the official ESP Flash Download Tool) to write the binaries to the correct sectors:
+### Option 2: Build it Yourself (ESP-IDF)
+
+Placas: **SmartDisplay 4"** (Guition ESP32-S3-4848S040) e **Cheap Yellow Display** (ESP32-2432S028R).
+
 ```bash
-esptool.py --chip esp32 --port COM3 --baud 921600 write_flash -z \
-  0x1000 bootloader.bin \
-  0x8000 partitions.bin \
-  0x10000 firmware.bin
+git clone https://github.com/Haris16-code/KryonOS.git && cd KryonOS
+source ~/esp/v6.1/esp-idf/export.sh          # ESP-IDF v6.1 instalado
+
+# SmartDisplay (ESP32-S3)
+idf.py -B build -DSDKCONFIG=build/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/smartdisplay/sdkconfig.defaults" \
+  set-target esp32s3
+idf.py -B build build flash -p /dev/ttyUSB0 monitor
+
+# Cheap Yellow Display (ESP32 classico)
+idf.py -B build-cyd -DSDKCONFIG=build-cyd/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/cyd/sdkconfig.defaults" \
+  -DKRYONOS_BOARD=cyd set-target esp32
+idf.py -B build-cyd build
+
+# Gravar o LittleFS de data/ (icones + app demo) na particao "littlefs"
+tools/flash_data.sh smartdisplay /dev/ttyUSB0    # ou: cyd <porta>
+
+# Servidor OTA local de testes (firma na LAN)
+python tools/ota_server.py --board smartdisplay
 ```
 
-### Option 2: Build it Yourself
-To build and flash the firmware from source using PlatformIO:
-1. Download the repository as a ZIP or clone it via git.
-2. Open the project folder in your terminal or IDE (like VS Code).
-3. Build and upload using the PlatformIO command:
-```bash
-pio run -t upload
-```
+Componentes de terceiros resolvem sozinhos pelo component manager
+(ArduinoJson, esp_littlefs, nlohmann); o LovyanGFX e um git submodule
+(`git clone --recurse-submodules`).
 
 ## Documentation & Community
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Haris16-code/KryonOS)

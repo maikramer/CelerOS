@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "KryonOS",
-    "project_version":    "1.0.0",
+    "project_version":    "1.1.0",
     "project_path":       "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS",
     "idf_path":           "/home/maikeu/esp/v6.1/esp-idf",
     "build_dir":          "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd",

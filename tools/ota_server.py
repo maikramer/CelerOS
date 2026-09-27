@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import re
 import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -43,14 +44,12 @@ def lan_ip() -> str:
 def read_version(repo_root: str, override: str | None) -> str:
     if override:
         return override
-    ini = os.path.join(repo_root, "platformio.ini")
-    try:
-        with open(ini, encoding="utf-8") as f:
-            m = re.search(r'KRYONOS_VERSION=\\"([^"\\]+)\\"', f.read())
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
+    # project(KryonOS VERSION x.y.z) no CMakeLists.txt raiz
+    with open(os.path.join(repo_root, "CMakeLists.txt")) as f:
+        for line in f:
+            m = re.search(r"project\(\s*KryonOS\s+VERSION\s+(\S+)", line)
+            if m:
+                return m.group(1).strip(")")
     return "0.0.0"
 
 
@@ -105,14 +104,15 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env", default="smartdisplay_4848S040", help="env do PlatformIO (para achar o firmware.bin)")
+    ap.add_argument("--board", default="smartdisplay", help="board do ESP-IDF: smartdisplay|cyd (para achar o kryonos.bin)")
     ap.add_argument("--bin", help="caminho direto do firmware.bin (sobrepoe --env)")
     ap.add_argument("--port", type=int, default=10234)
-    ap.add_argument("--version", help="versao a publicar (default: KRYONOS_VERSION do platformio.ini)")
+    ap.add_argument("--version", help="versao a publicar (default: project(VERSION) do CMakeLists.txt)")
     args = ap.parse_args()
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    bin_path = args.bin or os.path.join(repo_root, ".pio", "build", args.env, "firmware.bin")
+    build_dir = "build-cyd" if args.board == "cyd" else "build"
+    bin_path = args.bin or os.path.join(repo_root, build_dir, "kryonos.bin")
     if not os.path.isfile(bin_path):
         raise SystemExit(f"firmware nao encontrado: {bin_path} (rode pio run antes)")
 
