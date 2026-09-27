@@ -30,6 +30,19 @@ python3 tools/kryonctl.py reboot
 python3 tools/kryonctl.py logcat             # logs ao vivo (Ctrl-C sai)
 python3 tools/kryonctl.py ota push build/KryonOS.bin   # firmware sem esptool
 python3 tools/kryonctl.py screencap tela.png # captura do display -> PNG
+python3 tools/kryonctl.py tap 120 160        # injeta um toque (navegar via USB)
+python3 tools/kryonctl.py swipe 120 400 120 40  # injeta um arrasto (scroll)
+```
+
+### Iterar na UI sem tocar na placa
+
+`tap`/`swipe` + `screencap` formam um laco adb-like: o gesto e enfileirado
+no firmware (opcode `KL_TOUCH`), executado pelo TouchPump da UI como se
+fosse dedo fisico — vale para o Navigator e para modais (teclado QWERTY) —
+e o `screencap` le o framebuffer real. Exemplo de sessao:
+
+```bash
+python3 tools/kryonctl.py tap 360 88 && python3 tools/kryonctl.py screencap s.png
 ```
 
 ## Acelerando transferencias (-b)

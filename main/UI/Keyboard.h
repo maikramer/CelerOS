@@ -37,6 +37,8 @@ public:
     void draw(Canvas& c) override;
     bool onTouch(const TouchEvent& ev) override;
     void onTick(uint32_t dtMs) override;
+    // Cancelar e so pelo X: o swipe de borda esbarraria na coluna "q/a/z"
+    bool allowsBackGesture() const override { return false; }
 
 private:
     enum Mode { Lower, Upper, Sym1, Sym2 };

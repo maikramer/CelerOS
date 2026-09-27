@@ -20,6 +20,8 @@ Comandos:
   logcat                      stream de logs em tempo real (Ctrl-C sai)
   ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
   screencap [SAIDA.png]       captura da tela do dispositivo
+  tap X Y [ms]                injeta um toque (navegar pela UI via USB)
+  swipe X0 Y0 X1 Y1 [ms]      injeta um arrasto (scroll/troca de pagina)
 
 Exemplos:
   python3 tools/kryonctl.py devices
@@ -64,7 +66,7 @@ def load_opcodes():
         ops[name] = int(value, 16)
     missing = {"HELLO", "INFO", "LS", "STAT", "READ", "WRITE_BEGIN", "WRITE_CHUNK",
                "WRITE_END", "DELETE", "MKDIR", "RENAME", "EXEC", "REBOOT", "EXEC_CONT",
-               "SET_BAUD"} - set(ops)
+               "SET_BAUD", "TOUCH"} - set(ops)
     if missing:
         raise KryonError(f"opcodes ausentes em {header}: {missing}")
     return ops
@@ -284,6 +286,15 @@ class KryonLink:
                 raise KryonError("frame inesperado durante screenshot")
             data += more[1:]
         return w, h, bytes(data)
+
+    def touch(self, samples):
+        """Enfileira amostras de touch sinteticas: [(down, x, y, delay_ms)]."""
+        if not 1 <= len(samples) <= 16:
+            raise KryonError("gesto deve ter 1..16 amostras")
+        payload = bytes([len(samples)])
+        for down, x, y, delay in samples:
+            payload += bytes([1 if down else 0]) + struct.pack("<HHH", x, y, delay)
+        self.xfer(KL["TOUCH"], payload)
 
 
 # ------------------------------------------------------------------ utilidades
@@ -535,6 +546,34 @@ def cmd_screencap(args):
     print(f"{args.out}: {w}x{h}")
 
 
+def cmd_tap(args):
+    link = open_link(args)
+    try:
+        link.touch([(True, args.x, args.y, 0), (False, 0, 0, args.hold)])
+    finally:
+        link.close()
+    # deixa o gesto completar no dispositivo antes de um screencap seguinte
+    time.sleep((args.hold + 150) / 1000.0)
+
+
+def cmd_swipe(args):
+    steps = 8
+    step_ms = max(1, args.duration // (steps + 1))
+    samples = [(True, args.x0, args.y0, 0)]
+    for i in range(1, steps + 1):
+        t = i / (steps + 1)
+        x = round(args.x0 + (args.x1 - args.x0) * t)
+        y = round(args.y0 + (args.y1 - args.y0) * t)
+        samples.append((True, x, y, step_ms))
+    samples.append((False, 0, 0, 20))
+    link = open_link(args)
+    try:
+        link.touch(samples)
+    finally:
+        link.close()
+    time.sleep((args.duration + 200) / 1000.0)
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
@@ -603,6 +642,20 @@ def main():
     p = sub.add_parser("screencap", help="captura da tela -> PNG")
     p.add_argument("out", nargs="?", default="kryon_screencap.png")
     p.set_defaults(func=cmd_screencap)
+
+    p = sub.add_parser("tap", help="injeta um toque na tela")
+    p.add_argument("x", type=int)
+    p.add_argument("y", type=int)
+    p.add_argument("hold", nargs="?", type=int, default=80, help="ms pressionado (default 80)")
+    p.set_defaults(func=cmd_tap)
+
+    p = sub.add_parser("swipe", help="injeta um arrasto (p0 -> p1)")
+    p.add_argument("x0", type=int)
+    p.add_argument("y0", type=int)
+    p.add_argument("x1", type=int)
+    p.add_argument("y1", type=int)
+    p.add_argument("duration", nargs="?", type=int, default=250, help="duracao em ms (default 250)")
+    p.set_defaults(func=cmd_swipe)
 
     args = parser.parse_args()
     if args.command == "pull" and args.local is None:

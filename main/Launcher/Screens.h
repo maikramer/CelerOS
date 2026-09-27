@@ -18,11 +18,13 @@ public:
 
 private:
     kui::Rect cellRect(int entryIndex) const;
+    void drawStatusBar(kui::Canvas& c);
     int page = 0;
     std::string lastClock;
     bool lastWifi = false;
-    uint32_t offlineSinceMs = 0;
-    bool hasEverConnected = false;
+    bool m_noWifiPref = false;     // /local/nowifi.txt (lido no onEnter, nao por frame)
+    uint32_t m_pollAccumMs = 0;    // relogio/wifi checados a cada 250 ms
+    int m_dragDx = 0;              // arrasto horizontal em curso (pagina acompanha o dedo)
 };
 
 // ------------------------------------------------------------ Tela de app JS --
@@ -55,9 +57,11 @@ public:
     void draw(kui::Canvas& c) override;
     bool onTouch(const kui::TouchEvent& ev) override;
     void onTick(uint32_t dtMs) override;
+    // Conexao em andamento roda numa task: sair da tela no meio perderia o resultado
+    bool allowsBackGesture() const override { return m_phase != Connecting; }
 
 private:
-    enum Phase { LocalList, WebPortal };
+    enum Phase { LocalList, Connecting, WebPortal };
     struct NetEntry {
         std::string ssid;
         int32_t rssi = 0;
@@ -69,12 +73,17 @@ private:
     void updateStatus();   // linha de estado sob o header
     void askPassword(const std::string& ssid);  // teclado de senha
     void askHiddenSsid();                       // teclado de SSID oculto
+    // Conecta numa task propria (o connect bloqueia ate 15 s); a UI segue
+    // viva com spinner e o resultado e colhido no onTick
     void tryConnect(const std::string& ssid, const std::string& password, bool secure);
-    void drawConnecting(const std::string& ssid);  // direto no display (connect bloqueia)
+    void finishConnect(bool ok);
     void enterWebPortal();
     void leaveWebPortal();
 
     Phase m_phase = LocalList;
+    std::string m_connSsid;
+    bool m_connSecure = false;
+    uint32_t m_spinMs = 0;        // animacao do spinner (Connecting)
     bool m_scanStarted = false;   // ja disparou um scan nesta sessao
     bool m_scanning = false;      // aguardando o evento de scan
     uint32_t m_scanStartMs = 0;   // guarda de scan perdido (>20s)
@@ -106,6 +115,8 @@ public:
         : m_name(name), m_drawFn(draw), m_touchFn(touch) {}
 
     bool wantsDirectDraw() const override { return true; }
+    // Telas antigas navegam via currentState: um pop externo dessincroniza
+    bool allowsBackGesture() const override { return false; }
     const char* name() const { return m_name; }
 
     void draw(kui::Canvas& c) override { (void)c; m_drawFn(); }

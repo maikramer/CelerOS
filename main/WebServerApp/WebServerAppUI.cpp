@@ -3,6 +3,7 @@
 #include "../Display/Layout.h"
 #include "../WebManager/WebManager.h"
 #include "../FileSystem/FileSystem.h"
+#include "../Display/LegacyPalette.h"  // por ultimo: TFT_* -> tons do tema
 
 KryonDisplay *WebServerAppUI::tftInstance = nullptr;
 
