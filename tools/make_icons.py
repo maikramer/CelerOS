@@ -189,6 +189,19 @@ def main() -> None:
             old_bin.unlink()
             print(f"rm  {old_bin.relative_to(ROOT)}")
 
+    # Apps publicados no CelerOS Hub (hub_apps/<Nome>/): mesma copia de arte.
+    for app_name, icon_id in HUB_PKG_ICONS.items():
+        src_png = OUT / f"{icon_id}.png"
+        if not src_png.exists():
+            print(f"AVISO: {src_png} ausente, pacote de '{app_name}' sem icone")
+            continue
+        pkg_dir = ROOT / "hub_apps" / app_name
+        if not (pkg_dir / "app.json").exists():
+            print(f"AVISO: {pkg_dir} sem app.json, pulando icone")
+            continue
+        (pkg_dir / "icon.png").write_bytes(src_png.read_bytes())
+        print(f"ok  {(pkg_dir / 'icon.png').relative_to(ROOT)}")
+
 
 # Apps de sistema e o id do icone /local/icons usado como arte do pacote
 APP_PKG_ICONS = {
@@ -198,8 +211,14 @@ APP_PKG_ICONS = {
     "Settings": "settings",
     "Web Server": "web",
     "Terminal": "terminal",
-    "Calculator": "calculator",
     "Snake": "snake",
+}
+
+# Apps do CelerOS Hub (hub_apps/<Nome>/) e o id do icone do pacote
+HUB_PKG_ICONS = {
+    "2048": "2048",
+    "Breakout": "breakout",
+    "Cronometro": "cronometro",
 }
 
 

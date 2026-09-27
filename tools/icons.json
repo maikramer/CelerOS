@@ -72,15 +72,27 @@
     "seed": 112
   },
   {
-    "id": "calculator",
-    "prompt": "flat minimal vector app icon, simple white calculator glyph with small display and button grid, centered, solid warm amber orange background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-    "output": "calculator.png",
-    "seed": 113
-  },
-  {
     "id": "snake",
     "prompt": "flat minimal vector game icon, simple white coiled snake glyph made of rounded segments with a round dot apple nearby, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
     "output": "snake.png",
     "seed": 114
+  },
+  {
+    "id": "2048",
+    "prompt": "flat minimal vector game icon, simple white 2x2 grid of rounded square tiles with the numbers 2, 0, 4 and 8, one tile in vivid amber accent, centered, solid deep indigo background, rounded square icon tile, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "2048.png",
+    "seed": 115
+  },
+  {
+    "id": "breakout",
+    "prompt": "flat minimal vector game icon, simple white breakout glyph with three rows of small bricks on top, a round ball in the middle and a horizontal paddle bar at the bottom, centered, solid vivid violet purple background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "breakout.png",
+    "seed": 116
+  },
+  {
+    "id": "cronometro",
+    "prompt": "flat minimal vector app icon, simple white stopwatch glyph with side button and top crown, centered, solid crimson red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "cronometro.png",
+    "seed": 117
   }
 ]

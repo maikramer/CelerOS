@@ -318,36 +318,51 @@ function joinLog(log) { return log.join('\n'); }
     check('exit sai', r.err === null);
 })();
 
-// --- Calculator -------------------------------------------------------------
+// --- 2048 (hub_apps) --------------------------------------------------------
 (function() {
-    console.log('Calculator:');
-    // centro das teclas: GX=9, GY=136, BW=51, BH=30, GAP=6
-    function keyXY(col, row) {
-        return { x: 9 + col * 57 + 25, y: 136 + row * 36 + 15 };
-    }
-    var r = runApp('data/apps/Calculator/main.js', function(env) {
-        // 2 + 3 x 4 =  => 14 (precedencia)
-        // grid: R0 C<( ) | R1 789/ | R2 456x | R3 123- | R4 0.=+
-        var seq = ['1,3', '3,4', '2,3', '3,2', '0,2', '2,4'];  // 2 + 3 x 4 =
-        for (var i = 0; i < seq.length; i++) {
-            var rc = seq[i].split(',');
-            var p = keyXY(parseInt(rc[0], 10), parseInt(rc[1], 10));
-            env.__harness.tap(p.x, p.y);
-        }
-        // erro: C 5 / 0 =
-        var seq2 = ['0,0', '1,2', '3,1', '1,4', '2,4'];
-        for (var k = 0; k < seq2.length; k++) {
-            var rc2 = seq2[k].split(',');
-            var p2 = keyXY(parseInt(rc2[0], 10), parseInt(rc2[1], 10));
-            env.__harness.tap(p2.x, p2.y);
-        }
+    console.log('2048:');
+    var r = runApp('hub_apps/2048/main.js', function(env) {
+        // sequencia de swipes: down, left, down, right (qualquer estado valido)
+        env.__harness.swipe(120, 90, 120, 240);
+        env.__harness.swipe(200, 150, 30, 150);
+        env.__harness.swipe(120, 90, 120, 240);
+        env.__harness.swipe(30, 150, 200, 150);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
-    check('expressao exibida', j.indexOf('2+3x4') >= 0, j);
-    check('precedencia 2+3x4=14', j.indexOf('= 14') >= 0);
-    check('divisao por zero -> Erro', j.indexOf('Erro') >= 0);
+    check('header 2048', j.indexOf('2048') >= 0);
+    check('pontuacao desenhada', j.indexOf('PONTOS') >= 0);
+})();
+
+// --- Breakout (hub_apps) ----------------------------------------------------
+(function() {
+    console.log('Breakout:');
+    var r = runApp('hub_apps/Breakout/main.js', function(env) {
+        // 1o tap lanca a bola (serve->play); os outros arrastam/nao arrastam
+        env.__harness.tap(120, 280);
+        for (var i = 0; i < 200; i++) env.__harness.System.delay(10);
+        env.__harness.tap(60, 280);
+        env.__harness.tap(180, 280);
+        for (var k = 0; k < 200; k++) env.__harness.System.delay(10);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('placar desenhado', j.indexOf('PONTOS') >= 0);
+})();
+
+// --- Cronometro (hub_apps) --------------------------------------------------
+(function() {
+    console.log('Cronometro:');
+    var r = runApp('hub_apps/Cronometro/main.js', function(env) {
+        env.__harness.tap(120, 285);   // iniciar
+        for (var i = 0; i < 60; i++) env.__harness.System.delay(10);
+        env.__harness.tap(70, 285);    // volta
+        env.__harness.tap(170, 285);   // zerar
+        for (var k = 0; k < 20; k++) env.__harness.System.delay(10);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('titulo desenhado', j.indexOf('Cronometro') >= 0);
 })();
 
 // --- Snake ------------------------------------------------------------------
