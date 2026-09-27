@@ -247,7 +247,10 @@ void AppHostScreen::onTick(uint32_t) {
     m_started = true;
     // Executa o app sincronamente (sai via OS_EXIT; task propria no W7d)
     LauncherUI::launchApp(m_appIndex);
-    Navigator::home();
+    // O app pode ter empilhado tela nativa (System.openWifiSetup + exitApp):
+    // o host sai da pilha sem derrubar o que veio por cima
+    if (Navigator::top() == this) Navigator::home();
+    else Navigator::remove(this);
 }
 
 // ============================================================ WiFi setup ===

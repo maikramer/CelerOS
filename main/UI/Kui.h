@@ -326,6 +326,7 @@ public:
     static void push(Screen* s);       // entra por cima (desenha s)
     static void pop();                 // volta para a anterior (redesenha)
     static void replace(Screen* s);    // troca o topo
+    static void remove(Screen* s);     // tira s da pilha (mesmo sem ser o topo)
     static void home();                // esvazia ate a base (launcher)
     static Screen* top();
     static int depth();
