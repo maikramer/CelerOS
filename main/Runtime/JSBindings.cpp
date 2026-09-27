@@ -6,6 +6,7 @@
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
 #include "HttpClient.h"
+#include "SystemInfo.h"
 
 // ---------------------------------------------------------------------------
 // Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
@@ -616,40 +617,59 @@ duk_ret_t JSBindings::js_hasTemperatureSensor(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
+    SystemInfo& sys = SystemInfo::instance();
+    MemoryInfo mem = sys.getMemoryInfo();
+    ChipInfo chip = sys.getChipInfo();
+
     duk_push_object(ctx);
 
     // RAM
-    duk_push_uint(ctx, ESP.getHeapSize());
+    duk_push_uint(ctx, mem.totalHeap);
     duk_put_prop_string(ctx, -2, "totalRAM");
 
-    duk_push_uint(ctx, ESP.getFreeHeap());
+    duk_push_uint(ctx, mem.freeHeap);
     duk_put_prop_string(ctx, -2, "freeRAM");
 
-    duk_push_uint(ctx, ESP.getMinFreeHeap());
+    duk_push_uint(ctx, mem.minFreeHeap);
     duk_put_prop_string(ctx, -2, "minFreeRAM");
 
-    duk_push_uint(ctx, ESP.getMaxAllocHeap());
+    duk_push_uint(ctx, mem.largestFreeBlock);
     duk_put_prop_string(ctx, -2, "maxAllocRAM");
 
-    // Chip & CPU
+    duk_push_uint(ctx, mem.totalPsram);
+    duk_put_prop_string(ctx, -2, "totalPSRAM");
+
+    duk_push_uint(ctx, mem.freePsram);
+    duk_put_prop_string(ctx, -2, "freePSRAM");
+
+    // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
     duk_push_uint(ctx, ESP.getCpuFreqMHz());
     duk_put_prop_string(ctx, -2, "cpuFreqMHz");
 
-    duk_push_string(ctx, ESP.getChipModel());
+    duk_push_string(ctx, sys.getChipModel().c_str());
     duk_put_prop_string(ctx, -2, "chipModel");
 
-    duk_push_uint(ctx, ESP.getChipCores());
+    duk_push_uint(ctx, chip.cores);
     duk_put_prop_string(ctx, -2, "chipCores");
 
-    duk_push_uint(ctx, ESP.getChipRevision());
+    duk_push_uint(ctx, chip.revision);
     duk_put_prop_string(ctx, -2, "chipRevision");
 
-    duk_push_uint(ctx, ESP.getFlashChipSize());
+    duk_push_uint(ctx, sys.getFlashSize());
     duk_put_prop_string(ctx, -2, "flashSize");
 
-    // Uptime
-    duk_push_uint(ctx, millis());
+    // Uptime e identidade
+    duk_push_uint(ctx, (uint32_t)sys.getUptimeMillis());
     duk_put_prop_string(ctx, -2, "uptimeMs");
+
+    duk_push_string(ctx, sys.getMacAddress().c_str());
+    duk_put_prop_string(ctx, -2, "macAddress");
+
+    duk_push_string(ctx, sys.getResetReasonString().c_str());
+    duk_put_prop_string(ctx, -2, "resetReason");
+
+    duk_push_string(ctx, sys.getIdfVersion().c_str());
+    duk_put_prop_string(ctx, -2, "idfVersion");
 
     return 1;
 }

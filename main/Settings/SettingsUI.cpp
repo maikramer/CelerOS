@@ -6,6 +6,7 @@
 #include "../Kernel/TimeManager.h"
 #include "../Keyboard/MyKeyboard.h"
 #include "../WebManager/WebManager.h"
+#include "SystemInfo.h"
 #include "../Launcher/LauncherUI.h"
 #include "../OTA/OtaManager.h"
 #include "../WebManager/WifiSetupPortal.h"
@@ -313,10 +314,15 @@ void SettingsUI::drawAbout() {
     }
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString(kstr::fmt("Free Heap: %u KB", (unsigned)(ESP.getFreeHeap() / 1024)).c_str(), 15, 205, 2);
+    tftInstance->drawString(kstr::fmt("Free Heap: %u KB", (unsigned)(SystemInfo::instance().getFreeHeap() / 1024)).c_str(), 15, 205, 2);
 
+    SystemInfo& sysInfo = SystemInfo::instance();
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->drawString((std::string("KryonOS ") + KRYONOS_VERSION).c_str(), UI::sx(15), UI::sy(222), UI::font(2));
+    tftInstance->drawString((std::string("KryonOS ") + KRYONOS_VERSION +
+        "  up " + sysInfo.getFormattedUptime()).c_str(), UI::sx(15), UI::sy(222), UI::font(2));
+    tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tftInstance->drawString(("reset: " + sysInfo.getResetReasonString() +
+        " | IDF " + sysInfo.getIdfVersion()).c_str(), UI::sx(15), UI::sy(237), UI::font(1));
 
     // Reset Apps Button
     tftInstance->fillRoundRect(UI::sx(60), UI::sy(250), UI::sx(120), UI::sy(30), UI::sx(4), TFT_RED);
