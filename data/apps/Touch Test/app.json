@@ -1,8 +1,8 @@
 {
   "name": "Touch Test",
-  "packageName": "kryonos.touchtest",
+  "packageName": "celeros.touchtest",
   "version": "1.0.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Teste de display e touch: barras RGB + alvo de toque. Toque no X (canto superior direito) para sair.",
   "type": "Utility",
   "category": "Utility",

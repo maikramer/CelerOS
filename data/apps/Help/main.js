@@ -1,4 +1,4 @@
-// KryonOS Help (Central de Ajuda) — app de sistema. Porte do HelpCenterUI.cpp
+// CelerOS Help (Central de Ajuda) — app de sistema. Porte do HelpCenterUI.cpp
 // (commit 64ccfc8): menu Offline/Online, categorias e topicos offline (textos
 // originais resumidos em PT-BR), ajuda online buscada no GitHub via Net.getJSON
 // (indice -> categoria -> artigo) e leitor com rolagem por arraste.
@@ -9,7 +9,9 @@ var T = System.theme();
 // ---- helpers de UI (padrao dos apps de sistema) ---------------------------
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
+    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
+    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
@@ -75,8 +77,8 @@ function wrapText(s, font, maxW) {
 // ---- conteudo offline (porte do HelpCenterUI.cpp, PT-BR resumido) ----------
 var CATS = [
     { name: "Primeiros Passos", topics: [
-        { t: "O que e o KryonOS", d: "Visao do sistema",
-          c: "O KryonOS e um sistema operacional rapido e leve, feito para o ESP32. Traz loja de apps integrada, execucao de apps JavaScript pelo cartao SD e uma interface fluida no toque." },
+        { t: "O que e o CelerOS", d: "Visao do sistema",
+          c: "O CelerOS e um sistema operacional rapido e leve, feito para o ESP32. Traz loja de apps integrada, execucao de apps JavaScript pelo cartao SD e uma interface fluida no toque." },
         { t: "Como comecar", d: "WiFi e cartao SD",
           c: "Va em Configuracoes > WiFi para conectar o aparelho. Se for instalar novos apps de usuario, insira um cartao SD formatado em FAT32." },
         { t: "Tipos de app", d: "Sistema vs usuario",
@@ -273,7 +275,7 @@ function drawMenu() {
     System.fillScreen(T.bg);
     header("Central de Ajuda");
     System.setTextColor(T.textDim, T.bg);
-    System.drawString("Como usar o KryonOS:", 12, 56, 1);
+    System.drawString("Como usar o CelerOS:", 12, 56, 1);
     System.drawString("gestos, WiFi, apps e mais.", 12, 70, 1);
     System.fillRoundRect(20, 104, 200, 32, 8, T.accent);
     ctext("Ajuda Offline", 120, 120, 2, T.onAccent, T.accent);
@@ -301,8 +303,8 @@ function menuLoop() {
     }
 }
 
-// ---- ajuda online (GitHub, mesmas URLs do HelpCenterUI.cpp) ----------------
-var IDX_URL = "https://raw.githubusercontent.com/Haris16-code/KryonOS/refs/heads/main/help/index.json";
+// ---- ajuda online (CelerOS Hub, mesmo formato do HelpCenterUI.cpp) ---------
+var IDX_URL = "https://os.celer.tec.br/help/index.json";
 var errMsg = "";
 
 function loading(msg) {

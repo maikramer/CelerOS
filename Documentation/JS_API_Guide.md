@@ -1,29 +1,32 @@
-# KryonOS JavaScript Engine - Comprehensive Reference Manual
+# CelerOS JavaScript Engine - Comprehensive Reference Manual
 
-Welcome to the **KryonOS JavaScript API Reference**. This document provides deep technical details on the underlying JavaScript engine specifications, performance characteristics, and every native API exposed by the C++ Kernel for interacting with the ESP32 hardware.
+**English** | [Português (BR)](JS_API_Guide.pt-BR.md)
+
+Welcome to the **CelerOS JavaScript API Reference**. This document provides deep technical details on the underlying JavaScript engine specifications, performance characteristics, and every native API exposed by the C++ kernel for interacting with the ESP32 hardware.
 
 ---
-## KryonOS JS Runtime Version
+## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 3
+### API Level: 5
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
 
-**KryonOS JavaScript Runtime** uses the **Duktape 2.x**
+**CelerOS JavaScript Runtime** uses the **Duktape 2.x**
 
 ### 1.1 ECMAScript Compliance
 - **ES5 / ES5.1 Compliant:** The engine is fully compliant with the ECMAScript 5.1 specification. 
-- **Partial ES6 (ES2015) Support:** Supports modern built-ins such as `TypedArrays` (Uint8Array, Int32Array, etc.), `Promise`, `Proxy`, and `Reflect`.
+- **Partial ES6 (ES2015) Support:** Supports modern built-ins such as `TypedArrays` (Uint8Array, Int32Array, etc.), `Proxy`, and `Reflect`.
 - **Unsupported Modern Syntax:** Because it prioritizes ultra-low memory, modern syntactic sugar is **NOT SUPPORTED**. You cannot use:
   - Arrow functions `() => {}`
   - `let` and `const` (Use `var`)
   - ES6 `class` definitions (Use traditional prototype-based inheritance)
   - Template literals `` `string ${var}` ``
+  - `Promise` (the built-in is compiled out to save flash — use the blocking calls instead, e.g. `Net.get`)
 
 ### 1.2 Memory & Performance Limits
 - **Execution Strategy:** Bytecode compiled natively and executed by a virtual stack machine.
-- **Garbage Collection (GC):** Implements Mark-and-Sweep GC. The OS will automatically execute GC sweeps when you call `System.delay(ms)`, drastically reducing memory fragmentation.
+- **Garbage Collection (GC):** Reference counting frees most objects immediately; a full mark-and-sweep (for cycles) runs from `System.delay(ms)` at most once per second, or right away when the heap is tight. The time spent collecting is subtracted from the requested delay.
 - **Maximum Heap Size:** ~90KB of usable free RAM per script (when WiFi is disabled). Always minimize dynamic array allocations inside high-speed animation loops.
 
 ---
@@ -35,15 +38,16 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 ### Display Properties
 
 #### `System.screenWidth()`
-- **Returns:** `Integer` (e.g., `240` on the classic board, `480` on the SmartDisplay 4").
-- **Description:** Returns the total physical width of the TFT display.
+- **Returns:** `Integer` — always `240` (CelerOS 1.1+ virtual canvas).
+- **Description:** Width of the design canvas apps draw in. On larger panels the runtime scales everything to the physical screen (see the virtual canvas note in section 3).
 
 #### `System.screenHeight()`
-- **Returns:** `Integer` (e.g., `320` on the classic board, `480` on the SmartDisplay 4").
-- **Description:** Returns the total physical height of the TFT display.
+- **Returns:** `Integer` — always `320` (CelerOS 1.1+ virtual canvas).
+- **Description:** Height of the design canvas apps draw in.
 
-> Always query these at runtime — the UI is resolution-adaptive, so hardcoding
-> 240x320 will clip on larger panels.
+> Hardcoding 240x320 is the intended pattern: the runtime scales drawing,
+> sprites and touch to the physical panel, so the same app renders identically
+> (and fullscreen) on every board.
 
 ### OS Utilities
 
@@ -150,12 +154,14 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 
 ## 3. Display Drawing Pipeline
 
-HarixOS uses a direct-to-glass rendering pipeline without double-buffering. Calling shape-drawing functions directly overwrites pixels on the TFT screen.
+**Automatic frame buffer (CelerOS 1.2+, boards with PSRAM):** every draw call goes to an off-screen frame the size of the panel, and the frame is shown on the glass only when the app *yields*: `System.delay()`, `System.getTouch()`, `System.prompt()`, and right before blocking calls (`Net.*`, `System.wifiScan/wifiConnect`, `System.otaCheck/otaStart` — also after each OTA progress callback —, `FS.copyFile/copyDirectory/removeDirectory`). Apps that clear and redraw the whole screen on every event no longer flicker, with no code change. `System.present()` forces the frame to the glass (animations or long computations that never yield); `System.isBuffered()` tells whether the board has the frame (`false` on the CYD, where drawing still goes straight to the TFT).
+
+> Rule of thumb: draw the complete screen, then yield. Something drawn right before a long C++ call that is not listed above appears only at the next yield — call `System.present()` first.
 
 ### Color Engine
-The ESP32 TFT uses the high-performance **16-bit RGB565** color format. You can define colors directly via Hex (e.g. `0xF800` for Red), or use the color conversion API.
+Colors in JS are always **16-bit RGB565** integers (e.g. `0xF800` = red) on every board — use `System.color(r, g, b)` or `System.theme()` to build them. (CelerOS 1.2 fixed a runtime bug where, on 16-bit panels, RGB565 values were passed through as RGB888 and came out with the wrong hue.)
 
-> **Virtual canvas (KryonOS 1.1+):** apps always run in a **240x320 design canvas**. On boards with larger panels (e.g. the SmartDisplay 4.5"/480x480), `System.screenWidth()/screenHeight()` report 240/320, all drawing coordinates/sizes are scaled to the physical screen, sprites are allocated at the scaled size, and `System.getTouch()` returns coordinates in the 240x320 space — the same app renders identically (and in fullscreen) on every board. Colors are RGB565 everywhere; the runtime converts to the panel's native format.
+> **Virtual canvas (CelerOS 1.1+):** apps always run in a **240x320 design canvas**. On boards with larger panels (e.g. the SmartDisplay 4"/480x480), `System.screenWidth()/screenHeight()` report 240/320, all drawing coordinates/sizes are scaled to the physical screen, sprites are allocated at the scaled size, and `System.getTouch()` returns coordinates in the 240x320 space — the same app renders identically (and in fullscreen) on every board. Colors are RGB565 everywhere; the runtime converts to the panel's native format.
 
 #### `System.color(r, g, b)`
 - **Parameters:** `r`, `g`, `b` (Integers 0-255)
@@ -189,11 +195,11 @@ The ESP32 TFT uses the high-performance **16-bit RGB565** color format. You can 
 #### `System.drawBMP(path, x, y)`
 - **Parameters:** `path` (String), `x` (Int), `y` (Int)
 - **Returns:** `Boolean` (`true` if successful, `false` if unsupported or file missing)
-- **Description:** Reads a 16-bit, 24-bit, or 32-bit `.bmp` image from the FileSystem (`/sd/` or `/local/`) and streams the pixel data directly to the TFT display at coordinates `x, y`. Bypasses JavaScript RAM entirely for high-speed rendering. Automatically handles `RGB565` 16-bit translation and ignores alpha channels on 32-bit files.
+- **Description:** Reads a 16-, 24- or 32-bit `.bmp` image from the FileSystem (`/sd/` or `/local/`) and streams it at `x, y` without using JavaScript RAM. The image is scaled with the virtual canvas (a 240-px-wide BMP fills the screen width on every board).
 #### `System.drawPNG(path, x, y)`
 - **Parameters:** `path` (String), `x` (Int), `y` (Int)
 - **Returns:** `Boolean` (`true` if successful, `false` if path/decode failed)
-- **Description:** Draws a `.png` image from the FileSystem (`/sd/` or `/local/`) at `x, y`, decoded in streaming line-by-line (no full-framebuffer RAM spike; only the ~44 KB deflate window during decode). PNG alpha is blended over the existing background. Draw size is the PNG's native pixel size — coordinates follow the same virtual 240x320 canvas scaling as other draw calls. Interlaced PNGs are supported. Ideal for backgrounds and photos; use `System.drawIcon()` for launcher-style 64x64 icons.
+- **Description:** Draws a `.png` image from the FileSystem (`/sd/` or `/local/`) at `x, y`, decoded in streaming line-by-line (no full-framebuffer RAM spike; only the ~44 KB deflate window during decode). PNG alpha is blended over the existing background. Like every other draw call, the image is scaled with the virtual 240x320 canvas (CelerOS 1.2+; before, the PNG kept its native pixel size on large panels). Interlaced PNGs are supported. Ideal for backgrounds and photos; use `System.drawIcon()` for launcher-style 64x64 icons.
 
 #### `System.drawCircle(x, y, radius, color)`
 #### `System.fillCircle(x, y, radius, color)`
@@ -261,7 +267,7 @@ Double Buffering allows you to draw shapes invisibly to an off-screen RAM buffer
 
 ## 4. Hardware GPIO (General Purpose Input/Output)
 
-HarixOS enables direct hardware control of the ESP32 microcontroller pins via `System.gpio`.
+CelerOS enables direct hardware control of the ESP32 microcontroller pins via `System.gpio`.
 
 ### Constants
 - `System.gpio.INPUT`
@@ -376,9 +382,9 @@ The `FS` global object controls the C++ virtual file system layer. It dynamicall
 - **Description:** Triggers an SPI remount/unmount of the physical SD card.
 
 ---
-**Take Apps and Games from KryonOS Official App Store Repository As Example: https://github.com/Haris16-code/KryonOS-AppStore**
+**Take Apps and Games from the CelerOS Hub As Example: https://os.celer.tec.br/store (catalog) — see also `data/apps/` in this repository**
 ---
-*Document Version: 1.0 (Built for KryonOS JavaScript Environment)*
+*Document Version: 1.1 (Built for CelerOS JavaScript Environment)*
 
 ## 6. Networking: `Net` (API Level 2)
 
@@ -433,15 +439,15 @@ app package format.
 ### 12.1 Theme & Icons
 
 #### `System.theme()`
-- **Returns:** Object `{bg, card, raised, stroke, accent, accentD, onAccent, text, textDim, ok, warn, err}` — the OS theme palette as RGB565 values, ready to pass to any drawing call. System apps use it to inherit the KryonOS look on every board.
+- **Returns:** Object `{bg, card, raised, stroke, accent, accentD, onAccent, text, textDim, ok, warn, err}` — the OS theme palette as RGB565 values, ready to pass to any drawing call. System apps use it to inherit the CelerOS look on every board.
 
 #### `System.textWidth(str, font)`
 - **Parameters:** `str` (String), `font` (Number, default 2)
 - **Returns:** Number — string width in pixels in the virtual 240x320 space. `System.drawString` uses top-left datum; center manually: `x = 120 - (System.textWidth(s, 2) >> 1)`.
 
 #### `System.drawIcon(name, x, y)`
-- **Parameters:** `name` (String: `appstore`, `installer`, `settings`, `help`, `web`, `time`, `about`, `update`, `app`, `wifi_on`, `wifi_off`), position in virtual space
-- **Description:** Draws a 64x64 icon from `/local/icons/<name>.bin` with alpha blending.
+- **Parameters:** `name` (String: `appstore`, `installer`, `settings`, `help`, `web`, `time`, `about`, `update`, `app`, `wifi_on`, `wifi_off`, `terminal`, `calculator`, `snake` — or an absolute `/local`/`/sd` path), position in virtual space
+- **Description:** Draws a 64x64 icon from `/local/icons/<name>.png` with alpha blending (legacy `.bin` accepted).
 
 ### 12.2 App Lifecycle
 
@@ -453,6 +459,18 @@ Asks the launcher to rescan `/local/apps` and `/sd/apps`. Call after installing/
 
 #### `System.openWifiSetup()`
 Pushes the native WiFi setup screen. Since JS apps run synchronously, call `System.exitApp()` right after — the setup screen takes over when the script yields.
+
+#### `System.present()`
+Shows the automatic frame buffer on the glass now (no-op without it). Only needed in loops that never call `delay()`/`getTouch()`.
+
+#### `System.fontHeight(font)`
+Height in pixels (virtual canvas) of a numeric font (1/2/4) as rendered on this board — use `y - (System.fontHeight(f) >> 1)` to center text vertically.
+
+#### `System.setClip(x, y, w, h)` / `System.clearClip()`
+Restricts drawing to a rectangle of the virtual canvas (anything outside is discarded) — e.g. a scrolling list whose partial rows must not paint over the header. `clearClip()` restores the full screen. The clip is reset when an app starts.
+
+#### `System.isBuffered()`
+Returns `true` when the board has the automatic frame buffer (PSRAM boards).
 
 ### 12.3 Hardware & System
 
@@ -480,7 +498,7 @@ Time configuration (persisted by TimeManager).
 
 #### `System.factoryReset(mode)`
 - `"configs"` — clears configuration files in `/local` and saved WiFi networks, **keeps** apps and icons.
-- `"total"` — formats the whole LittleFS partition (**apps are erased**; recovery requires `tools/flash_data.sh` or `kryonctl apps install`). Always confirm twice in the UI.
+- `"total"` — formats the whole LittleFS partition (**apps are erased**; recovery requires `tools/flash_data.sh` or `celerctl apps install`). Always confirm twice in the UI.
 
 ### 12.4 WiFi (Net)
 
@@ -499,7 +517,7 @@ Time configuration (persisted by TimeManager).
 ```json
 {
   "name": "My App",
-  "packageName": "kryonos.myapp",
+  "packageName": "celeros.myapp",
   "version": "1.0.0",
   "author": "you",
   "description": "...",
@@ -514,6 +532,80 @@ Time configuration (persisted by TimeManager).
 
 - `system: true` — system app: sorted first in the launcher grid (native system screens are apps like this now).
 - `order` — position among system apps.
-- `icon` — icon name in `/local/icons`. **Preferred:** ship `icon.bin` (same v2 64x64 RGB565+A4 format, 10240 bytes) inside the app folder — it overrides the name and travels with the package when installed via SD/kryonctl.
+- `icon` — icon name in `/local/icons`. **Preferred:** ship `icon.png` (64x64 with alpha; decoded on load — CelerOS 1.2+) inside the app folder — it overrides the name and travels with the package when installed via SD/celerctl. Legacy `icon.bin` (v2 RGB565+A4) is still accepted.
 - `packageName` — identity used by the launcher dedup, installer and App Store.
-- Install paths: `/local/apps/<Name>/` (LittleFS) or `/sd/apps/<Name>/` (SD card). Reinstall/update with `kryonctl apps install <folder> [--sd]`.
+- Install paths: `/local/apps/<Name>/` (LittleFS) or `/sd/apps/<Name>/` (SD card). Reinstall/update with `celerctl apps install <folder> [--sd]`.
+
+---
+
+## 13. API Level 5 — Docked Keyboard (W9)
+
+Introduced with the W9 apps (Terminal, Calculator, Snake): a **non-blocking
+keyboard session** the app controls from its own loop, so text input can live
+side by side with the app's UI (a shell input line, chat fields, forms…).
+`System.prompt()` (section 2) stays the right choice for simple one-shot
+dialogs.
+
+The keyboard renders on the **same target as the app** (app sprite > PSRAM
+frame > display), so it survives `present()` and composes with the automatic
+frame buffer on every board. With `field: false` the keyboard is drawn as a
+compact block anchored to the bottom of the screen; everything above
+`System.keypadRect().y` belongs to the app.
+
+### 13.1 Session API
+
+#### `System.keypadOpen(options)` → Boolean
+- **Parameters:** `options` (Object, optional): `{title, initial, maxLen, field}`.
+  - `title` (String) — header label (only shown with a field).
+  - `initial` (String) — pre-filled text.
+  - `maxLen` (Number, default 64, max 256) — buffer limit.
+  - `field` (Boolean, default true) — draw the native input field + X button on top. `field: false` draws the bare keyboard docked at the bottom (the app echoes the line itself).
+- **Returns:** `false` if a session is already open (one at a time) or there is no display.
+- **Description:** Opens the keyboard session and draws it immediately. Enter (OK) does **not** close the session: it clears the buffer and keeps the keyboard open — ideal for line-at-a-time UIs. The session ends on `X` (only with `field: true`, reported as a `cancel` event) or `System.keypadClose()`.
+
+#### `System.keypadPoll()` → Object|null
+- **Returns:** `null` when nothing happened, or one event object per call:
+  - `{type: "change"}` — the buffer changed (key/backspace/space); read it with `System.keypadText()`.
+  - `{type: "enter", text: "..."}` — OK pressed; `text` is the line, the buffer is cleared afterwards.
+  - `{type: "cancel"}` — X pressed; the session **closed itself** (redraw your screen, the keyboard is gone).
+- **Description:** Pumps the touch for the keyboard, redraws its keys when needed (key press feedback, layout pages, cursor blink) and reports at most one event per call. The top-right OS exit corner keeps working while the keyboard is open. Call this every loop iteration while the session is open.
+
+#### `System.keypadText()` → String
+Current input buffer (same text the native field would show).
+
+#### `System.keypadRect()` → `{x, y, w, h}`
+Area occupied by the keyboard in the 240x320 virtual canvas (`h` is 0 when the session is closed). The app must not draw inside it.
+
+#### `System.keypadDraw()`
+Re-blits the keyboard after the app repaints a region that overlaps it (not needed if the app only draws above `keypadRect().y`).
+
+#### `System.keypadClose()`
+Closes the session and frees the keyboard. The next `present()` restores the app's frame. Sessions are also closed automatically when an app exits.
+
+### 13.2 Example — input line above a docked keyboard
+
+```javascript
+var T = System.theme();
+System.keypadOpen({ field: false, maxLen: 96 });
+var kbTop = System.keypadRect().y;   // app owns 0..kbTop
+
+while (true) {
+    var ev = System.keypadPoll();
+    if (ev && ev.type === "enter") {
+        handleLine(ev.text);          // ex.: comando, mensagem, busca...
+        redrawScreen();
+    } else if (ev && ev.type === "change") {
+        redrawInputLine(System.keypadText());
+    }
+    System.delay(20);                 // GC + present (obrigatorio)
+}
+```
+
+Reference implementation: `data/apps/Terminal/main.js` (preinstalled W9 app).
+
+### 13.3 Global color constants (API 5 fix)
+
+`BLACK, WHITE, RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, ORANGE, DARKGREY`
+are now registered as global RGB565 constants (before W9 the registration
+was a no-op — apps had to use `System.color()`). `System.color()` and
+`System.theme()` remain the recommended way to get colors.

@@ -1,5 +1,5 @@
-// KryonOS App Store — app de sistema (W8). Porte do AppStoreUI.cpp: le o
-// catalogo do repo KryonOS-AppStore no GitHub (indice + categorias), lista os
+// CelerOS App Store — app de sistema (W8). Porte do AppStoreUI.cpp: le o
+// catalogo do CelerOS Hub (os.celer.tec.br; indice + categorias), lista os
 // apps com estado vs instalado (novo / atualizacao / instalado), abre o
 // detalhe (descricao, versao local x remota, API exigida) e instala direto
 // baixando app.json + main.js para /local/apps ou /sd/apps (flag
@@ -7,8 +7,11 @@
 // e sem progresso: tela "Baixando..." antes de cada chamada. X no canto sup.
 // direito sai.
 
-var INDEX_URL = "https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json";
+var INDEX_URL = "https://os.celer.tec.br/store/index.json";
 var FLAG_SD = "/local/config_install_sd.txt";
+// Catalogo da ultima carga bem-sucedida: a loja abre na hora (ate offline) e
+// so vai a rede no "Atualizar" — a carga completa faz 1 HTTPS por app (~40 s).
+var CACHE = "/local/appstore_cache.json";
 
 var T = System.theme();
 var API = System.getAPILevel();
@@ -16,7 +19,9 @@ var API = System.getAPILevel();
 // ---- helpers de UI (padrao dos apps de sistema) ---------------------------
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
+    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
+    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
@@ -230,6 +235,7 @@ function loadCatalog() {
         var x = a.name.toLowerCase(), y = b.name.toLowerCase();
         return x < y ? -1 : (x > y ? 1 : 0);
     });
+    if (apps.length > 0) FS.writeTextFile(CACHE, JSON.stringify(apps));
     return "list";
 }
 
@@ -264,17 +270,24 @@ function drawList() {
     if (apps.length === 0) {
         ctext("Catalogo vazio", 120, 120, 2, T.text, T.bg);
         ctext("Nenhum app encontrado.", 120, 148, 1, T.textDim, T.bg);
+        drawListFooter();
         return;
     }
 
     var maxS = maxScroll();
     var first = Math.floor(scrollY / PITCH);
     var y = LIST_Y - (scrollY - first * PITCH);
+    // com recorte (API 3+), linhas parciais rolam suaves pelas bordas;
+    // sem ele, so linhas inteiras (evita pintar sobre o cabecalho)
+    var clip = typeof System.setClip === "function";
+    if (clip) System.setClip(0, LIST_Y, 240, LIST_END - LIST_Y);
     for (var i = first; i < apps.length && y < LIST_END; i++, y += PITCH) {
-        if (y < LIST_Y || y + ROW_H > LIST_END) continue;
+        if (!clip && (y < LIST_Y || y + ROW_H > LIST_END)) continue;
         drawRow(i, y);
     }
+    if (clip) System.clearClip();
 
+    drawListFooter();
     if (maxS > 0) {
         System.drawFastVLine(235, LIST_Y, LIST_END - LIST_Y, T.stroke);
         var trackH = LIST_END - LIST_Y;
@@ -314,6 +327,25 @@ function listDrag(t0) {
     }
     return -1;
 }
+function drawListFooter() {
+    footerVoltar();
+    System.fillRoundRect(140, 282, 92, 30, 8, T.raised);
+    System.drawRoundRect(140, 282, 92, 30, 8, T.stroke);
+    ctext("Atualizar", 186, 297, 1, T.text, T.raised);
+}
+function loadCache() {
+    var body = FS.readTextFile(CACHE);
+    if (!body) return false;
+    var arr = null;
+    try { arr = JSON.parse(body); } catch (e) { arr = null; }
+    if (!arr || !arr.length) return false;
+    apps = arr;
+    scanLocalApps();  // estado instalado/atualizacao vem sempre do disco
+    scrollY = 0;
+    sel = -1;
+    return true;
+}
+
 function screenList() {
     drawList();
     while (true) {
@@ -322,6 +354,9 @@ function screenList() {
             if (hit(t, 8, 282, 84, 30)) {
                 waitRelease();
                 return "exit";
+            } else if (hit(t, 140, 282, 92, 30)) {
+                waitRelease();
+                return Net.isConnected() ? "load" : "wifi";
             } else if (t.y >= LIST_Y && t.y < LIST_END) {
                 var r = listDrag(t);
                 if (r >= 0) {
@@ -543,7 +578,7 @@ function screenWifi() {
 }
 
 // ---- fluxo principal --------------------------------------------------------
-var mode = Net.isConnected() ? "load" : "wifi";
+var mode = loadCache() ? "list" : (Net.isConnected() ? "load" : "wifi");
 while (true) {
     if (mode === "wifi") mode = screenWifi();
     else if (mode === "load") mode = loadCatalog();

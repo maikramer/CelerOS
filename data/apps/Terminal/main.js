@@ -1,4 +1,4 @@
-// KryonOS Terminal — shell simulado sobre o FS real (API 5: System.keypad*)
+// CelerOS Terminal — shell simulado sobre o FS real (API 5: System.keypad*)
 // ES5 puro (Duktape). Teclado do OS ancorado no rodape; o app ecoa a linha
 // corrente acima dele e executa o comando no OK. 'help' lista os comandos.
 
@@ -95,9 +95,9 @@ function infoLines() {
     var ip = "";
     try { if (System.wifiStatus().connected) ip = System.getIPAddress(); } catch (e) {}
     return [
-        "root@kryonos",
+        "root@celeros",
         "------------",
-        "OS: KryonOS " + VER + " (API " + System.getAPILevel() + ")",
+        "OS: CelerOS " + VER + " (API " + System.getAPILevel() + ")",
         "CPU: " + i.chipModel + " x" + i.chipCores + " @" + i.cpuFreqMHz + "MHz",
         "RAM: " + fmtKB(i.freeRAM) + " livres de " + fmtKB(i.totalRAM),
         (i.totalPSRAM ? ("PSRAM: " + fmtKB(i.freePSRAM) + " de " + fmtKB(i.totalPSRAM)) : "PSRAM: -"),
@@ -244,9 +244,9 @@ var cmds = {
         for (var i = 0; i < a.length; i++) if (a[i].indexOf("a") >= 0) all = true;
         if (all) {
             var inf = System.getInfo();
-            out("KryonOS " + VER + " " + inf.chipModel + " @" + inf.cpuFreqMHz +
+            out("CelerOS " + VER + " " + inf.chipModel + " @" + inf.cpuFreqMHz +
                 "MHz IDF " + inf.idfVersion);
-        } else out("KryonOS");
+        } else out("CelerOS");
     },
     date: function() {
         out(System.getDate() + " " + System.getTime());
@@ -359,7 +359,7 @@ function drawAll() {
 useKeypad = System.keypadOpen({ field: false, maxLen: 96 });
 if (useKeypad) kbTop = System.keypadRect().y;
 
-out("KryonOS " + VER + " terminal", T.accent);
+out("CelerOS " + VER + " terminal", T.accent);
 if (useKeypad) {
     out("digite 'help' para listar comandos", T.textDim);
 } else {

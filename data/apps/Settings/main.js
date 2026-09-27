@@ -1,4 +1,4 @@
-// KryonOS Settings — app de sistema (W8). Porte JS do SettingsScreens.cpp:
+// CelerOS Settings — app de sistema (W8). Porte JS do SettingsScreens.cpp:
 // PIN de entrada, menu, Wi-Fi, Aplicativos, Hora/Fuso, Seguranca (PIN),
 // Tela (brilho), Atualizacao OTA, Sobre e Reset. Canvas virtual 240x320,
 // tema do OS (System.theme). X no canto sup. direito sai (exit nativo).
@@ -11,7 +11,9 @@ var INSTALL_SD = "/local/config_install_sd.txt";
 
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (f >= 2 ? 8 : 5), f);
+    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
+    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
@@ -100,6 +102,8 @@ var otaLines = [];     // bloco rolavel (changelog + guia): {t, h, y}
 var otaLinesH = 0;
 var blLvl = 60;
 var modal = null;      // {t, b, y, f} — confirmacao em 2 botoes
+var pressIdx = -1;     // linha sob o dedo (feedback visual antes do tap)
+var itemsSig = "";     // assinatura das linhas desenhadas (evita redesenho inutil)
 
 var TZS = [
     ["UTC-12 Baker Is", "UTC12"], ["UTC-11 Midway", "UTC11"],
@@ -150,27 +154,41 @@ function drawRows() {
     var first = Math.floor(scroll / PITCH) - 1;
     if (first < 0) first = 0;
     var y = TOP + first * PITCH - scroll;
+    // linhas parciais nas bordas: recortadas na janela da lista (sem o
+    // recorte elas invadiam o cabecalho ao rolar)
+    var clip = typeof System.setClip === "function";
+    if (clip) System.setClip(0, TOP - 4, 240, listBottom - TOP + 4);
     for (var i = first; i < items.length; i++, y += PITCH) {
-        if (y + ROW_H > listBottom) break;
+        if (y >= listBottom) break;
+        if (!clip && y + ROW_H > listBottom) break;
         if (y < TOP - ROW_H) continue;
+        if (!clip && y < TOP) continue;
         var it = items[i];
-        System.fillRoundRect(8, y, 224, ROW_H, 8, T.card);
-        System.drawRoundRect(8, y, 224, ROW_H, 8, T.stroke);
+        var bgc = (i === pressIdx && !it.i && !it.d) ? T.raised : T.card;
+        System.fillRoundRect(8, y, 224, ROW_H, 8, bgc);
+        System.drawRoundRect(8, y, 224, ROW_H, 8, i === pressIdx ? T.accent : T.stroke);
         if (it.cur) System.fillRect(8, y + 6, 4, ROW_H - 12, T.accent);
         var labCol = (it.i || it.d) ? T.textDim : (it.cur ? T.accent : T.text);
-        System.setTextColor(labCol, T.card);
+        System.setTextColor(labCol, bgc);
         System.drawString(trunc(it.l, it.v ? 128 : 200, 2), 20, y + 11, 2);
         if (it.v) {
-            System.setTextColor(it.cur ? T.accent : T.textDim, T.card);
+            System.setTextColor(it.cur ? T.accent : T.textDim, bgc);
             System.drawString(it.v, 220 - System.textWidth(it.v, 1), y + 14, 1);
         }
     }
+    if (clip) System.clearClip();
+}
+
+function rowsVisible() {
+    return tela === "menu" || tela === "tz" || tela === "security" || tela === "about" ||
+        tela === "apps" || tela === "time";
 }
 function rowAt(t) {
     if (t.y < TOP || t.y >= listBottom) return -1;
     var idx = Math.floor((t.y - TOP + scroll) / PITCH);
     if (idx < 0 || idx >= items.length) return -1;
-    if (TOP + idx * PITCH - scroll + ROW_H > listBottom) return -1;  // cortada
+    var ry = TOP + idx * PITCH - scroll;
+    if (t.y < ry || t.y > ry + ROW_H) return -1;  // no vao entre linhas
     return idx;
 }
 
@@ -612,7 +630,7 @@ function buildOtaLines() {
 function drawUpdate() {
     if (otaState === "idle") {
         ctext("Versao atual", 120, 92, 1, T.textDim, T.bg);
-        ctext("KryonOS v" + System.getOSVersion(), 120, 116, 2, T.text, T.bg);
+        ctext("CelerOS v" + System.getOSVersion(), 120, 116, 2, T.text, T.bg);
         System.fillRoundRect(48, 150, 144, 36, 8, T.accent);
         ctext("Verificar", 120, 168, 2, T.onAccent, T.accent);
         ctext("requer Wi-Fi conectado", 120, 205, 1, T.textDim, T.bg);
@@ -631,7 +649,7 @@ function drawUpdate() {
         }
     } else if (otaState === "uptodate") {
         ctext("Sistema atualizado!", 120, 110, 2, T.ok, T.bg);
-        ctext("KryonOS v" + System.getOSVersion(), 120, 140, 1, T.textDim, T.bg);
+        ctext("CelerOS v" + System.getOSVersion(), 120, 140, 1, T.textDim, T.bg);
     } else if (otaState === "avail") {
         ctext(trunc(otaInfo.type || "Atualizacao disponivel", 224, 1), 120, 60, 1, T.accent, T.bg);
         ctext(trunc("v" + System.getOSVersion() + " -> v" + otaInfo.version, 224, 2), 120, 78, 2, T.text, T.bg);
@@ -932,17 +950,26 @@ while (true) {
             down = true;
             lastX = t.x; lastY = t.y;
             movedPx = 0;
+            if (!modal && rowsVisible()) {
+                pressIdx = rowAt(t);
+                if (pressIdx >= 0 && (items[pressIdx].i || items[pressIdx].d)) pressIdx = -1;
+                if (pressIdx >= 0) drawAll();
+            }
         } else {
             var dx = t.x - lastX;
             var dy = t.y - lastY;
             movedPx += (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
             lastX = t.x; lastY = t.y;
+            if (pressIdx >= 0 && movedPx >= 12) {
+                pressIdx = -1;
+                drawAll();
+            }
             // rolagem por arraste (listas e changelog da OTA)
             if (!dragBri && !modal && hasScroll() && (dy > 2 || dy < -2)) {
                 scroll -= dy;
                 clampScroll();
                 scrolled = true;
-                if (System.millis() - lastScrollDraw > 90) {
+                if (System.millis() - lastScrollDraw > 40) {
                     lastScrollDraw = System.millis();
                     drawAll();
                 }
@@ -966,6 +993,8 @@ while (true) {
         }
     } else if (down) {
         down = false;
+        var wasPressed = pressIdx >= 0;
+        pressIdx = -1;
         if (dragBri) {
             dragBri = false;
             System.setBrightness(blLvl);  // persiste (grava sozinho)
@@ -975,6 +1004,9 @@ while (true) {
         } else if (movedPx < 12) {
             onTap();  // tap: usa a ultima posicao tocada
         }
+        // tira o destaque da linha (so vai ao vidro no proximo yield: um
+        // redesenho extra depois do onTap nao pisca)
+        if (wasPressed) drawAll();
     }
 
     // atualizacao periodica (Wi-Fi do menu/estado, relogio da tela Hora)
@@ -986,7 +1018,11 @@ while (true) {
                 rebuildItems();
                 scroll = s;
                 clampScroll();
-                drawAll();
+                var sig = JSON.stringify(items) + (tela === "wifi" ? JSON.stringify(System.wifiStatus()) : "");
+                if (sig !== itemsSig) {
+                    itemsSig = sig;
+                    drawAll();
+                }
             } else if (tela === "time") {
                 var tm = System.getTime();
                 if (tm !== lastClock) {

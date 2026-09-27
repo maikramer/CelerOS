@@ -1,4 +1,4 @@
-// KryonOS Touch Test — valida display (barras RGB) e touch (alvos + coords no serial)
+// CelerOS Touch Test — valida display (barras RGB) e touch (alvos + coords no serial)
 var W = System.screenWidth();
 var H = System.screenHeight();
 

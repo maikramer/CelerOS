@@ -1,8 +1,8 @@
 {
   "name": "Settings",
-  "packageName": "kryonos.settings",
+  "packageName": "celeros.settings",
   "version": "1.0.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN), tela, atualizacao OTA e sobre.",
   "type": "System",
   "category": "System",

@@ -1,4 +1,4 @@
-// KryonOS Web Server — app de sistema (W8). Liga/desliga o servidor web e
+// CelerOS Web Server — app de sistema (W8). Liga/desliga o servidor web e
 // mostra o IP de acesso (porta 80). UI no tema do OS (System.theme), toggle
 // ao vivo via System.webSetActive (sem reboot). X no canto sup. direito sai.
 
@@ -7,7 +7,9 @@ var T = System.theme();
 // ---- helpers de UI (padrao dos apps de sistema) ---------------------------
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
+    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
+    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;

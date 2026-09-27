@@ -8,7 +8,7 @@ body:
     id: board
     attributes:
       label: Board Name
-      description: What board would you like KryonOS to support?
+      description: What board would you like CelerOS to support?
       placeholder: e.g. ESP32-S3 DevKitC-1
     validations:
       required: true

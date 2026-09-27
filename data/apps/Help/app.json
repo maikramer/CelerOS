@@ -1,9 +1,9 @@
 {
   "name": "Help",
-  "packageName": "kryonos.help",
+  "packageName": "celeros.help",
   "version": "1.0.0",
-  "author": "KryonOS",
-  "description": "Central de ajuda: como usar o KryonOS, gestos, Wi-Fi, apps e notas de versao.",
+  "author": "CelerOS",
+  "description": "Central de ajuda: como usar o CelerOS, gestos, Wi-Fi, apps e notas de versao.",
   "type": "System",
   "category": "System",
   "api": 3,

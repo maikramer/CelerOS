@@ -1,8 +1,8 @@
 {
   "name": "App Store",
-  "packageName": "kryonos.appstore",
+  "packageName": "celeros.appstore",
   "version": "1.0.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Loja de apps: catalogo online com instalacao e atualizacao direto do GitHub.",
   "type": "System",
   "category": "System",
