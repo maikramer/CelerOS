@@ -5,7 +5,8 @@
 .vscode/ipch
 .zcode/
 logs/
-build/
+build*/
+build-cyd/
 sdkconfig
 sdkconfig.old
 managed_components/
@@ -13,3 +14,4 @@ managed_components/
 # binario de ferramenta (baixar: ver tools/flash_data.sh)
 tools/bin/
 __pycache__/
+.playwright-mcp/

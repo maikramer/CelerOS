@@ -4,7 +4,6 @@
   "major_update": false,
   "minor_update": false,
   "security_update": false,
-  "changelog": "KryonOS 1.1.0: base migrada para ESP-IDF 6.1 (sem Arduino); multi-placa SmartDisplay S3 + Cheap Yellow Display; novo runtime de touch GT911; servidor web sobre esp_http_server com upload e OTA pelo navegador; Net.* HTTP para apps.\n- Over-the-air firmware updates (Settings > System Updates > INSTALL)\n- Web firmware upload via file manager (/update)\n- Captive portal WiFi setup\n- Net.* HTTP API for JS apps\n- Settings PIN lock\n- Brightness control (SmartDisplay)",
-  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update.",
-  "firmware_url": "https://raw.githubusercontent.com/maikramer/KryonOS/refs/heads/main/updates/esp32/firmware.bin"
+  "changelog": "CelerOS: canal de updates migrado para o hub proprio (os.celer.tec.br/updates). Este manifest e espelho legado; o dispositivo agora consulta o hub. Publicacao via tools/publish_firmware.py no repo CelerOS-Server.",
+  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update."
 }
