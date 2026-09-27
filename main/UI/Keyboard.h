@@ -7,7 +7,8 @@
 // Layout padrao de teclado virtual (Android/iOS): linhas escalonadas, shift
 // one-shot, duas paginas de simbolos, espaco/backspace/OK na linha de baixo
 // e X (cancelar) no cabecalho. A geometria e calculada por tela (240x320 de
-// design via UI::sx/sy no cabecalho; teclas preenchem o resto) e a MESMA
+// design via UI::sx/sy no cabecalho; teclas ~1.25x mais altas que largas,
+// bloco ancorado no rodape — nunca "preenche o resto da tela") e a MESMA
 // lista de Rects desenha e faz hit-test.
 //
 // Duas formas de usar:
