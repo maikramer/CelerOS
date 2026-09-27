@@ -1,0 +1,408 @@
+// KryonOS Terminal — shell simulado sobre o FS real (API 5: System.keypad*)
+// ES5 puro (Duktape). Teclado do OS ancorado no rodape; o app ecoa a linha
+// corrente acima dele e executa o comando no OK. 'help' lista os comandos.
+
+var T = System.theme();
+var W = 240, H = 320;
+var CHW = 6;                    // fonte 1 (GLCD): 6 px por coluna
+var COLS = Math.floor(W / CHW); // 40 colunas
+var LINE_H = 10;
+
+var VER = System.getOSVersion();
+var cwd = "/local";
+var lines = [];                 // historico de saida: {s, c}
+var MAXLINES = 120;
+var histCmds = [];              // comandos ja digitados (cmd 'history')
+var kbTop = H;
+var useKeypad = false;
+var redrawAll = true;
+var inputDirty = true;
+var lastBlink = 0;
+var cursorOn = true;
+
+// ---------------------------------------------------------------- saida ----
+function pushLine(s, col) {
+    lines.push({ s: s, c: col || T.text });
+    if (lines.length > MAXLINES) lines.shift();
+}
+
+function out(s, col) {
+    if (s === undefined || s === null) s = "";
+    s = String(s);
+    while (s.length > COLS) {          // quebra em linhas de COLS colunas
+        pushLine(s.substring(0, COLS), col);
+        s = s.substring(COLS);
+    }
+    pushLine(s, col);
+}
+
+// ------------------------------------------------------------- caminhos ----
+function resolve(p) {
+    if (!p || p === ".") return cwd;
+    var base = (p.charAt(0) === "/") ? "" : cwd;
+    var parts = (base + "/" + p).split("/");
+    var st = [];
+    for (var i = 0; i < parts.length; i++) {
+        var s = parts[i];
+        if (s === "" || s === ".") continue;
+        if (s === "..") { if (st.length) st.pop(); continue; }
+        st.push(s);
+    }
+    return "/" + st.join("/");
+}
+
+function baseName(p) {
+    var i = p.lastIndexOf("/");
+    return i < 0 ? p : p.substring(i + 1);
+}
+
+function joinDir(dir, name) {
+    return (dir.charAt(dir.length - 1) === "/") ? dir + name : dir + "/" + name;
+}
+
+function fmtKB(n) {
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + "M";
+    if (n >= 1024) return (n / 1024).toFixed(1) + "K";
+    return n + "B";
+}
+
+function tokenize(s) {
+    var toks = [], cur = "", inQ = false;
+    for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch === '"') { inQ = !inQ; continue; }
+        if (!inQ && ch === " ") {
+            if (cur.length) { toks.push(cur); cur = ""; }
+        } else cur += ch;
+    }
+    if (cur.length) toks.push(cur);
+    return toks;
+}
+
+function promptStr() {
+    return "root@kos:" + cwd + "$ ";
+}
+
+// ------------------------------------------------------------- comandos ----
+function fsRow(p) {
+    var tot = FS.getTotalSpace(p), used = FS.getUsedSpace(p);
+    if (!tot) { out(p + ": nao montado", T.textDim); return; }
+    out(p + "  " + fmtKB(used) + " usados de " + fmtKB(tot));
+}
+
+function infoLines() {
+    var i = System.getInfo();
+    var ip = "";
+    try { if (System.wifiStatus().connected) ip = System.getIPAddress(); } catch (e) {}
+    return [
+        "root@kryonos",
+        "------------",
+        "OS: KryonOS " + VER + " (API " + System.getAPILevel() + ")",
+        "CPU: " + i.chipModel + " x" + i.chipCores + " @" + i.cpuFreqMHz + "MHz",
+        "RAM: " + fmtKB(i.freeRAM) + " livres de " + fmtKB(i.totalRAM),
+        (i.totalPSRAM ? ("PSRAM: " + fmtKB(i.freePSRAM) + " de " + fmtKB(i.totalPSRAM)) : "PSRAM: -"),
+        "Uptime: " + fmtUptime(i.uptimeMs),
+        "IP: " + (ip || "sem wifi")
+    ];
+}
+
+function fmtUptime(ms) {
+    var s = Math.floor(ms / 1000);
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    s = s % 60;
+    return h + "h" + (m < 10 ? "0" : "") + m + "m" + (s < 10 ? "0" : "") + s;
+}
+
+var LOGO = [
+    " _  ___  ___ ",
+    "| |/ _ \\/ __|",
+    "| | (_) \\__ \\",
+    "|_|\\___/|___/"
+];
+
+var cmds = {
+    help: function(a) {
+        out("Comandos:", T.accent);
+        out("  ls cd pwd cat echo touch mkdir rmdir rm");
+        out("  mv cp df free uname date uptime whoami");
+        out("  history clear neofetch js wifi reboot exit");
+        out("Dica: echo txt > arquivo grava no FS;", T.textDim);
+        out("js 2+2 avalia expressoes JavaScript.", T.textDim);
+    },
+    ls: function(a) {
+        var p = a.length ? resolve(a[0]) : cwd;
+        if (!FS.isDirectory(p)) { out("ls: " + p + ": nao e diretorio", T.err); return; }
+        var ent = FS.listDir(p);
+        if (!ent || ent.length === 0) { out("(vazio)", T.textDim); return; }
+        var names = [];
+        for (var i = 0; i < ent.length; i++) {
+            var n = ent[i];
+            if (n.charAt(0) === "/") n = baseName(n);
+            if (FS.isDirectory(joinDir(p, n))) n += "/";
+            names.push(n);
+        }
+        names.sort();
+        for (var j = 0; j < names.length; j++) out(names[j]);
+    },
+    cd: function(a) {
+        var p = a.length ? resolve(a[0]) : "/";
+        if (!FS.isDirectory(p)) { out("cd: " + p + ": nao e diretorio", T.err); return; }
+        cwd = p;
+    },
+    pwd: function() { out(cwd); },
+    cat: function(a) {
+        if (!a.length) { out("uso: cat <arquivo>", T.warn); return; }
+        var p = resolve(a[0]);
+        var txt = FS.readTextFile(p);
+        if (txt === null) { out("cat: " + p + ": nao encontrado", T.err); return; }
+        if (txt.length > 600) {
+            out(txt.substring(0, 600));
+            out("... (truncado, " + txt.length + " bytes)", T.textDim);
+        } else {
+            var ls = txt.split("\n");
+            for (var i = 0; i < ls.length; i++) out(ls[i]);
+        }
+    },
+    echo: function(a) {
+        var txt = [], redir = 0, rp = null;
+        for (var i = 0; i < a.length; i++) {
+            if (a[i] === ">") redir = 1;
+            else if (a[i] === ">>") redir = 2;
+            else if (redir && rp === null) rp = a[i];
+            else if (!redir) txt.push(a[i]);
+        }
+        var s = txt.join(" ");
+        if (redir && rp) {
+            var p = resolve(rp);
+            var ok = (redir === 1) ? FS.writeTextFile(p, s + "\n")
+                                   : FS.appendTextFile(p, s + "\n");
+            out(ok ? "ok: gravado em " + p : "falha ao gravar " + p, ok ? T.ok : T.err);
+        } else out(s);
+    },
+    touch: function(a) {
+        if (!a.length) { out("uso: touch <arquivo>", T.warn); return; }
+        var p = resolve(a[0]);
+        if (FS.exists(p)) { out("ja existe: " + p, T.textDim); return; }
+        var ok = FS.writeTextFile(p, "");
+        out(ok ? "ok: " + p : "falha: " + p, ok ? T.ok : T.err);
+    },
+    mkdir: function(a) {
+        if (!a.length) { out("uso: mkdir <dir>", T.warn); return; }
+        var p = resolve(a[0]);
+        var ok = FS.mkdir(p);
+        out(ok ? "ok: " + p : "falha: " + p, ok ? T.ok : T.err);
+    },
+    rmdir: function(a) {
+        if (!a.length) { out("uso: rmdir <dir vazio>", T.warn); return; }
+        var p = resolve(a[0]);
+        var ok = FS.rmdir(p);
+        out(ok ? "ok: " + p : "falha (vazio?)", ok ? T.ok : T.err);
+    },
+    rm: function(a) {
+        var rec = false, alvo = null;
+        for (var i = 0; i < a.length; i++) {
+            if (a[i] === "-r" || a[i] === "-rf") rec = true;
+            else alvo = a[i];
+        }
+        if (!alvo) { out("uso: rm [-r] <alvo>", T.warn); return; }
+        var p = resolve(alvo);
+        var ok;
+        if (FS.isDirectory(p)) {
+            if (!rec) { out("rm: " + p + " e diretorio (use -r)", T.warn); return; }
+            ok = FS.removeDirectory(p);
+        } else {
+            ok = FS.deleteFile(p);
+        }
+        out(ok ? "ok: " + p : "falha: " + p, ok ? T.ok : T.err);
+    },
+    mv: function(a) {
+        if (a.length < 2) { out("uso: mv <de> <para>", T.warn); return; }
+        var de = resolve(a[0]), para = resolve(a[1]);
+        var ok = FS.renameFile(de, para);
+        out(ok ? "ok" : "falha", ok ? T.ok : T.err);
+    },
+    cp: function(a) {
+        if (a.length < 2) { out("uso: cp <de> <para>", T.warn); return; }
+        var de = resolve(a[0]), para = resolve(a[1]);
+        var ok = FS.copyFile(de, para);
+        out(ok ? "ok" : "falha", ok ? T.ok : T.err);
+    },
+    df: function() {
+        out("Sistemas de arquivos:", T.accent);
+        fsRow("/local");
+        fsRow("/sd");
+    },
+    free: function() {
+        var i = System.getInfo();
+        out("RAM: " + fmtKB(i.freeRAM) + " livres de " + fmtKB(i.totalRAM));
+        out("menor livre: " + fmtKB(i.minFreeRAM) + "  max aloc: " + fmtKB(i.maxAllocRAM));
+        if (i.totalPSRAM) out("PSRAM: " + fmtKB(i.freePSRAM) + " de " + fmtKB(i.totalPSRAM));
+    },
+    uname: function(a) {
+        var all = false;
+        for (var i = 0; i < a.length; i++) if (a[i].indexOf("a") >= 0) all = true;
+        if (all) {
+            var inf = System.getInfo();
+            out("KryonOS " + VER + " " + inf.chipModel + " @" + inf.cpuFreqMHz +
+                "MHz IDF " + inf.idfVersion);
+        } else out("KryonOS");
+    },
+    date: function() {
+        out(System.getDate() + " " + System.getTime());
+    },
+    uptime: function() {
+        out("ligado ha " + fmtUptime(System.getInfo().uptimeMs));
+    },
+    whoami: function() { out("root"); },
+    history: function() {
+        for (var i = 0; i < histCmds.length; i++) out("  " + (i + 1) + "  " + histCmds[i]);
+    },
+    clear: function() { lines = []; },
+    neofetch: function() {
+        var info = infoLines();
+        var i = 0;
+        for (; i < LOGO.length && i < info.length; i++) out(LOGO[i] + "  " + info[i], T.accent);
+        for (; i < info.length; i++) out("             " + info[i]);
+    },
+    js: function(a) {
+        if (!a.length) { out("uso: js <expressao JS>", T.warn); return; }
+        var expr = a.join(" ");
+        try {
+            var r = eval(expr);
+            if (r === undefined) out("undefined", T.textDim);
+            else if (typeof r === "object" && r !== null) out(JSON.stringify(r));
+            else out(String(r));
+        } catch (e) { out("erro: " + e, T.err); }
+    },
+    wifi: function(a) {
+        var sub = a.length ? a[0] : "status";
+        if (sub === "scan") {
+            out("escaneando redes...", T.textDim);
+            System.delay(30);
+            var nets = Net.wifiScan();
+            if (!nets || !nets.length) { out("nenhuma rede encontrada", T.textDim); return; }
+            for (var i = 0; i < nets.length && i < 12; i++) {
+                out(nets[i].ssid + " " + nets[i].rssi + "dBm" + (nets[i].secure ? " *" : ""));
+            }
+        } else {
+            var st = System.wifiStatus();
+            out(st.connected ? "conectado - IP " + System.getIPAddress() : "desconectado");
+        }
+    },
+    reboot: function() { System.restart(); },
+    exit: function() { System.exitApp(); }
+};
+
+function execute(line) {
+    var toks = tokenize(line);
+    if (!toks.length) return;
+    var name = toks[0], args = [];
+    for (var i = 1; i < toks.length; i++) args.push(toks[i]);
+    if (cmds[name]) {
+        try { cmds[name](args); }
+        catch (e) {
+            if (e === "OS_EXIT") throw e;  // exit/reboot: deixa o kernel sair
+            out(name + ": erro: " + e, T.err);
+        }
+    } else {
+        out(name + ": comando nao encontrado", T.err);
+    }
+}
+
+// -------------------------------------------------------------- desenho ----
+function drawBar() {
+    System.fillRect(0, 0, W, 18, T.card);
+    System.setTextColor(T.text, T.card);
+    System.drawString("Terminal", 6, 5, 1);
+    var right = System.getTime();
+    System.setTextColor(T.textDim, T.card);
+    System.drawString(right, W - 6 - System.textWidth(right, 1), 5, 1);
+    System.drawFastHLine(0, 18, W, T.stroke);
+}
+
+function drawOut() {
+    var top = 22, bottom = kbTop - 16;
+    if (bottom <= top) return;
+    System.fillRect(0, top, W, bottom - top, T.bg);
+    var n = Math.floor((bottom - top) / LINE_H);
+    var start = lines.length - n;
+    if (start < 0) start = 0;
+    var y = top;
+    for (var i = start; i < lines.length; i++) {
+        System.setTextColor(lines[i].c, T.bg);
+        System.drawString(lines[i].s, 4, y, 1);
+        y += LINE_H;
+    }
+}
+
+function drawInput() {
+    var y = kbTop - 14;
+    System.fillRect(0, y, W, 14, T.bg);
+    var s = promptStr() + System.keypadText();
+    if (s.length > COLS - 1) s = s.substring(s.length - (COLS - 1)); // mostra a cauda
+    System.setTextColor(T.accent, T.bg);
+    System.drawString(s, 4, y + 3, 1);
+    if (cursorOn) {
+        var cx = 4 + System.textWidth(s, 1);
+        System.fillRect(cx + 1, y + 2, 5, 9, T.text);
+    }
+}
+
+function drawAll() {
+    drawBar();
+    drawOut();
+    drawInput();
+}
+
+// ------------------------------------------------------------------ main ---
+useKeypad = System.keypadOpen({ field: false, maxLen: 96 });
+if (useKeypad) kbTop = System.keypadRect().y;
+
+out("KryonOS " + VER + " terminal", T.accent);
+if (useKeypad) {
+    out("digite 'help' para listar comandos", T.textDim);
+} else {
+    out("requer firmware com API >= 5", T.err);
+}
+out("");
+
+while (true) {
+    if (useKeypad) {
+        var ev = System.keypadPoll();
+        if (ev) {
+            if (ev.type === "enter") {
+                out(promptStr() + ev.text, T.accent);
+                if (ev.text) histCmds.push(ev.text);
+                cursorOn = true;
+                execute(ev.text);
+                redrawAll = true;
+            } else if (ev.type === "change") {
+                inputDirty = true;
+                cursorOn = true;
+            } else if (ev.type === "cancel") {
+                // X nao existe com field:false, mas por seguranca: redesenha
+                redrawAll = true;
+                System.keypadOpen({ field: false, maxLen: 96 });
+                kbTop = System.keypadRect().y;
+            }
+        }
+    }
+
+    if (redrawAll) {
+        drawAll();
+        redrawAll = false;
+        inputDirty = false;
+        lastBlink = System.millis();
+    } else if (inputDirty) {
+        drawInput();
+        inputDirty = false;
+        lastBlink = System.millis();
+    } else if (System.millis() - lastBlink > 500) {
+        cursorOn = !cursorOn;
+        drawInput();
+        lastBlink = System.millis();
+    }
+
+    System.delay(20);
+}

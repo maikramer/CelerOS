@@ -197,6 +197,9 @@ APP_PKG_ICONS = {
     "Installer": "installer",
     "Settings": "settings",
     "Web Server": "web",
+    "Terminal": "terminal",
+    "Calculator": "calculator",
+    "Snake": "snake",
 }
 
 

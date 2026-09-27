@@ -1,0 +1,10 @@
+{
+  "name": "Calculator",
+  "packageName": "kryonos.calculator",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Calculadora de expressao: precedencia, parenteses, preview do resultado ao digitar.",
+  "type": "App",
+  "category": "Utilities",
+  "api": 3
+}

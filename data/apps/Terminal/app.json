@@ -1,0 +1,10 @@
+{
+  "name": "Terminal",
+  "packageName": "kryonos.terminal",
+  "version": "1.0.0",
+  "author": "KryonOS",
+  "description": "Shell estilo bash sobre o FS real: ls, cat, echo, mkdir, neofetch, js (eval) e mais. Teclado acoplado do OS (API 5).",
+  "type": "App",
+  "category": "Utilities",
+  "api": 5
+}

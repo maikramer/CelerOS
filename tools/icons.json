@@ -64,5 +64,23 @@
     "prompt": "flat minimal vector app icon, simple white wifi signal arcs glyph crossed by a diagonal slash, centered, solid gray background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
     "output": "wifi_off.png",
     "seed": 111
+  },
+  {
+    "id": "terminal",
+    "prompt": "flat minimal vector app icon, simple white terminal prompt glyph with angle bracket and underscore cursor, centered, solid deep charcoal green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "terminal.png",
+    "seed": 112
+  },
+  {
+    "id": "calculator",
+    "prompt": "flat minimal vector app icon, simple white calculator glyph with small display and button grid, centered, solid warm amber orange background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "calculator.png",
+    "seed": 113
+  },
+  {
+    "id": "snake",
+    "prompt": "flat minimal vector game icon, simple white coiled snake glyph made of rounded segments with a round dot apple nearby, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "snake.png",
+    "seed": 114
   }
 ]
