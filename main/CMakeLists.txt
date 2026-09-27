@@ -8,6 +8,9 @@ idf_component_register(
     SRCS
         "spike_main.cpp"
         "Compat/KryonCompat.cpp"
+        "FileSystem/FileSystem.cpp"
+        "Display/Backlight.cpp"
+        "Display/Icon.cpp"
     INCLUDE_DIRS
         "."
         "Compat"
@@ -19,6 +22,10 @@ idf_component_register(
         esp_timer
         spi_flash
         esp_hw_support
+        fatfs
+        sdmmc
+        joltwallet__esp_littlefs
+        mbedtls
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

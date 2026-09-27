@@ -2,11 +2,16 @@
 #define FILE_SYSTEM_H
 
 #include <Arduino.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <SPI.h>
-#include <SD.h>
 #include <string>
+#include <stdint.h>
+#include <time.h>
+
+// Camada de arquivos do KryonOS sobre VFS do ESP-IDF:
+//   /local/...  -> particao LittleFS ("littlefs") via esp_littlefs
+//   /sd/...     -> cartao SD via sdspi + esp_vfs_fat (FATFS)
+// Os prefixos que antes eram virtuais (traduzidos para fs::FS do Arduino)
+// agora sao pontos de montagem reais: os caminhos resolvem direto nas APIs
+// POSIX (open/opendir/stat/...).
 
 struct FileEntry {
     std::string name;
@@ -58,9 +63,15 @@ public:
     
 private:
 #ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-    static const int SD_CS_PIN = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
+    static constexpr int SD_CS_PIN = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
+    static constexpr int SD_SCK    = 48;
+    static constexpr int SD_MISO   = 41;
+    static constexpr int SD_MOSI   = 47;
 #else
-    static const int SD_CS_PIN = 15;  // Placa classica (HSPI dedicado)
+    static constexpr int SD_CS_PIN = 15;  // Cheap Yellow Display (HSPI dedicado)
+    static constexpr int SD_SCK    = 14;
+    static constexpr int SD_MISO   = 26;
+    static constexpr int SD_MOSI   = 13;
 #endif
 };
 

@@ -252,6 +252,21 @@ public:
     HttpResponse request(HttpMethod method, const std::string& url, 
                          const std::string& body = "");
 
+    /**
+     * @brief Download a URL to a file, streaming (low memory footprint).
+     *
+     * Uses the same config (timeout, redirects, TLS, auth) as the other
+     * methods. The body is NOT buffered in RAM: HTTP_EVENT_ON_DATA chunks are
+     * written straight to the file. Fires the progress callback with
+     * (bytesTransferred, totalBytes). On failure the partial file is removed
+     * and success=false.
+     *
+     * @param url Source URL.
+     * @param filePath Destination VFS path (e.g. "/local/tmp/app.js").
+     * @return HttpResponse (body empty; statusCode/contentLength valid).
+     */
+    HttpResponse downloadToFile(const std::string& url, const std::string& filePath);
+
     // ========== Events ==========
 
     /**
@@ -278,6 +293,7 @@ private:
      * @brief HTTP event handler callback.
      */
     static int eventHandler(esp_http_client_event_t* evt);
+    static int dlFileEventHandler(esp_http_client_event_t* evt);
 
     /**
      * @brief Convert HttpMethod to esp_http_client method.
@@ -294,6 +310,10 @@ private:
     // For event handler
     std::string* _responseBody;
     int64_t _contentLength;
+
+    // For downloadToFile
+    void* _dlFile = nullptr;        // FILE* em curso
+    int64_t _dlReceived = 0;
 
     static constexpr const char* TAG = "HttpClient";
 };
