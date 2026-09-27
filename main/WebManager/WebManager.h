@@ -80,8 +80,11 @@ public:
     // Servidor web no ar?
     static bool isServerRunning();
 
-private:
+    // Sobe o servidor se ainda nao estiver rodando (web_on.txt) — publico:
+    // usado pelo binding System.webSetActive do JS
     static void startWebServerIfNeeded();
+
+private:
     static void importLegacyWifiTxt();
     static void onNetworkStateChanged(NetworkState oldState, NetworkState newState);
 };

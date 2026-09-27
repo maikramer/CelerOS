@@ -687,6 +687,19 @@ void Navigator::replace(Screen* s) {
     s_repaint = true;
 }
 
+void Navigator::remove(Screen* s) {
+    if (s == nullptr) return;
+    for (size_t i = s_stack.size(); i-- > 0;) {
+        if (s_stack[i] != s) continue;
+        bool wasTop = (i == s_stack.size() - 1);
+        s->onExit();
+        s_stack.erase(s_stack.begin() + i);
+        if (wasTop && !s_stack.empty()) s_stack.back()->onEnter();
+        s_repaint = true;
+        return;
+    }
+}
+
 void Navigator::home() {
     while (s_stack.size() > 1) {
         s_stack.back()->onExit();

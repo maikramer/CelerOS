@@ -1234,8 +1234,16 @@ duk_ret_t JSBindings::js_webActive(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
-    if (duk_require_boolean(ctx, 0)) WebManager::enable();
-    else WebManager::disable();
+    // Toggle do servidor web (persiste em web_on.txt e age ao vivo), igual a
+    // tela C++ original — mas sem reboot. NAO desliga o WiFi (isso e o
+    // nowifi.txt / WebManager::disable).
+    if (duk_require_boolean(ctx, 0)) {
+        FileSystem::writeTextFile("/local/web_on.txt", "1");
+        if (WebManager::isActive()) WebManager::startWebServerIfNeeded();
+    } else {
+        FileSystem::deleteFile("/local/web_on.txt");
+        WebManager::stopWebServer();
+    }
     return 0;
 }
 
