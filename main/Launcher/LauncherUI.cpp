@@ -96,9 +96,12 @@ void LauncherUI::scanLocalApps() {
                 if (order <= 0) order = 100;
                 isFolder = true;
 
-                // icone do pacote (icon.bin na pasta do app) tem preferencia:
-                // cada app carrega a propria arte onde for instalado
-                std::string pkgIcon = appJsonPath.substr(0, appJsonPath.length() - strlen("app.json")) + "icon.bin";
+                // icone do pacote na pasta do app tem preferencia: cada app
+                // carrega a propria arte onde for instalado (icon.png; o
+                // .bin v1/v2 segue como legado)
+                std::string pkgDir = appJsonPath.substr(0, appJsonPath.length() - strlen("app.json"));
+                std::string pkgIcon = pkgDir + "icon.png";
+                if (!FileSystem::exists(pkgIcon.c_str())) pkgIcon = pkgDir + "icon.bin";
                 if (FileSystem::exists(pkgIcon.c_str())) icon = pkgIcon;
             } else {
                 std::string fname = entries[i].name;

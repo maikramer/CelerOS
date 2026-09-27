@@ -9,10 +9,14 @@ PORT="${2:-/dev/ttyUSB0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 case "$BOARD" in
-  smartdisplay) SIZE=$((0x360000)); PART_CSV="partitions_16MB.csv" ;;
-  cyd)          SIZE=$((0x20000)); PART_CSV="partitions_4MB.csv" ;;
+  smartdisplay) PART_CSV="partitions_16MB.csv" ;;
+  cyd)          PART_CSV="partitions_4MB.csv" ;;
   *) echo "board invalida: $BOARD (smartdisplay|cyd)"; exit 1 ;;
 esac
+
+# Tamanho vem do proprio CSV (fonte unica, sem duplicar valor aqui)
+SIZE=$(awk -F',' '$1 ~ /^littlefs/ {gsub(/[[:space:]]/, "", $5); print $5}' "$ROOT/$PART_CSV")
+if [ -z "$SIZE" ]; then echo "littlefs nao encontrada em $PART_CSV"; exit 1; fi
 
 IMG="$ROOT/build/littlefs-$(date +%s).img"
 "$ROOT/tools/bin/mklittlefs.bin" -c "$ROOT/data" -s "$SIZE" "$IMG"

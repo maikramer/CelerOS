@@ -4,7 +4,9 @@
 #include <string>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include "esp_heap_caps.h"
+#include <lgfx/utility/lgfx_pngle.h>
 
 // Registro fixo — mesmos ids do tools/icons.json
 const char* Icon::NAMES[Icon::COUNT] = {
@@ -22,23 +24,39 @@ int Icon::index(const char* name) {
 }
 
 uint16_t* Icon::load(const char* name, uint8_t** alphaOut) {
+    // nome comum -> /local/icons/<nome>.png (ou .bin legado); caminho absoluto
+    // (icone de pacote de app) e usado como veio
+    FILE* f = nullptr;
+    if (name[0] != '/') {
+        std::string path = std::string("/local/icons/") + name + ".png";
+        f = fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            path = std::string("/local/icons/") + name + ".bin";
+            f = fopen(path.c_str(), "rb");
+        }
+    } else {
+        f = fopen(name, "rb");
+    }
+    if (f == nullptr) return nullptr;
+
+    uint8_t sig[8];
+    bool isPng = fread(sig, 1, 8, f) == 8 && memcmp(sig, "\x89PNG\r\n\x1a\n", 8) == 0;
+    fseek(f, 0, SEEK_SET);
+    uint16_t* px = isPng ? loadPng(f, alphaOut) : loadBin(f, alphaOut);
+    fclose(f);
+    return px;
+}
+
+// ---- fluxo historico .bin --------------------------------------------------
+uint16_t* Icon::loadBin(FILE* f, uint8_t** alphaOut) {
     constexpr size_t PX = (size_t)SIZE * SIZE;
     constexpr size_t V1_SZ = PX * 2;           // RGB565 opaco
     constexpr size_t V2_SZ = PX * 2 + PX / 2;  // + mascara A4
-    // nome comum -> /local/icons/<nome>.bin; caminho absoluto (icone de
-    // pacote de app) e usado como veio
-    std::string path = (name[0] == '/') ? std::string(name)
-                                        : std::string("/local/icons/") + name + ".bin";
-    FILE* f = fopen(path.c_str(), "rb");
-    if (f == nullptr) return nullptr;
 
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (size < (long)V1_SZ) {
-        fclose(f);
-        return nullptr;
-    }
+    if (size < (long)V1_SZ) return nullptr;
     bool hasAlpha = size >= (long)V2_SZ;
 
     // PSRAM quando disponivel (framebuffer grande), senao heap interno
@@ -56,10 +74,81 @@ uint16_t* Icon::load(const char* name, uint8_t** alphaOut) {
         (hasAlpha && fread(a, 1, PX / 2, f) != PX / 2)) {
         free(buf);
         free(a);
-        fclose(f);
         return nullptr;
     }
-    fclose(f);
+    *alphaOut = a;
+    return buf;
+}
+
+// ---- PNG via pngle do LovyanGFX ---------------------------------------------
+// Decodifica no load direto para os buffers RGB565+A4 do cache (o caminho de
+// draw nao conhece PNG). O pngle usa ~44 KB de heap durante o decode (janela
+// do deflate) e e destruido em seguida — transitório até no CYD sem PSRAM.
+namespace {
+struct PngIconCtx {
+    uint16_t* px;
+    uint8_t* a4;
+    bool ok;
+};
+
+uint32_t pngReadCb(void* user, uint8_t* buf, uint32_t len) {
+    return (uint32_t)fread(buf, 1, len, (FILE*)user);
+}
+
+void pngDrawCb(void* user, uint32_t x, uint32_t y, uint_fast8_t div_x, size_t len,
+               const uint8_t* argb) {
+    PngIconCtx* c = (PngIconCtx*)user;
+    if ((int)y >= Icon::SIZE) { c->ok = false; return; }
+    for (size_t i = 0; i < len; i++) {
+        const uint8_t* p = argb + i * 4;  // A,R,G,B
+        uint16_t rgb = (uint16_t)(((p[1] >> 3) << 11) | ((p[2] >> 2) << 5) | (p[3] >> 3));
+        uint8_t a = p[0] >> 4;
+        uint32_t x0 = x + (uint32_t)i * div_x;  // div_x>1: passos do interlace
+        for (uint32_t k = 0; k < div_x && x0 + k < (uint32_t)Icon::SIZE; k++) {
+            size_t idx = (size_t)y * Icon::SIZE + x0 + k;
+            c->px[idx] = rgb;
+            if (idx & 1) c->a4[idx >> 1] = (c->a4[idx >> 1] & 0xF0) | a;
+            else         c->a4[idx >> 1] = (c->a4[idx >> 1] & 0x0F) | (a << 4);
+        }
+    }
+}
+}  // namespace
+
+uint16_t* Icon::loadPng(FILE* f, uint8_t** alphaOut) {
+    constexpr size_t PX = (size_t)SIZE * SIZE;
+    pngle_t* pngle = lgfx_pngle_new();
+    if (pngle == nullptr) return nullptr;
+
+    uint16_t* buf = (uint16_t*)heap_caps_malloc(PX * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == nullptr) buf = (uint16_t*)malloc(PX * 2);
+    uint8_t* a = (uint8_t*)heap_caps_malloc(PX / 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (a == nullptr) a = (uint8_t*)malloc(PX / 2);
+
+    bool ok = false;
+    if (buf != nullptr && a != nullptr &&
+        lgfx_pngle_prepare(pngle, pngReadCb, f) >= 0 &&
+        lgfx_pngle_get_width(pngle) == (uint32_t)SIZE &&
+        lgfx_pngle_get_height(pngle) == (uint32_t)SIZE) {
+        memset(a, 0, PX / 2);
+        PngIconCtx ctx = {buf, a, true};
+        ok = lgfx_pngle_decomp(pngle, pngDrawCb) >= 0 && ctx.ok;
+    }
+    lgfx_pngle_destroy(pngle);  // devolve os ~44 KB da janela do deflate
+
+    if (!ok) {
+        free(buf);
+        free(a);
+        return nullptr;
+    }
+    // PNG opaco (sem canal alpha/tRNS): dispensa a mascara — blit direto
+    bool opaque = true;
+    for (size_t i = 0; i < PX / 2; i++) {
+        if (a[i] != 0xFF) { opaque = false; break; }
+    }
+    if (opaque) {
+        free(a);
+        a = nullptr;
+    }
     *alphaOut = a;
     return buf;
 }

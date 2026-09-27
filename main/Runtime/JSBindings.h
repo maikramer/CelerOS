@@ -43,6 +43,7 @@ private:
     static duk_ret_t js_drawRoundRect(duk_context *ctx);
     static duk_ret_t js_fillRoundRect(duk_context *ctx);
     static duk_ret_t js_drawBMP(duk_context *ctx);
+    static duk_ret_t js_drawPNG(duk_context *ctx);
 
     // Display Bindings - Text
     static duk_ret_t js_drawString(duk_context *ctx);

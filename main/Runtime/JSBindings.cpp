@@ -14,6 +14,7 @@
 #include "../OTA/OtaManager.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
+#include <lgfx/v1/misc/DataWrapper.hpp>
 
 // ---------------------------------------------------------------------------
 // Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
@@ -40,6 +41,28 @@ static inline uint32_t jsc(uint32_t c) {
 static inline int jsx(int v) { return UI::sx(v); }
 static inline int jsy(int v) { return UI::sy(v); }
 static inline int jsu(int v) { return (UI::sx(v) + UI::sy(v)) / 2; }  // uniforme (raios)
+
+// Wrapper stdio para o drawPngFile do LGFX (a especializacao DataWrapperT<FILE>
+// do upstream so ativa com macros do newlib que nao estao definidas no IDF)
+struct KryonFileWrapper : public lgfx::DataWrapper {
+    bool open(const char* path) override {
+        while (nullptr == (_fp = fopen(path, "rb")) && path[0] == '/') ++path;
+        return _fp != nullptr;
+    }
+    int read(uint8_t* buf, uint32_t len) override { return (int)fread(buf, 1, len, _fp); }
+    void skip(int32_t offset) override { fseek(_fp, offset, SEEK_CUR); }
+    bool seek(uint32_t offset) override { return fseek(_fp, offset, SEEK_SET) == 0; }
+    void close(void) override {
+        if (_fp) {
+            fclose(_fp);
+            _fp = nullptr;
+        }
+    }
+    int32_t tell(void) override { return ftell(_fp); }
+
+private:
+    FILE* _fp = nullptr;
+};
 
 KryonDisplay* JSBindings::tftInstance = nullptr;
 KryonSprite* JSBindings::tftSprite = nullptr;
@@ -1001,6 +1024,23 @@ duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
     return 0;
 }
 
+duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
+    // Desenho streaming (linha a linha via pngle do LovyanGFX): nao aloca
+    // framebuffer da imagem inteira, so a janela do deflate (~44 KB durante
+    // o decode). Alpha do PNG e composto sobre o fundo pelo proprio LGFX.
+    if (!tftInstance) return 0;
+    const char *path = duk_require_string(ctx, 0);
+    int x = duk_require_int(ctx, 1);
+    int y = duk_require_int(ctx, 2);
+    // /sd e /local sao pontos de montagem reais no VFS (mesma regra do drawBMP)
+    if (strncmp(path, "/sd", 3) != 0 && strncmp(path, "/local", 6) != 0) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    KryonFileWrapper file;
+    duk_push_boolean(ctx, tftInstance->drawPngFile(&file, path, jsx(x), jsy(y)));
+    return 1;
+}
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     duk_push_boolean(ctx, FileSystem::copyFile(duk_require_string(ctx, 0),
                                                duk_require_string(ctx, 1)) ? 1 : 0);
@@ -1356,6 +1396,8 @@ void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     
     duk_push_c_function(ctx, js_drawBMP, 3);
     duk_put_prop_string(ctx, -2, "drawBMP");
+    duk_push_c_function(ctx, js_drawPNG, 3);
+    duk_put_prop_string(ctx, -2, "drawPNG");
 
     // --- Text ---
     duk_push_c_function(ctx, js_drawString, 4);
