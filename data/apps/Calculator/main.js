@@ -1,4 +1,4 @@
-// KryonOS Calculator — expressao com precedencia e parenteses (API 3)
+// CelerOS Calculator — expressao com precedencia e parenteses (API 3)
 // ES5 puro (Duktape). Preview do resultado enquanto digita; = confirma e
 // encadeia (o resultado vira o inicio da proxima expressao).
 

@@ -1,8 +1,8 @@
 {
   "name": "Snake",
-  "packageName": "kryonos.snake",
+  "packageName": "celeros.snake",
   "version": "1.0.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Classico da cobrinha: deslize o dedo para virar, coma as frutas, acelere e bata o recorde (salvo no littlefs).",
   "type": "Game",
   "category": "Games",

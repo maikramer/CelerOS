@@ -1,4 +1,4 @@
-// KryonOS Installer — app de sistema (W8). Porte do InstallerUI.cpp:
+// CelerOS Installer — app de sistema (W8). Porte do InstallerUI.cpp:
 // escaneia /sd/apps/, mostra detalhes dos pacotes e instala na flash
 // (/local/apps) ou no proprio SD (flag /local/config_install_sd.txt).
 // X no canto sup. direito sai.
@@ -16,7 +16,9 @@ var TOP = 80;     // topo da lista
 // ---- helpers de UI (padrao dos apps de sistema) ---------------------------
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
+    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
+    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
 function lcenter(s, cx, y, f, col, bg) {
     System.setTextColor(col, bg);
@@ -200,7 +202,7 @@ function drawEmpty() {
     y += 20;
     lcenter("Copie apps para o cartao ou", 120, y, 1, T.textDim, T.card);
     y += 14;
-    lcenter("use o kryonctl / App Store.", 120, y, 1, T.textDim, T.card);
+    lcenter("use o celerctl / App Store.", 120, y, 1, T.textDim, T.card);
     System.fillRoundRect(8, 230, 224, 32, 8, T.accent);
     ctext("Reescanear", 120, 246, 2, T.onAccent, T.accent);
     footer();
@@ -334,7 +336,7 @@ function openApp(i) {
         showAlert("Incompativel",
                   ["O app requer API " + app.api + ".",
                    "Este OS tem API " + lvl + ".",
-                   "Atualize o KryonOS."], true);
+                   "Atualize o CelerOS."], true);
         return;
     }
     if (!validPkg(app.pkg)) {

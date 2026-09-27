@@ -1,8 +1,8 @@
 {
   "name": "Web Server",
-  "packageName": "kryonos.webserver",
+  "packageName": "celeros.webserver",
   "version": "1.0.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Liga e desliga o servidor web (file manager, upload de arquivos e de firmware na porta 80) e mostra o IP de acesso.",
   "type": "System",
   "category": "System",

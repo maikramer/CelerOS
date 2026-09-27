@@ -1,4 +1,4 @@
-// KryonOS Snake — classico da cobrinha (API 3)
+// CelerOS Snake — classico da cobrinha (API 3)
 // ES5 puro (Duktape). Swipe do dedo para virar; a cobra acelera a cada
 // fruta. Recorde persistido em /local/config_snake_hi.txt. Desenho por
 // celulas alteradas (sem sprite): zero flicker e barato para o heap.

@@ -1,4 +1,4 @@
-// HTTP Demo — exercita a API Net.* do KryonOS (API level 2)
+// HTTP Demo — exercita a API Net.* do CelerOS (API level 2)
 // Busca a cotacao USD/BRL em uma API publica HTTP e desenha na tela.
 
 var W = System.screenWidth();
