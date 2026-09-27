@@ -155,6 +155,8 @@ HarixOS uses a direct-to-glass rendering pipeline without double-buffering. Call
 ### Color Engine
 The ESP32 TFT uses the high-performance **16-bit RGB565** color format. You can define colors directly via Hex (e.g. `0xF800` for Red), or use the color conversion API.
 
+> **Virtual canvas (KryonOS 1.1+):** apps always run in a **240x320 design canvas**. On boards with larger panels (e.g. the SmartDisplay 4.5"/480x480), `System.screenWidth()/screenHeight()` report 240/320, all drawing coordinates/sizes are scaled to the physical screen, sprites are allocated at the scaled size, and `System.getTouch()` returns coordinates in the 240x320 space — the same app renders identically (and in fullscreen) on every board. Colors are RGB565 everywhere; the runtime converts to the panel's native format.
+
 #### `System.color(r, g, b)`
 - **Parameters:** `r`, `g`, `b` (Integers 0-255)
 - **Returns:** `Integer` (16-bit packed color)

@@ -427,12 +427,9 @@ bool CaptivePortal::runBlocking(KryonDisplay* tft) {
 
         if (s_connectState == PORTAL_CONNECTING) {
             if (WebManager::wifi().isConnected()) {
-                std::string creds = s_pendingSsid + "\n" + s_pendingPass;
-                if (FileSystem::exists("/sd/")) {
-                    FileSystem::writeTextFile("/sd/wifi.txt", creds.c_str());
-                } else {
-                    FileSystem::writeTextFile("/local/wifi.txt", creds.c_str());
-                }
+                // Credenciais agora vivem no NetworkCredentialStore (NVS)
+                NetworkManager::instance().getCredentialStore().saveNetwork(
+                    KnownNetwork(s_pendingSsid.c_str(), s_pendingPass.c_str()));
                 s_connectState = PORTAL_CONNECTED;
                 portalStatus(tft, "Connected!", WebManager::getIPAddress());
                 delay(1500);

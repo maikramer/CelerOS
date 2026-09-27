@@ -41,6 +41,7 @@ idf_component_register(
         joltwallet__esp_littlefs
         mbedtls
         Wifi
+        Connection
         Http
         esp_https_ota
         app_update

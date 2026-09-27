@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <string>
 #include <vector>
+#include "NetworkManager.h"
 #include "WifiConnection.h"
 
 // Resultado de scan para as UIs (SettingsUI/captive portal)
@@ -14,15 +15,18 @@ struct KryonScanEntry {
 
 class WebManager {
 public:
-    // Boot: inicializa WiFi (WifiConnection) com as credenciais de
-    // /sd/wifi.txt (fallback /local/wifi.txt) e sobe o servidor web se
-    // existir /local/web_on.txt. Retorna true se conectou.
+    // Boot: inicializa o NetworkManager (componente Connection — background
+    // task de reconexao/roaming), importa wifi.txt legado para o
+    // NetworkCredentialStore (NVS) uma unica vez e conecta na melhor rede
+    // conhecida. Sobe o servidor web se existir /local/web_on.txt.
+    // Retorna true se conectou.
     static bool init();
 
     // Liga o WiFi em tempo de execucao (mesmo efeito do init() no boot)
     static bool enable();
 
-    // Encerra o servidor e desliga o WiFi em tempo de execucao (sem reboot)
+    // Encerra o servidor e desliga o WiFi em tempo de execucao (sem reboot).
+    // O NetworkManager e dono do radio — nao ha esp_wifi_stop() aqui.
     static void disable();
 
     // Encerra apenas o servidor web, mantendo o WiFi ligado — usado antes de
@@ -42,8 +46,9 @@ public:
 
     // --- API estendida usada pelas UIs (substitui as chamadas WiFi.* do Arduino) ---
 
-    // Conecta bloqueando ate timeoutMs. saveCreds=true grava /wifi.txt
-    // (SD se montado, senao LittleFS). Retorna true se conectou.
+    // Conecta bloqueando ate timeoutMs. saveCreds=true grava no
+    // NetworkCredentialStore (NVS) — wifi.txt nao e mais escrito.
+    // Retorna true se conectou.
     static bool connect(const std::string& ssid, const std::string& password,
                         bool saveCreds = true, uint32_t timeoutMs = 15000);
 
@@ -54,11 +59,18 @@ public:
     static int scanNetworks(KryonScanEntry* out, int maxN);
 
     // Scan assincrono: dispara e entrega o resultado via callback no evento
-    // do componente Wifi.
+    // do componente Connection.
     static bool startScanAsync();
     static std::vector<KryonScanEntry> getLastScan();
 
-    // Acesso direto ao componente WifiConnection (portal, casos especiais)
+    // Ha redes salvas? (store NVS ou wifi.txt legado ainda nao importado)
+    static bool hasSavedNetworks();
+
+    // Esquece TODAS as redes: limpa o store NVS, apaga wifi.txt (e o
+    // .migrated) e desliga o WiFi. Usado pelo FORGET do Settings.
+    static void forgetAllNetworks();
+
+    // Acesso direto ao WifiConnection do NetworkManager (portal, casos especiais)
     static WifiConnection& wifi();
 
     // Servidor web no ar?
@@ -66,5 +78,6 @@ public:
 
 private:
     static void startWebServerIfNeeded();
-    static void onStateChanged(WifiConnection* conn, WiFiConnectionState oldState, WiFiConnectionState newState);
+    static void importLegacyWifiTxt();
+    static void onNetworkStateChanged(NetworkState oldState, NetworkState newState);
 };
