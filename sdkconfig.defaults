@@ -1,4 +1,4 @@
-# KryonOS — configuracao comum aos alvos (por-placa em boards/<board>/)
+# CelerOS — configuracao comum aos alvos (por-placa em boards/<board>/)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 
 # Biblioteca esp_components usa try/catch (nlohmann/json, etc.)
@@ -19,7 +19,7 @@ CONFIG_FREERTOS_HZ=1000
 # a stack padrao (4KB) transborda com os handlers encadeados -> stack overflow
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
 
-# vTaskList (comando ps do shell kryonctl/console)
+# vTaskList (comando ps do shell celerctl/console)
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
 

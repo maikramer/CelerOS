@@ -1,6 +1,0 @@
--Wno-frame-address
--mlongcalls
--fno-builtin-memcpy
--fno-builtin-memset
--fno-builtin-bzero
-"-specs=/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/KryonOS/build-cyd/specs/picolibc.specs"
