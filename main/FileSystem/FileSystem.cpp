@@ -1,378 +1,346 @@
 #include "FileSystem.h"
 #include "../Utils/StrUtils.h"
 
-// Pinos do barramento SPI do cartao SD, por placa
-#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
-// SmartDisplay 4": MOSI/SCK compartilhados com o SPI 3-wire do init do painel
-  #define KRYONOS_SD_SPI_HOST FSPI
-  #define KRYONOS_SD_SCK  48
-  #define KRYONOS_SD_MISO 41
-  #define KRYONOS_SD_MOSI 47
-#else
-  #define KRYONOS_SD_SPI_HOST HSPI
-  #define KRYONOS_SD_SCK  14
-  #define KRYONOS_SD_MISO 26
-  #define KRYONOS_SD_MOSI 13
-#endif
+#include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
-SPIClass sdSPI(KRYONOS_SD_SPI_HOST);
+#include "esp_log.h"
+#include "esp_littlefs.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
+
+static const char* FS_TAG = "kryon.fs";
+
+// Handle do cartao para unmount; bus SPI inicializada sob demanda
+static sdmmc_card_t* s_sd_card = nullptr;
+static bool s_spi_bus_ready = false;
+
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+  #define KRYONOS_SD_SPI_HOST SPI2_HOST  // FSPI (compartilhada com init 3-wire do painel)
+#else
+  #define KRYONOS_SD_SPI_HOST SPI2_HOST  // HSPI no ESP32 classico
+#endif
 
 bool FileSystem::init() {
     bool success = true;
 
-    // Initialize LittleFS
-    if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS Mount Failed");
+    // --- LittleFS em /local ---
+    esp_vfs_littlefs_conf_t lfsc = {};
+    lfsc.base_path = "/local";
+    lfsc.partition_label = "littlefs";
+    lfsc.format_if_mount_failed = true;
+    lfsc.dont_mount = false;
+    esp_err_t err = esp_vfs_littlefs_register(&lfsc);
+    if (err != ESP_OK) {
+        ESP_LOGE(FS_TAG, "LittleFS mount falhou: %s", esp_err_to_name(err));
         success = false;
     } else {
-        Serial.println("LittleFS Mount Successful");
-        if (!LittleFS.exists("/apps")) LittleFS.mkdir("/apps");
+        size_t total = 0, used = 0;
+        esp_littlefs_info("littlefs", &total, &used);
+        ESP_LOGI(FS_TAG, "LittleFS montado em /local (%u/%u usado)", (unsigned)used, (unsigned)total);
+        mkdir("/local/apps");  // ignora EEXIST
     }
 
-    // Initialize dedicated SPI bus for SD Card
-    sdSPI.begin(KRYONOS_SD_SCK, KRYONOS_SD_MISO, KRYONOS_SD_MOSI, SD_CS_PIN);
-
-    // Initialize SD Card
-    if (!SD.begin(SD_CS_PIN, sdSPI, 4000000)) {
-        Serial.println("SD Card Mount Failed");
+    // --- SD em /sd ---
+    if (!mountSD()) {
+        ESP_LOGW(FS_TAG, "SD Card Mount Failed");
         success = false;
-    } else {
-        Serial.println("SD Card Mount Successful");
     }
 
     return success;
 }
 
+bool FileSystem::mountSD() {
+    if (s_sd_card != nullptr) return true;
+
+    if (!s_spi_bus_ready) {
+        spi_bus_config_t buscfg = {};
+        buscfg.mosi_io_num = SD_MOSI;
+        buscfg.miso_io_num = SD_MISO;
+        buscfg.sclk_io_num = SD_SCK;
+        buscfg.quadwp_io_num = -1;
+        buscfg.quadhd_io_num = -1;
+        buscfg.max_transfer_sz = 4092;
+        esp_err_t err = spi_bus_initialize(KRYONOS_SD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+        if (err != ESP_OK) {
+            ESP_LOGE(FS_TAG, "spi_bus_initialize falhou: %s", esp_err_to_name(err));
+            return false;
+        }
+        s_spi_bus_ready = true;
+    }
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = KRYONOS_SD_SPI_HOST;
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+    // No SmartDisplay o barramento e compartilhado com o init do painel: 4MHz
+    host.max_freq_khz = 4000;
+#endif
+
+    sdspi_device_config_t slot = {};
+    slot.gpio_cs = (gpio_num_t)SD_CS_PIN;
+    slot.gpio_cd = GPIO_NUM_NC;
+
+    esp_vfs_fat_mount_config_t mountcfg = {};
+    mountcfg.format_if_mount_failed = false;
+    mountcfg.max_files = 5;
+    mountcfg.allocation_unit_size = 16 * 1024;
+
+    esp_err_t err = esp_vfs_fat_sdspi_mount("/sd", &host, &slot, &mountcfg, &s_sd_card);
+    if (err != ESP_OK) {
+        ESP_LOGW(FS_TAG, "sdspi mount falhou: %s", esp_err_to_name(err));
+        s_sd_card = nullptr;
+        return false;
+    }
+    ESP_LOGI(FS_TAG, "SD montado em /sd (%s)", s_sd_card->cid.name);
+    return true;
+}
+
+void FileSystem::unmountSD() {
+    if (s_sd_card != nullptr) {
+        esp_vfs_fat_sdcard_unmount("/sd", s_sd_card);
+        s_sd_card = nullptr;
+    }
+}
+
+bool FileSystem::formatSD() {
+    return false;  // FATFS format em runtime nao suportado (igual ao comportamento original)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers locais
+// ---------------------------------------------------------------------------
+
+static bool pathOk(const char* path) {
+    return path != nullptr &&
+           (strncmp(path, "/local", 6) == 0 || strncmp(path, "/sd", 3) == 0);
+}
+
 std::string FileSystem::readTextFile(const char* path) {
-    if (path == nullptr) return "";
-    
-    fs::FS* targetFS = nullptr;
-    const char* relPath = "";
-    if (strncmp(path, "/sd/", 4) == 0) {
-        targetFS = &SD;
-        relPath = path + 3;
-    } else if (strncmp(path, "/local/", 7) == 0) {
-        targetFS = &LittleFS;
-        relPath = path + 6;
-    } else {
-        return ""; // Unknown prefix
-    }
-    
-    if (strlen(relPath) == 0) relPath = "/";
-    
-    File file = targetFS->open(relPath);
-    if (!file || file.isDirectory()) {
-        return "";
-    }
-    
-    size_t size = file.size();
-    if (size == 0) {
-        file.close();
-        return "";
-    }
-    
-    // Pre-allocate to prevent massive heap fragmentation
-    std::string content;
-    try {
-        content.reserve(size);
-    } catch (...) {
-        Serial.println("Memory allocation failed for reading file.");
-        file.close();
+    if (!pathOk(path)) return "";
+
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) return "";
+
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || st.st_size <= 0 || S_ISDIR(st.st_mode)) {
+        fclose(f);
         return "";
     }
 
-    // Read in 512-byte chunks
-    uint8_t buffer[512];
-    while (file.available()) {
-        size_t bytesRead = file.read(buffer, sizeof(buffer));
-        content.append((const char*)buffer, bytesRead);
+    std::string content;
+    content.reserve((size_t)st.st_size);
+
+    char buffer[512];
+    size_t bytesRead = 0;
+    while ((bytesRead = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+        content.append(buffer, bytesRead);
     }
-    
-    file.close();
+
+    fclose(f);
     return content;
 }
 
 bool FileSystem::writeTextFile(const char* path, const char* content) {
-    if (path == nullptr || content == nullptr) return false;
-    
-    fs::FS* targetFS = nullptr;
-    const char* relPath = "";
-    if (strncmp(path, "/sd/", 4) == 0) {
-        targetFS = &SD;
-        relPath = path + 3;
-    } else if (strncmp(path, "/local/", 7) == 0) {
-        targetFS = &LittleFS;
-        relPath = path + 6;
-    } else {
-        return false;
-    }
-    
-    if (strlen(relPath) == 0) relPath = "/";
-    
-    File file = targetFS->open(relPath, FILE_WRITE);
-    if (!file) {
-        return false;
-    }
-    
-    if (file.print(content)) {
-        file.close();
-        return true;
-    } else {
-        file.close();
-        return false;
-    }
+    if (!pathOk(path) || content == nullptr) return false;
+
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) return false;
+
+    size_t len = strlen(content);
+    bool ok = (fwrite(content, 1, len, f) == len);
+    fclose(f);
+    return ok;
+}
+
+bool FileSystem::appendTextFile(const char* path, const char* content) {
+    if (!pathOk(path) || content == nullptr) return false;
+
+    FILE* f = fopen(path, "ab");
+    if (f == nullptr) return false;
+
+    size_t len = strlen(content);
+    bool ok = (fwrite(content, 1, len, f) == len);
+    fclose(f);
+    return ok;
 }
 
 bool FileSystem::exists(const char* path) {
-    if (path == nullptr) return false;
-    
-    if (strncmp(path, "/sd/", 4) == 0) {
-        return SD.exists(path + 3);
-    } else if (strncmp(path, "/local/", 7) == 0) {
-        return LittleFS.exists(path + 6);
-    }
-    return false;
+    if (!pathOk(path)) return false;
+    struct stat st;
+    return stat(path, &st) == 0;
 }
 
 bool FileSystem::deleteFile(const char* path) {
-    if (path == nullptr) return false;
-    
-    fs::FS* targetFS = nullptr;
-    const char* relPath = "";
-    if (strncmp(path, "/sd/", 4) == 0) {
-        targetFS = &SD;
-        relPath = path + 3;
-    } else if (strncmp(path, "/local/", 7) == 0) {
-        targetFS = &LittleFS;
-        relPath = path + 6;
-    } else {
-        return false;
-    }
-    
-    if (strlen(relPath) == 0) return false;
-    return targetFS->remove(relPath);
+    if (!pathOk(path)) return false;
+    return unlink(path) == 0;
 }
 
 bool FileSystem::formatLittleFS() {
-    Serial.println("Formatting LittleFS...");
-    return LittleFS.format();
+    ESP_LOGI(FS_TAG, "Formatando LittleFS...");
+    return esp_littlefs_format("littlefs") == ESP_OK;
 }
 
 int FileSystem::listDir(const char* dirPath, std::string* resultFiles, int maxFiles) {
     if (dirPath == nullptr || resultFiles == nullptr) return 0;
-    
-    fs::FS* targetFS = nullptr;
-    const char* relativePath = "";
-    if (strncmp(dirPath, "/sd", 3) == 0) {
-        targetFS = &SD;
-        relativePath = dirPath + 3; // e.g. "" or "/" or "/apps"
-        if (strlen(relativePath) == 0) relativePath = "/";
-    } else if (strncmp(dirPath, "/local", 6) == 0) {
-        targetFS = &LittleFS;
-        relativePath = dirPath + 6;
-        if (strlen(relativePath) == 0) relativePath = "/";
-    } else {
-        return 0;
-    }
-    
-    File dir = targetFS->open(relativePath);
-    if (!dir || !dir.isDirectory()) {
-        return 0;
-    }
+
+    DIR* dir = opendir(dirPath);
+    if (dir == nullptr) return 0;
 
     int count = 0;
-    File file = dir.openNextFile();
-    while (file && count < maxFiles) {
-        std::string name = file.name();
-        // Return full absolute path e.g. /sd/apps/file.js
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr && count < maxFiles) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+
         std::string fullPath = dirPath;
         if (!kstr::endsWith(fullPath, "/")) fullPath += "/";
-        fullPath += name;
+        fullPath += ent->d_name;
         resultFiles[count++] = fullPath;
-
-        file = dir.openNextFile();
     }
+    closedir(dir);
     return count;
 }
 
 int FileSystem::listDirectory(const char* dirPath, FileEntry* entries, int maxEntries) {
-    fs::FS* targetFS = nullptr;
-    const char* relativePath = "";
+    if (dirPath == nullptr || entries == nullptr) return 0;
 
-    if (strncmp(dirPath, "/sd", 3) == 0) {
-        targetFS = &SD;
-        relativePath = dirPath + 3; 
-        if (strlen(relativePath) == 0) relativePath = "/";
-    } else if (strncmp(dirPath, "/local", 6) == 0) {
-        targetFS = &LittleFS;
-        relativePath = dirPath + 6;
-        if (strlen(relativePath) == 0) relativePath = "/";
-    } else {
-        return 0;
-    }
-    
-    File dir = targetFS->open(relativePath);
-    if (!dir || !dir.isDirectory()) {
-        return 0;
-    }
+    DIR* dir = opendir(dirPath);
+    if (dir == nullptr) return 0;
 
     int count = 0;
-    File file = dir.openNextFile();
-    while (file && count < maxEntries) {
-        entries[count].name = std::string(file.name());
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr && count < maxEntries) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+
+        entries[count].name = ent->d_name;
 
         std::string fullPath = dirPath;
         if (!kstr::endsWith(fullPath, "/")) fullPath += "/";
         fullPath += entries[count].name;
-
         entries[count].path = fullPath;
-        entries[count].isDir = file.isDirectory();
+
+        if (ent->d_type == DT_DIR) {
+            entries[count].isDir = true;
+        } else if (ent->d_type == DT_UNKNOWN) {
+            struct stat st;
+            entries[count].isDir = (stat(fullPath.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+        } else {
+            entries[count].isDir = false;
+        }
 
         count++;
-        file = dir.openNextFile();
     }
+    closedir(dir);
     return count;
 }
 
 bool FileSystem::readCalData(uint16_t* calData) {
-    if (!LittleFS.exists("/touch_cal_p.bin")) return false;
-    File f = LittleFS.open("/touch_cal_p.bin", FILE_READ);
-    if (!f) return false;
-    if (f.read((uint8_t*)calData, 10) == 10) {
-        f.close();
-        return true;
-    }
-    f.close();
-    return false;
+    FILE* f = fopen("/local/touch_cal_p.bin", "rb");
+    if (f == nullptr) return false;
+    bool ok = (fread(calData, 1, 10, f) == 10);
+    fclose(f);
+    return ok;
 }
 
 bool FileSystem::writeCalData(uint16_t* calData) {
-    File f = LittleFS.open("/touch_cal_p.bin", FILE_WRITE);
-    if (!f) return false;
-    f.write((uint8_t*)calData, 10);
-    f.close();
+    FILE* f = fopen("/local/touch_cal_p.bin", "wb");
+    if (f == nullptr) return false;
+    fwrite(calData, 1, 10, f);
+    fclose(f);
     return true;
 }
 
 bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
-    if (srcPath == nullptr || dstPath == nullptr) return false;
-    
-    fs::FS* srcFS = nullptr;
-    const char* srcRel = "";
-    if (strncmp(srcPath, "/sd/", 4) == 0) {
-        srcFS = &SD; srcRel = srcPath + 3;
-    } else if (strncmp(srcPath, "/local/", 7) == 0) {
-        srcFS = &LittleFS; srcRel = srcPath + 6;
-    } else return false;
-    
-    fs::FS* dstFS = nullptr;
-    const char* dstRel = "";
-    if (strncmp(dstPath, "/sd/", 4) == 0) {
-        dstFS = &SD; dstRel = dstPath + 3;
-    } else if (strncmp(dstPath, "/local/", 7) == 0) {
-        dstFS = &LittleFS; dstRel = dstPath + 6;
-    } else return false;
+    if (!pathOk(srcPath) || !pathOk(dstPath)) return false;
 
-    if (strlen(srcRel) == 0) srcRel = "/";
-    if (strlen(dstRel) == 0) dstRel = "/";
+    FILE* src = fopen(srcPath, "rb");
+    if (src == nullptr) return false;
 
-    File srcFile = srcFS->open(srcRel, FILE_READ);
-    if (!srcFile || srcFile.isDirectory()) return false;
-    
-    File dstFile = dstFS->open(dstRel, FILE_WRITE);
-    if (!dstFile) {
-        srcFile.close();
+    struct stat st;
+    if (fstat(fileno(src), &st) == 0 && S_ISDIR(st.st_mode)) {
+        fclose(src);
         return false;
     }
-    
-    size_t n;
-    uint8_t buf[512];
-    while ((n = srcFile.read(buf, sizeof(buf))) > 0) {
-        dstFile.write(buf, n);
+
+    FILE* dst = fopen(dstPath, "wb");
+    if (dst == nullptr) {
+        fclose(src);
+        return false;
     }
-    
-    srcFile.close();
-    dstFile.close();
+
+    uint8_t buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+        if (fwrite(buf, 1, n, dst) != n) {
+            fclose(src);
+            fclose(dst);
+            return false;
+        }
+    }
+
+    fclose(src);
+    fclose(dst);
     return true;
 }
 
-
-
-#include <mbedtls/md5.h>
-#include <mbedtls/version.h>
-
-// mbedtls 2.x (Arduino core 2.x) expoe apenas as variantes *_ret
-#if MBEDTLS_VERSION_NUMBER < 0x03000000
-  #define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts_ret(c)
-  #define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update_ret(c,b,l)
-  #define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish_ret(c,h)
-#else
-  #define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts(c)
-  #define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update(c,b,l)
-  #define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish(c,h)
-#endif
-
-static fs::FS* getTargetFS(const char* path, const char*& relPath) {
-    if (path == nullptr) return nullptr;
-    if (strncmp(path, "/sd", 3) == 0) {
-        relPath = path + 3;
-        if (strlen(relPath) == 0) relPath = "/";
-        return &SD;
-    } else if (strncmp(path, "/local", 6) == 0) {
-        relPath = path + 6;
-        if (strlen(relPath) == 0) relPath = "/";
-        return &LittleFS;
-    }
-    return nullptr;
-}
-
 int FileSystem::countFilesInDir(const char* dirPath) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(dirPath, relPath);
-    if (!targetFS) return 0;
-    File dir = targetFS->open(relPath);
-    if (!dir || !dir.isDirectory()) return 0;
+    DIR* dir = opendir(dirPath);
+    if (dir == nullptr) return 0;
+
     int count = 0;
-    File f = dir.openNextFile();
-    while (f) {
-        if (!f.isDirectory()) {
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+
+        bool isDir;
+        if (ent->d_type == DT_DIR) isDir = true;
+        else if (ent->d_type == DT_UNKNOWN) {
+            std::string full = std::string(dirPath) + "/" + ent->d_name;
+            struct stat st;
+            isDir = (stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+        } else isDir = false;
+
+        if (!isDir) {
             count++;
         } else {
             std::string subPath = dirPath;
             if (!kstr::endsWith(subPath, "/")) subPath += "/";
-            subPath += f.name();
+            subPath += ent->d_name;
             count += countFilesInDir(subPath.c_str());
         }
-        f = dir.openNextFile();
     }
+    closedir(dir);
     return count;
 }
 
 bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*progressCb)(int current, int total)) {
     if (!srcDir || !destDir) return false;
     mkdir(destDir);
-    
-    const char* relPath = "";
-    fs::FS* srcFS = getTargetFS(srcDir, relPath);
-    if (!srcFS) return false;
-    
-    File dir = srcFS->open(relPath);
-    if (!dir || !dir.isDirectory()) return false;
-    
+
+    DIR* dir = opendir(srcDir);
+    if (dir == nullptr) return false;
+
     static int copiedFiles = 0;
     static int totalFiles = 0;
     static bool isTopLevel = true;
-    
+
     if (isTopLevel) {
         copiedFiles = 0;
         totalFiles = countFilesInDir(srcDir);
         if (totalFiles == 0) totalFiles = 1;
         isTopLevel = false;
     }
-    
-    File file = dir.openNextFile();
-    while (file) {
-        std::string fileName = file.name();
+
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        std::string fileName = ent->d_name;
+
         std::string srcFilePath = srcDir;
         if (!kstr::endsWith(srcFilePath, "/")) srcFilePath += "/";
         srcFilePath += fileName;
@@ -380,8 +348,15 @@ bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*p
         std::string dstFilePath = destDir;
         if (!kstr::endsWith(dstFilePath, "/")) dstFilePath += "/";
         dstFilePath += fileName;
-        
-        if (file.isDirectory()) {
+
+        bool isDir;
+        if (ent->d_type == DT_DIR) isDir = true;
+        else if (ent->d_type == DT_UNKNOWN) {
+            struct stat st;
+            isDir = (stat(srcFilePath.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+        } else isDir = false;
+
+        if (isDir) {
             bool wasTopLevel = isTopLevel;
             isTopLevel = false;
             copyDirectory(srcFilePath.c_str(), dstFilePath.c_str(), progressCb);
@@ -390,11 +365,11 @@ bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*p
             copyFile(srcFilePath.c_str(), dstFilePath.c_str());
             copiedFiles++;
             if (progressCb) progressCb(copiedFiles, totalFiles);
-            yield();
+            taskYIELD();
         }
-        file = dir.openNextFile();
     }
-    
+    closedir(dir);
+
     isTopLevel = true;
     return true;
 }
@@ -425,125 +400,116 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
 }
 
 bool FileSystem::mkdir(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return false;
-    return targetFS->mkdir(relPath);
+    if (!pathOk(path)) return false;
+    return ::mkdir(path, 0775) == 0 || errno == EEXIST;
 }
 
 bool FileSystem::rmdir(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return false;
-    return targetFS->rmdir(relPath);
+    if (!pathOk(path)) return false;
+    return ::rmdir(path) == 0;
 }
 
 bool FileSystem::isDirectory(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return false;
-    File file = targetFS->open(relPath);
-    if (!file) return false;
-    bool isDir = file.isDirectory();
-    file.close();
-    return isDir;
+    if (!pathOk(path)) return false;
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 bool FileSystem::isFile(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return false;
-    File file = targetFS->open(relPath);
-    if (!file) return false;
-    bool isFile = !file.isDirectory();
-    file.close();
-    return isFile;
-}
-
-bool FileSystem::appendTextFile(const char* path, const char* content) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return false;
-    File file = targetFS->open(relPath, FILE_APPEND);
-    if (!file) return false;
-    bool res = file.print(content);
-    file.close();
-    return res;
+    if (!pathOk(path)) return false;
+    struct stat st;
+    return stat(path, &st) == 0 && !S_ISDIR(st.st_mode);
 }
 
 bool FileSystem::renameFile(const char* pathFrom, const char* pathTo) {
-    const char* relPathFrom = "";
-    fs::FS* targetFSFrom = getTargetFS(pathFrom, relPathFrom);
-    const char* relPathTo = "";
-    fs::FS* targetFSTo = getTargetFS(pathTo, relPathTo);
-    
-    // Cannot rename across different file systems natively via targetFS->rename
-    if (!targetFSFrom || !targetFSTo || targetFSFrom != targetFSTo) return false;
-    
-    return targetFSFrom->rename(relPathFrom, relPathTo);
+    if (!pathOk(pathFrom) || !pathOk(pathTo)) return false;
+    return rename(pathFrom, pathTo) == 0;
 }
 
 size_t FileSystem::getFileSize(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return 0;
-    File file = targetFS->open(relPath);
-    if (!file) return 0;
-    size_t size = file.size();
-    file.close();
-    return size;
+    if (!pathOk(path)) return 0;
+    struct stat st;
+    if (stat(path, &st) != 0 || S_ISDIR(st.st_mode)) return 0;
+    return (size_t)st.st_size;
 }
 
 time_t FileSystem::getLastModified(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return 0;
-    File file = targetFS->open(relPath);
-    if (!file) return 0;
-    time_t mod = file.getLastWrite();
-    file.close();
-    return mod;
+    if (!pathOk(path)) return 0;
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return st.st_mtime;
 }
 
 size_t FileSystem::getTotalSpace(const char* drive) {
-    if (strncmp(drive, "/sd", 3) == 0) return SD.totalBytes();
-    if (strncmp(drive, "/local", 6) == 0) return LittleFS.totalBytes();
+    if (strncmp(drive, "/sd", 3) == 0) {
+        FATFS* fs = nullptr;
+        DWORD freeClusters = 0;
+        if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
+        size_t clusterSize = fs->csize * 512;
+        return (size_t)((fs->n_fatent - 2) * clusterSize);
+    }
+    if (strncmp(drive, "/local", 6) == 0) {
+        size_t total = 0, used = 0;
+        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        return total;
+    }
     return 0;
 }
 
 size_t FileSystem::getUsedSpace(const char* drive) {
-    if (strncmp(drive, "/sd", 3) == 0) return SD.usedBytes();
-    if (strncmp(drive, "/local", 6) == 0) return LittleFS.usedBytes();
+    if (strncmp(drive, "/sd", 3) == 0) {
+        size_t total = getTotalSpace(drive);
+        size_t freeB = getFreeSpace(drive);
+        return total > freeB ? (total - freeB) : 0;
+    }
+    if (strncmp(drive, "/local", 6) == 0) {
+        size_t total = 0, used = 0;
+        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        return used;
+    }
     return 0;
 }
 
 size_t FileSystem::getFreeSpace(const char* drive) {
-    size_t total = getTotalSpace(drive);
-    size_t used = getUsedSpace(drive);
-    return total > used ? (total - used) : 0;
+    if (strncmp(drive, "/sd", 3) == 0) {
+        FATFS* fs = nullptr;
+        DWORD freeClusters = 0;
+        if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
+        return (size_t)(freeClusters * fs->csize * 512);
+    }
+    if (strncmp(drive, "/local", 6) == 0) {
+        size_t total = 0, used = 0;
+        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        return total > used ? (total - used) : 0;
+    }
+    return 0;
 }
 
-std::string FileSystem::getFileMD5(const char* path) {
-    const char* relPath = "";
-    fs::FS* targetFS = getTargetFS(path, relPath);
-    if (!targetFS) return "";
-    File file = targetFS->open(relPath, FILE_READ);
-    if (!file || file.isDirectory()) return "";
+// ---------------------------------------------------------------------------
+// MD5 — implementacao da ROM da Espressif (mbedtls 3.x esconde o MD5 como
+// API privada; a ROM expoe direto e o hash precisa continuar MD5 porque e
+// formato publicado: System.getFileMD5 do JS e PIN do Settings)
+// ---------------------------------------------------------------------------
 
-    mbedtls_md5_context ctx;
-    mbedtls_md5_init(&ctx);
-    KRYONOS_MD5_STARTS(&ctx);
+#include "esp_rom_md5.h"
+
+std::string FileSystem::getFileMD5(const char* path) {
+    if (!pathOk(path)) return "";
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) return "";
+
+    md5_context_t ctx;
+    esp_rom_md5_init(&ctx);
 
     uint8_t buffer[512];
     size_t len;
-    while ((len = file.read(buffer, sizeof(buffer))) > 0) {
-        KRYONOS_MD5_UPDATE(&ctx, buffer, len);
+    while ((len = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+        esp_rom_md5_update(&ctx, buffer, (uint32_t)len);
     }
-    file.close();
+    fclose(f);
 
     uint8_t hash[16];
-    KRYONOS_MD5_FINISH(&ctx, hash);
-    mbedtls_md5_free(&ctx);
+    esp_rom_md5_final(hash, &ctx);
 
     std::string hexHash;
     for (int i = 0; i < 16; i++) {
@@ -552,16 +518,4 @@ std::string FileSystem::getFileMD5(const char* path) {
         hexHash += buf;
     }
     return hexHash;
-}
-
-bool FileSystem::mountSD() {
-    return SD.begin(SD_CS_PIN, sdSPI, 4000000);
-}
-
-void FileSystem::unmountSD() {
-    SD.end();
-}
-
-bool FileSystem::formatSD() {
-    return false; // Not natively supported on standard Arduino core without custom FAT commands
 }

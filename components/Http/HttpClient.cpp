@@ -296,3 +296,100 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
 
     return response;
 }
+
+int HttpClient::dlFileEventHandler(esp_http_client_event_t* evt) {
+    HttpClient* self = static_cast<HttpClient*>(evt->user_data);
+    if (self == nullptr) return 0;
+
+    switch (evt->event_id) {
+        case HTTP_EVENT_ON_HEADER:
+            // esp_http_client ja acumula headers padrao; nada a fazer aqui
+            break;
+        case HTTP_EVENT_ON_DATA: {
+            FILE* f = static_cast<FILE*>(self->_dlFile);
+            if (f != nullptr && evt->data != nullptr && evt->data_len > 0) {
+                size_t written = fwrite(evt->data, 1, evt->data_len, f);
+                self->_dlReceived += (int64_t)written;
+                if (self->_progressCallback) {
+                    self->_progressCallback(self->_dlReceived, self->_contentLength);
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return 0;
+}
+
+HttpResponse HttpClient::downloadToFile(const std::string& url, const std::string& filePath) {
+    HttpResponse response;
+    _responseBody = nullptr;
+    _contentLength = -1;
+    _dlReceived = 0;
+
+    uint64_t startTime = esp_timer_get_time();
+
+    FILE* f = fopen(filePath.c_str(), "wb");
+    if (f == nullptr) {
+        response.errorMessage = "Cannot open " + filePath + " for writing";
+        onError.trigger(url, response.errorMessage);
+        return response;
+    }
+    _dlFile = f;
+
+    esp_http_client_config_t config = {};
+    config.url = url.c_str();
+    config.event_handler = dlFileEventHandler;
+    config.user_data = this;
+    config.timeout_ms = static_cast<int>(_config.timeoutMs);
+    config.buffer_size = static_cast<int>(_config.bufferSize);
+    config.buffer_size_tx = static_cast<int>(_config.bufferSizeTx);
+    config.disable_auto_redirect = !_config.followRedirects;
+    config.max_redirection_count = _config.maxRedirects;
+    config.keep_alive_enable = _config.keepAlive;
+
+    if (!_certPem.empty()) {
+        config.cert_pem = _certPem.c_str();
+        config.cert_len = _certPem.length() + 1;
+    } else if (url.find("https://") == 0) {
+        config.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+    if (_config.disableSslVerify) {
+        config.skip_cert_common_name_check = true;
+    }
+    if (!_username.empty()) {
+        config.username = _username.c_str();
+        config.password = _password.c_str();
+        config.auth_type = HTTP_AUTH_TYPE_BASIC;
+    }
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = (client != nullptr) ? esp_http_client_perform(client) : ESP_FAIL;
+
+    if (client != nullptr) {
+        response.statusCode = esp_http_client_get_status_code(client);
+        response.contentLength = esp_http_client_get_content_length(client);
+        esp_http_client_cleanup(client);
+    }
+
+    fclose(f);
+    _dlFile = nullptr;
+
+    response.success = (err == ESP_OK && response.statusCode >= 200 && response.statusCode < 300);
+    response.durationMs = (uint32_t)((esp_timer_get_time() - startTime) / 1000);
+
+    if (!response.success) {
+        if (err != ESP_OK) {
+            response.errorMessage = esp_err_to_name(err);
+        } else {
+            response.errorMessage = "HTTP status " + std::to_string(response.statusCode);
+        }
+        remove(filePath.c_str());  // nao deixa arquivo parcial
+        onError.trigger(url, response.errorMessage);
+        return response;
+    }
+
+    onComplete.trigger(response);
+    return response;
+}

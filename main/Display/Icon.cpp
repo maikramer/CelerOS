@@ -2,7 +2,9 @@
 #include "Theme.h"
 #include "Layout.h"
 #include <string>
-#include <LittleFS.h>
+#include <cstdio>
+#include <cstdlib>
+#include "esp_heap_caps.h"
 
 // Registro fixo — mesmos ids do tools/icons.json
 const char* Icon::NAMES[Icon::COUNT] = {
@@ -20,30 +22,33 @@ int Icon::index(const char* name) {
 
 uint16_t* Icon::load(const char* name) {
     constexpr size_t SZ = (size_t)SIZE * SIZE * 2;
-    std::string path = std::string("/icons/") + name + ".bin";
-    // fs:: qualificado: o TFT_eSPI define FS_NO_GLOBALS (SMOOTH_FONT), o que
-    // esconde o "using fs::File" quando o FS.h entra primeiro pela cadeia do
-    // display
-    fs::File f = LittleFS.open(path.c_str(), "r");
-    if (!f || f.size() < SZ) {
-        if (f) f.close();
+    std::string path = std::string("/local/icons/") + name + ".bin";
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) return nullptr;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size < (long)SZ) {
+        fclose(f);
         return nullptr;
     }
-#ifdef BOARD_HAS_PSRAM
-    uint16_t* buf = (uint16_t*)ps_malloc(SZ);
-#else
-    uint16_t* buf = (uint16_t*)malloc(SZ);
-#endif
-    if (!buf) {
-        if (f) f.close();
+
+    // PSRAM quando disponivel (framebuffer grande), senao heap interno
+    uint16_t* buf = (uint16_t*)heap_caps_malloc(SZ, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == nullptr) {
+        buf = (uint16_t*)malloc(SZ);
+    }
+    if (buf == nullptr) {
+        fclose(f);
         return nullptr;
     }
-    if (f.read((uint8_t*)buf, SZ) != SZ) {
+    if (fread(buf, 1, SZ, f) != SZ) {
         free(buf);
-        f.close();
+        fclose(f);
         return nullptr;
     }
-    f.close();
+    fclose(f);
     return buf;
 }
 
