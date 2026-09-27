@@ -36,5 +36,5 @@ direct_dependencies:
 - johboh/nlohmann-json
 - joltwallet/esp_littlefs
 manifest_hash: fb61a5298cebb61ea8ac323401ad148fb5088ef0a18185fc5f0a754e3dd5e051
-target: esp32s3
+target: esp32
 version: 3.0.0

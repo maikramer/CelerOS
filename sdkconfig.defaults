@@ -1,43 +1,19 @@
-# KryonOS — Guition ESP32-S3-4848S040 (SmartDisplay 4", N16R8)
-# Equivalente ao env smartdisplay_4848S040 do platformio.ini:
-# 16MB flash QIO + PSRAM 8MB OCTAL (qio_opi).
-CONFIG_IDF_TARGET="esp32s3"
-
-# Flash 16MB QIO (o modulo N16R8 exige flash qio + psram opi)
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
-
-# Particoes OTA duplas + littlefs (partitions_16MB.csv)
+# KryonOS — configuracao comum aos alvos (por-placa em boards/<board>/)
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
-
-# PSRAM 8MB OCTAL — obrigatoria para o framebuffer RGB 480x480
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-# 120MHz (experimental) nao compila no IDF 6.1.0 com flash QIO 80MHz:
-# tabela MSPI_TIMING_FLASH_CONFIG_TABLE_CORE_CLK_240M_MODULE_CLK_80M_STR_MODE
-# nao existe no mspi_timing_tuning_configs.h. Reavaliar em IDF 6.1.x futuro.
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
-
-# A task main roda a UI + heap Duktape
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
-
-# TLS sem validacao de certificado (mesmo padrao do updater Arduino anterior:
-# WiFiClientSecure::setInsecure()). Revisar antes de producao.
-CONFIG_ESP_TLS_INSECURE=y
-CONFIG_ESP_TLS_SKIP_CERT_VERIFY=y
-
-CONFIG_FREERTOS_HZ=1000
 
 # Biblioteca esp_components usa try/catch (nlohmann/json, etc.)
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_EXCEPTIONS_EMUL_POOL_SIZE=64
-# CPU 240MHz (PSRAM 120MHz exige) — necessario p/ framebuffer RGB 480x480
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# A task main roda a UI + heap Duktape
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+
+# TLS sem validacao de certificado (mesmo padrao do updater anterior:
+# WiFiClientSecure::setInsecure). Revisar antes de producao.
+CONFIG_ESP_TLS_INSECURE=y
+CONFIG_ESP_TLS_SKIP_CERT_VERIFY=y
+
+CONFIG_FREERTOS_HZ=1000
 
 # Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y

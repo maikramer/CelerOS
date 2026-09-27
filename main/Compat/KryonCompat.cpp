@@ -5,7 +5,10 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_adc/adc_oneshot.h"
-#include "driver/temperature_sensor.h"
+#if CONFIG_IDF_TARGET_ESP32S3
+  #include "driver/temperature_sensor.h"
+  #define KRYONOS_HAS_TSENS 1
+#endif
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
@@ -81,18 +84,8 @@ int digitalRead(int pin) {
 static adc_oneshot_unit_handle_t s_adc_unit[2] = {nullptr, nullptr};
 
 static bool adc_io_to_unit_channel(int pin, adc_unit_t* unit, adc_channel_t* chan) {
-    // GPIO -> (unit, channel); so ADC1 (GPIO1-10) e ADC2 (GPIO11-20) no S3
-    if (pin >= 1 && pin <= 10) {
-        *unit = ADC_UNIT_1;
-        *chan = (adc_channel_t)(pin - 1);
-        return true;
-    }
-    if (pin >= 11 && pin <= 20) {
-        *unit = ADC_UNIT_2;
-        *chan = (adc_channel_t)(pin - 11);
-        return true;
-    }
-    return false;
+    // API oficial: valida o GPIO para o alvo corrente (mapa ADC difere por chip)
+    return adc_oneshot_io_to_channel(pin, unit, chan) == ESP_OK;
 }
 
 int analogRead(int pin) {
@@ -189,6 +182,9 @@ long map(long x, long in_min, long in_max, long out_min, long out_max) {
 // --- Temperatura interna (S3 tem sensor dedicado) ----------------------------
 
 float temperatureRead(void) {
+#if !KRYONOS_HAS_TSENS
+    return 53.33f;  // ESP32 classico nao tem sensor de temperatura
+#else
     static temperature_sensor_handle_t s_ts = nullptr;
     static bool s_failed = false;
     if (s_failed) return 53.33f;  // mesmo valor sentinela do arduino-esp32
@@ -204,6 +200,7 @@ float temperatureRead(void) {
     float t = 53.33f;
     temperature_sensor_get_celsius(s_ts, &t);
     return t;
+#endif
 }
 
 // --- Serial ------------------------------------------------------------------
