@@ -1,14 +1,13 @@
 #include "SettingsUI.h"
 #include "../Display/Layout.h"
 #include "Boards/Board.h"
+#include "../Launcher/Screens.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Kernel/TimeManager.h"
-#include "../Keyboard/MyKeyboard.h"
 #include "../WebManager/WebManager.h"
 #include "SystemInfo.h"
-#include "../Launcher/LauncherUI.h"
 #include "../OTA/OtaManager.h"
 #include "../WebManager/WifiSetupPortal.h"
 #include "esp_rom_md5.h"
@@ -198,8 +197,8 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
             // Check if wifi credentials exist
             bool hasWifiCredentials = WebManager::hasSavedNetworks();
             if (!hasWifiCredentials) {
-                // Launch the Visual WiFi Scanner
-                scanAndConnectWiFi();
+                // Configurador local (Kui) por cima do settings legacy
+                kui::Navigator::push(WifiSetupScreen::instance());
                 return;
             }
 
@@ -229,10 +228,9 @@ void SettingsUI::handleWiFiTouch(uint16_t x, uint16_t y) {
                 ? (x >= UI::sx(122) && x <= UI::sx(230))
                 : (x >= UI::sx(40) && x <= UI::sx(200));
             if (hitPortal) {
-                WebManager::stopWebServer();  // libera a porta 80 para o portal
-                WifiSetupPortal::runBlocking(tftInstance);
-                WebManager::enable();         // restaura STA + servidor conforme o resultado
-                drawWiFi();
+                // Transicao W7: abre a tela de setup do portal (Kui) por
+                // cima; a conexao roda no poll da tela, sem bloquear aqui.
+                kui::Navigator::push(WifiSetupScreen::instance());
                 return;
             }
 
@@ -909,193 +907,6 @@ void SettingsUI::handleTimeManualTouch(uint16_t x, uint16_t y) {
     }
 }
 
-// ----------------------------------------------------
-// WIFI SCANNER AND CONNECT UI
-// ----------------------------------------------------
-
-void SettingsUI::scanAndConnectWiFi() {
-    extern int currentState;
-    tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
-    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
-    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("WiFi Scanner", UI::sx(120), UI::sy(21), UI::font(2));
-
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Scanning for networks...", UI::sx(120), UI::sy(160), UI::font(2));
-
-    // Scan via WebManager (bloqueante ~2s, dedup por SSID, ordem por RSSI)
-    KryonScanEntry nets[20];
-    int n = WebManager::scanNetworks(nets, 20);
-
-    if (n == 0) {
-        tftInstance->fillScreen(TFT_BLACK);
-        tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-        tftInstance->drawString("No networks found.", UI::sx(120), UI::sy(160), UI::font(2));
-        delay(2000);
-        // Revert WiFi ON request
-        FileSystem::writeTextFile("/local/nowifi.txt", "1");
-        drawWiFi();
-        return;
-    }
-
-    int currentPage = 0;
-    int networksPerPage = 5;
-    int totalPages = (n + networksPerPage - 1) / networksPerPage;
-    
-    while (true) {
-        tftInstance->fillScreen(TFT_BLACK);
-        tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
-        tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
-        tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
-        tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-        tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Select Network", UI::sx(120), UI::sy(21), UI::font(2));
-
-        int startIdx = currentPage * networksPerPage;
-        int endIdx = startIdx + networksPerPage;
-        if (endIdx > n) endIdx = n;
-
-        int yPos = 50;
-        tftInstance->setTextDatum(TL_DATUM);
-        for (int i = startIdx; i < endIdx; i++) {
-            // Draw button
-            tftInstance->fillRoundRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(40), UI::sx(5), TFT_DARKGREY);
-            
-            std::string ssid = nets[i].ssid;
-            if (ssid.length() > 18) ssid = ssid.substr(0, 15) + "..."; // Truncate long SSIDs
-
-            tftInstance->setTextColor(TFT_WHITE, TFT_DARKGREY);
-            tftInstance->drawString(ssid.c_str(), UI::sx(20), UI::sy(yPos + 10), UI::font(2));
-
-            // Draw lock icon or open text
-            if (!nets[i].secure) {
-                tftInstance->setTextColor(TFT_GREEN, TFT_DARKGREY);
-                tftInstance->drawString("OPEN", UI::sx(180), UI::sy(yPos + 10), UI::font(2));
-            } else {
-                tftInstance->setTextColor(TFT_RED, TFT_DARKGREY);
-                tftInstance->drawString("SECURE", UI::sx(170), UI::sy(yPos + 10), UI::font(2));
-            }
-            
-            yPos += 45;
-        }
-
-        // Draw pagination or Cancel
-        tftInstance->fillRoundRect(UI::sx(10), UI::sy(275), UI::sx(100), UI::sy(35), UI::sx(5), TFT_RED);
-        tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-        tftInstance->setTextDatum(MC_DATUM);
-        tftInstance->drawString("Cancel", UI::sx(60), UI::sy(292), UI::font(2));
-
-        if (totalPages > 1) {
-            tftInstance->fillRoundRect(UI::sx(130), UI::sy(275), UI::sx(100), UI::sy(35), UI::sx(5), TFT_BLUE);
-            tftInstance->setTextColor(TFT_WHITE, TFT_BLUE);
-            tftInstance->drawString("Next Page", UI::sx(180), UI::sy(292), UI::font(2));
-        }
-
-        // Touch handling loop for this screen
-        uint16_t tx = 0, ty = 0;
-        bool touched = false;
-        while (!touched) {
-            if (tftInstance->getTouch(&tx, &ty)) {
-                // Debounce
-                while (tftInstance->getTouch(&tx, &ty)) { delay(10); }
-                touched = true;
-            }
-            delay(50);
-        }
-
-        // Check if Cancel tapped
-        if (ty >= UI::sy(275) && ty <= UI::sy(310) && tx >= UI::sx(10) && tx <= UI::sx(110)) {
-            // Revert WiFi ON request
-            FileSystem::writeTextFile("/local/nowifi.txt", "1");
-            drawWiFi();
-            return;
-        }
-
-        // Check if Next Page tapped
-        if (totalPages > 1 && ty >= UI::sy(275) && ty <= UI::sy(310) && tx >= UI::sx(130) && tx <= UI::sx(230)) {
-            currentPage++;
-            if (currentPage >= totalPages) currentPage = 0;
-            continue; // redraw
-        }
-
-        // Check if a network was tapped
-        int tappedIndex = -1;
-        int checkY = 50;
-        for (int i = startIdx; i < endIdx; i++) {
-            if (ty >= UI::sy(checkY) && ty <= UI::sy(checkY + 40) && tx >= UI::sx(10) && tx <= UI::sx(230)) {
-                tappedIndex = i;
-                break;
-            }
-            checkY += 45;
-        }
-
-        if (tappedIndex != -1) {
-            std::string selectedSSID = nets[tappedIndex].ssid;
-            selectedSSID = kstr::trim(selectedSSID);
-            std::string password = "";
-            bool connected = false;
-
-            while (!connected) {
-                if (nets[tappedIndex].secure) {
-                    // Ask for password
-                    std::string promptMsg = "Password for " + selectedSSID;
-                    password = MyKeyboard::getString("", promptMsg, 64);
-                    password = kstr::trim(password);
-                    if (password.length() == 0) {
-                        // Canceled typing password
-                        break; 
-                    }
-                }
-
-                tftInstance->fillScreen(TFT_BLACK);
-                tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-                tftInstance->setTextDatum(MC_DATUM);
-                tftInstance->drawString("Testing Connection...", UI::sx(120), UI::sy(160), UI::font(2));
-
-                // Conecta bloqueando ate 15s e grava /wifi.txt (SD ou
-                // LittleFS) somente se conectar — mesma sequencia do fluxo
-                // antigo de testar antes de salvar
-                if (WebManager::connect(selectedSSID, password)) {
-                    connected = true;
-                } else {
-                    if (!nets[tappedIndex].secure) {
-                        tftInstance->fillScreen(TFT_BLACK);
-                        tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-                        tftInstance->drawString("Failed to Connect!", UI::sx(120), UI::sy(160), UI::font(2));
-                        delay(2000);
-                        break;
-                    } else {
-                        tftInstance->fillScreen(TFT_BLACK);
-                        tftInstance->setTextColor(TFT_RED, TFT_BLACK);
-                        tftInstance->drawString("Wrong Password!", UI::sx(120), UI::sy(140), UI::font(2));
-                        tftInstance->drawString("Please try again.", UI::sx(120), UI::sy(160), UI::font(2));
-                        delay(2000);
-                        // Loop continues and asks for password again
-                    }
-                }
-            }
-
-            if (!connected) {
-                continue; // Go back to scanning list
-            }
-
-            // Credenciais ja gravadas em /wifi.txt pelo WebManager::connect()
-
-            tftInstance->fillScreen(TFT_BLACK);
-            tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-            tftInstance->setTextDatum(MC_DATUM);
-            tftInstance->drawString("Connected!", UI::sx(120), UI::sy(160), UI::font(2));
-            delay(1000);
-            WebManager::enable();
-            LauncherUI::requestRescan();
-            currentState = 0; // volta ao launcher
-            return;
-        }
-    }
-}
 // ----------------------------------------------------
 // SYSTEM UPDATER
 // ----------------------------------------------------

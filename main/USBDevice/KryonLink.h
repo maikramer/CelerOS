@@ -59,6 +59,7 @@ constexpr uint8_t KL_OTA_CHUNK = 0x14;    // payload -> esp_ota_write
 constexpr uint8_t KL_OTA_END = 0x15;      // -> fecha, valida e marca boot (sem reiniciar)
 constexpr uint8_t KL_OTA_ABORT = 0x16;    // cancela escrita OTA
 constexpr uint8_t KL_SCREENSHOT = 0x17;   // -> u16 w + u16 h, depois chunks KL_SCR_DATA
+constexpr uint8_t KL_TOUCH = 0x19;        // u8 n + n × {u8 down,u16 x,u16 y,u16 delayMs}
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

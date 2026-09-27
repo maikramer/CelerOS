@@ -26,8 +26,6 @@ public:
     static void drawTimeManual();
     static void handleTimeManualTouch(uint16_t x, uint16_t y);
 
-    static void scanAndConnectWiFi();
-
     static void drawUpdater(bool isBootCheck = false);
     static void handleUpdaterTouch(uint16_t x, uint16_t y);
     static bool checkUpdateSilent();

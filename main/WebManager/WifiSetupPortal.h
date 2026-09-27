@@ -1,17 +1,23 @@
 #ifndef KRYONOS_WIFI_SETUP_PORTAL_H
 #define KRYONOS_WIFI_SETUP_PORTAL_H
 
-#include "../Boards/Board.h"
+#include <string>
 
-// Captive portal do KryonOS sobre o componente Wifi/CaptivePortal: wrapper
-// fino que adiciona a tela no display (nome do AP, IP do portal, SKIP) e a
-//conexao STA — esta roda no loop do modal, nunca no handler do httpd. O
-// resultado chega a pagina via reportConnectionState/GET /status.
+// Captive portal do KryonOS sobre o componente Wifi/CaptivePortal.
+// Ciclo nao-bloqueante (a tela Kui dirige do loop principal):
+//   begin()  -> sobe o AP + portal (nao bloqueia)
+//   poll()   -> processa credenciais entregues pela pagina; quando ha
+//               credenciais, CONECTA (~15s bloqueantes com o portal vivo)
+//               e devolve o estado resultante
+//   end()    -> derruba o AP (STA preservado se conectado)
 class WifiSetupPortal {
 public:
-    // Abre o portal e bloqueia ate conectar (true; credenciais salvas no
-    // NetworkCredentialStore) ou o usuario tocar SKIP (false).
-    static bool runBlocking(KryonDisplay* tft);
+    enum State { Waiting, Connecting, Connected, Failed };
+
+    static bool begin();
+    static State poll(std::string& detail);
+    static void end();
+    static const char* apSsid();
 };
 
-#endif // KRYONOS_WIFI_SETUP_PORTAL_H
+#endif  // KRYONOS_WIFI_SETUP_PORTAL_H

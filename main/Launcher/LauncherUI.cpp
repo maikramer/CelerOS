@@ -196,6 +196,20 @@ void LauncherUI::drawCell(int entryIndex, int cellX, int cellY, int w, int h) {
     tftInstance->drawString(shown.c_str(), cellX + w / 2, iconY + Icon::SIZE + (UI::big ? 6 : 3), UI::font(2));
 }
 
+// ---- Acesso para o LauncherScreen (Kui) ------------------------------------
+int LauncherUI::appEntryCount() { return appCount; }
+const std::string& LauncherUI::appEntryPath(int i) { return appPaths[i]; }
+const std::string& LauncherUI::appEntryName(int i) { return appNames[i]; }
+bool LauncherUI::appEntryIsFolder(int i) { return appIsFolder[i]; }
+void LauncherUI::launchApp(int index) {
+    if (index < 0 || index >= appCount) return;
+    runApp(tftInstance, appPaths[index], appIsFolder[index]);
+}
+int LauncherUI::gridCols() { return cols(); }
+int LauncherUI::gridRows() { return rows(); }
+int LauncherUI::gridTotalEntries() { return totalEntries(); }
+int LauncherUI::gridTotalPages() { return totalPages(); }
+
 void LauncherUI::draw() {
     if (!tftInstance) return;
 

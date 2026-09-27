@@ -68,9 +68,11 @@ struct TouchEvent {
 class Canvas {
 public:
     explicit Canvas(KryonDisplay& dev);
+    ~Canvas();  // libera o sprite full-screen (PSRAM/heap) quando o Canvas e temporario
 
     // Ciclo de um redesenho: begin() ... primitivas ... end()
-    void begin();
+    // direct=true desenha direto no display (telas legacy), sem sprite.
+    void begin(bool direct = false);
     void end();
 
     // Primitivas (unidades fisicas; cores RGB888 como o resto do firmware)
@@ -82,6 +84,9 @@ public:
     void drawLine(int x0, int y0, int x1, int y1, uint32_t color);
     void drawCircle(int cx, int cy, int r, uint32_t color);
     void fillCircle(int cx, int cy, int r, uint32_t color);
+    void pushImage(int x, int y, int w, int h, const uint16_t* data);
+    // Icone do pacote (Icon::draw): compoe o alpha sobre o fundo atual
+    void drawIcon(const char* name, int x, int y);
     // Texto SEMPRE transparente (o widget limpa o proprio fundo antes)
     void text(const char* s, int x, int y, uint8_t font, uint32_t color, int datum = TL_DATUM);
     void text(const std::string& s, int x, int y, uint8_t font, uint32_t color, int datum = TL_DATUM);
@@ -107,6 +112,8 @@ public:
     virtual void draw(Canvas& c) = 0;            // redesenho completo da tela
     virtual bool onTouch(const TouchEvent& ev) { (void)ev; return false; }
     virtual void onTick(uint32_t dtMs) { (void)dtMs; }
+    // Telas antigas (embrulhadas) desenham direto no display, sem sprite
+    virtual bool wantsDirectDraw() const { return false; }
 
     void markDirty() { m_dirty = true; }
     bool consumeDirty() {
@@ -202,6 +209,45 @@ public:
     uint32_t color = THEME_ACCENT;
 };
 
+// ------------------------------------------------------------- TouchPump ----
+// Classificador de touch: converte o estado bruto do display em eventos
+// Press/Drag/Release (com tap/swipe derivados no TouchEvent). O Navigator
+// usa um; modais auto-contidos (ex.: Keyboard::getString) usam o proprio.
+class TouchPump {
+public:
+    using Handler = std::function<void(const TouchEvent&)>;
+
+    // Le o touch agora e entrega 0..1 eventos ao handler.
+    void poll(const Handler& onEvent);
+
+private:
+    bool m_down = false;
+    int m_lastX = 0, m_lastY = 0;
+    int m_pressX = 0, m_pressY = 0;
+    uint32_t m_pressMs = 0;
+};
+
+// ------------------------------------------------------------ TouchInjector ----
+// Fila de amostras de touch sinteticas (kryonctl tap/swipe). Os TouchPump
+// consomem a fila durante o poll; enquanto houver amostras pendentes (ou
+// espera de timing), o touch fisico e ignorado — o gesto injetado e dono do
+// pump. Preenchida pela task do KryonLink, drenada pelo loop da UI.
+class TouchInjector {
+public:
+    struct Sample {
+        bool down;
+        uint16_t x = 0, y = 0;
+        uint16_t delayMs = 0;  // espera ANTES de virar estado do dedo
+    };
+
+    static bool push(const Sample* samples, size_t n);  // false: fila cheia
+    static bool active();                               // gesto em curso
+    static bool take(Sample& out);                      // pop se o delay venceu
+
+private:
+    TouchInjector() = delete;
+};
+
 // -------------------------------------------------------------- Navigator ----
 class Navigator {
 public:
@@ -228,7 +274,6 @@ public:
     // Redesenho forcado da tela do topo
     static void repaint();
 
-    static bool handleTouchRaw(uint16_t x, uint16_t y, bool down);
     static void pumpEvents();  // gera eventos a partir do estado do touch
 
 private:

@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
+#include "../UI/Kui.h"     // TouchInjector (injecao de touch do kryonctl)
 
 #if !defined(KRYONOS_VERSION)
 #define KRYONOS_VERSION "?"
@@ -518,6 +519,35 @@ void handleScreenshot() {
     heap_caps_free(fb);
 }
 
+// ------------------------------------------------------------- touch inject
+
+void handleTouch(const uint8_t* payload, uint16_t len) {
+    // u8 n + n entradas {u8 down, u16 x, u16 y, u16 delayMs}
+    if (len < 1) {
+        respondError(KL_TOUCH, "payload vazio");
+        return;
+    }
+    uint8_t n = payload[0];
+    if (n == 0 || (size_t)len < 1 + (size_t)n * 7) {
+        respondError(KL_TOUCH, "payload malformado");
+        return;
+    }
+    if (n > 16) n = 16;
+    kui::TouchInjector::Sample s[16];
+    for (int i = 0; i < n; i++) {
+        const uint8_t* p = payload + 1 + i * 7;
+        s[i].down = p[0] != 0;
+        s[i].x = (uint16_t)(p[1] | (p[2] << 8));
+        s[i].y = (uint16_t)(p[3] | (p[4] << 8));
+        s[i].delayMs = (uint16_t)(p[5] | (p[6] << 8));
+    }
+    if (!kui::TouchInjector::push(s, n)) {
+        respondError(KL_TOUCH, "fila de touch cheia");
+        return;
+    }
+    respond(KL_TOUCH, 0);
+}
+
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     switch (cmd) {
         case KL_HELLO: handleHello(payload, len); break;
@@ -541,6 +571,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_OTA_END: handleOtaEnd(); break;
         case KL_OTA_ABORT: handleOtaAbort(); break;
         case KL_SCREENSHOT: handleScreenshot(); break;
+        case KL_TOUCH: handleTouch(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }

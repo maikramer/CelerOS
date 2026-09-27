@@ -1,6 +1,7 @@
 #include "KryonShell.h"
 #include "FileSystem/FileSystem.h"
 #include "Boards/Board.h"
+#include "Display/Theme.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -265,6 +266,46 @@ int cmdInfo(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// Diagnostico de cor: desenha, le de volta e imprime o conteudo do fb
+int cmdColorBars(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
+    KryonDisplay& tft = Board::display();
+    char line[96];
+    snprintf(line, sizeof(line), "depth=%u rot=%u w=%u h=%u\r\n",
+             (unsigned)tft.getColorDepth(), (unsigned)tft.getRotation(),
+             (unsigned)tft.width(), (unsigned)tft.height());
+    print(ctx, line);
+
+    const uint32_t bars[6] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF, 0xFFFF00, 0x00FFFF};
+    const uint16_t exp565[6] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0xFFE0, 0x07FF};
+    const char* nm[6] = {"RED", "GRN", "BLU", "WHT", "YEL", "CYN"};
+    int bw = tft.width() / 6;
+    uint16_t got;
+    for (int i = 0; i < 6; i++) {
+        tft.fillRect(i * bw, 0, bw, tft.height(), bars[i]);
+        tft.readRect(i * bw + bw / 2, tft.height() / 2, 1, 1, &got);
+        snprintf(line, sizeof(line), "%s exp=%04X got=%04X\r\n", nm[i], exp565[i], got);
+        print(ctx, line);
+    }
+    // tema: fill + readback direto
+    const uint32_t theme[3] = {THEME_BG, THEME_CARD, THEME_ACCENT};
+    const uint16_t themeExp[3] = {0x0882, 0x10E4, 0x269D};
+    const char* tn[3] = {"BG  ", "CARD", "ACNT"};
+    for (int i = 0; i < 3; i++) {
+        tft.fillRect(0, 0, 100, 100, theme[i]);
+        tft.readRect(50, 50, 1, 1, &got);
+        snprintf(line, sizeof(line), "%s exp=%04X got=%04X\r\n", tn[i], themeExp[i], got);
+        print(ctx, line);
+    }
+    // pushImage de 565 puro (vermelho) e readback
+    uint16_t raw[4] = {0xF800, 0xF800, 0x07E0, 0x07E0};
+    tft.pushImage(0, 0, 2, 2, raw);
+    tft.readRect(0, 0, 1, 1, &got);
+    snprintf(line, sizeof(line), "PUSH exp=F800 got=%04X\r\n", got);
+    print(ctx, line);
+    print(ctx, "feito\r\n");
+    return 0;
+}
+
 int cmdReboot(int argc, char** argv, KryonShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -281,6 +322,7 @@ const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
+    {"colorbars", cmdColorBars},
 };
 
 }  // namespace

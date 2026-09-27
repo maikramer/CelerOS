@@ -124,6 +124,29 @@ bool WebManager::init() {
     return true;
 }
 
+bool WebManager::startAsync() {
+    nvs_flash_init();
+
+    if (FileSystem::exists("/local/nowifi.txt")) {
+        Serial.println("WiFi desligado pelo usuario (nowifi.txt).");
+        return false;
+    }
+
+    ErrorCode err = nm().init(true);  // task de reconexao/roaming conecta
+    if (err != CommonErrorCodes::None) {
+        Serial.println("NetworkManager init failed.");
+        return false;
+    }
+
+    if (!s_nmEventsBound) {
+        s_nmEventsBound = true;
+        nm().onStateChanged.addHandler(
+            [](NetworkState o, NetworkState n) { WebManager::onNetworkStateChanged(o, n); });
+    }
+    importLegacyWifiTxt();
+    return true;
+}
+
 bool WebManager::enable() {
     nm().setAutoReconnect(true);
     return WebManager::init();

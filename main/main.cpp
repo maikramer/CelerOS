@@ -10,7 +10,6 @@
 #include "Settings/SettingsUI.h"
 #include "Launcher/InstallerUI.h"
 #include "Settings/TouchCalibrator.h"
-#include "Keyboard/MyKeyboard.h"
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
 #include "Runtime/JSBindings.h"
@@ -19,6 +18,7 @@
 #include "Kernel/TimeManager.h"
 #include "Launcher/AppStoreUI.h"
 #include "Launcher/HelpCenterUI.h"
+#include "Launcher/Screens.h"
 #include "USBDevice/SerialLink.h"
 #include "Boards/Board.h"
 #if CONFIG_KRYONOS_USB_NATIVE
@@ -46,6 +46,7 @@
 
 int currentState = STATE_LAUNCHER;
 KryonDisplay& tft = Board::display();
+static LauncherScreen s_launcher;  // base da pilha do Navigator
 
 static void kryonSetup() {
     Serial.begin(115200);
@@ -102,54 +103,11 @@ static void kryonSetup() {
     // Initialize Time Manager
     TimeManager::init();
     
-    // Initialize Web Manager (Only if not disabled)
-    if (!FileSystem::exists("/local/nowifi.txt")) {
-        tft.fillScreen(TFT_BLACK);
-        tft.drawString("Connecting WiFi...", UI::cx(), UI::cy(), UI::font(2));
-        Serial.println("DEBUG: Starting WebManager...");
-        if (WebManager::init()) {
-            tft.drawString("WiFi Connected!", UI::cx(), UI::sy(140), UI::font(2));
-            tft.drawString(WebManager::getIPAddress().c_str(), UI::cx(), UI::sy(180), UI::font(2));
-            delay(2000);
-        } else {
-            // Sem wifi.txt ou conexao falhou: oferece o captive portal
-            // antes de seguir o boot sem WiFi
-            tft.fillScreen(TFT_BLACK);
-            tft.setTextDatum(MC_DATUM);
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
-            tft.drawString("WiFi Setup", UI::cx(), UI::sy(70), UI::font(2));
-            tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-            tft.drawString("No saved network.", UI::cx(), UI::sy(100), UI::font(2));
-            tft.drawString("Configure via web portal?", UI::cx(), UI::sy(118), UI::font(2));
-
-            tft.fillRoundRect(UI::sx(15), UI::sy(150), UI::sx(95), UI::sy(40), UI::sx(5), TFT_BLUE);
-            tft.setTextColor(TFT_WHITE, TFT_BLUE);
-            tft.drawString("SETUP", UI::sx(62), UI::sy(170), UI::font(2));
-            tft.fillRoundRect(UI::sx(130), UI::sy(150), UI::sx(95), UI::sy(40), UI::sx(5), TFT_DARKGREY);
-            tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
-            tft.drawString("SKIP", UI::sx(177), UI::sy(170), UI::font(2));
-
-            bool doSetup = false;
-            uint16_t tx = 0, ty = 0;
-            while (true) {
-                if (tft.getTouch(&tx, &ty)) {
-                    if (ty >= UI::sy(150) && ty <= UI::sy(190)) {
-                        if (tx >= UI::sx(15) && tx <= UI::sx(110)) { doSetup = true; break; }
-                        if (tx >= UI::sx(130) && tx <= UI::sx(225)) { doSetup = false; break; }
-                    }
-                    while (tft.getTouch(&tx, &ty)) { delay(10); }
-                }
-                delay(20);
-            }
-
-            if (doSetup && WifiSetupPortal::runBlocking(&tft)) {
-                WebManager::init();  // NTP + servidor web, se habilitados
-            }
-        }
-        Serial.println("DEBUG: WebManager initialized.");
-    } else {
-        Serial.println("DEBUG: WebManager Disabled by user (RAM Mode).");
-    }
+    // WiFi 100% assincrono: prepara credenciais/eventos e a task de
+    // reconexao do NetworkManager conecta sozinha (sem race de scan —
+    // o boot antigo concorria com a task e caia na tela "WiFi Setup").
+    // Sem rede, o launcher mostra o banner "WiFi offline".
+    WebManager::startAsync();
     Serial.printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
@@ -163,7 +121,6 @@ static void kryonSetup() {
     SettingsUI::init(&tft);
     InstallerUI::init(&tft);
     TouchCalibrator::init(&tft);
-    MyKeyboard::init(&tft);
     WebServerAppUI::init(&tft);
     AppStoreUI::init(&tft);
     HelpCenterUI::init(&tft);
@@ -177,155 +134,60 @@ static void kryonSetup() {
     LauncherUI::needsRescan = false;
     Serial.println("DEBUG: Local Apps Scanned.");
 
-    // Attempt to read touch calibration
-    if (Board::profile().capacitiveTouch) {
-        // Touch capacitivo (GT911): nao requer calibracao
-        Serial.println("DEBUG: Capacitive touch, skipping calibrator.");
-        currentState = STATE_LAUNCHER;
-    } else {
-        Serial.println("DEBUG: Reading CalData...");
+    // Touch resistivo sem calibracao salva: roda o calibrador antes da UI.
+    // Placas com touch capacitivo (GT911) pulam a calibracao.
+    if (!Board::profile().capacitiveTouch) {
         uint16_t calData[5];
-        if (FileSystem::readCalData(calData)) {
-            Serial.println("Calibration data found and loaded.");
-            tft.setTouch(calData);
-            currentState = STATE_LAUNCHER;
-        } else {
+        if (!FileSystem::readCalData(calData)) {
             Serial.println("No calibration data. Entering calibrator.");
-            currentState = STATE_CALIBRATOR;
+            TouchCalibrator::runCalibration();
+        } else {
+            tft.setTouch(calData);
         }
     }
-    
-    // Check for updates on boot
-    if (currentState == STATE_LAUNCHER && WebManager::isWifiConnected()) {
-        Serial.println("DEBUG: Checking for updates...");
-        if (SettingsUI::checkUpdateSilent()) {
-            currentState = STATE_UPDATER_BOOT;
-        }
-    }
-    
+
+    // UI nova: launcher e a base da pilha do Navigator
+    kui::Navigator::begin(tft);
+    kui::Navigator::push(&s_launcher);
+    currentState = STATE_LAUNCHER;
     Serial.println("DEBUG: Setup complete, entering loop!");
-    
-    // Initial draw
+}
+
+// Guardiao da transicao: telas antigas ainda navegam escrevendo em
+// currentState; aqui a mudanca e refletida na pilha do Navigator.
+static void pumpLegacyNavigation() {
+    static int last = STATE_LAUNCHER;
+    if (currentState == last) return;
+    last = currentState;
+
     if (currentState == STATE_LAUNCHER) {
-        LauncherUI::draw();
-    } else if (currentState == STATE_UPDATER_BOOT) {
-        SettingsUI::drawUpdater(true);
+        kui::Navigator::home();
+        return;
+    }
+    if (currentState == STATE_RUN_APP || currentState == STATE_CALIBRATOR) return;  // tratados fora
+    LegacyScreen* s = LegacyScreen::forState(currentState);
+    if (s != nullptr) {
+        // substitui o topo se for tela antiga diferente; senao empilha
+        kui::Screen* top = kui::Navigator::top();
+        if (top != nullptr && top != (kui::Screen*)&s_launcher && kui::Navigator::depth() > 1) {
+            kui::Navigator::replace(s);
+        } else {
+            kui::Navigator::push(s);
+        }
     }
 }
 
-int lastState = -1; // To trigger draws on state change
-
 static void kryonLoop() {
-
-    if (currentState != lastState) {
-        if (currentState != STATE_RUN_APP) {
-            tft.fillScreen(TFT_BLACK); // Completely wipe screen when changing states!
-        }
-        int oldState = currentState;
-        if (currentState == STATE_LAUNCHER) LauncherUI::draw();
-        else if (currentState == STATE_SETTINGS) SettingsUI::draw();
-        else if (currentState == STATE_INSTALLER) InstallerUI::draw();
-        else if (currentState == STATE_CALIBRATOR) TouchCalibrator::runCalibration();
-        else if (currentState == STATE_WEB_APP) WebServerAppUI::draw();
-        else if (currentState == STATE_SETTINGS_ABOUT) SettingsUI::drawAbout();
-        else if (currentState == STATE_SETTINGS_WIFI) SettingsUI::drawWiFi();
-        else if (currentState == STATE_SETTINGS_APPS) SettingsUI::drawApps();
-        else if (currentState == STATE_SETTINGS_TIME) SettingsUI::drawTimeSettings();
-        else if (currentState == STATE_SETTINGS_TIME_MANUAL) SettingsUI::drawTimeManual();
-        else if (currentState == STATE_UPDATER_BOOT) SettingsUI::drawUpdater(true);
-        else if (currentState == STATE_UPDATER_MANUAL) SettingsUI::drawUpdater(false);
-        else if (currentState == STATE_APP_STORE) AppStoreUI::draw();
-        else if (currentState == STATE_HELP_CENTER) HelpCenterUI::draw();
-        else if (currentState == STATE_SETTINGS_SECURITY) SettingsUI::drawSecurity();
-        else if (currentState == STATE_SETTINGS_DISPLAY) SettingsUI::drawDisplaySettings();
-        
-        // If state changed during drawing, don't set lastState to oldState
-        if (currentState == oldState) {
-            lastState = currentState;
-        } else {
-            lastState = -1; // Force next iteration to draw the new state
-        }
-    }
-
-    if (currentState == STATE_HELP_CENTER) {
-        HelpCenterUI::update();
-    }
-
-    // Home screen: relogio, wifi e gestos (swipe/tap)
-    if (currentState == STATE_LAUNCHER) {
-        LauncherUI::update();
-    }
+    // UI (input + redraw)
+    kui::Navigator::tick();
 
     // Reboot diferido do upload web de firmware (/update)
     WebManager::tick();
 
-    // Basic Touch handling loop
-    uint16_t x, y;
-    bool touched = tft.getTouch(&x, &y);
-    
-    static unsigned long lastTouchTime = 0;
-    static bool wasTouched = false;
+    // Navegacao das telas antigas via currentState -> pilha do Navigator
+    pumpLegacyNavigation();
 
-    if (touched) {
-        bool processNow = false;
-        
-        if (!wasTouched) {
-            processNow = true;
-            lastTouchTime = millis();
-        } else {
-            // If held down for 300ms, start fast repeat
-            if (millis() - lastTouchTime > 300) {
-                // Only fast repeat for footer buttons (UP/DN are typically at y >= 280)
-                if (y >= UI::FOOTER_TOUCH_Y) {
-                    processNow = true;
-                    lastTouchTime = millis() - 250; // repeat every 50ms
-                }
-            }
-        }
-        
-        if (processNow) {
-            if (currentState == STATE_LAUNCHER) {
-                LauncherUI::handleTouch(x, y);  // registra inicio do gesto
-            } else if (currentState == STATE_SETTINGS) {
-                SettingsUI::handleTouch(x, y);
-            } else if (currentState == STATE_INSTALLER) {
-                InstallerUI::handleTouch(x, y);
-            } else if (currentState == STATE_WEB_APP) {
-                WebServerAppUI::handleTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_ABOUT) {
-                SettingsUI::handleAboutTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_WIFI) {
-                SettingsUI::handleWiFiTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_APPS) {
-                SettingsUI::handleAppsTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_TIME) {
-                SettingsUI::handleTimeTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_TIME_MANUAL) {
-                SettingsUI::handleTimeManualTouch(x, y);
-            } else if (currentState == STATE_UPDATER_BOOT || currentState == STATE_UPDATER_MANUAL) {
-                SettingsUI::handleUpdaterTouch(x, y);
-            } else if (currentState == STATE_APP_STORE) {
-                AppStoreUI::handleTouch(x, y);
-            } else if (currentState == STATE_HELP_CENTER) {
-                HelpCenterUI::handleTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_SECURITY) {
-                SettingsUI::handleSecurityTouch(x, y);
-            } else if (currentState == STATE_SETTINGS_DISPLAY) {
-                SettingsUI::handleDisplayTouch(x, y);
-            } else if (currentState == STATE_RUN_APP) {
-                // Check if user touched the top-right "X" button
-                if (UI::hitExit(x, y)) {
-                    currentState = STATE_LAUNCHER; // Exit app
-                }
-            }
-        }
-        wasTouched = true;
-    } else {
-        wasTouched = false;
-    }
-
-    // Yield to let ESP32 handle background tasks (WiFi, etc.)
-    delay(10);
+    delay(5);
 }
 
 // Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)
