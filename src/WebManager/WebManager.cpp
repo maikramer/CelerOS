@@ -4,12 +4,39 @@
 #include <LittleFS.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <Update.h>
 #include "../File System/FileSystem.h"
 #include "filemanager_html.h"
+#include "ota_upload_html.h"
 #include "../Kernel/TimeManager.h"
 
 AsyncWebServer server(80);
 bool isWiFiConnected = false;
+static bool serverConfigured = false;
+static bool serverRunning = false;
+static WiFiEventId_t wifiEventId = 0;
+static unsigned long reconnectGateUntil = 0;  // auto-reconnect suspenso ate este ms
+static volatile bool rebootPending = false;   // setado pelo /update, consumido por tick()
+
+// Auto-reconnect com backoff de 10s: se o roteador cair, o KryonOS tenta
+// voltar sozinho (antes era preciso reboot). So age em modo STA puro —
+// durante o captive portal (AP_STA) e na janela pos-disable() fica mudo.
+void WebManager::onWifiEvent(arduino_event_id_t event) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        isWiFiConnected = false;
+        if (WiFi.getMode() == WIFI_MODE_STA && millis() > reconnectGateUntil) {
+            static unsigned long lastTry = 0;
+            unsigned long now = millis();
+            if (now - lastTry >= 10000) {
+                lastTry = now;
+                Serial.println("WiFi lost, reconnecting...");
+                WiFi.reconnect();
+            }
+        }
+    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+        isWiFiConnected = true;
+    }
+}
 
 // Helper to get FS based on path
 fs::FS* getFSFromPath(String& path) {
@@ -26,6 +53,11 @@ fs::FS* getFSFromPath(String& path) {
 }
 
 bool WebManager::init() {
+    // Registra o auto-reconnect uma unica vez, antes de qualquer early-return
+    if (wifiEventId == 0) {
+        wifiEventId = WiFi.onEvent(onWifiEvent);
+    }
+
     File wifiFile = SD.open("/wifi.txt", FILE_READ);
     if (!wifiFile) {
         // Fallback to LittleFS
@@ -80,7 +112,15 @@ bool WebManager::init() {
             return true; // WiFi is connected, but server is not started
         }
 
-        // Configure Web Server
+        // Configure Web Server (handlers registrados apenas uma vez)
+        if (serverConfigured) {
+            if (!serverRunning) {
+                server.begin();
+                serverRunning = true;
+                Serial.println("Async Web Server started on port 80");
+            }
+            return true;
+        }
         server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
             request->send(200, "text/html", filemanager_html);
         });
@@ -295,16 +335,90 @@ bool WebManager::init() {
             }
         });
 
+        // Flash de firmware pelo navegador (estilo ElegantOTA). O reboot e
+        // diferido para o tick() do loop principal — nao se pode reiniciar
+        // dentro do handler do AsyncWebServer.
+        server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request){
+            request->send(200, "text/html", ota_upload_html);
+        });
+
+        server.on("/update", HTTP_POST,
+            [](AsyncWebServerRequest *request){
+                bool ok = !Update.hasError();
+                if (ok) {
+                    request->send(200, "text/plain", "OK - rebooting");
+                    rebootPending = true;
+                } else {
+                    request->send(500, "text/plain", String(Update.errorString()));
+                }
+            },
+            [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+                if (index == 0) {
+                    Serial.println("OTA web upload: " + filename);
+                    Update.begin(UPDATE_SIZE_UNKNOWN);
+                }
+                if (len) {
+                    if (Update.write(data, len) != len) {
+                        Serial.printf("OTA write failed: %s\n", Update.errorString());
+                    }
+                }
+                if (final) {
+                    if (Update.end(true)) {
+                        Serial.println("OTA web upload flashed OK");
+                    } else {
+                        Serial.printf("OTA end failed: %s\n", Update.errorString());
+                    }
+                }
+            });
+
         // Required CORS for API usage if needed
         DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
 
+        serverConfigured = true;
         server.begin();
+        serverRunning = true;
         Serial.println("Async Web Server started on port 80");
         
         return true;
     } else {
         Serial.println("WiFi connection failed.");
         return false;
+    }
+}
+
+bool WebManager::enable() {
+    return WebManager::init();
+}
+
+void WebManager::disable() {
+    // Silencia o auto-reconnect por uns segundos para nao religar o WiFi
+    // logo apos um desligamento intencional
+    reconnectGateUntil = millis() + 8000;
+    if (serverRunning) {
+        server.end();
+        serverRunning = false;
+        Serial.println("Async Web Server stopped");
+    }
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    isWiFiConnected = false;
+    Serial.println("WiFi disabled at runtime");
+}
+
+void WebManager::stopWebServer() {
+    if (serverRunning) {
+        server.end();
+        serverRunning = false;
+        Serial.println("Async Web Server paused");
+    }
+}
+
+void WebManager::tick() {
+    if (rebootPending) {
+        rebootPending = false;
+        Serial.println("Rebooting after web OTA...");
+        delay(500);  // da tempo para a resposta HTTP chegar ao navegador
+        ESP.restart();
     }
 }
 

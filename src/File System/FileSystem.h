@@ -56,7 +56,11 @@ public:
     static bool formatSD();
     
 private:
-    static const int SD_CS_PIN = 15;
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+    static const int SD_CS_PIN = 42;  // SmartDisplay 4" (compartilha SPI com o init do painel)
+#else
+    static const int SD_CS_PIN = 15;  // Placa classica (HSPI dedicado)
+#endif
 };
 
 #endif // FILE_SYSTEM_H

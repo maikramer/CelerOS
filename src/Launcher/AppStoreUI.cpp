@@ -1,4 +1,5 @@
 #include "AppStoreUI.h"
+#include "../Display/Layout.h"
 #include "../File System/FileSystem.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -9,7 +10,7 @@
 
 extern int currentState;
 
-TFT_eSPI *AppStoreUI::tftInstance = nullptr;
+KryonDisplay *AppStoreUI::tftInstance = nullptr;
 
 int AppStoreUI::storeState = 0;
 bool AppStoreUI::isUpdateMode = false;
@@ -33,7 +34,7 @@ bool AppStoreUI::downloadInProgress = false;
 
 const char* INDEX_URL = "https://raw.githubusercontent.com/Haris16-code/KryonOS-AppStore/refs/heads/main/index.json";
 
-void AppStoreUI::init(TFT_eSPI *tft) {
+void AppStoreUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
@@ -78,8 +79,8 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(loadingMsg, 120, 140, 2);
-    tftInstance->drawRect(30, 160, 180, 20, TFT_WHITE);
+    tftInstance->drawString(loadingMsg, UI::sx(120), UI::sy(140), UI::font(2));
+    tftInstance->drawRect(UI::sx(30), UI::sy(160), UI::sx(180), UI::sy(20), TFT_WHITE);
     
     int httpCode = http.GET();
     if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
@@ -118,7 +119,7 @@ bool AppStoreUI::downloadFile(const String& url, const String& destPath, const S
                     // Update Progress Bar
                     if (totalLen > 0) {
                         int progressWidth = map(downloaded, 0, totalLen, 0, 176);
-                        tftInstance->fillRect(32, 162, progressWidth, 16, TFT_GREEN);
+                        tftInstance->fillRect(UI::sx(32), UI::sy(162), UI::sx(progressWidth), UI::sy(16), TFT_GREEN);
                     }
                 }
             } else {
@@ -395,22 +396,22 @@ void AppStoreUI::performInstall(int appIdx) {
 // UI Draw Methods
 // ============================================================
 void AppStoreUI::drawCategories() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("App Store", 120, 21, 2);
+    tftInstance->drawString("App Store", UI::sx(120), UI::sy(21), UI::font(2));
     
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+    tftInstance->fillRect(UI::sx(10), UI::sy(45), UI::sx(220), UI::sy(230), TFT_BLACK);
 
     int yPos = 45;
-    int itemsPerPage = 7;
+    int itemsPerPage = UI::ITEMS_PER_PAGE;
     int totalItems = categoryCount;
     
     if (totalItems == 0) {
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("No categories found.", 120, 100, 2);
+        tftInstance->drawString("No categories found.", UI::sx(120), UI::sy(100), UI::font(2));
     } else {
         for (int i = 0; i < itemsPerPage; i++) {
             int listIndex = scrollOffset + i;
@@ -419,49 +420,49 @@ void AppStoreUI::drawCategories() {
             String name = categoryNames[listIndex];
             
             if (listIndex == selectedIndex) {
-                tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+                tftInstance->fillRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(25), TFT_WHITE);
                 tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("> " + name).c_str(), 15, yPos + 12, 2);
+                tftInstance->drawString(("> " + name).c_str(), UI::sx(15), UI::sy(yPos + 12), UI::font(2));
             } else {
                 tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("  " + name).c_str(), 15, yPos + 12, 2);
+                tftInstance->drawString(("  " + name).c_str(), UI::sx(15), UI::sy(yPos + 12), UI::font(2));
             }
             yPos += 30;
         }
     }
     
     // Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 35, 300, 2);
-    tftInstance->drawString("|", 70, 300, 2);
-    tftInstance->drawString("UP", 100, 300, 2);
-    tftInstance->drawString("|", 130, 300, 2);
-    tftInstance->drawString("SEL", 165, 300, 2);
-    tftInstance->drawString("|", 200, 300, 2);
-    tftInstance->drawString("DN", 220, 300, 2);
+    tftInstance->drawString("BACK", UI::sx(35), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(70), UI::sy(300), UI::font(2));
+    tftInstance->drawString("UP", UI::sx(100), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(130), UI::sy(300), UI::font(2));
+    tftInstance->drawString("SEL", UI::sx(165), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(200), UI::sy(300), UI::font(2));
+    tftInstance->drawString("DN", UI::sx(220), UI::sy(300), UI::font(2));
 }
 
 void AppStoreUI::drawAppList() {
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString(currentCategoryName, 120, 21, 2);
+    tftInstance->drawString(currentCategoryName, UI::sx(120), UI::sy(21), UI::font(2));
     
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+    tftInstance->fillRect(UI::sx(10), UI::sy(45), UI::sx(220), UI::sy(230), TFT_BLACK);
 
     int yPos = 45;
-    int itemsPerPage = 7;
+    int itemsPerPage = UI::ITEMS_PER_PAGE;
     int totalItems = currentAppCount;
     
     if (totalItems == 0) {
         tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-        tftInstance->drawString("No apps found.", 120, 100, 2);
+        tftInstance->drawString("No apps found.", UI::sx(120), UI::sy(100), UI::font(2));
     } else {
         for (int i = 0; i < itemsPerPage; i++) {
             int listIndex = scrollOffset + i;
@@ -470,67 +471,67 @@ void AppStoreUI::drawAppList() {
             String name = currentApps[listIndex].name;
             
             if (listIndex == selectedIndex) {
-                tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
+                tftInstance->fillRect(UI::sx(10), UI::sy(yPos), UI::sx(220), UI::sy(25), TFT_WHITE);
                 tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("> " + name).c_str(), 15, yPos + 12, 2);
+                tftInstance->drawString(("> " + name).c_str(), UI::sx(15), UI::sy(yPos + 12), UI::font(2));
             } else {
                 tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
                 tftInstance->setTextDatum(ML_DATUM);
-                tftInstance->drawString(("  " + name).c_str(), 15, yPos + 12, 2);
+                tftInstance->drawString(("  " + name).c_str(), UI::sx(15), UI::sy(yPos + 12), UI::font(2));
             }
             yPos += 30;
         }
     }
     
     // Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(5), UI::sy(285), UI::sx(230), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("BACK", 35, 300, 2);
-    tftInstance->drawString("|", 70, 300, 2);
-    tftInstance->drawString("UP", 100, 300, 2);
-    tftInstance->drawString("|", 130, 300, 2);
-    tftInstance->drawString("SEL", 165, 300, 2);
-    tftInstance->drawString("|", 200, 300, 2);
-    tftInstance->drawString("DN", 220, 300, 2);
+    tftInstance->drawString("BACK", UI::sx(35), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(70), UI::sy(300), UI::font(2));
+    tftInstance->drawString("UP", UI::sx(100), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(130), UI::sy(300), UI::font(2));
+    tftInstance->drawString("SEL", UI::sx(165), UI::sy(300), UI::font(2));
+    tftInstance->drawString("|", UI::sx(200), UI::sy(300), UI::font(2));
+    tftInstance->drawString("DN", UI::sx(220), UI::sy(300), UI::font(2));
 }
 
 void AppStoreUI::drawAppInfo() {
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
     
     AppStoreItem& app = currentApps[selectedAppIndex];
     
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("App Details", 120, 21, 2);
+    tftInstance->drawString("App Details", UI::sx(120), UI::sy(21), UI::font(2));
     
     int y = 45;
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     tftInstance->setTextDatum(TL_DATUM);
     
-    tftInstance->drawString("Name:", 10, y, 2); y += 18;
+    tftInstance->drawString("Name:", UI::sx(10), UI::sy(y), UI::font(2)); y += 18;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.name, 10, y, 2); y += 22;
+    tftInstance->drawString(app.name, UI::sx(10), UI::sy(y), UI::font(2)); y += 22;
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Author:", 10, y, 2); y += 18;
+    tftInstance->drawString("Author:", UI::sx(10), UI::sy(y), UI::font(2)); y += 18;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.author, 10, y, 2); y += 22;
+    tftInstance->drawString(app.author, UI::sx(10), UI::sy(y), UI::font(2)); y += 22;
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("Version:", 10, y, 2); y += 18;
+    tftInstance->drawString("Version:", UI::sx(10), UI::sy(y), UI::font(2)); y += 18;
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tftInstance->drawString(app.version, 10, y, 2); y += 22;
+    tftInstance->drawString(app.version, UI::sx(10), UI::sy(y), UI::font(2)); y += 22;
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     if (isUpdateMode) {
-        tftInstance->drawString("What's New:", 10, y, 2); y += 18;
+        tftInstance->drawString("What's New:", UI::sx(10), UI::sy(y), UI::font(2)); y += 18;
     } else {
-        tftInstance->drawString("Description:", 10, y, 2); y += 18;
+        tftInstance->drawString("Description:", UI::sx(10), UI::sy(y), UI::font(2)); y += 18;
     }
     tftInstance->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     
@@ -542,49 +543,49 @@ void AppStoreUI::drawAppInfo() {
             int spaceIdx = desc.lastIndexOf(' ', 25);
             if(spaceIdx > 0) splitIdx = spaceIdx;
         }
-        tftInstance->drawString(desc.substring(0, splitIdx), 10, y, 2);
+        tftInstance->drawString(desc.substring(0, splitIdx), UI::sx(10), UI::sy(y), UI::font(2));
         desc = desc.substring(splitIdx);
         desc.trim();
         y += 15;
     }
     
     // Action Buttons
-    tftInstance->fillRoundRect(25, 230, 80, 30, 5, TFT_GREEN);
+    tftInstance->fillRoundRect(UI::sx(25), UI::sy(230), UI::sx(80), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_BLACK, TFT_GREEN);
     tftInstance->setTextDatum(MC_DATUM);
     if (isUpdateMode) {
-        tftInstance->drawString("UPDATE", 65, 245, 2);
+        tftInstance->drawString("UPDATE", UI::sx(65), UI::sy(245), UI::font(2));
     } else {
-        tftInstance->drawString("DOWNLOAD", 65, 245, 2);
+        tftInstance->drawString("DOWNLOAD", UI::sx(65), UI::sy(245), UI::font(2));
     }
     
-    tftInstance->drawRoundRect(135, 230, 80, 30, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(135), UI::sy(230), UI::sx(80), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("CANCEL", 175, 245, 2);
+    tftInstance->drawString("CANCEL", UI::sx(175), UI::sy(245), UI::font(2));
 }
 
 void AppStoreUI::drawDialog() {
     tftInstance->fillScreen(TFT_BLACK);
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(3), UI::sy(3), UI::sx(234), UI::sy(314), UI::sx(5), TFT_WHITE);
     
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK);
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
+    tftInstance->fillRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_BLACK);
+    tftInstance->drawRoundRect(UI::sx(6), UI::sy(6), UI::sx(228), UI::sy(30), UI::sx(5), TFT_GREEN);
     tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
     tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("Message", 120, 21, 2);
+    tftInstance->drawString("Message", UI::sx(120), UI::sy(21), UI::font(2));
     
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
     int nlIdx = dialogMessage.indexOf('\n');
     if (nlIdx > 0) {
-        tftInstance->drawString(dialogMessage.substring(0, nlIdx), 120, 130, 2);
-        tftInstance->drawString(dialogMessage.substring(nlIdx + 1), 120, 150, 2);
+        tftInstance->drawString(dialogMessage.substring(0, nlIdx), UI::sx(120), UI::sy(130), UI::font(2));
+        tftInstance->drawString(dialogMessage.substring(nlIdx + 1), UI::sx(120), UI::sy(150), UI::font(2));
     } else {
-        tftInstance->drawString(dialogMessage, 120, 140, 2);
+        tftInstance->drawString(dialogMessage, UI::sx(120), UI::sy(140), UI::font(2));
     }
     
-    tftInstance->drawRoundRect(85, 220, 70, 30, 5, TFT_WHITE);
+    tftInstance->drawRoundRect(UI::sx(85), UI::sy(220), UI::sx(70), UI::sy(30), UI::sx(5), TFT_WHITE);
     tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->drawString("OK", 120, 235, 2);
+    tftInstance->drawString("OK", UI::sx(120), UI::sy(235), UI::font(2));
 }
 
 // ============================================================
@@ -592,8 +593,8 @@ void AppStoreUI::drawDialog() {
 // ============================================================
 void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
     if (storeState == 0) { // Categories
-        if (y >= 45 && y <= 270) {
-            int clickedRelative = (y - 45) / 30;
+        if (y >= UI::sy(45) && y <= UI::sy(270)) {
+            int clickedRelative = (y - UI::LIST_Y) / UI::ITEM_H;
             int clickedAbs = scrollOffset + clickedRelative;
             if (clickedAbs < categoryCount) {
                 selectedIndex = clickedAbs;
@@ -614,17 +615,17 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
             return;
         }
         
-        if (y >= 285 && y <= 315) {
-            if (x < 70) { // BACK
+        if (y >= UI::sy(285) && y <= UI::sy(315)) {
+            if (x < UI::sx(70)) { // BACK
                 currentState = 0;
                 categoryCount = 0; // force refetch next time
-            } else if (x >= 70 && x < 130) { // UP
+            } else if (x >= UI::sx(70) && x < UI::sx(130)) { // UP
                 if (selectedIndex > 0) {
                     selectedIndex--;
                     if (selectedIndex < scrollOffset) scrollOffset--;
                     draw();
                 }
-            } else if (x >= 130 && x < 200) { // SEL
+            } else if (x >= UI::sx(130) && x < UI::sx(200)) { // SEL
                 currentCategoryName = categoryNames[selectedIndex];
                 isUpdateMode = (categoryUrls[selectedIndex] == "UPDATE_ACTION");
                 
@@ -638,17 +639,17 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
                     scrollOffset = 0;
                     draw();
                 }
-            } else if (x >= 200) { // DN
+            } else if (x >= UI::sx(200)) { // DN
                 if (selectedIndex < categoryCount - 1) {
                     selectedIndex++;
-                    if (selectedIndex >= scrollOffset + 7) scrollOffset++;
+                    if (selectedIndex >= scrollOffset + UI::ITEMS_PER_PAGE) scrollOffset++;
                     draw();
                 }
             }
         }
     } else if (storeState == 1) { // App List
-        if (y >= 45 && y <= 270) {
-            int clickedRelative = (y - 45) / 30;
+        if (y >= UI::sy(45) && y <= UI::sy(270)) {
+            int clickedRelative = (y - UI::LIST_Y) / UI::ITEM_H;
             int clickedAbs = scrollOffset + clickedRelative;
             if (clickedAbs < currentAppCount) {
                 selectedIndex = clickedAbs;
@@ -715,19 +716,19 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
             return;
         }
         
-        if (y >= 285 && y <= 315) {
-            if (x < 70) { // BACK
+        if (y >= UI::sy(285) && y <= UI::sy(315)) {
+            if (x < UI::sx(70)) { // BACK
                 storeState = 0;
                 selectedIndex = 0;
                 scrollOffset = 0;
                 draw();
-            } else if (x >= 70 && x < 130) { // UP
+            } else if (x >= UI::sx(70) && x < UI::sx(130)) { // UP
                 if (selectedIndex > 0) {
                     selectedIndex--;
                     if (selectedIndex < scrollOffset) scrollOffset--;
                     draw();
                 }
-            } else if (x >= 130 && x < 200) { // SEL
+            } else if (x >= UI::sx(130) && x < UI::sx(200)) { // SEL
                 selectedAppIndex = selectedIndex;
                 
                 // Fetch Meta for details
@@ -787,26 +788,26 @@ void AppStoreUI::handleTouch(uint16_t x, uint16_t y) {
                 
                 storeState = 2;
                 draw();
-            } else if (x >= 200) { // DN
+            } else if (x >= UI::sx(200)) { // DN
                 if (selectedIndex < currentAppCount - 1) {
                     selectedIndex++;
-                    if (selectedIndex >= scrollOffset + 7) scrollOffset++;
+                    if (selectedIndex >= scrollOffset + UI::ITEMS_PER_PAGE) scrollOffset++;
                     draw();
                 }
             }
         }
     } else if (storeState == 2) { // App Info
-        if (y >= 230 && y <= 260) {
-            if (x >= 25 && x <= 105) { // INSTALL
+        if (y >= UI::sy(230) && y <= UI::sy(260)) {
+            if (x >= UI::sx(25) && x <= UI::sx(105)) { // INSTALL
                 performInstall(selectedAppIndex);
                 draw();
-            } else if (x >= 135 && x <= 215) { // CANCEL
+            } else if (x >= UI::sx(135) && x <= UI::sx(215)) { // CANCEL
                 storeState = 1;
                 draw();
             }
         }
     } else if (storeState == 3 || storeState == 4) { // Dialog
-        if (x >= 85 && x <= 155 && y >= 220 && y <= 250) {
+        if (x >= UI::sx(85) && x <= UI::sx(155) && y >= UI::sy(220) && y <= UI::sy(250)) {
             if (categoryCount == 0) {
                 extern int currentState;
                 currentState = 0; // Back to Launcher

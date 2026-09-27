@@ -1,12 +1,16 @@
 #include "JSBindings.h"
+#include "../Display/Layout.h"
 #include "../File System/FileSystem.h"
 #include "../Keyboard/MyKeyboard.h"
 #include "../WebManager/WebManager.h"
 #include "../Kernel/TimeManager.h"
 #include <SPI.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
-TFT_eSPI* JSBindings::tftInstance = nullptr;
-TFT_eSprite* JSBindings::tftSprite = nullptr;
+KryonDisplay* JSBindings::tftInstance = nullptr;
+KryonSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
 
 void JSBindings::fatalErrorHandler(void *udata, const char *msg) {
@@ -95,7 +99,11 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
         tftSprite = nullptr;
     }
     
-    tftSprite = new TFT_eSprite(tftInstance);
+    tftSprite = new KryonSprite(tftInstance);
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+    // Em telas grandes o sprite so cabe na PSRAM
+    tftSprite->setPsram(true);
+#endif
     
     void* ptr = nullptr;
     
@@ -478,7 +486,7 @@ duk_ret_t JSBindings::js_setTextSize(duk_context *ctx) {
 // Display Bindings - Utility
 // =====================================================
 
-// Convert RGB888 (0-255 per channel) to RGB565 TFT color
+// Convert RGB888 (0-255 per channel) to the target's native color format
 duk_ret_t JSBindings::js_color(duk_context *ctx) {
     int r = duk_require_int(ctx, 0);
     int g = duk_require_int(ctx, 1);
@@ -487,19 +495,18 @@ duk_ret_t JSBindings::js_color(duk_context *ctx) {
     if (r < 0) r = 0; if (r > 255) r = 255;
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
-    uint16_t color565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-    duk_push_uint(ctx, color565);
+    duk_push_uint(ctx, KryonColorRGB(r, g, b));
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenWidth(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, 240); return 1; }
+    if (!tftInstance) { duk_push_int(ctx, UI::W); return 1; }
     duk_push_int(ctx, tftInstance->width());
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
-    if (!tftInstance) { duk_push_int(ctx, 320); return 1; }
+    if (!tftInstance) { duk_push_int(ctx, UI::H); return 1; }
     duk_push_int(ctx, tftInstance->height());
     return 1;
 }
@@ -516,7 +523,7 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
         touched = tftInstance->getTouch(&tx, &ty);
         
         // Hidden OS Exit Button (Top Right Corner)
-        if (touched && tx >= 200 && ty <= 40) {
+        if (touched && UI::hitExit(tx, ty)) {
             duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
             return 0; // Unreachable, but good practice
         }
@@ -689,6 +696,89 @@ duk_ret_t JSBindings::js_isWiFiActive(duk_context *ctx) {
 }
 
 // =====================================================
+// Network Bindings - HTTP (objeto Net, API level 2)
+// =====================================================
+
+// Custo de memoria: o TLS (https) pede ~45KB de heap durante a chamada,
+// concorrendo com o heap do Duktape — respostas grandes podem estourar o
+// ~90KB do runtime JS. Limitar payloads a dezenas de KB.
+#define NET_MAX_BODY 32768
+
+// Executa GET/POST e devolve o body em "out". Sem WiFi conectado: duk_error
+// (o script ve um erro legivel em vez de um null silencioso).
+static bool netFetch(duk_context *ctx, bool isPost, String &out) {
+    if (WiFi.status() != WL_CONNECTED) {
+        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
+        return false;
+    }
+    const char *url = duk_require_string(ctx, 0);
+
+    String body;
+    String contentType = "text/plain";
+    if (isPost) {
+        body = duk_require_string(ctx, 1);
+        if (duk_is_string(ctx, 2)) contentType = duk_get_string(ctx, 2);
+    }
+
+    // Clientes na pilha: precisam sobreviver enquanto "http" estiver em uso
+    WiFiClientSecure secureClient;
+    HTTPClient http;
+    http.setTimeout(10000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    bool begun;
+    if (String(url).startsWith("https:")) {
+        secureClient.setInsecure();  // mesmo padrao do updater do OS
+        begun = http.begin(secureClient, url);
+    } else {
+        begun = http.begin(url);
+    }
+    if (!begun) return false;
+
+    int code;
+    if (isPost) {
+        http.addHeader("Content-Type", contentType.c_str());
+        code = http.POST(body);
+    } else {
+        code = http.GET();
+    }
+    if (code < 200 || code >= 300) {
+        http.end();
+        return false;
+    }
+    out = http.getString();
+    http.end();
+    if (out.length() > NET_MAX_BODY) out.remove(NET_MAX_BODY);
+    return true;
+}
+
+duk_ret_t JSBindings::js_netGet(duk_context *ctx) {
+    String body;
+    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
+    duk_push_string(ctx, body.c_str());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_netGetJSON(duk_context *ctx) {
+    String body;
+    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
+    duk_push_string(ctx, body.c_str());
+    duk_json_decode(ctx, -1);  // parse falho vira erro visivel no script
+    return 1;
+}
+
+duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
+    String body;
+    if (!netFetch(ctx, true, body)) { duk_push_null(ctx); return 1; }
+    duk_push_string(ctx, body.c_str());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_netIsConnected(duk_context *ctx) {
+    duk_push_boolean(ctx, WiFi.status() == WL_CONNECTED);
+    return 1;
+}
+
+// =====================================================
 // FileSystem Bindings
 // =====================================================
 
@@ -838,7 +928,7 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
 // Init - Register ALL bindings
 // =====================================================
 
-void JSBindings::init(duk_context *ctx, TFT_eSPI *tft) {
+void JSBindings::init(duk_context *ctx, KryonDisplay *tft) {
     tftInstance = tft;
 
     // --- System Object ---
@@ -981,6 +1071,18 @@ void JSBindings::init(duk_context *ctx, TFT_eSPI *tft) {
 
     // Assign to global variable 'System'
     duk_put_prop_string(ctx, -2, "System");
+
+    // --- Net Object (HTTP para apps, API level 2) ---
+    duk_push_object(ctx); // Net
+    duk_push_c_function(ctx, js_netGet, 1);
+    duk_put_prop_string(ctx, -2, "get");
+    duk_push_c_function(ctx, js_netGetJSON, 1);
+    duk_put_prop_string(ctx, -2, "getJSON");
+    duk_push_c_function(ctx, js_netPost, 3);
+    duk_put_prop_string(ctx, -2, "post");
+    duk_push_c_function(ctx, js_netIsConnected, 0);
+    duk_put_prop_string(ctx, -2, "isConnected");
+    duk_put_prop_string(ctx, -2, "Net");
 
     // --- FS Object ---
     duk_push_object(ctx); // FS

@@ -1,10 +1,24 @@
 #include "FileSystem.h"
 
-SPIClass sdSPI(HSPI);
+// Pinos do barramento SPI do cartao SD, por placa
+#ifdef KRYONOS_BOARD_SMARTDISPLAY_4IN
+// SmartDisplay 4": MOSI/SCK compartilhados com o SPI 3-wire do init do painel
+  #define KRYONOS_SD_SPI_HOST FSPI
+  #define KRYONOS_SD_SCK  48
+  #define KRYONOS_SD_MISO 41
+  #define KRYONOS_SD_MOSI 47
+#else
+  #define KRYONOS_SD_SPI_HOST HSPI
+  #define KRYONOS_SD_SCK  14
+  #define KRYONOS_SD_MISO 26
+  #define KRYONOS_SD_MOSI 13
+#endif
+
+SPIClass sdSPI(KRYONOS_SD_SPI_HOST);
 
 bool FileSystem::init() {
     bool success = true;
-    
+
     // Initialize LittleFS
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS Mount Failed");
@@ -14,11 +28,11 @@ bool FileSystem::init() {
         if (!LittleFS.exists("/apps")) LittleFS.mkdir("/apps");
     }
 
-    // Initialize dedicated SPI bus for SD Card (HSPI pins: SCK=14, MISO=26, MOSI=13, CS=15)
-    sdSPI.begin(14, 26, 13, 15);
-    
+    // Initialize dedicated SPI bus for SD Card
+    sdSPI.begin(KRYONOS_SD_SCK, KRYONOS_SD_MISO, KRYONOS_SD_MOSI, SD_CS_PIN);
+
     // Initialize SD Card
-    if (!SD.begin(15, sdSPI, 4000000)) {
+    if (!SD.begin(SD_CS_PIN, sdSPI, 4000000)) {
         Serial.println("SD Card Mount Failed");
         success = false;
     } else {
@@ -284,6 +298,18 @@ bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
 
 
 #include <mbedtls/md5.h>
+#include <mbedtls/version.h>
+
+// mbedtls 2.x (Arduino core 2.x) expoe apenas as variantes *_ret
+#if MBEDTLS_VERSION_NUMBER < 0x03000000
+  #define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts_ret(c)
+  #define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update_ret(c,b,l)
+  #define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish_ret(c,h)
+#else
+  #define KRYONOS_MD5_STARTS(c)     mbedtls_md5_starts(c)
+  #define KRYONOS_MD5_UPDATE(c,b,l) mbedtls_md5_update(c,b,l)
+  #define KRYONOS_MD5_FINISH(c,h)   mbedtls_md5_finish(c,h)
+#endif
 
 static fs::FS* getTargetFS(const char* path, const char*& relPath) {
     if (path == nullptr) return nullptr;
@@ -506,17 +532,17 @@ String FileSystem::getFileMD5(const char* path) {
 
     mbedtls_md5_context ctx;
     mbedtls_md5_init(&ctx);
-    mbedtls_md5_starts(&ctx);
+    KRYONOS_MD5_STARTS(&ctx);
 
     uint8_t buffer[512];
     size_t len;
     while ((len = file.read(buffer, sizeof(buffer))) > 0) {
-        mbedtls_md5_update(&ctx, buffer, len);
+        KRYONOS_MD5_UPDATE(&ctx, buffer, len);
     }
     file.close();
 
     uint8_t hash[16];
-    mbedtls_md5_finish(&ctx, hash);
+    KRYONOS_MD5_FINISH(&ctx, hash);
     mbedtls_md5_free(&ctx);
 
     String hexHash = "";

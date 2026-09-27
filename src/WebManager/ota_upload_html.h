@@ -1,0 +1,92 @@
+#ifndef KRYONOS_OTA_UPLOAD_HTML_H
+#define KRYONOS_OTA_UPLOAD_HTML_H
+
+// Pagina de flash de firmware pelo navegador (POST /update), no mesmo estilo
+// do file manager. Conceito ElegantOTA sem dependencia externa.
+static const char ota_upload_html[] PROGMEM = R"html(<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KryonOS Firmware Update</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+background:#0d1117;color:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.container{width:100%;max-width:420px;background:#161d27;border:1px solid #2a3441;border-radius:16px;overflow:hidden}
+.header{padding:24px;text-align:center;border-bottom:1px solid #2a3441}
+.header h1{font-size:20px;color:#22d3ee}
+.header p{opacity:.7;font-size:13px;margin-top:6px}
+.content{padding:24px}
+.file-zone{border:2px dashed #2a3441;border-radius:10px;padding:28px;text-align:center;margin-bottom:16px;cursor:pointer}
+.file-zone:hover{border-color:#22d3ee}
+.file-zone.has{border-color:#22c55e}
+.file-zone .fname{font-weight:600;word-break:break-all}
+.file-zone .hint{color:#8b98a9;font-size:13px;margin-top:6px}
+input[type=file]{display:none}
+.btn{width:100%;padding:14px;background:#0e7490;color:#fff;border:none;border-radius:8px;font-size:16px;
+font-weight:600;cursor:pointer}
+.btn:hover{background:#22d3ee;color:#0d1117}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.bar{height:14px;background:#0d1117;border:1px solid #2a3441;border-radius:7px;overflow:hidden;margin-top:16px;display:none}
+.bar>div{height:100%;width:0;background:linear-gradient(90deg,#0e7490,#22d3ee);transition:width .2s}
+.status{margin-top:14px;padding:12px;border-radius:8px;text-align:center;font-size:14px;display:none}
+.status.error{background:#3b1d20;color:#ef4444;display:block}
+.status.success{background:#12331f;color:#22c55e;display:block}
+.status.info{background:#12333b;color:#22d3ee;display:block}
+.warn{margin-top:16px;font-size:12px;color:#f59e0b;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h1>⚙️ KryonOS Firmware Update</h1>
+<p>Upload a firmware.bin — the device flashes and reboots</p></div>
+<div class="content">
+<div class="file-zone" id="zone" onclick="document.getElementById('f').click()">
+<div class="fname" id="fname">Select firmware.bin</div>
+<div class="hint">tap to choose a file</div>
+</div>
+<input type="file" id="f" accept=".bin" onchange="pick(this)">
+<button class="btn" id="go" onclick="up()" disabled>Upload &amp; Flash</button>
+<div class="bar" id="bar"><div id="fill"></div></div>
+<div id="status" class="status"></div>
+<div class="warn">⚠ do not power off during the flash</div>
+</div></div>
+<script>
+function st(m,c){const s=document.getElementById('status');s.textContent=m;s.className='status '+c}
+function pick(i){
+if(!i.files.length)return;
+document.getElementById('fname').textContent=i.files[0].name;
+document.getElementById('zone').classList.add('has');
+document.getElementById('go').disabled=false;
+st('','');
+}
+function up(){
+const f=document.getElementById('f').files[0];
+if(!f){st('Choose a firmware.bin first','error');return}
+st('Uploading...','info');
+document.getElementById('bar').style.display='block';
+document.getElementById('go').disabled=true;
+let fd=new FormData();
+fd.append('update',f,f.name);
+let x=new XMLHttpRequest();
+x.open('POST','/update');
+x.upload.onprogress=e=>{
+if(e.lengthComputable){
+let p=Math.round(e.loaded*100/e.total);
+document.getElementById('fill').style.width=p+'%';
+}
+};
+x.onload=()=>{
+if(x.status==200){st('Flashed! Rebooting — reload this page in ~15s','success')}
+else st('Flash failed: '+x.responseText,'error');
+document.getElementById('go').disabled=false;
+};
+x.onerror=()=>{st('Network error','error');document.getElementById('go').disabled=false};
+x.send(fd);
+}
+</script>
+</body>
+</html>)html";
+
+#endif // KRYONOS_OTA_UPLOAD_HTML_H

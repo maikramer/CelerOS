@@ -1,63 +1,99 @@
 #include "LauncherUI.h"
 #include "../Kernel/Core/HarixKernel.h"
 #include "../File System/FileSystem.h"
+#include "../Display/Layout.h"
+#include "../Display/Theme.h"
+#include "../Display/Icon.h"
+#include "../Kernel/TimeManager.h"
+#include "../WebManager/WebManager.h"
 
 extern int currentState;
 
-TFT_eSPI *LauncherUI::tftInstance = nullptr;
+KryonDisplay *LauncherUI::tftInstance = nullptr;
 String LauncherUI::appPaths[50];
 String LauncherUI::appNames[50];
 bool   LauncherUI::appIsFolder[50];
 int LauncherUI::appCount = 0;
-int LauncherUI::selectedIndex = 1;
-int LauncherUI::scrollOffset = 0;
+int LauncherUI::page = 0;
 bool LauncherUI::needsRescan = true;
+
+bool LauncherUI::tracking = false;
+int LauncherUI::trackStartX = 0;
+int LauncherUI::trackStartY = 0;
+unsigned long LauncherUI::trackStartMs = 0;
+String LauncherUI::lastMinute = "";
 
 void LauncherUI::requestRescan() {
     needsRescan = true;
 }
 
-void LauncherUI::init(TFT_eSPI *tft) {
+void LauncherUI::init(KryonDisplay *tft) {
     tftInstance = tft;
 }
 
+// ---------------------------------------------------------------------------
+// Geometria do grid
+// ---------------------------------------------------------------------------
+int LauncherUI::totalEntries() {
+    return 4 + appCount;  // App Store, Installer, Settings, Help + apps
+}
+
+int LauncherUI::cols() {
+    return (UI::W >= 400) ? 4 : 3;
+}
+
+int LauncherUI::rows() {
+    int labelH = UI::big ? 26 : 14;
+    int cellH = Icon::SIZE + labelH + (UI::big ? 18 : 10);
+    int areaH = UI::H - UI::sy(56) - UI::sy(10) - UI::sy(28);
+    int r = areaH / cellH;
+    return (r < 1) ? 1 : r;
+}
+
+int LauncherUI::cellsPerPage() {
+    return cols() * rows();
+}
+
+int LauncherUI::totalPages() {
+    int tp = (totalEntries() + cellsPerPage() - 1) / cellsPerPage();
+    return (tp < 1) ? 1 : tp;
+}
+
+// ---------------------------------------------------------------------------
+// Scan de apps (LittleFS + SD)
+// ---------------------------------------------------------------------------
 void LauncherUI::scanLocalApps() {
     appCount = 0;
-    
-    // Scan both /local/apps/ and /sd/apps/ for folder-based apps and legacy .js files
+
     const char* appDirs[] = { "/local/apps/", "/sd/apps/" };
-    
+
     for (int d = 0; d < 2; d++) {
         if (!FileSystem::exists(appDirs[d])) continue;
-        
+
         FileEntry entries[50];
         int count = FileSystem::listDirectory(appDirs[d], entries, 50);
-        
+
         for (int i = 0; i < count && appCount < 50; i++) {
-            // Draw loading bar
             if (tftInstance) {
-                tftInstance->fillRect(20, 200, (i * 200) / count, 10, TFT_GREEN);
+                tftInstance->fillRect(UI::sx(20), UI::sy(200), (i * UI::sx(200)) / count, UI::sy(10), THEME_ACCENT);
             }
-            
+
             if (entries[i].isDir) {
-                // Check if it's an app package (has app.json)
                 String appJsonPath = entries[i].path;
                 if (!appJsonPath.endsWith("/")) appJsonPath += "/";
                 appJsonPath += "app.json";
-                
+
                 if (FileSystem::exists(appJsonPath.c_str())) {
-                    // Read app name from app.json
                     String jsonContent = FileSystem::readTextFile(appJsonPath.c_str());
                     String name = FileSystem::parseJsonValue(jsonContent, "name");
-                    
+
                     if (name.length() > 0) {
-                        // Check if this app is already in our list (avoid duplicates from SD + local)
                         bool duplicate = false;
                         for (int j = 0; j < appCount; j++) {
                             if (appNames[j] == name) { duplicate = true; break; }
                         }
                         if (duplicate) continue;
-                        
+
                         appPaths[appCount] = entries[i].path;
                         appNames[appCount] = name;
                         appIsFolder[appCount] = true;
@@ -65,16 +101,14 @@ void LauncherUI::scanLocalApps() {
                     }
                 }
             } else {
-                // Legacy .js file support
                 String fname = entries[i].name;
                 if (fname.endsWith(".js")) {
-                    // Check if this legacy app is already in our list
                     bool duplicate = false;
                     for (int j = 0; j < appCount; j++) {
                         if (appNames[j] == fname) { duplicate = true; break; }
                     }
                     if (duplicate) continue;
-                    
+
                     appPaths[appCount] = entries[i].path;
                     appNames[appCount] = fname;
                     appIsFolder[appCount] = false;
@@ -85,101 +119,214 @@ void LauncherUI::scanLocalApps() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Desenho
+// ---------------------------------------------------------------------------
+void LauncherUI::drawHeader() {
+    int hdr = UI::sy(56);
+    tftInstance->fillRect(0, 0, UI::W, hdr, THEME_CARD);
+    tftInstance->fillRect(0, hdr - UI::sy(3), UI::W, UI::sy(3), THEME_ACCENT);
+
+    // Titulo
+    tftInstance->setTextColor(THEME_TEXT, THEME_CARD);
+    tftInstance->setTextDatum(ML_DATUM);
+    tftInstance->drawString("KryonOS", UI::sx(14), hdr / 2, UI::font(4));
+
+    // Status WiFi (icone na tela grande, ponto na classica)
+    bool wifi = WebManager::isActive();
+    if (UI::big) {
+        Icon::draw(tftInstance, wifi ? "wifi_on" : "wifi_off", UI::W - Icon::SIZE - UI::sx(10), (hdr - Icon::SIZE) / 2);
+    } else {
+        tftInstance->fillCircle(UI::W - UI::sx(10), hdr / 2, UI::sx(3), wifi ? THEME_OK : THEME_TEXT_DIM);
+    }
+
+    // Relogio
+    tftInstance->setTextColor(THEME_TEXT_DIM, THEME_CARD);
+    tftInstance->setTextDatum(MR_DATUM);
+    tftInstance->drawString(TimeManager::getFormattedTime(),
+                            UI::W - Icon::SIZE - UI::sx(24), hdr / 2, UI::font(2));
+    lastMinute = TimeManager::getFormattedTime();
+}
+
+void LauncherUI::drawDots() {
+    int tp = totalPages();
+    if (tp <= 1) return;
+    int dotsY = UI::H - UI::sy(14);
+    int spacing = UI::sx(18);
+    int totalW = (tp - 1) * spacing;
+    int x0 = UI::cx() - totalW / 2;
+    for (int i = 0; i < tp; i++) {
+        int x = x0 + i * spacing;
+        if (i == page) {
+            tftInstance->fillCircle(x, dotsY, UI::sx(3), THEME_ACCENT);
+        } else {
+            tftInstance->fillCircle(x, dotsY, UI::sx(2), THEME_STROKE);
+        }
+    }
+}
+
+void LauncherUI::drawCell(int entryIndex, int cellX, int cellY, int w, int h) {
+    const char* sysIcons[4] = { "appstore", "installer", "settings", "help" };
+    const char* sysNames[4] = { "App Store", "Installer", "Settings", "Help" };
+
+    String label;
+    int iconX = cellX + (w - Icon::SIZE) / 2;
+    int iconY = cellY + (h - Icon::SIZE - (UI::big ? 26 : 14)) / 2;
+
+    if (entryIndex < 4) {
+        Icon::draw(tftInstance, sysIcons[entryIndex], iconX, iconY);
+        label = sysNames[entryIndex];
+    } else {
+        int appIdx = entryIndex - 4;
+        Icon::drawAppTile(tftInstance, appNames[appIdx].c_str(), iconX, iconY);
+        label = appNames[appIdx];
+    }
+
+    // Label truncada para a largura da celula
+    int maxW = w - UI::sx(8);
+    String shown = label;
+    while (shown.length() > 1 && tftInstance->textWidth(shown.c_str(), UI::font(2)) > maxW) {
+        shown = shown.substring(0, shown.length() - 1);
+    }
+    if (shown != label && shown.length() > 1) shown += ".";
+
+    tftInstance->setTextColor(THEME_TEXT, THEME_BG);
+    tftInstance->setTextDatum(TC_DATUM);
+    tftInstance->drawString(shown, cellX + w / 2, iconY + Icon::SIZE + (UI::big ? 6 : 3), UI::font(2));
+}
+
 void LauncherUI::draw() {
     if (!tftInstance) return;
-    
-    tftInstance->drawRoundRect(3, 3, 234, 314, 5, TFT_WHITE);
-    tftInstance->fillRoundRect(6, 6, 228, 30, 5, TFT_BLACK); // Header bg
-    tftInstance->drawRoundRect(6, 6, 228, 30, 5, TFT_GREEN);
-    tftInstance->setTextColor(TFT_GREEN, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("KryonOS Home", 120, 21, 2);
-    
-    // Clear only the list area to prevent full screen flicker
-    tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+
+    tftInstance->fillScreen(THEME_BG);
 
     if (needsRescan) {
         scanLocalApps();
         needsRescan = false;
-        // Re-clear after scanning as the loading bar might have been drawn
-        tftInstance->fillRect(10, 45, 220, 230, TFT_BLACK);
+        tftInstance->fillScreen(THEME_BG);
     }
 
-    int totalItems = appCount + 6; // +6 for SYSTEM, 4 system apps, APPS
-    int yPos = 45;
-    int itemsPerPage = 7;
-    
-    for (int i = 0; i < itemsPerPage; i++) {
-        int listIndex = scrollOffset + i;
-        if (listIndex >= totalItems) break;
-        
-        String itemName = "";
-        bool isHeader = false;
-        
-        if (listIndex == 0) { itemName = "[ SYSTEM ]"; isHeader = true; }
-        else if (listIndex == 1) itemName = "App Store";
-        else if (listIndex == 2) itemName = "App Installer";
-        else if (listIndex == 3) itemName = "Settings";
-        else if (listIndex == 4) itemName = "Help Center";
-        else if (listIndex == 5) { itemName = "[ APPS ]"; isHeader = true; }
-        else {
-            int appIdx = listIndex - 6;
-            itemName = appNames[appIdx];
-        }
-        
-        if (isHeader) {
-            tftInstance->fillRect(10, yPos, 220, 25, TFT_BLACK);
-            tftInstance->setTextColor(TFT_DARKGREY, TFT_BLACK);
-            tftInstance->setTextDatum(ML_DATUM);
-            tftInstance->drawString(itemName.c_str(), 15, yPos + 12, 2);
-        } else if (listIndex == selectedIndex) {
-            // Highlighted Item
-            tftInstance->fillRect(10, yPos, 220, 25, TFT_WHITE);
-            tftInstance->setTextColor(TFT_BLACK, TFT_WHITE);
-            tftInstance->setTextDatum(ML_DATUM);
-            tftInstance->drawString(("> " + itemName).c_str(), 15, yPos + 12, 2);
-        } else {
-            // Normal Item
-            tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-            tftInstance->setTextDatum(ML_DATUM);
-            tftInstance->drawString(("  " + itemName).c_str(), 15, yPos + 12, 2);
-        }
-        
-        yPos += 30;
-    }
+    if (page >= totalPages()) page = totalPages() - 1;
+    if (page < 0) page = 0;
 
-    // Draw Scrollbar
-    if (totalItems > itemsPerPage) {
-        int sbX = 232;
-        int sbY = 45;
-        int sbHeight = 230;
-        int thumbHeight = (sbHeight * itemsPerPage) / totalItems;
-        if (thumbHeight < 20) thumbHeight = 20;
-        int maxThumbY = sbHeight - thumbHeight;
-        int thumbY = sbY + (scrollOffset * maxThumbY) / (totalItems - itemsPerPage);
-        
-        tftInstance->fillRect(sbX, sbY, 3, sbHeight, TFT_DARKGREY);
-        tftInstance->fillRect(sbX, thumbY, 3, thumbHeight, TFT_WHITE);
-    }
+    drawHeader();
+    drawDots();
 
-    // Touch Footer
-    tftInstance->drawRoundRect(5, 285, 230, 30, 5, TFT_WHITE);
-    tftInstance->setTextColor(TFT_WHITE, TFT_BLACK);
-    tftInstance->setTextDatum(MC_DATUM);
-    tftInstance->drawString("UP", 30, 300, 2);
-    tftInstance->drawString("|", 60, 300, 2);
-    tftInstance->drawString("SEL", 120, 300, 2);
-    tftInstance->drawString("|", 180, 300, 2);
-    tftInstance->drawString("DN", 210, 300, 2);
+    int hdr = UI::sy(56);
+    int gridTop = hdr + UI::sy(10);
+    int areaH = UI::H - gridTop - UI::sy(28);
+    int c = cols(), r = rows();
+    int cellW = UI::W / c;
+    int cellH = areaH / r;
+    int gridLeft = (UI::W - c * cellW) / 2;
+
+    for (int cell = 0; cell < c * r; cell++) {
+        int entry = page * c * r + cell;
+        if (entry >= totalEntries()) break;
+        drawCell(entry, gridLeft + (cell % c) * cellW, gridTop + (cell / c) * cellH, cellW, cellH);
+    }
 }
 
-static void runApp(TFT_eSPI* tft, const String& path, bool isFolder) {
+// ---------------------------------------------------------------------------
+// Interacao: o toque inicial e registrado; no release, update() decide entre
+// tap (celula / dot) e swipe (troca de pagina).
+// ---------------------------------------------------------------------------
+void LauncherUI::handleTouch(uint16_t x, uint16_t y) {
+    if (!tracking) {
+        tracking = true;
+        trackStartX = x;
+        trackStartY = y;
+        trackStartMs = millis();
+    }
+}
+
+void LauncherUI::update() {
+    if (!tftInstance) return;
+
+    // Atualiza header na virada do minuto ou mudanca de estado do WiFi
+    static bool lastWifi = false;
+    bool wifi = WebManager::isActive();
+    String now = TimeManager::getFormattedTime();
+    if (now != lastMinute || wifi != lastWifi) {
+        drawHeader();
+        lastWifi = wifi;
+    }
+
+    uint16_t x, y;
+    bool touched = tftInstance->getTouch(&x, &y);
+    if (touched) {
+        if (!tracking) {
+            tracking = true;
+            trackStartX = x;
+            trackStartY = y;
+            trackStartMs = millis();
+        }
+        return;  // aguarda o release para decidir
+    }
+    if (!tracking) return;
+    tracking = false;
+
+    long dx = (long)x - trackStartX;
+    long dy = (long)y - trackStartY;
+    unsigned long dur = millis() - trackStartMs;
+
+    // Swipe horizontal: troca de pagina
+    if (labs(dx) > UI::sx(60) && labs(dx) > labs(dy) && dur < 600) {
+        int tp = totalPages();
+        if (dx < 0) page = (page + 1) % tp;
+        else page = (page - 1 + tp) % tp;
+        draw();
+        return;
+    }
+
+    // Tap nos dots de paginacao
+    int tp = totalPages();
+    if (tp > 1 && trackStartY >= UI::H - UI::sy(24)) {
+        int spacing = UI::sx(18);
+        int x0 = UI::cx() - (tp - 1) * spacing / 2;
+        for (int i = 0; i < tp; i++) {
+            if (labs((long)trackStartX - (x0 + i * spacing)) < spacing / 2) {
+                if (page != i) { page = i; draw(); }
+                return;
+            }
+        }
+        return;
+    }
+
+    // Tap em celula do grid
+    int hdr = UI::sy(56);
+    int gridTop = hdr + UI::sy(10);
+    if (trackStartY < gridTop) return;  // header nao e clicavel
+    int areaH = UI::H - gridTop - UI::sy(28);
+    int c = cols(), r = rows();
+    int cellW = UI::W / c;
+    int cellH = areaH / r;
+    int col = trackStartX / cellW;
+    int row = (trackStartY - gridTop) / cellH;
+    if (row < 0 || row >= r) return;
+    int entry = page * c * r + row * c + col;
+    if (entry >= totalEntries()) return;
+
+    if (entry == 0) currentState = 13;      // STATE_APP_STORE
+    else if (entry == 1) currentState = 3;  // STATE_INSTALLER
+    else if (entry == 2) currentState = 1;  // STATE_SETTINGS
+    else if (entry == 3) currentState = 14; // STATE_HELP_CENTER
+    else {
+        int appIdx = entry - 4;
+        runApp(tftInstance, appPaths[appIdx], appIsFolder[appIdx]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Execucao de app JS
+// ---------------------------------------------------------------------------
+void LauncherUI::runApp(KryonDisplay* tft, const String& path, bool isFolder) {
     extern int currentState;
     currentState = 2; // STATE_RUN_APP
-    
+
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
-    
+
     String filePath;
     if (isFolder) {
         filePath = path;
@@ -188,93 +335,12 @@ static void runApp(TFT_eSPI* tft, const String& path, bool isFolder) {
     } else {
         filePath = path;
     }
-    
+
     HarixKernel::runFile(filePath.c_str());
-    
-    // Draw exit button
-    tft->fillRoundRect(200, 0, 40, 30, 5, TFT_RED);
-    tft->setTextColor(TFT_WHITE, TFT_RED);
+
+    // Botao de saida (canto superior direito)
+    tft->fillRoundRect(UI::exitX(), UI::exitY(), UI::exitW(), UI::exitH(), UI::sx(5), THEME_ERR);
+    tft->setTextColor(THEME_TEXT, THEME_ERR);
     tft->setTextDatum(MC_DATUM);
-    tft->drawString("X", 220, 15, 2);
-}
-
-void LauncherUI::handleTouch(uint16_t x, uint16_t y) {
-    extern int currentState;
-    
-    int totalItems = appCount + 6;
-    
-    // Check list item touch first (y between 45 and 270)
-    if (y >= 45 && y <= 270) {
-        int clickedRelativeIndex = (y - 45) / 30;
-        int clickedAbsoluteIndex = scrollOffset + clickedRelativeIndex;
-        
-        if (clickedAbsoluteIndex < totalItems && clickedAbsoluteIndex != 0 && clickedAbsoluteIndex != 5) {
-            selectedIndex = clickedAbsoluteIndex;
-            draw(); // Highlight the item
-            
-            // Execute it
-            if (selectedIndex == 1) {
-                currentState = 13; // STATE_APP_STORE
-            } else if (selectedIndex == 2) {
-                currentState = 3; // STATE_INSTALLER
-            } else if (selectedIndex == 3) {
-                currentState = 1; // STATE_SETTINGS
-            } else if (selectedIndex == 4) {
-                currentState = 14; // STATE_HELP_CENTER
-            } else if (selectedIndex > 5) {
-                int appIndex = selectedIndex - 6;
-                runApp(tftInstance, appPaths[appIndex], appIsFolder[appIndex]);
-            }
-        }
-        return;
-    }
-
-    if (y >= 285 && y <= 315) {
-        // Footer Buttons
-        if (x < 60) { // UP
-            if (selectedIndex > 1) {
-                selectedIndex--;
-                if (selectedIndex == 5) selectedIndex--;
-                
-                if (selectedIndex < scrollOffset) {
-                    scrollOffset = selectedIndex;
-                }
-                
-                if (selectedIndex == 1) scrollOffset = 0;
-                if (selectedIndex == 6 && scrollOffset >= 6) scrollOffset = 5;
-                
-                draw();
-            } else if (scrollOffset > 0) {
-                scrollOffset = 0;
-                draw();
-            }
-        } else if (x > 60 && x < 180) { // SEL
-            if (selectedIndex == 1) {
-                currentState = 13; // STATE_APP_STORE
-            } else if (selectedIndex == 2) {
-                currentState = 3; // STATE_INSTALLER
-            } else if (selectedIndex == 3) {
-                currentState = 1; // STATE_SETTINGS
-            } else if (selectedIndex == 4) {
-                currentState = 14; // STATE_HELP_CENTER
-            } else if (selectedIndex > 5) {
-                int appIndex = selectedIndex - 6;
-                runApp(tftInstance, appPaths[appIndex], appIsFolder[appIndex]);
-            }
-        } else if (x > 180) { // DN
-            if (selectedIndex < totalItems - 1) {
-                selectedIndex++;
-                if (selectedIndex == 5) selectedIndex++;
-                if (selectedIndex >= scrollOffset + 7) scrollOffset = selectedIndex - 6;
-                draw();
-            }
-        }
-        return;
-    }
-    
-    // Quick jump to installer if pressing header
-    if (y < 40) {
-        currentState = 3;
-        return;
-    }
+    tft->drawString("X", UI::exitX() + UI::exitW() / 2, UI::exitY() + UI::exitH() / 2, UI::font(2));
 }
