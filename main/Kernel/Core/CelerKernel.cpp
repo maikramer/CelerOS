@@ -10,6 +10,7 @@
 #include <vector>
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
+#include "esp_debug_helpers.h"
 
 duk_context *CelerKernel::ctx = nullptr;
 CelerDisplay *CelerKernel::tftInstance = nullptr;
@@ -116,6 +117,12 @@ static const char* oomHint() {
 // timers); passou disso, PSRAM. Sem PSRAM (CYD): malloc padrao.
 // ---------------------------------------------------------------------------
 static constexpr size_t kInternalReserve = 72 * 1024;
+// Sem PSRAM (CYD): o heap Duktape compete com WiFi/lwIP pela RAM interna
+// (~70KB livres no boot). Sem piso, ele comia o heap ate o ultimo byte
+// (heap_min de 48 BYTES medido no device) e o sistema abortava — agora
+// nega alocacao abaixo do piso e o Duktape ve OOM (soft-error "Sem
+// memoria"), nao um abort no meio da tela de erro.
+static constexpr size_t kNoPsramFloor = 20 * 1024;
 
 static uint32_t duk_caps() {
     if (!Board::profile().hasPsram) return MALLOC_CAP_8BIT;
@@ -123,13 +130,37 @@ static uint32_t duk_caps() {
     return MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 }
 
+// Orçamento para ABRIR um app (piso só no create, nunca no run): sem PSRAM,
+// exigir folga generosa — app que estourar vai de OOM fatal ao my_fatal, e
+// o sistema recupera com a tela de erro.
+static bool dukHeapBudgetOk() {
+    if (Board::profile().hasPsram) return true;
+    // O heap base do Duktape (builtins) neste build pede ~50KB: com menos que
+    // isso na RAM interna, o create OOMa no meio e o fatal anterior abortava.
+    // Recusa ANTES (mensagem limpa) — CYD classica fica ~51KB livre: apps JS
+    // grandes nao abrem por ora (ver Documentation/ENGINE_NOTES.md).
+    return heap_caps_get_free_size(MALLOC_CAP_8BIT) > kNoPsramFloor + 40 * 1024;
+}
+
 static void *my_alloc(void *udata, duk_size_t size) {
     (void)udata;
     if (size == 0) return nullptr;
+    // NOTA: sem piso AQUI de proposito — negar alocacao no meio do run
+    // derruba o Duktape no caminho de erro (intern -> throw error object ->
+    // malloc -> spinlock corrupto, LoadStoreError medido no device). O piso
+    // age so no duk_create_heap (dukHeapBudgetOk no runFile).
     uint32_t caps = duk_caps();
     void *p = heap_caps_malloc(size, caps);
     if (!p && caps != MALLOC_CAP_8BIT) p = heap_caps_malloc(size, MALLOC_CAP_8BIT);
-    if (!p) celer_log_println("out of memory");
+    if (!p) {
+        static int oomLogs = 0;
+        if (oomLogs++ < 1) {
+            char b[80];
+            snprintf(b, sizeof(b), "[duk-oom] size=%u free=%u", (unsigned)size,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+            celer_log_println(b);
+        }
+    }
     return p;
 }
 
@@ -154,14 +185,32 @@ static void my_free(void *udata, void *ptr) {
 static void my_fatal(void *udata, const char *msg) {
     celer_log_print("Duktape fatal error: ");
     celer_log_println(msg ? msg : "no message");
-    
-    std::string detail = (msg && strstr(msg, "alloc")) ? std::string(kOomHint) : std::string(msg ? msg : "erro fatal");
-    showRuntimeError(i18n::TR("Erro fatal do runtime", "Runtime fatal error"),
-                    detail + i18n::TR("\n\nO sistema vai reiniciar.", "\n\nThe system will restart."));
 
-    if (msg && strstr(msg, "alloc")) {
-        celer_log_println("out of memory");
+    // Tela estatica SEM alocacao: o fatal tipico e OOM ("alloc failed") e o
+    // heap do sistema pode estar esgotado — std::string aqui era abort()
+    // dentro do proprio handler (o device rebootava sem mostrar nada).
+    CelerDisplay* tft = CelerKernel::tftInstance;
+    if (tft) {
+        tft->startWrite();
+        tft->fillScreen(THEME_BG);
+        int hdr = UI::sy(52);
+        tft->fillRect(0, 0, UI::W, hdr, THEME_CARD);
+        tft->fillRect(0, hdr - UI::sy(3), UI::W, UI::sy(3), THEME_ERR);
+        tft->setTextDatum(ML_DATUM);
+        tft->setTextColor(THEME_TEXT);
+        tft->drawString(i18n::TR("Erro fatal do runtime", "Runtime fatal error"),
+                        UI::sx(14), hdr / 2, kui::type::title());
+        tft->setTextDatum(TL_DATUM);
+        tft->setTextColor(THEME_TEXT_DIM);
+        bool oom = (msg && strstr(msg, "alloc"));
+        tft->drawString(oom ? i18n::TR("O app ficou sem memoria.", "The app ran out of memory.")
+                            : i18n::TR("O app travou o runtime.", "The app broke the runtime."),
+                        UI::sx(14), hdr + UI::sy(16), kui::type::body());
+        tft->drawString(i18n::TR("O sistema vai reiniciar...", "The system will restart..."),
+                        UI::sx(14), hdr + UI::sy(34), kui::type::body());
+        tft->endWrite();
     }
+    delay(2500);
     ESP.restart(); // Reboot when they close it
 }
 
@@ -290,6 +339,12 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     if (ctx) {
         duk_destroy_heap(ctx);
         ctx = nullptr;
+    }
+
+    if (!dukHeapBudgetOk()) {
+        celer_log_println("heap do sistema baixo p/ app JS (piso sem PSRAM)");
+        showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+        return; // Soft exit back to OS
     }
 
     ctx = duk_create_heap(my_alloc, my_realloc, my_free, nullptr, my_fatal);

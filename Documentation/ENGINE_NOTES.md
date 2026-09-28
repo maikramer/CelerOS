@@ -57,3 +57,24 @@ infraestrutura (i18n do firmware + `System.toast`) já cobre o caso nativo.
 - i18n do firmware nativo (`Utils/I18n.h`, `System.setting("lang")`).
 - Background/services: adiado deliberadamente — depende da `CELEROS_APP_TASK`
   amadurecer em campo; `System.toast` é a fundação de UI para notificações.
+
+## CYD classica: heap para apps JS (limitacao de hardware, 2026-09)
+
+A CYD classica (sem PSRAM) tem ~70KB de RAM interna livre no boot; com o
+canvas do Kui em bandas (16KB) e o WiFi, sobram ~51KB. O heap base do
+Duktape (criacao dos objetos builtin) neste build pede ~50KB — o create
+OOMa no meio, e o antigo `my_fatal` alocava `std::string` para desenhar a
+tela de erro: abort() dentro do proprio handler, device rebootando sem
+mostrar nada (riscos no vidro = tela de erro pela metade).
+
+Estado atual: `dukHeapBudgetOk()` exige ~60KB livres para ABRIR app — na
+CYD os apps JS sao recusados com tela "Sem memoria" limpa (sem reboot). O
+`my_fatal` desenha tela estatica sem alocar. `my_alloc` nao nega alocacao
+durante o run (o caminho de erro do Duktape com alloc parcial derrubava o
+spinlock do multi_heap — LoadStoreError medido).
+
+Caminhos futuros (em ordem de custo/beneficio):
+1. Config low-memory do Duktape (refcount16, strtable menor): -20~30%.
+2. Desligar WiFi durante apps sem permissao "net" (+~35KB).
+3. Heap Duktape em buffer estatico unico (sem fragmentar o heap do sistema).
+A SmartDisplay (8MB PSRAM) nao e afetada.

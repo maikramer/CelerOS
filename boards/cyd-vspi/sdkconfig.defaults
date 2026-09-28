@@ -21,3 +21,8 @@ CONFIG_LOG_DEFAULT_LEVEL_WARN=y
 # slot de 1.75MB. A SmartDisplay (16MB) segue com o bundle completo.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set
+
+# O slot microSD desta variante compartilha o HSPI do TFT (CS=5): o mount
+# dedicado conflitaria com o display. Sem SD até o mount suportar bus
+# compartilhado — e o FAT/SDSPI saem do binário (bônus de tamanho).
+# CONFIG_CELEROS_SD_CARD is not set
