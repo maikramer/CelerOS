@@ -191,9 +191,12 @@ private:
      * @brief Load a single network from NVS.
      * @param index The index to load from.
      * @param network Output parameter for the loaded network.
+     * @param legacyUsed Optional: set to true when the entry came from the
+     *        legacy pipe-serialized format (triggers a one-time migration).
      * @return ErrorCode indicating success or failure.
      */
-    ErrorCode loadNetworkFromNvs(size_t index, KnownNetwork& network);
+    ErrorCode loadNetworkFromNvs(size_t index, KnownNetwork& network,
+                                 bool* legacyUsed = nullptr);
 
     /**
      * @brief Find network index by SSID.

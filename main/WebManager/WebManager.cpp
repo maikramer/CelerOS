@@ -16,7 +16,9 @@
 #include "NetworkCredentialStore.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/CelerSettings.h"
 #include "../Kernel/TimeManager.h"
+#include "WebAuth.h"
 #include "filemanager_html.h"
 #include "ota_upload_html.h"
 
@@ -32,6 +34,10 @@ static volatile bool s_rebootPending = false;
 
 static NetworkManager& nm() { return NetworkManager::instance(); }
 
+// Flags de config em NVS (F3; web_on.txt/nowifi.txt/config_install_sd.txt
+// sao importados e apagados no primeiro boot com CelerSettings::migrateLegacy)
+static bool cfgFlag(const char* key) { return CelerSettings::get(key) == "1"; }
+
 WifiConnection& WebManager::wifi() { return *nm().getWifiConnection(); }
 
 // Estado de rede: NTP na conexao e (re)subida do servidor quando habilitado.
@@ -40,7 +46,7 @@ void WebManager::onNetworkStateChanged(NetworkState /*oldState*/, NetworkState n
     if (newState == NetworkState::Connected) {
         ESP_LOGI(WM_TAG, "WiFi conectado, IP=%s", nm().getIpAddress().c_str());
         TimeManager::syncNTP();
-        if (FileSystem::exists("/local/web_on.txt")) {
+        if (cfgFlag("web_on")) {
             startWebServerIfNeeded();
         }
     }
@@ -69,6 +75,9 @@ void WebManager::importLegacyWifiTxt() {
             celer_log_print("wifi.txt migrado para o credential store (NVS): ");
             celer_log_println(ssid.c_str());
         }
+        // Esvazia ANTES de renomear: a senha nao pode ficar em plaintext no
+        // disco (o .migrated so existe para marcar "ja processado").
+        FileSystem::writeTextFile(path, "");
         FileSystem::renameFile(path, (std::string(path) + ".migrated").c_str());
         return;  // so o primeiro que existir (SD tem preferencia)
     }
@@ -82,6 +91,7 @@ bool WebManager::init() {
         celer_log_println("NetworkManager init failed.");
         return false;
     }
+    CelerSettings::migrateLegacy();
 
     if (!s_nmEventsBound) {
         s_nmEventsBound = true;
@@ -94,7 +104,7 @@ bool WebManager::init() {
     // Ja conectado (ex.: captive portal acabou de conectar): nao refaz
     // connectToKnown, so garante o servidor se habilitado
     if (nm().isConnected()) {
-        if (FileSystem::exists("/local/web_on.txt")) {
+        if (cfgFlag("web_on")) {
             startWebServerIfNeeded();
         }
         return true;
@@ -104,7 +114,7 @@ bool WebManager::init() {
         celer_log_println("No saved networks (NVS store vazio).");
         return false;
     }
-    if (FileSystem::exists("/local/nowifi.txt")) {
+    if (cfgFlag("nowifi")) {
         celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
@@ -116,7 +126,7 @@ bool WebManager::init() {
         return false;
     }
 
-    if (!FileSystem::exists("/local/web_on.txt")) {
+    if (!cfgFlag("web_on")) {
         celer_log_println("Web Server disabled by user (web_on.txt not found).");
         return true;  // WiFi conectado, servidor nao sobe
     }
@@ -128,7 +138,7 @@ bool WebManager::init() {
 bool WebManager::startAsync() {
     nvs_flash_init();
 
-    if (FileSystem::exists("/local/nowifi.txt")) {
+    if (cfgFlag("nowifi")) {
         celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
@@ -138,6 +148,7 @@ bool WebManager::startAsync() {
         celer_log_println("NetworkManager init failed.");
         return false;
     }
+    CelerSettings::migrateLegacy();
 
     if (!s_nmEventsBound) {
         s_nmEventsBound = true;
@@ -297,21 +308,33 @@ static void addCORS(httpd_req_t* req) { (void)req; }
 
 // Anti-CSRF: rotas que alteram estado (POST/DELETE) exigem o cabecalho
 // X-Celer-Request. Um formulario/fetch "simples" de outro site nao consegue
-// envia-lo (header customizado forca preflight, que o servidor nao aprova) —
-// antes, uma pagina maliciosa podia regravar o firmware via POST /update.
+// envia-lo (header customizado forca preflight, que o servidor nao aprova).
 // As paginas do proprio aparelho (file manager, /update) enviam o header.
 static const char* CSRF_HEADER = "X-Celer-Request";
 
-static esp_err_t csrfGuard(httpd_req_t* req) {
-    char v[8];
-    if (httpd_req_get_hdr_value_str(req, CSRF_HEADER, v, sizeof(v)) != ESP_OK) {
-        httpd_resp_set_status(req, "403 Forbidden");
-        httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
-        httpd_resp_sendstr(req, "Forbidden: missing X-Celer-Request header");
-        return ESP_OK;
+// Cadeia de guarda de cada rota: WebAuth (Basic Auth — toda requisicao,
+// GET incluso) -> CSRF (mutacoes) -> handler real. Antes da v1.3 so as
+// mutacoes tinham o csrfGuard e qualquer cliente da LAN podia ler arquivos
+// e regravar firmware.
+struct RouteCtx {
+    esp_err_t (*handler)(httpd_req_t* req);
+    bool csrf;
+};
+
+static esp_err_t routeGuard(httpd_req_t* req) {
+    if (!WebAuth::check(req)) return ESP_OK;  // 401/429 ja enviados
+
+    RouteCtx* c = (RouteCtx*)req->user_ctx;
+    if (c->csrf) {
+        char v[8];
+        if (httpd_req_get_hdr_value_str(req, CSRF_HEADER, v, sizeof(v)) != ESP_OK) {
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
+            httpd_resp_sendstr(req, "Forbidden: missing X-Celer-Request header");
+            return ESP_OK;
+        }
     }
-    auto handler = (esp_err_t (*)(httpd_req_t*))req->user_ctx;
-    return handler(req);
+    return c->handler(req);
 }
 
 static std::string urlDecode(const std::string& str) {
@@ -602,7 +625,7 @@ struct MultipartCtx {
 
         // Intercepta apps e respeita o local padrao de instalacao
         if (kstr::startsWith(filePath, "/local/apps/") || kstr::startsWith(filePath, "/sd/apps/")) {
-            bool defaultSD = FileSystem::exists("/local/config_install_sd.txt");
+            bool defaultSD = cfgFlag("install_sd");
             int appsIndex = kstr::indexOf(filePath, "/apps/");
             std::string relativePath = filePath.substr(appsIndex + 6);
             if (defaultSD && FileSystem::exists("/sd/")) {
@@ -807,6 +830,7 @@ static esp_err_t handler_update_post(httpd_req_t* req) {
 
 void WebManager::startWebServerIfNeeded() {
     if (s_server != nullptr) return;
+    WebAuth::init();  // garante senha antes do primeiro 401
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
@@ -820,22 +844,34 @@ void WebManager::startWebServerIfNeeded() {
         return;
     }
 
+    static const RouteCtx C_INDEX{handler_index, false};
+    static const RouteCtx C_LIST{handler_list, false};
+    static const RouteCtx C_EDIT_GET{handler_edit_get, false};
+    static const RouteCtx C_EDIT_POST{handler_edit_post, true};
+    static const RouteCtx C_DOWNLOAD{handler_download, false};
+    static const RouteCtx C_DELETE{handler_delete, true};
+    static const RouteCtx C_CREATE{handler_create, true};
+    static const RouteCtx C_RENAME{handler_rename, true};
+    static const RouteCtx C_UPLOAD{handler_upload, true};
+    static const RouteCtx C_UPDATE_GET{handler_update_get, false};
+    static const RouteCtx C_UPDATE_POST{handler_update_post, true};
+
     const httpd_uri_t routes[] = {
-        {"/",             HTTP_GET,    handler_index,       nullptr},
-        {"/api/list",     HTTP_GET,    handler_list,        nullptr},
-        {"/api/edit",     HTTP_GET,    handler_edit_get,    nullptr},
-        {"/api/edit",     HTTP_POST,   csrfGuard,           (void*)handler_edit_post},
-        {"/api/download", HTTP_GET,    handler_download,    nullptr},
-        {"/api/delete",   HTTP_DELETE, csrfGuard,           (void*)handler_delete},
-        {"/api/create",   HTTP_POST,   csrfGuard,           (void*)handler_create},
-        {"/api/rename",   HTTP_POST,   csrfGuard,           (void*)handler_rename},
-        {"/api/upload",   HTTP_POST,   csrfGuard,           (void*)handler_upload},
-        {"/update",       HTTP_GET,    handler_update_get,  nullptr},
-        {"/update",       HTTP_POST,   csrfGuard,           (void*)handler_update_post},
+        {"/",             HTTP_GET,    routeGuard, (void*)&C_INDEX},
+        {"/api/list",     HTTP_GET,    routeGuard, (void*)&C_LIST},
+        {"/api/edit",     HTTP_GET,    routeGuard, (void*)&C_EDIT_GET},
+        {"/api/edit",     HTTP_POST,   routeGuard, (void*)&C_EDIT_POST},
+        {"/api/download", HTTP_GET,    routeGuard, (void*)&C_DOWNLOAD},
+        {"/api/delete",   HTTP_DELETE, routeGuard, (void*)&C_DELETE},
+        {"/api/create",   HTTP_POST,   routeGuard, (void*)&C_CREATE},
+        {"/api/rename",   HTTP_POST,   routeGuard, (void*)&C_RENAME},
+        {"/api/upload",   HTTP_POST,   routeGuard, (void*)&C_UPLOAD},
+        {"/update",       HTTP_GET,    routeGuard, (void*)&C_UPDATE_GET},
+        {"/update",       HTTP_POST,   routeGuard, (void*)&C_UPDATE_POST},
     };
     for (const auto& r : routes) {
         httpd_register_uri_handler(s_server, &r);
     }
 
-    celer_log_println("Web Server started on port 80");
+    celer_log_println("Web Server started on port 80 (senha: app Web Server / celerctl info)");
 }

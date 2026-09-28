@@ -46,6 +46,18 @@ public:
     static ErrorCode eraseData();
 
     /**
+     * @brief Erases a single key from a namespace.
+     *
+     * Erasing a key that does not exist is a no-op (returns None) — callers
+     * use this to clean up stale entries without tracking what was written.
+     *
+     * @param namespaceName The namespace holding the key.
+     * @param key The key to erase.
+     * @return ErrorCode indicating success or failure.
+     */
+    static ErrorCode eraseKey(const std::string& namespaceName, const std::string& key);
+
+    /**
      * @brief Stores a value in NVS associated with a specific key and namespace.
      *
      * @tparam T The type of the value to be stored. Must be a supported NVS data type.

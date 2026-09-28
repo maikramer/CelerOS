@@ -4,18 +4,25 @@
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
 #include "../WebManager/WebManager.h"
+#include "../WebManager/WebAuth.h"
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/PinStore.h"
+#include "../Utils/CelerSettings.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
+#include "esp_task_wdt.h"
 #include "../Display/Backlight.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
 #include "../Launcher/LauncherUI.h"
+#include "../Kernel/AppRunner.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // ---------------------------------------------------------------------------
 // Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
@@ -36,6 +43,18 @@ static inline uint32_t jsc(uint32_t c) {
     return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
 }
 static inline int jsx(int v) { return UI::sx(v); }
+
+// Saida limpa de app: erro MARCADO com a propriedade celerExit — o kernel
+// identifica a marcacao (ou a string "OS_EXIT" exata, compat com apps que a
+// lancam direto, ex. Terminal). Antes qualquer erro cujo texto continha
+// "OS_EXIT" fechava o app silenciosamente.
+[[noreturn]] static void throwAppExit(duk_context *ctx) {
+    duk_push_error_object(ctx, DUK_ERR_ERROR, "app exit");
+    duk_push_boolean(ctx, 1);
+    duk_put_prop_string(ctx, -2, "celerExit");
+    (void)duk_throw(ctx);  // longjmp: nunca retorna de verdade
+    while (true) { }       // so para calmar o -Wreturn-type
+}
 
 // Topbar do sistema (titulo + X de sair): s_exitArmed = dedo sobre o X no
 // ultimo poll (tambem e o estado "hot" da faixa); s_barOnGlass/s_barHotOnGlass
@@ -738,8 +757,7 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
 
         // Topbar (X de sair): dispara so no release; toque na faixa e chrome
         if (pollAppChrome(touched, tx, ty)) {
-            duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-            return 0; // Unreachable, but good practice
+            throwAppExit(ctx);  // nao retorna
         }
     }
 
@@ -789,8 +807,15 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
         lastGcMs = t0;
     }
     if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
-        uint32_t spent = millis() - t0;
-        if ((uint32_t)ms > spent) delay(ms - spent);
+        // fatias de 4s com reset do watchdog: um System.delay(30000) nao
+        // pode derrubar o WDT de 15s da main task (app rodando = sem celerLoop)
+        uint32_t remain = (uint32_t)ms - (millis() - t0);
+        while (remain > 0) {
+            esp_task_wdt_reset();
+            uint32_t slice = remain > 4000 ? 4000 : remain;
+            delay(slice);
+            remain -= slice;
+        }
     }
     return 0;
 }
@@ -949,102 +974,6 @@ duk_ret_t JSBindings::js_isWiFiActive(duk_context *ctx) {
 // =====================================================
 // Network Bindings - HTTP (objeto Net, API level 2)
 // =====================================================
-
-// Custo de memoria: o TLS (https) pede ~45KB de heap durante a chamada,
-// concorrendo com o heap do Duktape — respostas grandes podem estourar o
-// ~90KB do runtime JS. Limitar payloads a dezenas de KB.
-#define NET_MAX_BODY 32768
-
-// Executa GET/POST e devolve o body em "out". Sem WiFi conectado: duk_error
-// (o script ve um erro legivel em vez de um null silencioso).
-static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
-    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
-        return false;
-    }
-    const char *url = duk_require_string(ctx, 0);
-
-    std::string body;
-    std::string contentType = "text/plain";
-    if (isPost) {
-        body = duk_require_string(ctx, 1);
-        if (duk_is_string(ctx, 2)) contentType = duk_get_string(ctx, 2);
-    }
-
-    // Componente Http (esp_http_client): https usa o cert bundle do sistema
-    HttpClient http;
-    http.setTimeout(10000);
-    HttpResponse resp;
-    if (isPost) {
-        resp = http.post(url, body, contentType);
-    } else {
-        resp = http.get(url);
-    }
-    if (!resp.isOk()) return false;
-    out = resp.body;
-    if (out.length() > NET_MAX_BODY) out.resize(NET_MAX_BODY);
-    return true;
-}
-
-duk_ret_t JSBindings::js_netGet(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
-    return 1;
-}
-
-duk_ret_t JSBindings::js_netGetJSON(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
-    duk_json_decode(ctx, -1);  // parse falho vira erro visivel no script
-    return 1;
-}
-
-duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, true, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
-    return 1;
-}
-
-// API 6: download em streaming direto para arquivo — o corpo NAO passa pela
-// heap do Duktape (chunk a chunk vai pro FILE*), entao nao sofre o teto de
-// 32KB do Net.get. Uso: Net.download(url, path[, onProgress]) -> true|false;
-// onProgress(bytes, total) por chunk (total = -1 se o server nao mandou
-// Content-Length). O callback roda DENTRO do esp_http_client: duk_pcall para
-// um erro de script nao estourar o longjmp no meio do download.
-duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
-    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
-    }
-    const char *url = duk_require_string(ctx, 0);
-    const char *path = duk_require_string(ctx, 1);
-    const bool hasProgress = duk_is_function(ctx, 2);
-
-    HttpClient http;
-    http.setTimeout(15000);
-    http.setBufferSize(4096);  // chunk maior = menos chamadas do callback
-    if (hasProgress) {
-        http.setProgressCallback([ctx](int64_t got, int64_t total) {
-            duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
-            duk_push_number(ctx, (duk_double_t)got);
-            duk_push_number(ctx, (duk_double_t)total);
-            if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) duk_pop(ctx);
-        });
-    }
-    HttpResponse resp = http.downloadToFile(url, path);
-    if (!resp.isOk()) { duk_push_false(ctx); return 1; }
-    duk_push_true(ctx);
-    return 1;
-}
-
-duk_ret_t JSBindings::js_netIsConnected(duk_context *ctx) {
-    duk_push_boolean(ctx, WebManager::isWifiConnected());
-    return 1;
-}
 
 // =====================================================
 // FileSystem Bindings
@@ -1287,8 +1216,7 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
     bool touched = kui::readTouch(&tx, &ty);
     if (pollAppChrome(touched, tx, ty)) {
         keypadCloseSession();
-        duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-        return 0;
+        throwAppExit(ctx);  // nao retorna
     }
 
     s_kbEvent = KB_EV_NONE;
@@ -1558,10 +1486,16 @@ duk_ret_t JSBindings::js_backlightSupported(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    // Empilha a tela nativa de WiFi. Como o app JS roda sincrono, a tela
-    // so entra em cena quando o script devolver o controle ao loop do Kui
-    // (o app deve chamar System.exitApp() logo em seguida).
-    kui::Navigator::push(WifiSetupScreen::instance());
+    // Empilha a tela nativa de WiFi. No modo sincrono a tela so entra em
+    // cena quando o script devolver o controle ao loop do Kui (o app deve
+    // chamar System.exitApp() logo em seguida). Com o app em task propria,
+    // o push tem que esperar a main task: o pedido e registrado e o
+    // AppHostScreen atende quando a task do app termina.
+    if (AppRunner::supported()) {
+        AppRunner::requestWifiSetup();
+    } else {
+        kui::Navigator::push(WifiSetupScreen::instance());
+    }
     return 0;
 }
 
@@ -1591,10 +1525,9 @@ duk_ret_t JSBindings::js_isBuffered(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_exitApp(duk_context *ctx) {
-    // Mesmo protocolo do canto superior direito: erro "OS_EXIT" e
+    // Mesmo protocolo do canto superior direito: erro marcado celerExit,
     // interceptado como saida limpa pelo CelerKernel.
-    duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-    return 0;  // unreachable
+    throwAppExit(ctx);  // nao retorna
 }
 
 duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {
@@ -1627,6 +1560,51 @@ duk_ret_t JSBindings::js_md5(duk_context *ctx) {
     return 1;
 }
 
+// ---- PIN do Settings (nativo, com salt) -----------------------------------
+// Substitui o fluxo JS antigo (md5 em settings_pin.txt): qualquer app podia
+// ler o hash e apagar o arquivo para destravar o Settings. O estado mora no
+// nativo (PinStore: settings_pin2.bin + flag NVS) e nao ha hash exposto.
+
+duk_ret_t JSBindings::js_setPin(duk_context *ctx) {
+    const char* pin = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, PinStore::set(pin) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_verifyPin(duk_context *ctx) {
+    const char* pin = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, PinStore::verify(pin) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_pinClear(duk_context *ctx) {
+    PinStore::clear();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_pinState(duk_context *ctx) {
+    // 0 = sem PIN, 1 = ativo, 2 = corrompido (flag NVS sem arquivo)
+    duk_push_int(ctx, PinStore::state());
+    return 1;
+}
+
+// ---- senha do Web Server ---------------------------------------------------
+
+duk_ret_t JSBindings::js_webAuthInfo(duk_context *ctx) {
+    duk_push_object(ctx);
+    duk_push_string(ctx, "admin");
+    duk_put_prop_string(ctx, -2, "user");
+    duk_push_string(ctx, WebAuth::password());
+    duk_put_prop_string(ctx, -2, "pass");
+    return 1;
+}
+
+duk_ret_t JSBindings::js_webAuthSetPass(duk_context *ctx) {
+    const char* p = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, WebAuth::setPassword(p) ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_rescanApps(duk_context *ctx) {
     LauncherUI::requestRescan();
     return 0;
@@ -1641,6 +1619,8 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         // reflashe de data/ (tools/flash_data.sh) ou celerctl apps install.
         WebManager::forgetAllNetworks();
         FileSystem::formatLittleFS();
+        PinStore::clear();     // flag NVS nao vive no LittleFS
+        WebAuth::regenerate();
         duk_push_boolean(ctx, 1);
         return 1;
     }
@@ -1650,8 +1630,12 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         "/local/brightness.txt", "/local/settings_pin.txt", "/local/nowifi.txt",
         "/local/web_on.txt", "/local/config_install_sd.txt", "/local/ota_url.txt",
         "/local/config_time.txt", "/local/touch_cal_p.bin", "/local/wifi.txt",
+        "/local/settings_pin2.bin", "/local/ota_allow_http.txt",
     };
     for (const char* f : cfgFiles) FileSystem::deleteFile(f);
+    CelerSettings::eraseAll();  // settings em NVS (flags/brightness)
+    PinStore::clear();        // limpa tambem a flag NVS do PIN
+    WebAuth::regenerate();    // senha web nova (a antiga era "config")
     WebManager::forgetAllNetworks();
     duk_push_boolean(ctx, 1);
     return 1;
@@ -1767,57 +1751,45 @@ duk_ret_t JSBindings::js_webActive(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
-    // Toggle do servidor web (persiste em web_on.txt e age ao vivo), igual a
-    // tela C++ original — mas sem reboot. NAO desliga o WiFi (isso e o
-    // nowifi.txt / WebManager::disable).
+    // Toggle do servidor web (persiste no NVS de settings e age ao vivo),
+    // sem reboot. NAO desliga o WiFi (isso e o nowifi / WebManager::disable).
     if (duk_require_boolean(ctx, 0)) {
-        FileSystem::writeTextFile("/local/web_on.txt", "1");
+        CelerSettings::set("web_on", "1");
         if (WebManager::isActive()) WebManager::startWebServerIfNeeded();
     } else {
-        FileSystem::deleteFile("/local/web_on.txt");
+        CelerSettings::erase("web_on");
         WebManager::stopWebServer();
     }
     return 0;
 }
 
+duk_ret_t JSBindings::js_setting(duk_context *ctx) {
+    // Config do sistema em NVS (F3): System.setting("install_sd") -> "1" |
+    // null. Apps de sistema leem/escrevem flags do OS sem tocar arquivos.
+    const char* key = duk_require_string(ctx, 0);
+    if (duk_is_string(ctx, 1)) {
+        duk_push_boolean(ctx, CelerSettings::set(key, duk_get_string(ctx, 1)) ? 1 : 0);
+        return 1;
+    }
+    std::string v = CelerSettings::get(key);
+    if (v.empty()) { duk_push_null(ctx); return 1; }
+    duk_push_string(ctx, v.c_str());
+    return 1;
+}
+
 // --- Net nivel 3 (WiFi) ---
 
-duk_ret_t JSBindings::js_wifiScan(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
-    // Scan bloqueante (~2s) — mesmo comportamento da tela nativa.
-    CelerScanEntry entries[20];
-    int n = WebManager::scanNetworks(entries, 20);
-
-    duk_push_array(ctx);
-    for (int i = 0; i < n; i++) {
-        duk_push_object(ctx);
-        duk_push_string(ctx, entries[i].ssid.c_str());
-        duk_put_prop_string(ctx, -2, "ssid");
-        duk_push_int(ctx, entries[i].rssi);
-        duk_put_prop_string(ctx, -2, "rssi");
-        duk_push_boolean(ctx, entries[i].secure ? 1 : 0);
-        duk_put_prop_string(ctx, -2, "secure");
-        duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
-    }
-    return 1;
-}
-
-duk_ret_t JSBindings::js_wifiConnect(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
-    const char* ssid = duk_require_string(ctx, 0);
-    const char* pass = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
-    duk_push_boolean(ctx, WebManager::connect(ssid, pass) ? 1 : 0);
-    return 1;
-}
-
-duk_ret_t JSBindings::js_wifiDisconnect(duk_context *ctx) {
-    WebManager::disconnect();
-    return 0;
-}
 
 // =====================================================
 // Init - Register ALL bindings
 // =====================================================
+
+// Registro de binding no objeto do topo do stack (o init tinha ~120 pares
+// push/put identicos — a tabela redundante virou uma chamada por binding)
+static void regFn(duk_context* ctx, duk_c_function fn, const char* name, duk_idx_t nargs) {
+    duk_push_c_function(ctx, fn, nargs);
+    duk_put_prop_string(ctx, -2, name);
+}
 
 void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
                       bool topbarFixed) {
@@ -1882,16 +1854,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // System.gpio sub-object
     duk_push_object(ctx);
-    duk_push_c_function(ctx, js_pinMode, 2);
-    duk_put_prop_string(ctx, -2, "pinMode");
-    duk_push_c_function(ctx, js_digitalWrite, 2);
-    duk_put_prop_string(ctx, -2, "digitalWrite");
-    duk_push_c_function(ctx, js_digitalRead, 1);
-    duk_put_prop_string(ctx, -2, "digitalRead");
-    duk_push_c_function(ctx, js_analogRead, 1);
-    duk_put_prop_string(ctx, -2, "analogRead");
-    duk_push_c_function(ctx, js_analogWrite, 2);
-    duk_put_prop_string(ctx, -2, "analogWrite");
+    regFn(ctx, js_pinMode, "pinMode", 2);
+    regFn(ctx, js_digitalWrite, "digitalWrite", 2);
+    regFn(ctx, js_digitalRead, "digitalRead", 1);
+    regFn(ctx, js_analogRead, "analogRead", 1);
+    regFn(ctx, js_analogWrite, "analogWrite", 2);
     duk_push_c_function(ctx, js_pulseIn, 3); // max 3 args
     duk_put_prop_string(ctx, -2, "pulseIn");
     
@@ -1906,261 +1873,159 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // --- Drawing Primitives ---
 
-    duk_push_c_function(ctx, js_createSprite, 2);
-    duk_put_prop_string(ctx, -2, "createSprite");
-    duk_push_c_function(ctx, js_deleteSprite, 0);
-    duk_put_prop_string(ctx, -2, "deleteSprite");
-    duk_push_c_function(ctx, js_pushSprite, 2);
-    duk_put_prop_string(ctx, -2, "pushSprite");
-    duk_push_c_function(ctx, js_bindSprite, 1);
-    duk_put_prop_string(ctx, -2, "bindSprite");
-    duk_push_c_function(ctx, js_drawFastVLine, 4);
-    duk_put_prop_string(ctx, -2, "drawFastVLine");
-    duk_push_c_function(ctx, js_drawFastHLine, 4);
-    duk_put_prop_string(ctx, -2, "drawFastHLine");
+    regFn(ctx, js_createSprite, "createSprite", 2);
+    regFn(ctx, js_deleteSprite, "deleteSprite", 0);
+    regFn(ctx, js_pushSprite, "pushSprite", 2);
+    regFn(ctx, js_bindSprite, "bindSprite", 1);
+    regFn(ctx, js_drawFastVLine, "drawFastVLine", 4);
+    regFn(ctx, js_drawFastHLine, "drawFastHLine", 4);
 
-    duk_push_c_function(ctx, js_fillScreen, 1);
-    duk_put_prop_string(ctx, -2, "fillScreen");
-    duk_push_c_function(ctx, js_fillRect, 5);
-    duk_put_prop_string(ctx, -2, "fillRect");
-    duk_push_c_function(ctx, js_drawRect, 5);
-    duk_put_prop_string(ctx, -2, "drawRect");
-    duk_push_c_function(ctx, js_drawLine, 5);
-    duk_put_prop_string(ctx, -2, "drawLine");
-    duk_push_c_function(ctx, js_drawPixel, 3);
-    duk_put_prop_string(ctx, -2, "drawPixel");
-    duk_push_c_function(ctx, js_drawCircle, 4);
-    duk_put_prop_string(ctx, -2, "drawCircle");
-    duk_push_c_function(ctx, js_fillCircle, 4);
-    duk_put_prop_string(ctx, -2, "fillCircle");
-    duk_push_c_function(ctx, js_drawTriangle, 7);
-    duk_put_prop_string(ctx, -2, "drawTriangle");
-    duk_push_c_function(ctx, js_fillTriangle, 7);
-    duk_put_prop_string(ctx, -2, "fillTriangle");
-    duk_push_c_function(ctx, js_drawRoundRect, 6);
-    duk_put_prop_string(ctx, -2, "drawRoundRect");
-    duk_push_c_function(ctx, js_fillRoundRect, 6);
-    duk_put_prop_string(ctx, -2, "fillRoundRect");
+    regFn(ctx, js_fillScreen, "fillScreen", 1);
+    regFn(ctx, js_fillRect, "fillRect", 5);
+    regFn(ctx, js_drawRect, "drawRect", 5);
+    regFn(ctx, js_drawLine, "drawLine", 5);
+    regFn(ctx, js_drawPixel, "drawPixel", 3);
+    regFn(ctx, js_drawCircle, "drawCircle", 4);
+    regFn(ctx, js_fillCircle, "fillCircle", 4);
+    regFn(ctx, js_drawTriangle, "drawTriangle", 7);
+    regFn(ctx, js_fillTriangle, "fillTriangle", 7);
+    regFn(ctx, js_drawRoundRect, "drawRoundRect", 6);
+    regFn(ctx, js_fillRoundRect, "fillRoundRect", 6);
     
-    duk_push_c_function(ctx, js_drawBMP, 3);
-    duk_put_prop_string(ctx, -2, "drawBMP");
-    duk_push_c_function(ctx, js_drawPNG, 3);
-    duk_put_prop_string(ctx, -2, "drawPNG");
+    regFn(ctx, js_drawBMP, "drawBMP", 3);
+    regFn(ctx, js_drawPNG, "drawPNG", 3);
 
     // --- Text ---
-    duk_push_c_function(ctx, js_drawString, 4);
-    duk_put_prop_string(ctx, -2, "drawString");
-    duk_push_c_function(ctx, js_setTextColor, 2);
-    duk_put_prop_string(ctx, -2, "setTextColor");
-    duk_push_c_function(ctx, js_setTextSize, 1);
-    duk_put_prop_string(ctx, -2, "setTextSize");
-    duk_push_c_function(ctx, js_textWidth, 2);
-    duk_put_prop_string(ctx, -2, "textWidth");
-    duk_push_c_function(ctx, js_fontHeight, 1);
-    duk_put_prop_string(ctx, -2, "fontHeight");
+    regFn(ctx, js_drawString, "drawString", 4);
+    regFn(ctx, js_setTextColor, "setTextColor", 2);
+    regFn(ctx, js_setTextSize, "setTextSize", 1);
+    regFn(ctx, js_textWidth, "textWidth", 2);
+    regFn(ctx, js_fontHeight, "fontHeight", 1);
 
     // --- Utility ---
-    duk_push_c_function(ctx, js_color, 3);
-    duk_put_prop_string(ctx, -2, "color");
-    duk_push_c_function(ctx, js_screenWidth, 0);
-    duk_put_prop_string(ctx, -2, "screenWidth");
-    duk_push_c_function(ctx, js_screenHeight, 0);
-    duk_put_prop_string(ctx, -2, "screenHeight");
+    regFn(ctx, js_color, "color", 3);
+    regFn(ctx, js_screenWidth, "screenWidth", 0);
+    regFn(ctx, js_screenHeight, "screenHeight", 0);
 
     // --- Touch Input ---
-    duk_push_c_function(ctx, js_getTouch, 0);
-    duk_put_prop_string(ctx, -2, "getTouch");
-    duk_push_c_function(ctx, js_millis, 0);
-    duk_put_prop_string(ctx, -2, "millis");
-    duk_push_c_function(ctx, js_micros, 0);
-    duk_put_prop_string(ctx, -2, "micros");
-    duk_push_c_function(ctx, js_delay, 1);
-    duk_put_prop_string(ctx, -2, "delay");
-    duk_push_c_function(ctx, js_delayMicroseconds, 1);
-    duk_put_prop_string(ctx, -2, "delayMicroseconds");
-    duk_push_c_function(ctx, js_print, 1);
-    duk_put_prop_string(ctx, -2, "print");
-    duk_push_c_function(ctx, js_getTemperature, 0);
-    duk_put_prop_string(ctx, -2, "getTemperature");
-    duk_push_c_function(ctx, js_hasTemperatureSensor, 0);
-    duk_put_prop_string(ctx, -2, "hasTemperatureSensor");
-    duk_push_c_function(ctx, js_getInfo, 0);
-    duk_put_prop_string(ctx, -2, "getInfo");
-    duk_push_c_function(ctx, js_restart, 0);
-    duk_put_prop_string(ctx, -2, "restart");
+    regFn(ctx, js_getTouch, "getTouch", 0);
+    regFn(ctx, js_millis, "millis", 0);
+    regFn(ctx, js_micros, "micros", 0);
+    regFn(ctx, js_delay, "delay", 1);
+    regFn(ctx, js_delayMicroseconds, "delayMicroseconds", 1);
+    regFn(ctx, js_print, "print", 1);
+    regFn(ctx, js_getTemperature, "getTemperature", 0);
+    regFn(ctx, js_hasTemperatureSensor, "hasTemperatureSensor", 0);
+    regFn(ctx, js_getInfo, "getInfo", 0);
+    regFn(ctx, js_restart, "restart", 0);
     
-    duk_push_c_function(ctx, js_getTime, 0);
-    duk_put_prop_string(ctx, -2, "getTime");
-    duk_push_c_function(ctx, js_getSeconds, 0);
-    duk_put_prop_string(ctx, -2, "getSeconds");
-    duk_push_c_function(ctx, js_getDate, 0);
-    duk_put_prop_string(ctx, -2, "getDate");
-    duk_push_c_function(ctx, js_getYear, 0);
-    duk_put_prop_string(ctx, -2, "getYear");
-    duk_push_c_function(ctx, js_getMonth, 0);
-    duk_put_prop_string(ctx, -2, "getMonth");
-    duk_push_c_function(ctx, js_getDay, 0);
-    duk_put_prop_string(ctx, -2, "getDay");
-    duk_push_c_function(ctx, js_getTimezone, 0);
-    duk_put_prop_string(ctx, -2, "getTimezone");
+    regFn(ctx, js_getTime, "getTime", 0);
+    regFn(ctx, js_getSeconds, "getSeconds", 0);
+    regFn(ctx, js_getDate, "getDate", 0);
+    regFn(ctx, js_getYear, "getYear", 0);
+    regFn(ctx, js_getMonth, "getMonth", 0);
+    regFn(ctx, js_getDay, "getDay", 0);
+    regFn(ctx, js_getTimezone, "getTimezone", 0);
 
-    duk_push_c_function(ctx, js_getOSVersion, 0);
-    duk_put_prop_string(ctx, -2, "getOSVersion");
+    regFn(ctx, js_getOSVersion, "getOSVersion", 0);
 
-    duk_push_c_function(ctx, js_getAPILevel, 0);
-    duk_put_prop_string(ctx, -2, "getAPILevel");
+    regFn(ctx, js_getAPILevel, "getAPILevel", 0);
 
-    duk_push_c_function(ctx, js_getIPAddress, 0);
-    duk_put_prop_string(ctx, -2, "getIPAddress");
+    regFn(ctx, js_getIPAddress, "getIPAddress", 0);
 
-    duk_push_c_function(ctx, js_isWiFiActive, 0);
-    duk_put_prop_string(ctx, -2, "isWiFiActive");
+    regFn(ctx, js_isWiFiActive, "isWiFiActive", 0);
 
     // --- Keyboard ---
-    duk_push_c_function(ctx, js_prompt, 2);
-    duk_put_prop_string(ctx, -2, "prompt");
+    regFn(ctx, js_prompt, "prompt", 2);
 
     // --- Keyboard acoplado (API level 5): sessao nao-bloqueante p/ apps ---
-    duk_push_c_function(ctx, js_keypadOpen, 1);
-    duk_put_prop_string(ctx, -2, "keypadOpen");
-    duk_push_c_function(ctx, js_keypadPoll, 0);
-    duk_put_prop_string(ctx, -2, "keypadPoll");
-    duk_push_c_function(ctx, js_keypadText, 0);
-    duk_put_prop_string(ctx, -2, "keypadText");
-    duk_push_c_function(ctx, js_keypadRect, 0);
-    duk_put_prop_string(ctx, -2, "keypadRect");
-    duk_push_c_function(ctx, js_keypadDraw, 0);
-    duk_put_prop_string(ctx, -2, "keypadDraw");
-    duk_push_c_function(ctx, js_keypadClose, 0);
-    duk_put_prop_string(ctx, -2, "keypadClose");
+    regFn(ctx, js_keypadOpen, "keypadOpen", 1);
+    regFn(ctx, js_keypadPoll, "keypadPoll", 0);
+    regFn(ctx, js_keypadText, "keypadText", 0);
+    regFn(ctx, js_keypadRect, "keypadRect", 0);
+    regFn(ctx, js_keypadDraw, "keypadDraw", 0);
+    regFn(ctx, js_keypadClose, "keypadClose", 0);
 
     // --- Topbar custom (API level 6): texto e chips da faixa ---
-    duk_push_c_function(ctx, js_topbarText, 1);
-    duk_put_prop_string(ctx, -2, "topbarText");
-    duk_push_c_function(ctx, js_topbarButtons, 1);
-    duk_put_prop_string(ctx, -2, "topbarButtons");
-    duk_push_c_function(ctx, js_topbarPop, 0);
-    duk_put_prop_string(ctx, -2, "topbarPop");
+    regFn(ctx, js_topbarText, "topbarText", 1);
+    regFn(ctx, js_topbarButtons, "topbarButtons", 1);
+    regFn(ctx, js_topbarPop, "topbarPop", 0);
 
     // --- System nivel 3 (apps de sistema em JS) ---
-    duk_push_c_function(ctx, js_setBrightness, 1);
-    duk_put_prop_string(ctx, -2, "setBrightness");
-    duk_push_c_function(ctx, js_getBrightness, 0);
-    duk_put_prop_string(ctx, -2, "getBrightness");
-    duk_push_c_function(ctx, js_backlightSupported, 0);
-    duk_put_prop_string(ctx, -2, "backlightSupported");
-    duk_push_c_function(ctx, js_openWifiSetup, 0);
-    duk_put_prop_string(ctx, -2, "openWifiSetup");
-    duk_push_c_function(ctx, js_exitApp, 0);
-    duk_put_prop_string(ctx, -2, "exitApp");
-    duk_push_c_function(ctx, js_setClip, 4);
-    duk_put_prop_string(ctx, -2, "setClip");
-    duk_push_c_function(ctx, js_clearClip, 0);
-    duk_put_prop_string(ctx, -2, "clearClip");
-    duk_push_c_function(ctx, js_present, 0);
-    duk_put_prop_string(ctx, -2, "present");
-    duk_push_c_function(ctx, js_isBuffered, 0);
-    duk_put_prop_string(ctx, -2, "isBuffered");
-    duk_push_c_function(ctx, js_wifiStatus, 0);
-    duk_put_prop_string(ctx, -2, "wifiStatus");
-    duk_push_c_function(ctx, js_md5, 1);
-    duk_put_prop_string(ctx, -2, "md5");
-    duk_push_c_function(ctx, js_rescanApps, 0);
-    duk_put_prop_string(ctx, -2, "rescanApps");
-    duk_push_c_function(ctx, js_factoryReset, 1);
-    duk_put_prop_string(ctx, -2, "factoryReset");
-    duk_push_c_function(ctx, js_otaCheck, 0);
-    duk_put_prop_string(ctx, -2, "otaCheck");
-    duk_push_c_function(ctx, js_otaStart, 2);
-    duk_put_prop_string(ctx, -2, "otaStart");
-    duk_push_c_function(ctx, js_setTimezone, 1);
-    duk_put_prop_string(ctx, -2, "setTimezone");
-    duk_push_c_function(ctx, js_setManualTime, 5);
-    duk_put_prop_string(ctx, -2, "setManualTime");
-    duk_push_c_function(ctx, js_set24hFormat, 1);
-    duk_put_prop_string(ctx, -2, "set24hFormat");
-    duk_push_c_function(ctx, js_get24hFormat, 0);
-    duk_put_prop_string(ctx, -2, "get24hFormat");
-    duk_push_c_function(ctx, js_setNtpEnabled, 1);
-    duk_put_prop_string(ctx, -2, "setNtpEnabled");
-    duk_push_c_function(ctx, js_getNtpEnabled, 0);
-    duk_put_prop_string(ctx, -2, "getNtpEnabled");
-    duk_push_c_function(ctx, js_webActive, 0);
-    duk_put_prop_string(ctx, -2, "webActive");
-    duk_push_c_function(ctx, js_webSetActive, 1);
-    duk_put_prop_string(ctx, -2, "webSetActive");
-    duk_push_c_function(ctx, js_theme, 0);
-    duk_put_prop_string(ctx, -2, "theme");
-    duk_push_c_function(ctx, js_drawIcon, 3);
-    duk_put_prop_string(ctx, -2, "drawIcon");
+    regFn(ctx, js_setBrightness, "setBrightness", 1);
+    regFn(ctx, js_getBrightness, "getBrightness", 0);
+    regFn(ctx, js_backlightSupported, "backlightSupported", 0);
+    regFn(ctx, js_openWifiSetup, "openWifiSetup", 0);
+    regFn(ctx, js_exitApp, "exitApp", 0);
+    regFn(ctx, js_setClip, "setClip", 4);
+    regFn(ctx, js_clearClip, "clearClip", 0);
+    regFn(ctx, js_present, "present", 0);
+    regFn(ctx, js_isBuffered, "isBuffered", 0);
+    regFn(ctx, js_wifiStatus, "wifiStatus", 0);
+    regFn(ctx, js_md5, "md5", 1);
+    regFn(ctx, js_setPin, "setPin", 1);
+    regFn(ctx, js_verifyPin, "verifyPin", 1);
+    regFn(ctx, js_pinClear, "pinClear", 0);
+    regFn(ctx, js_pinState, "pinState", 0);
+    regFn(ctx, js_webAuthInfo, "webAuthInfo", 0);
+    regFn(ctx, js_webAuthSetPass, "webAuthSetPass", 1);
+    regFn(ctx, js_setting, "setting", 2);
+    regFn(ctx, js_rescanApps, "rescanApps", 0);
+    regFn(ctx, js_factoryReset, "factoryReset", 1);
+    regFn(ctx, js_otaCheck, "otaCheck", 0);
+    regFn(ctx, js_otaStart, "otaStart", 2);
+    regFn(ctx, js_setTimezone, "setTimezone", 1);
+    regFn(ctx, js_setManualTime, "setManualTime", 5);
+    regFn(ctx, js_set24hFormat, "set24hFormat", 1);
+    regFn(ctx, js_get24hFormat, "get24hFormat", 0);
+    regFn(ctx, js_setNtpEnabled, "setNtpEnabled", 1);
+    regFn(ctx, js_getNtpEnabled, "getNtpEnabled", 0);
+    regFn(ctx, js_webActive, "webActive", 0);
+    regFn(ctx, js_webSetActive, "webSetActive", 1);
+    regFn(ctx, js_theme, "theme", 0);
+    regFn(ctx, js_drawIcon, "drawIcon", 3);
 
     // Assign to global variable 'System'
     duk_put_prop_string(ctx, -2, "System");
 
     // --- Net Object (HTTP para apps, API level 2) ---
     duk_push_object(ctx); // Net
-    duk_push_c_function(ctx, js_netGet, 1);
-    duk_put_prop_string(ctx, -2, "get");
-    duk_push_c_function(ctx, js_netGetJSON, 1);
-    duk_put_prop_string(ctx, -2, "getJSON");
-    duk_push_c_function(ctx, js_netPost, 3);
-    duk_put_prop_string(ctx, -2, "post");
-    duk_push_c_function(ctx, js_netDownload, 3);
-    duk_put_prop_string(ctx, -2, "download");
-    duk_push_c_function(ctx, js_netIsConnected, 0);
-    duk_put_prop_string(ctx, -2, "isConnected");
-    duk_push_c_function(ctx, js_wifiScan, 0);
-    duk_put_prop_string(ctx, -2, "wifiScan");
-    duk_push_c_function(ctx, js_wifiConnect, 2);
-    duk_put_prop_string(ctx, -2, "wifiConnect");
-    duk_push_c_function(ctx, js_wifiDisconnect, 0);
-    duk_put_prop_string(ctx, -2, "wifiDisconnect");
+    regFn(ctx, js_netGet, "get", 1);
+    regFn(ctx, js_netGetJSON, "getJSON", 1);
+    regFn(ctx, js_netPost, "post", 3);
+    regFn(ctx, js_netDownload, "download", 3);
+    regFn(ctx, js_netBeginGet, "beginGet", 1);
+    regFn(ctx, js_netPollGet, "pollGet", 1);
+    regFn(ctx, js_netCancelGet, "cancelGet", 1);
+    regFn(ctx, js_netIsConnected, "isConnected", 0);
+    regFn(ctx, js_wifiScan, "wifiScan", 0);
+    regFn(ctx, js_wifiConnect, "wifiConnect", 2);
+    regFn(ctx, js_wifiDisconnect, "wifiDisconnect", 0);
     duk_put_prop_string(ctx, -2, "Net");
 
     // --- FS Object ---
     duk_push_object(ctx); // FS
-    duk_push_c_function(ctx, js_readTextFile, 1);
-    duk_put_prop_string(ctx, -2, "readTextFile");
-    duk_push_c_function(ctx, js_writeTextFile, 2);
-    duk_put_prop_string(ctx, -2, "writeTextFile");
-    duk_push_c_function(ctx, js_appendTextFile, 2);
-    duk_put_prop_string(ctx, -2, "appendTextFile");
-    duk_push_c_function(ctx, js_deleteFile, 1);
-    duk_put_prop_string(ctx, -2, "deleteFile");
-    duk_push_c_function(ctx, js_renameFile, 2);
-    duk_put_prop_string(ctx, -2, "renameFile");
-    duk_push_c_function(ctx, js_fileExists, 1);
-    duk_put_prop_string(ctx, -2, "exists");
-    duk_push_c_function(ctx, js_listDir, 1);
-    duk_put_prop_string(ctx, -2, "listDir");
-    duk_push_c_function(ctx, js_mkdir, 1);
-    duk_put_prop_string(ctx, -2, "mkdir");
-    duk_push_c_function(ctx, js_rmdir, 1);
-    duk_put_prop_string(ctx, -2, "rmdir");
-    duk_push_c_function(ctx, js_isDirectory, 1);
-    duk_put_prop_string(ctx, -2, "isDirectory");
-    duk_push_c_function(ctx, js_isFile, 1);
-    duk_put_prop_string(ctx, -2, "isFile");
-    duk_push_c_function(ctx, js_getFileSize, 1);
-    duk_put_prop_string(ctx, -2, "getFileSize");
-    duk_push_c_function(ctx, js_getTotalSpace, 1);
-    duk_put_prop_string(ctx, -2, "getTotalSpace");
-    duk_push_c_function(ctx, js_getUsedSpace, 1);
-    duk_put_prop_string(ctx, -2, "getUsedSpace");
-    duk_push_c_function(ctx, js_getFreeSpace, 1);
-    duk_put_prop_string(ctx, -2, "getFreeSpace");
-    duk_push_c_function(ctx, js_getFileMD5, 1);
-    duk_put_prop_string(ctx, -2, "getFileMD5");
-    duk_push_c_function(ctx, js_mountSD, 0);
-    duk_put_prop_string(ctx, -2, "mountSD");
-    duk_push_c_function(ctx, js_unmountSD, 0);
-    duk_put_prop_string(ctx, -2, "unmountSD");
-    duk_push_c_function(ctx, js_copyFile, 2);
-    duk_put_prop_string(ctx, -2, "copyFile");
-    duk_push_c_function(ctx, js_copyDirectory, 2);
-    duk_put_prop_string(ctx, -2, "copyDirectory");
-    duk_push_c_function(ctx, js_removeDirectory, 1);
-    duk_put_prop_string(ctx, -2, "removeDirectory");
+    regFn(ctx, js_readTextFile, "readTextFile", 1);
+    regFn(ctx, js_writeTextFile, "writeTextFile", 2);
+    regFn(ctx, js_appendTextFile, "appendTextFile", 2);
+    regFn(ctx, js_deleteFile, "deleteFile", 1);
+    regFn(ctx, js_renameFile, "renameFile", 2);
+    regFn(ctx, js_fileExists, "exists", 1);
+    regFn(ctx, js_listDir, "listDir", 1);
+    regFn(ctx, js_mkdir, "mkdir", 1);
+    regFn(ctx, js_rmdir, "rmdir", 1);
+    regFn(ctx, js_isDirectory, "isDirectory", 1);
+    regFn(ctx, js_isFile, "isFile", 1);
+    regFn(ctx, js_getFileSize, "getFileSize", 1);
+    regFn(ctx, js_getTotalSpace, "getTotalSpace", 1);
+    regFn(ctx, js_getUsedSpace, "getUsedSpace", 1);
+    regFn(ctx, js_getFreeSpace, "getFreeSpace", 1);
+    regFn(ctx, js_getFileMD5, "getFileMD5", 1);
+    regFn(ctx, js_mountSD, "mountSD", 0);
+    regFn(ctx, js_unmountSD, "unmountSD", 0);
+    regFn(ctx, js_copyFile, "copyFile", 2);
+    regFn(ctx, js_copyDirectory, "copyDirectory", 2);
+    regFn(ctx, js_removeDirectory, "removeDirectory", 1);
     
     // Assign to global variable 'FS'
     duk_put_prop_string(ctx, -2, "FS");

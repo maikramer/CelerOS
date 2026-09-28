@@ -1,4 +1,5 @@
 #include "LauncherUI.h"
+#include "../Kernel/AppRunner.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Layout.h"
@@ -219,6 +220,22 @@ void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
     runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index]);
 }
+
+bool LauncherUI::launchAppAsync(int index) {
+    // Caminho F3 (CELEROS_APP_TASK): resolve o app igual ao launchApp e
+    // inicia na task propria. Retorna false se o build e sincrono ou a task
+    // nao foi criada — o chamador cai no caminho classico.
+#ifdef CELEROS_APP_TASK
+    if (index < 0 || index >= appCount) return false;
+    std::string filePath;
+    std::string title;
+    resolveApp(appPaths[index], appIsFolder[index], filePath, title);
+    return AppRunner::start(filePath, title, appTopbar[index]);
+#else
+    (void)index;
+    return false;
+#endif
+}
 int LauncherUI::gridCols() { return cols(); }
 int LauncherUI::gridRows() { return rows(); }
 int LauncherUI::gridTotalEntries() { return totalEntries(); }
@@ -227,11 +244,8 @@ int LauncherUI::gridTotalPages() { return totalPages(); }
 // ---------------------------------------------------------------------------
 // Execucao de app JS
 // ---------------------------------------------------------------------------
-void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed) {
-    tft->fillScreen(TFT_BLACK);
-    tft->setTextDatum(TL_DATUM);
-
-    std::string filePath;
+void LauncherUI::resolveApp(const std::string& path, bool isFolder,
+                            std::string& filePath, std::string& title) {
     if (isFolder) {
         filePath = path;
         if (!kstr::endsWith(filePath, "/")) filePath += "/";
@@ -241,11 +255,19 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
     }
 
     // Titulo para a topbar do sistema: nome da pasta do app (ou do .js avulso)
-    std::string title = path;
+    title = path;
     while (title.size() > 1 && title.back() == '/') title.pop_back();
     size_t slash = title.find_last_of('/');
     title = (slash == std::string::npos) ? title : title.substr(slash + 1);
     if (!isFolder && kstr::endsWith(title, ".js")) title.resize(title.size() - 3);
+}
+
+void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed) {
+    tft->fillScreen(TFT_BLACK);
+    tft->setTextDatum(TL_DATUM);
+
+    std::string filePath, title;
+    resolveApp(path, isFolder, filePath, title);
 
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia

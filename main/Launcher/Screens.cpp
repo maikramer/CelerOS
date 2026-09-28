@@ -1,4 +1,5 @@
 #include "Screens.h"
+#include "../Kernel/AppRunner.h"
 #include "LauncherUI.h"
 #include "../Display/Icon.h"
 #include "../Kernel/TimeManager.h"
@@ -330,16 +331,41 @@ void AppHostScreen::draw(kui::Canvas& c) {
 
 void AppHostScreen::onEnter() { m_started = false; }
 
+bool AppHostScreen::suppressRedraw() const {
+    // app em task propria (CELEROS_APP_TASK): enquanto roda, o app e dono do
+    // vidro — a UI nao pode pintar frame/toasts por cima
+    return m_started && AppRunner::running();
+}
+
 void AppHostScreen::onTick(uint32_t) {
-    if (m_started) return;
+#ifdef CELEROS_APP_TASK
+    if (m_started) {
+        if (AppRunner::running()) return;
+        // a task do app terminou: retoma input, mesma sequencia de saida do
+        // caminho sincrono
+        kui::Navigator::setInputSuspended(false);
+        finishApp();
+        return;
+    }
     m_started = true;
-    // Executa o app sincronamente (sai via OS_EXIT; task propria no W7d)
+    if (LauncherUI::launchAppAsync(m_appIndex)) return;  // roda na celerapp
+    // sem suporte ou task nao criada: caminho sincrono classico
+#endif
     LauncherUI::launchApp(m_appIndex);
+    finishApp();
+}
+
+void AppHostScreen::finishApp() {
     // O toque que fechou o app (X do canto, botao do proprio app, erro) morre
     // aqui: sem isso o release vira tap no launcher — e o WiFi mora no mesmo
     // canto do X.
     TouchPump::quarantine(300);
     // O app pode ter empilhado tela nativa (System.openWifiSetup + exitApp):
+    // no modo task o pedido foi registrado pelo binding e e atendido AQUI,
+    // na main task (Navigator nao e thread-safe)
+    if (AppRunner::consumeWifiSetupRequest()) {
+        Navigator::push(WifiSetupScreen::instance());
+    }
     // o host sai da pilha sem derrubar o que veio por cima
     if (Navigator::top() == this) Navigator::home();
     else Navigator::remove(this);

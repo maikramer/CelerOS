@@ -12,6 +12,8 @@
 
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 #include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
 #include "esp_idf_version.h"
@@ -21,6 +23,7 @@
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
 #include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
+#include "../WebManager/WebAuth.h"  // senha do web server no `celerctl info`
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
@@ -178,11 +181,13 @@ void handleInfo() {
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":1,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
+             "\"web_user\":\"admin\",\"web_pass\":\"%s\","
              "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              hasIp ? ip : "", hasSd ? "true" : "false",
+             WebAuth::password(),
              lt, lu, st, su);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
 }
@@ -596,6 +601,47 @@ void handleTouch(const uint8_t* payload, uint16_t len) {
     respond(KL_TOUCH, 0);
 }
 
+
+// Coredump da particao dedicada (ELF): u32 tamanho no primeiro frame,
+// binario em chunks KL_COREDUMP_DATA. Analisavel no PC com
+// `idf.py coredump-info -c <arquivo>` / `coredump-decode`.
+void handleCoredump() {
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+        respondError(KL_COREDUMP, "sem coredump gravado");
+        return;
+    }
+    // IDF 6: image_get devolve endereco FISICO na flash — mapeia a particao
+    // inteira (64 KB, alinhada) e envia o range do dump
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+    if (part == nullptr || addr < part->address ||
+        addr + size > part->address + part->size) {
+        respondError(KL_COREDUMP, "coredump fora da particao");
+        return;
+    }
+    const void* mapped = nullptr;
+    esp_partition_mmap_handle_t mh;
+    if (esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA,
+                           &mapped, &mh) != ESP_OK) {
+        respondError(KL_COREDUMP, "falha ao mapear a particao");
+        return;
+    }
+    uint8_t head[4] = {(uint8_t)size, (uint8_t)(size >> 8),
+                       (uint8_t)(size >> 16), (uint8_t)(size >> 24)};
+    respond(KL_COREDUMP, 0, head, sizeof(head));
+
+    const uint8_t* p = (const uint8_t*)mapped + (addr - part->address);
+    size_t off = 0;
+    while (off < size && s_writer != nullptr) {
+        size_t rest = size - off;
+        uint16_t chunk = (uint16_t)((rest > CelerLink::MAX_PAYLOAD) ? CelerLink::MAX_PAYLOAD : rest);
+        respond(KL_COREDUMP_DATA, 0, p + off, chunk);
+        off += chunk;
+    }
+    esp_partition_munmap(mh);
+}
+
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     switch (cmd) {
         case KL_HELLO: handleHello(payload, len); break;
@@ -619,6 +665,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_OTA_END: handleOtaEnd(); break;
         case KL_OTA_ABORT: handleOtaAbort(); break;
         case KL_SCREENSHOT: handleScreenshot(payload, len); break;
+        case KL_COREDUMP: handleCoredump(); break;
         case KL_TOUCH: handleTouch(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }

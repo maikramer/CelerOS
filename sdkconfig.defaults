@@ -8,10 +8,9 @@ CONFIG_COMPILER_CXX_EXCEPTIONS_EMUL_POOL_SIZE=64
 # A task main roda a UI + heap Duktape
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 
-# TLS sem validacao de certificado (mesmo padrao do updater anterior:
-# WiFiClientSecure::setInsecure). Revisar antes de producao.
-CONFIG_ESP_TLS_INSECURE=y
-CONFIG_ESP_TLS_SKIP_CERT_VERIFY=y
+# TLS valida certificados: HttpClient e o OTA anexam esp_crt_bundle_attach
+# (bundle completo na SmartDisplay, CMN na CYD). INSECURE/SKIP_CERT_VERIFY
+# ficaram no passado entre a v1.1 e a v1.3 — nao reative sem motivo muito bom.
 
 CONFIG_FREERTOS_HZ=1000
 
@@ -26,8 +25,21 @@ CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
 # Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 
-# OTA dev via HTTP puro na LAN (tools/ota_server.py); HTTPS segue valendo
+# OTA dev via HTTP puro na LAN (tools/ota_server.py) exige alem disso o
+# opt-in /local/ota_allow_http.txt no aparelho (guard no OtaManager); HTTPS
+# segue valendo sempre
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# Resiliencia (F2): task watchdog com panic — app JS travado em while(true)
+# sem System.delay reinicia o aparelho em ~15s em vez de congelar para sempre
+# (a main task e inscrita apos o setup; durante o boot os idles ja vigiam).
+# OTA com rollback: slot novo so e confirmado apos 30s de boot sao; crash
+# antes disso reverte para o slot anterior. Coredump vai para a particao
+# dedicada (ler com celerctl coredump).
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 
 # Release: tamanho (o padrao -Og estourava o slot OTA da CYD) e asserts
 # sem strings de mensagem

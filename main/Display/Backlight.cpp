@@ -1,11 +1,10 @@
 #include "Backlight.h"
 #include <string>
-#include "../FileSystem/FileSystem.h"
+#include "../Utils/CelerSettings.h"
 #include "../Utils/StrUtils.h"
 #include "../Boards/Board.h"
 
 static CelerDisplay* blTft = nullptr;
-static const char* BRIGHTNESS_FILE = "/local/brightness.txt";
 
 static int currentLevel = 100;
 
@@ -21,14 +20,13 @@ void Backlight::set(int level, bool persist) {
         blTft->setBrightness((uint8_t)(level * 255 / 100));
     }
     if (persist) {
-        FileSystem::writeTextFile(BRIGHTNESS_FILE, std::to_string(level).c_str());
+        CelerSettings::set("brightness", std::to_string(level).c_str());
     }
 }
 
 void Backlight::init(CelerDisplay* tft) {
     blTft = tft;
-    std::string s = kstr::trim(FileSystem::readTextFile(BRIGHTNESS_FILE));
-    int lvl = (int)kstr::toInt(s);
+    int lvl = (int)kstr::toInt(CelerSettings::get("brightness", "100"));
     if (lvl < 5 || lvl > 100) lvl = 100;
     set(lvl, false);
 }

@@ -1,6 +1,7 @@
 #include "Icon.h"
 #include "Theme.h"
 #include "Layout.h"
+#include <Arduino.h>
 #include <string>
 #include <cstdio>
 #include <cstdlib>
@@ -234,6 +235,7 @@ constexpr int FILE_CACHE = 12;
 std::string g_filePath[FILE_CACHE];
 uint16_t* g_filePx[FILE_CACHE] = {};
 uint8_t* g_fileA[FILE_CACHE] = {};
+uint32_t g_fileLastUse[FILE_CACHE] = {};  // LRU (F3): vitima = mais antigo
 }  // namespace
 
 void Icon::invalidateFileIcons() {
@@ -243,24 +245,33 @@ void Icon::invalidateFileIcons() {
         g_filePx[i] = nullptr;
         g_fileA[i] = nullptr;
         g_filePath[i].clear();
+        g_fileLastUse[i] = 0;
     }
 }
 
 bool Icon::availableFile(const char* path) {
     for (int i = 0; i < FILE_CACHE; i++) {
-        if (g_filePath[i] == path) return g_filePx[i] != nullptr;
+        if (g_filePath[i] == path) {
+            if (g_filePx[i]) g_fileLastUse[i] = millis();
+            return g_filePx[i] != nullptr;
+        }
     }
     int slot = -1;
     for (int i = 0; i < FILE_CACHE; i++) {
         if (g_filePx[i] == nullptr) { slot = i; break; }
     }
-    if (slot < 0) {  // cache cheio: recicla o primeiro slot
-        slot = 0;
-        free(g_filePx[0]);
-        free(g_fileA[0]);
-        g_filePx[0] = nullptr;
-        g_fileA[0] = nullptr;
-        g_filePath[0].clear();
+    if (slot < 0) {  // cache cheio: recicla o slot menos recentemente usado
+        // (antes era sempre o slot 0 — apps alternando >12 icones
+        // recarregavam sempre os mesmos)
+        uint32_t oldest = UINT32_MAX;
+        for (int i = 0; i < FILE_CACHE; i++) {
+            if (g_fileLastUse[i] < oldest) { oldest = g_fileLastUse[i]; slot = i; }
+        }
+        free(g_filePx[slot]);
+        free(g_fileA[slot]);
+        g_filePx[slot] = nullptr;
+        g_fileA[slot] = nullptr;
+        g_filePath[slot].clear();
     }
     uint8_t* a = nullptr;
     uint16_t* px = load(path, &a);
@@ -268,6 +279,7 @@ bool Icon::availableFile(const char* path) {
     g_filePath[slot] = path;
     g_filePx[slot] = px;
     g_fileA[slot] = a;
+    g_fileLastUse[slot] = millis();
     return true;
 }
 
@@ -275,6 +287,7 @@ void Icon::drawFile(lgfx::LGFXBase* tft, const char* path, int x, int y) {
     if (!tft) return;
     for (int i = 0; i < FILE_CACHE; i++) {
         if (g_filePath[i] == path && g_filePx[i]) {
+            g_fileLastUse[i] = millis();  // hit conta como uso recente (LRU)
             if (g_fileA[i]) drawAlpha(tft, g_filePx[i], g_fileA[i], x, y);
             else tft->pushImage(x, y, SIZE, SIZE, g_filePx[i]);
             return;

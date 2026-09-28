@@ -1,6 +1,7 @@
 #include "esp_crt_bundle.h"
 #include "WifiOta.h"
 #include <esp_log.h>
+#include "esp_task_wdt.h"
 
 const char* WifiOta::TAG = "WifiOta";
 
@@ -40,6 +41,7 @@ ErrorCode WifiOta::performUpdate(const std::string& url) {
     // Perform OTA update com relatório de progresso
     int last_progress = -1;
     while (1) {
+        esp_task_wdt_reset();  // flash de ~2MB demora mais que o WDT (15s)
         err = esp_https_ota_perform(https_ota_handle);
         if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
             break;

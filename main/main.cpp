@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include "USBDevice/LogSink.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
+#include "esp_ota_ops.h"
+#include "esp_core_dump.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "Boards/Board.h"
@@ -126,16 +131,57 @@ static void celerSetup() {
     kui::Navigator::begin(tft);
     kui::Navigator::push(&s_launcher);
     currentState = STATE_LAUNCHER;
+
+    // Diagnostico pos-boot: reinicio por watchdog de task (app travado) ou
+    // coredump gravado na particao dedicada viram toast no launcher
+    esp_reset_reason_t rr = esp_reset_reason();
+    if (rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT) {
+        kui::Navigator::toast("Um app travou e o sistema reiniciou", THEME_WARN, 4000);
+    }
+    {
+        size_t cdAddr = 0, cdSize = 0;
+        if (esp_core_dump_image_get(&cdAddr, &cdSize) == ESP_OK && cdSize > 0) {
+            celer_log_println("coredump presente no flash (celerctl coredump para ler)");
+        }
+    }
+    if (FileSystem::localMountFailed()) {
+        kui::Navigator::toast("Armazenamento interno corrompido — recupere pelo USB",
+                              THEME_WARN, 5000);
+    }
+
+    // Watchdog da main task: inscricao DEPOIS da calibracao (calibrateTouch
+    // do LovyanGFX espera o usuario sem timeout e e imexivel — submodule).
+    // Durante todo o boot os idle tasks ja sao vigiados (PANIC=y).
+    esp_task_wdt_add(nullptr);
     celer_log_println("DEBUG: Setup complete, entering loop!");
 }
 
+// OTA com rollback: o slot novo boota como PENDING_VERIFY; 30s de uptime sao
+// (primeiro tick apos a marca) confirmam com esp_ota_mark_app_valid. Crash ou
+// reset antes disso e o bootloader reverte para o slot anterior sozinho.
+static void confirmPendingOta() {
+    static bool checked = false;
+    if (checked || esp_timer_get_time() < 30LL * 1000000LL) return;
+    checked = true;
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (esp_ota_get_state_partition(running, &st) == ESP_OK &&
+        st == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        celer_log_println("OTA confirmada: boot sao por 30s");
+    }
+}
+
 static void celerLoop() {
+    esp_task_wdt_reset();  // coracao do watchdog: UI viva
+
     // UI (input + redraw)
     kui::Navigator::tick();
 
     // Reboot diferido do upload web de firmware (/update)
     WebManager::tick();
     TimeManager::tick(WebManager::isActive());
+    confirmPendingOta();
 
     delay(5);
 }

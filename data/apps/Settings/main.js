@@ -1,10 +1,10 @@
 // CelerOS Settings — app de sistema (W8). Porte JS do SettingsScreens.cpp:
-// PIN de entrada, menu, Wi-Fi, Aplicativos, Hora/Fuso, Seguranca (PIN),
-// Tela (brilho), Atualizacao OTA, Sobre e Reset. Canvas virtual 240x320,
-// tema do OS (System.theme). X no canto sup. direito sai (exit nativo).
+// PIN de entrada (nativo: System.setPin/verifyPin), menu, Wi-Fi,
+// Aplicativos, Hora/Fuso, Seguranca (PIN + senha web), Tela (brilho),
+// Atualizacao OTA, Sobre e Reset. Canvas virtual 240x320, tema do OS
+// (System.theme). X no canto sup. direito sai (exit nativo).
 
 var T = System.theme();
-var PIN_FILE = "/local/settings_pin.txt";
 var INSTALL_SD = "/local/config_install_sd.txt";
 
 // ---- helpers de UI (padrao dos apps de sistema) ---------------------------
@@ -191,15 +191,11 @@ function rowAt(t) {
     return idx;
 }
 
-// ---- PIN (md5 compativel com settings_pin.txt legado) ----------------------
+// ---- PIN (nativo desde a 1.3: System.setPin/verifyPin — salt SHA-256 no
+// firmware, substitui o md5 solto em settings_pin.txt) -----------------------
 
-function readPin() {
-    var s = FS.readTextFile(PIN_FILE);
-    return s ? trimStr(s) : "";
-}
 function pinOk(p) {
-    var st = readPin();
-    return st.length === 32 && System.md5(p) === st;
+    return System.verifyPin(p);
 }
 function validPin(p) {
     return /^[0-9]{4,6}$/.test(p);
@@ -215,7 +211,10 @@ function flowNewPin() {
         note("Seguranca", "PINs nao conferem", 1200);
         return false;
     }
-    FS.writeTextFile(PIN_FILE, System.md5(p1));
+    if (!System.setPin(p1)) {
+        note("Seguranca", "Falha ao salvar o PIN", 1200);
+        return false;
+    }
     note("Seguranca", "PIN salvo", 1000);
     return true;
 }
@@ -348,7 +347,7 @@ function buildMenu() {
     a.push({ l: "Wi-Fi", v: w.connected ? "ON" : "OFF", a: "wifi" });
     a.push({ l: "Aplicativos", a: "apps" });
     a.push({ l: "Hora e fuso", a: "time" });
-    a.push({ l: "Seguranca", v: FS.exists(PIN_FILE) ? "PIN" : "--", a: "sec" });
+    a.push({ l: "Seguranca", v: System.pinState() > 0 ? "PIN" : "--", a: "sec" });
     a.push({
         l: "Tela",
         v: System.backlightSupported() ? System.getBrightness() + "%" : "--",
@@ -574,15 +573,17 @@ function runManual() {
 // ---- Seguranca -------------------------------------------------------------
 
 function buildSec() {
-    var has = FS.exists(PIN_FILE);
+    var st = System.pinState();  // 0 sem, 1 ativo, 2 corrompido
     var a = [];
-    a.push({ l: "PIN do Settings", v: has ? "ativo" : "desativado", i: 1 });
-    if (has) {
+    a.push({ l: "PIN do Settings", v: st === 1 ? "ativo" : (st === 2 ? "corrompido" : "desativado"), i: 1 });
+    if (st === 1) {
         a.push({ l: "Trocar PIN", a: "chg" });
         a.push({ l: "Remover PIN", a: "rm" });
     } else {
         a.push({ l: "Definir PIN", a: "set" });
     }
+    a.push({ l: "Senha web", v: System.webAuthInfo().pass, i: 1 });
+    a.push({ l: "Trocar senha web", a: "wpw" });
     return a;
 }
 
@@ -879,8 +880,18 @@ function onTap() {
             var cur2 = System.prompt("PIN atual", "");
             if (cur2 === null || cur2 === "") return;
             if (!pinOk(cur2)) { note("Seguranca", "PIN incorreto", 1100); return; }
-            FS.deleteFile(PIN_FILE);
+            System.pinClear();
             note("Seguranca", "PIN removido", 1000);
+            rebuildItems();
+            drawAll();
+        } else if (a5 === "wpw") {
+            var np = System.prompt("Nova senha web (6+ chars)", "");
+            if (np === null || np === "") return;
+            if (!System.webAuthSetPass(np)) {
+                note("Seguranca", "Use 6 a 31 caracteres", 1200);
+                return;
+            }
+            note("Seguranca", "Senha web alterada", 1000);
             rebuildItems();
             drawAll();
         }
@@ -932,9 +943,22 @@ function pinGate() {
     }
 }
 
+// Flag NVS diz que ha PIN mas o arquivo nao existe (apagaram por fora):
+// exigir redefinicao em vez de abrir destravado.
+function pinCorruptGate() {
+    System.fillScreen(T.bg);
+    header("Settings");
+    ctext("PIN corrompido", 120, 100, 2, T.warn, T.bg);
+    ctext("O arquivo do PIN foi apagado.", 120, 130, 1, T.textDim, T.bg);
+    ctext("Defina um novo PIN para continuar.", 120, 144, 1, T.textDim, T.bg);
+    if (!flowNewPin()) System.exitApp();
+}
+
 // ---- loop principal --------------------------------------------------------
 
-if (FS.exists(PIN_FILE)) pinGate();
+var pinSt0 = System.pinState();
+if (pinSt0 === 1) pinGate();
+else if (pinSt0 === 2) pinCorruptGate();
 
 var down = false;
 var lastX = 0, lastY = 0, movedPx = 0;

@@ -73,6 +73,11 @@ normal.
 A versão publicada vem de `CELEROS_VERSION` (`main/CMakeLists.txt`); para o
 dispositivo "ver" a atualização, a versão precisa ser maior que a instalada.
 
+Desde a 1.3 o guard de OTA recusa URLs `http://` a menos que o opt-in
+**`/local/ota_allow_http.txt`** exista no aparelho (crie um arquivo vazio com
+esse nome — `celerctl push`, web file manager ou cartão SD). HTTPS funciona
+sem opt-in, por isso o canal de produção não é afetado.
+
 ## Testar pelo cabo USB (sem rede e sem esptool)
 
 Com a placa ligada no cabo serial, o `celerctl` grava o firmware direto
@@ -116,17 +121,15 @@ vivem no LittleFS e não são afetados por OTA — atualize-os com
 ## Limitações conhecidas
 
 - Downloads HTTPS (manifesto e firmware) validam o certificado do servidor
-  contra o bundle de CAs do ESP-IDF; HTTP puro segue aceito para o servidor
-  de testes local. Ainda não há assinatura de firmware (secure boot /
-  imagens assinadas ficam como evolução futura).
-- O bootloader rollback do ESP-IDF não está habilitado no core Arduino
-  pré-compilado, então não há rollback automático pós-boot; a proteção é a
-  validação de checksum antes da ativação do slot.
-- Nem o canal de updates nem o `/update` têm autenticação (o mesmo vale para
-  o file manager inteiro): qualquer um na rede local usa enquanto o servidor
-  web estiver ligado. Requisições cruzadas, porém, são bloqueadas: as rotas de
-  escrita (`POST`/`DELETE`, inclusive `/update`) exigem o cabeçalho
-  `X-Celer-Request`, que só as páginas do próprio aparelho enviam, e não há
-  CORS permissivo — um site malicioso não consegue mais gravar firmware nem
-  mexer em arquivos pelo navegador de quem o visita. Scripts precisam mandar o
-  cabeçalho, ex.: `curl -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.
+  contra o bundle de CAs do ESP-IDF; HTTP puro exige o opt-in
+  `/local/ota_allow_http.txt` desde a 1.3. Ainda não há assinatura de
+  firmware (secure boot / imagens assinadas ficam como evolução futura).
+- O bootloader rollback do ESP-IDF não está habilitado, então não há
+  rollback automático pós-boot; a proteção é a validação de checksum antes
+  da ativação do slot.
+- Desde a 1.3 toda rota web — `/update` e o file manager inteiro — exige
+  HTTP Basic Auth (usuário `admin`, senha gerada no primeiro boot; veja no
+  app Web Server ou `celerctl info`). 5 senhas erradas travam o servidor web
+  por 30 s. As rotas de escrita continuam exigindo o cabeçalho
+  `X-Celer-Request` por cima (defesa em profundidade), ex.:
+  `curl -u admin:<senha> -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.

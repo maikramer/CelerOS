@@ -37,8 +37,9 @@ private:
 };
 
 // ------------------------------------------------------------ Tela de app JS --
-// Executa o app sincronamente (congela o SO ate o app sair — OS_EXIT; a
-// migracao para task propria e o W7d) e volta ao launcher.
+// Executa o app JS: por padrao sincrono (congela o SO ate o app sair via
+// celerExit/OS_EXIT); com CELEROS_APP_TASK (F3) roda na task "celerapp" e a
+// UI segue viva. Ao sair, volta ao launcher (ou a tela nativa empilhada).
 class AppHostScreen : public kui::Screen {
 public:
     static AppHostScreen* instance(int appIndex);
@@ -46,8 +47,11 @@ public:
     void onEnter() override;
     void draw(kui::Canvas& c) override;
     void onTick(uint32_t dtMs) override;
+    bool suppressRedraw() const override;
 
 private:
+    void finishApp();
+
     int m_appIndex;
     bool m_started = false;
 };

@@ -50,8 +50,9 @@ function draw() {
     } else {
         // card de status
         var url = "http://" + st.ip;
-        System.fillRoundRect(8, y, 224, 92, 10, T.card);
-        System.drawRoundRect(8, y, 224, 92, 10, T.stroke);
+        var auth = System.webAuthInfo();
+        System.fillRoundRect(8, y, 224, 108, 10, T.card);
+        System.drawRoundRect(8, y, 224, 108, 10, T.stroke);
         System.fillCircle(22, y + 16, 4, T.ok);
         System.setTextColor(T.textDim, T.card);
         System.drawString("rodando - porta 80", 34, y + 11, 1);
@@ -59,10 +60,12 @@ function draw() {
         var show = url;
         while (show.length > 3 && System.textWidth(show, 2) > 200) show = show.substring(1);
         System.drawString(show, 20, y + 30, 2);
+        System.setTextColor(T.text, T.card);
+        System.drawString("login: " + auth.user, 20, y + 58, 1);
+        System.drawString("senha: " + auth.pass, 20, y + 72, 1);
         System.setTextColor(T.textDim, T.card);
-        System.drawString("abra no navegador do PC/celular", 20, y + 56, 1);
-        System.drawString("para arquivos e firmware (OTA)", 20, y + 70, 1);
-        y += 92 + 12;
+        System.drawString("acesso protegido - arquivos e OTA", 20, y + 92, 1);
+        y += 108 + 12;
     }
 
     // botao toggle (o X da faixa do sistema sai do app)

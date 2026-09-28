@@ -60,10 +60,12 @@ constexpr uint8_t KL_OTA_END = 0x15;      // -> fecha, valida e marca boot (sem 
 constexpr uint8_t KL_OTA_ABORT = 0x16;    // cancela escrita OTA
 constexpr uint8_t KL_SCREENSHOT = 0x17;   // [u8 fmt: 1=RLE] -> u16 w + u16 h + u8 fmt, depois chunks KL_SCR_DATA
 constexpr uint8_t KL_TOUCH = 0x19;        // u8 n + n × {u8 down,u16 x,u16 y,u16 delayMs}
+constexpr uint8_t KL_COREDUMP = 0x1A;     // -> u32 size, depois chunks KL_COREDUMP_DATA (ELF da particao)
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)
 constexpr uint8_t KL_LOG_DATA = 0x12;     // linha de log (texto, com \n)
 constexpr uint8_t KL_SCR_DATA = 0x18;     // continuacao do screenshot (RGB565 cru)
+constexpr uint8_t KL_COREDUMP_DATA = 0x1B; // continuacao do coredump (binario ELF)
 
 #endif // CELER_LINK_H

@@ -32,20 +32,22 @@ Não usados pelo `Wifi` do satisfaction-hub: `WifiServer`, `WifiClient`, `Telnet
 
 ## Fora do build (vendados para o futuro)
 
-`BluetoothServer` (precisa `h2zero/esp-nimble-cpp`), `Drivers`, `IoUtility`
-(precisa `espressif/button`), `SafeContainers`, `Supabase`, `UI` (precisa
-`lvgl ^9`), `UserManaging`, `Time` (o CelerOS tem `TimeManager` próprio com
-config em arquivo). A lista vive no `EXCLUDE_COMPONENTS` do `CMakeLists.txt`
-raiz — para ativar um, remova-o da lista e garanta as dependências do
-`idf_component.yml` dele.
+Os componentes herdados do fork que nunca entraram no build (BluetoothServer,
+Drivers, IoUtility, SafeContainers, Supabase, UI, UserManaging, Time — ~19k
+linhas) foram removidos na F3; o histórico segue no git. `EXCLUDE_COMPONENTS`
+não existe mais.
 
 ## Requisitos no projeto raiz
 
 ```
 CONFIG_COMPILER_CXX_EXCEPTIONS=y      # JsonModels/OtaManager usam try/catch
-CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y     # OTA dev via HTTP na LAN
-CONFIG_ESP_TLS_INSECURE / SKIP_CERT_VERIFY  # (dev) TODO endurecer p/ producao
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y     # OTA dev via HTTP na LAN — e ainda exige
+                                      # /local/ota_allow_http.txt (guard no OtaManager)
 ```
+
+TLS valida certificados desde a 1.3 (`ESP_TLS_INSECURE`/`SKIP_CERT_VERIFY`
+saíram do `sdkconfig.defaults`): HttpClient e o OTA anexam
+`esp_crt_bundle_attach`.
 
 Partições com `nvs` (credential store) + `ota_0`/`ota_1` + `otadata` — ver
 `partitions_16MB.csv` / `partitions_4MB.csv`. `config/projectConfig.h` e

@@ -552,6 +552,10 @@ uint32_t s_quarantineUntilMs = 0;
 
 void TouchPump::quarantine(uint32_t ms) { s_quarantineUntilMs = millis() + ms; }
 
+void TouchPump::reset() {
+    m_down = false;
+}
+
 bool readTouch(uint16_t* x, uint16_t* y) {
     if (TouchInjector::active()) {
         // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e soltar
@@ -642,6 +646,7 @@ Dialog* s_dialog = nullptr;
 bool s_dialogArmed = false;
 std::vector<Toast> s_toasts;
 bool s_repaint = true;
+bool s_inputSuspended = false;  // app JS em task propria: UI pausa o pump
 uint32_t s_lastTickMs = 0;
 TouchPump s_pump;
 
@@ -785,7 +790,17 @@ void Navigator::toast(const std::string& message, uint32_t color, uint32_t durat
 
 void Navigator::repaint() { s_repaint = true; }
 
+void Navigator::setInputSuspended(bool suspended) {
+    s_inputSuspended = suspended;
+    if (suspended) {
+        // solta o estado do pump: um press pendente nao pode virar release
+        // fantasma quando a UI retomar apos o app
+        s_pump.reset();
+    }
+}
+
 void Navigator::pumpEvents() {
+    if (s_inputSuspended) return;  // app JS em task propria: dono do touch
     s_pump.poll(dispatchTouch);
 }
 
@@ -811,7 +826,10 @@ void Navigator::tick() {
         }
     }
 
-    if (!s_stack.empty() && (s_repaint || s_stack.back()->consumeDirty())) {
+    // suppressRedraw: app JS rodando em task propria e dono do vidro — nem
+    // o frame do topo nem toasts podem pintar por cima dele
+    if (!s_stack.empty() && !s_stack.back()->suppressRedraw() &&
+        (s_repaint || s_stack.back()->consumeDirty())) {
         s_repaint = false;
         drawFrame();
     }
