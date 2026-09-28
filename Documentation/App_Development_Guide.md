@@ -61,11 +61,13 @@ by hand** (a manual publish overwrites them again):
 
 ### App update rules (CelerOS Hub)
 
-- **The catalog is the update channel.** The device store compares each catalog version against the installed one; newer versions land under **"Atualizações (N)"** at the top of the store.
+- **The catalog is the update channel.** The device store compares each catalog version against the installed one; newer versions show an **"Atualizar"** badge in the list, the **Atualizações** tab and the **"Atualizar tudo"** button.
 - **Bump `version` on every publish.** The hub rejects versions ≤ the published one (`--force` to override, e.g. to republish a fixed package).
 - **You own your `packageName`.** The first publisher becomes the owner; only the same token (or the hub root) can update or remove the package afterwards.
-- **Size limits:** `main.js` ≤ 30 KB (the device's `Net.get` truncates at 32 KB) and `icon.png` ≤ 16 KB. `main.js` itself is downloaded via streaming (`Net.download`) and never goes through the JS heap.
+- **Size limits:** `main.js` ≤ **48 KB** — apps above **30 KB** must declare `api: 6` (old firmware downloaded via `Net.get`, which truncates at 32 KB; the API 6 streaming downloader has no cap). `icon.png` ≤ 16 KB.
 - **The icon ships with the update:** keep an `icon.png` (64×64 PNG, ≤ 16 KB) in the package — the store downloads it on install/update and the launcher refreshes its icon cache automatically.
+- **Updates land in the folder the launcher runs** (resolved by `packageName`): updating a preinstalled app updates it in place instead of creating a shadow copy.
+- **The App Store updates itself:** the store is a regular hub package (`celeros.appstore`). When the catalog has a newer store, it shows up like any update — after installing, the store asks to exit and reopen (the new `main.js` is read from disk on the next launch).
 
 ## 3. The `icon.png` File (App Icon)
 

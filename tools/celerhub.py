@@ -29,9 +29,11 @@ from urllib import error, request
 
 # API level maximo que os devices entendem (main/CMakeLists.txt)
 MAX_API_LEVEL = 6
-# Net.get do firmware trunca o corpo em 32KB: main.js maior quebra a install
-# (o download novo e streaming via Net.download, mas o teto segue no hub)
-MAX_MAIN_JS = 30 * 1024
+# Teto do hub (download streaming via Net.download, sem limite de 32KB).
+# Acima de STREAM_SAFE o app precisa declarar api >= 6: firmwares antigos
+# instalavam via Net.get, que trunca o corpo em 32KB.
+MAX_MAIN_JS = 48 * 1024
+STREAM_SAFE_MAIN_JS = 30 * 1024
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -105,7 +107,7 @@ def validate(folder: Path):
     api = int(meta.get("api") or 1)
     if api > MAX_API_LEVEL:
         die(f"{folder}: api {api} > {MAX_API_LEVEL} (device nao instala)")
-    if api >= 5 and "keypad" not in code_path.read_text(encoding="utf-8", errors="replace"):
+    if api == 5 and "keypad" not in code_path.read_text(encoding="utf-8", errors="replace"):
         avisos.append("declara api 5 mas nao usa keypad*")
 
     src = code_path.read_text(encoding="utf-8")
@@ -114,8 +116,10 @@ def validate(folder: Path):
         avisos.append(f"sintaxe fora do ES5 perto de {bad.group(0)!r} (Duktape e ES5.1)")
     size = code_path.stat().st_size
     if size > MAX_MAIN_JS:
-        die(f"{folder}: main.js tem {size}B; Net.get trunca em 32KB "
-            f"(max seguro: {MAX_MAIN_JS}B)")
+        die(f"{folder}: main.js tem {size}B (max {MAX_MAIN_JS}B)")
+    if size > STREAM_SAFE_MAIN_JS and api < 6:
+        die(f"{folder}: main.js > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
+            f"app.json (firmware antigo trunca o download em 32KB)")
     if icon_path.is_file():
         isz = icon_path.stat().st_size
         if isz > 10 * 1024:

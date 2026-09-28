@@ -90,19 +90,27 @@ do `app.json` são calculados e gravados pelo servidor — **não escreva à mã
 
 ### Regras de atualização de apps (CelerOS Hub)
 
-- **O catálogo é o canal de update.** A loja do aparelho compara a versão de
-  cada entrada com a instalada; versão mais nova aparece em
-  **"Atualizações (N)"** no topo da loja.
+- **O catálogo é o canal de update.** A loja compara a versão de cada entrada
+  com a instalada; versão nova ganha badge **"Atualizar"** na lista, aparece
+  na aba **Atualizações** e no botão **"Atualizar tudo"**.
 - **Suba a `version` a cada publish.** O hub rejeita versão ≤ à publicada
   (`--force` para exceções, ex. republicar um pacote corrigido).
 - **O seu `packageName` tem dono.** Quem publica primeiro vira o dono; só o
   mesmo token (ou o root do hub) atualiza/remove o pacote depois.
-- **Limites de tamanho:** `main.js` ≤ 30 KB (o `Net.get` do aparelho trunca
-  em 32 KB) e `icon.png` ≤ 16 KB. O `main.js` em si é baixado em streaming
-  (`Net.download`) e nunca passa pela heap do JS.
+- **Limites de tamanho:** `main.js` ≤ **48 KB** — apps acima de **30 KB**
+  precisam declarar `api: 6` (firmware antigo baixava via `Net.get`, que
+  trunca em 32 KB; o downloader streaming da API 6 não tem teto).
+  `icon.png` ≤ 16 KB.
 - **O ícone viaja com o update:** mantenha um `icon.png` (PNG 64×64, ≤ 16 KB)
   no pacote — a loja baixa na instalação/atualização e o launcher renova o
   cache de ícones sozinho.
+- **O update cai na pasta que o launcher executa** (resolvida por
+  `packageName`): atualizar um app preinstalado atualiza in-place, sem criar
+  cópia sombreada.
+- **A App Store se atualiza sozinha:** a loja é um pacote comum do hub
+  (`celeros.appstore`). Quando o catálogo tem loja mais nova, ela aparece
+  como qualquer update — depois de instalar, a loja pede para sair e abrir
+  de novo (o `main.js` novo é relido do disco na próxima abertura).
 
 ## 3. O Arquivo `icon.png` (Ícone do App)
 
