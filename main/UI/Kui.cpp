@@ -619,6 +619,10 @@ namespace {
 Canvas* s_canvas = nullptr;
 std::vector<Screen*> s_stack;
 Dialog* s_dialog = nullptr;
+// O dialog so aceita toques que COMECARAM com ele aberto: aberto no meio de
+// um toque (ex.: pressionar-e-segurar), o release desse toque nao pode
+// acionar o botao que por acaso ficou sob o dedo.
+bool s_dialogArmed = false;
 std::vector<Toast> s_toasts;
 bool s_repaint = true;
 uint32_t s_lastTickMs = 0;
@@ -656,6 +660,10 @@ bool isBackGesture(const TouchEvent& ev) {
 
 void dispatchTouch(const TouchEvent& ev) {
     if (s_dialog != nullptr) {
+        if (!s_dialogArmed) {
+            if (ev.type != TouchEvent::Press) return;
+            s_dialogArmed = true;
+        }
         s_dialog->onTouch(ev, s_dialog->cardRect());
         s_repaint = true;  // botao pode ter mudado algo / estado pressionado
         return;
@@ -737,6 +745,7 @@ int Navigator::depth() { return (int)s_stack.size(); }
 
 void Navigator::showDialog(Dialog* d) {
     s_dialog = d;
+    s_dialogArmed = false;
     s_repaint = true;
 }
 

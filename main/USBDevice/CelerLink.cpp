@@ -162,7 +162,7 @@ void handleInfo() {
     }
 
     // espaco nos filesystems
-    size_t lt = 0, lu = 0, st = 0, su = 0;
+    unsigned long long lt = 0, lu = 0, st = 0, su = 0;
     bool hasSd = FileSystem::exists("/sd");
     if (FileSystem::exists("/local")) {
         lt = FileSystem::getTotalSpace("/local");
@@ -178,12 +178,12 @@ void handleInfo() {
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":1,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
-             "\"fs\":{\"/local\":{\"total\":%u,\"used\":%u},\"/sd\":{\"total\":%u,\"used\":%u}}}",
+             "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              hasIp ? ip : "", hasSd ? "true" : "false",
-             (unsigned)lt, (unsigned)lu, (unsigned)st, (unsigned)su);
+             lt, lu, st, su);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
 }
 
@@ -494,29 +494,77 @@ void handleOtaAbort() {
 
 // ---------------------------------------------------------------- screenshot
 
-void handleScreenshot() {
+void handleScreenshot(const uint8_t* payload, uint16_t len) {
+    // Pedido: u8 formato opcional (1 = RLE). Resposta: u16 w + u16 h + u8
+    // formato; depois chunks KL_SCR_DATA. Cliente antigo nao manda payload e
+    // recebe o cru de sempre (e ignora o byte extra do cabecalho).
+    //   cru: pixels RGB565 LE
+    //   RLE: pares {u16 contagem, u16 pixel} LE — a UI e quase so cor chapada:
+    //        ~10x menos bytes (captura de 5 s a 921600 vira < 1 s, e a 115200
+    //        deixa de levar 40 s)
+    // Leitura linha a linha: sem buffer do tamanho da tela (a CYD, sem PSRAM,
+    // nao conseguia capturar).
+    const bool rle = len >= 1 && payload[0] == 1;
     CelerDisplay& tft = Board::display();
-    uint16_t w = (uint16_t)tft.width();
-    uint16_t h = (uint16_t)tft.height();
-    size_t bytes = (size_t)w * h * 2;
-    uint16_t* fb = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
-    if (fb == nullptr) {
+    const uint16_t w = (uint16_t)tft.width();
+    const uint16_t h = (uint16_t)tft.height();
+    uint16_t* row = (uint16_t*)malloc((size_t)w * 2);
+    const size_t cap = (CelerLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
+    uint8_t* out = (uint8_t*)malloc(cap);
+    if (row == nullptr || out == nullptr) {
+        free(row);
+        free(out);
         respondError(KL_SCREENSHOT, "sem memoria para captura");
         return;
     }
-    tft.readRect(0, 0, w, h, fb);  // RGB565 do framebuffer
-    uint8_t head[4] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8)};
+    uint8_t head[5] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8), (uint8_t)(rle ? 1 : 0)};
     respond(KL_SCREENSHOT, 0, head, sizeof(head));
 
-    const uint8_t* src = (const uint8_t*)fb;
-    size_t off = 0;
-    while (off < bytes && s_writer != nullptr) {
-        size_t n = bytes - off;
-        if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
-        respond(KL_SCR_DATA, 0, src + off, (uint16_t)n);
-        off += n;
+    size_t used = 0;
+    auto flush = [&]() {
+        if (used > 0 && s_writer != nullptr) respond(KL_SCR_DATA, 0, out, (uint16_t)used);
+        used = 0;
+    };
+    uint16_t runPx = 0, runLen = 0;
+    auto emitRun = [&]() {
+        if (runLen == 0) return;
+        if (used + 4 > cap) flush();
+        out[used++] = (uint8_t)runLen;
+        out[used++] = (uint8_t)(runLen >> 8);
+        out[used++] = (uint8_t)runPx;
+        out[used++] = (uint8_t)(runPx >> 8);
+        runLen = 0;
+    };
+
+    for (uint16_t y = 0; y < h && s_writer != nullptr; y++) {
+        tft.readRect(0, y, w, 1, row);  // RGB565 (swapBytes: ordem nativa LE)
+        if (!rle) {
+            const uint8_t* src = (const uint8_t*)row;
+            size_t rem = (size_t)w * 2;
+            while (rem > 0) {
+                size_t n = cap - used < rem ? cap - used : rem;
+                memcpy(out + used, src, n);
+                used += n;
+                src += n;
+                rem -= n;
+                if (used == cap) flush();
+            }
+            continue;
+        }
+        for (uint16_t x = 0; x < w; x++) {
+            if (runLen > 0 && row[x] == runPx && runLen < 0xFFFF) {
+                runLen++;
+            } else {
+                emitRun();
+                runPx = row[x];
+                runLen = 1;
+            }
+        }
     }
-    heap_caps_free(fb);
+    emitRun();
+    flush();
+    free(row);
+    free(out);
 }
 
 // ------------------------------------------------------------- touch inject
@@ -570,7 +618,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_OTA_CHUNK: handleOtaChunk(payload, len); break;
         case KL_OTA_END: handleOtaEnd(); break;
         case KL_OTA_ABORT: handleOtaAbort(); break;
-        case KL_SCREENSHOT: handleScreenshot(); break;
+        case KL_SCREENSHOT: handleScreenshot(payload, len); break;
         case KL_TOUCH: handleTouch(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }

@@ -188,7 +188,7 @@ void LauncherScreen::openAppActions(int entry) {
         m_dlg.buttons.push_back(cancel);
     } else {
         m_dlg.title = "Remover " + name + "?";
-        m_dlg.body = "O app e os dados dele saem do aparelho";
+        m_dlg.body = "Apaga o app e os dados";
         m_dlg.buttons.push_back(cancel);
         kui::Button rm;
         rm.label = "Remover";

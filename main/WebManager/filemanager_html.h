@@ -180,6 +180,9 @@ const char filemanager_html[] PROGMEM = R"rawliteral(
     </div>
 
     <script>
+// Anti-CSRF: toda requisicao desta pagina leva X-Celer-Request (o servidor
+// recusa POST/DELETE sem ele — sites de fora nao conseguem mandar o header)
+(function(){const H='X-Celer-Request';const f=window.fetch;window.fetch=function(u,o){o=o||{};const h=new Headers(o.headers||{});h.set(H,'1');o.headers=h;return f(u,o);};const op=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){op.apply(this,arguments);this.setRequestHeader(H,'1');};})();
         // Global State variables
         let currentStorage = '/littlefs'; // Base mount root
         let currentPath = '/';            // Current directory track relative to root

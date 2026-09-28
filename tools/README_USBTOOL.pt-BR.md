@@ -29,7 +29,8 @@ python3 tools/celerctl.py rm /local/old.txt
 python3 tools/celerctl.py reboot
 python3 tools/celerctl.py logcat             # logs ao vivo (Ctrl-C sai)
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware sem esptool
-python3 tools/celerctl.py screencap tela.png # captura do display -> PNG
+python3 tools/celerctl.py screencap tela.png # captura do display -> PNG (RLE: ~10x mais rapida)
+python3 tools/celerctl.py shell "run Snake"  # abre um app (pasta, nome ou pacote)
 python3 tools/celerctl.py tap 120 160        # injeta um toque (navegar via USB)
 python3 tools/celerctl.py swipe 120 400 120 40  # injeta um arrasto (scroll)
 python3 tools/celerctl.py apps list             # apps instalados (local + sd)

@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
+#include <vector>
 
 #include "esp_log.h"
 #include "esp_littlefs.h"
@@ -160,13 +161,24 @@ std::string FileSystem::readTextFile(const char* path) {
 bool FileSystem::writeTextFile(const char* path, const char* content) {
     if (!pathOk(path) || content == nullptr) return false;
 
-    FILE* f = fopen(path, "wb");
+    // LittleFS: rename sobre arquivo existente e atomico (troca de metadados),
+    // entao escreve ao lado e troca. No FAT do SD rename nao sobrescreve:
+    // escrita direta (como antes).
+    const bool atomic = strncmp(path, "/local", 6) == 0;
+    std::string tmp = atomic ? std::string(path) + ".tmp" : std::string(path);
+
+    FILE* f = fopen(tmp.c_str(), "wb");
     if (f == nullptr) return false;
 
     size_t len = strlen(content);
     bool ok = (fwrite(content, 1, len, f) == len);
-    fclose(f);
-    return ok;
+    ok = (fclose(f) == 0) && ok;  // fclose faz o flush: erro de disco cheio aparece aqui
+    if (!atomic) return ok;
+    if (!ok || rename(tmp.c_str(), path) != 0) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    return true;
 }
 
 bool FileSystem::appendTextFile(const char* path, const char* content) {
@@ -284,19 +296,21 @@ bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
         return false;
     }
 
-    uint8_t buf[512];
+    // 4 KB = setor/bloco tipico do FAT e do LittleFS: ~4-8x menos chamadas
+    // que os 512 B de antes (instalar app do SD ficava lento)
+    constexpr size_t BUF = 4096;
+    uint8_t* buf = (uint8_t*)malloc(BUF);
+    bool ok = buf != nullptr;
     size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
-        if (fwrite(buf, 1, n, dst) != n) {
-            fclose(src);
-            fclose(dst);
-            return false;
-        }
+    while (ok && (n = fread(buf, 1, BUF, src)) > 0) {
+        if (fwrite(buf, 1, n, dst) != n) ok = false;
     }
-
+    if (ok && ferror(src)) ok = false;
+    free(buf);
     fclose(src);
-    fclose(dst);
-    return true;
+    ok = (fclose(dst) == 0) && ok;
+    if (!ok) unlink(dstPath);  // sem copia pela metade com cara de valida
+    return ok;
 }
 
 int FileSystem::countFilesInDir(const char* dirPath) {
@@ -329,60 +343,54 @@ int FileSystem::countFilesInDir(const char* dirPath) {
     return count;
 }
 
-bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*progressCb)(int current, int total)) {
-    if (!srcDir || !destDir) return false;
-    mkdir(destDir);
+namespace {
+struct CopyProgress {
+    int copied = 0;
+    int total = 1;
+    void (*cb)(int, int) = nullptr;
+};
 
-    DIR* dir = opendir(srcDir);
+bool copyTree(const std::string& srcDir, const std::string& dstDir, CopyProgress& pr) {
+    if (!FileSystem::mkdir(dstDir.c_str())) return false;
+    DIR* dir = opendir(srcDir.c_str());
     if (dir == nullptr) return false;
 
-    static int copiedFiles = 0;
-    static int totalFiles = 0;
-    static bool isTopLevel = true;
-
-    if (isTopLevel) {
-        copiedFiles = 0;
-        totalFiles = countFilesInDir(srcDir);
-        if (totalFiles == 0) totalFiles = 1;
-        isTopLevel = false;
-    }
-
+    bool ok = true;
     struct dirent* ent;
-    while ((ent = readdir(dir)) != nullptr) {
+    while (ok && (ent = readdir(dir)) != nullptr) {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        std::string fileName = ent->d_name;
-
-        std::string srcFilePath = srcDir;
-        if (!kstr::endsWith(srcFilePath, "/")) srcFilePath += "/";
-        srcFilePath += fileName;
-
-        std::string dstFilePath = destDir;
-        if (!kstr::endsWith(dstFilePath, "/")) dstFilePath += "/";
-        dstFilePath += fileName;
+        std::string src = srcDir + (kstr::endsWith(srcDir, "/") ? "" : "/") + ent->d_name;
+        std::string dst = dstDir + (kstr::endsWith(dstDir, "/") ? "" : "/") + ent->d_name;
 
         bool isDir;
         if (ent->d_type == DT_DIR) isDir = true;
         else if (ent->d_type == DT_UNKNOWN) {
             struct stat st;
-            isDir = (stat(srcFilePath.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+            isDir = (stat(src.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
         } else isDir = false;
 
         if (isDir) {
-            bool wasTopLevel = isTopLevel;
-            isTopLevel = false;
-            copyDirectory(srcFilePath.c_str(), dstFilePath.c_str(), progressCb);
-            isTopLevel = wasTopLevel;
+            ok = copyTree(src, dst, pr);
         } else {
-            copyFile(srcFilePath.c_str(), dstFilePath.c_str());
-            copiedFiles++;
-            if (progressCb) progressCb(copiedFiles, totalFiles);
+            ok = FileSystem::copyFile(src.c_str(), dst.c_str());
+            if (!ok) ESP_LOGW(FS_TAG, "copia falhou: %s -> %s", src.c_str(), dst.c_str());
+            pr.copied++;
+            if (pr.cb) pr.cb(pr.copied, pr.total);
             taskYIELD();
         }
     }
     closedir(dir);
+    return ok;
+}
+}  // namespace
 
-    isTopLevel = true;
-    return true;
+bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*progressCb)(int current, int total)) {
+    if (!srcDir || !destDir || !pathOk(srcDir) || !pathOk(destDir)) return false;
+    CopyProgress pr;
+    pr.total = countFilesInDir(srcDir);
+    if (pr.total <= 0) pr.total = 1;
+    pr.cb = progressCb;
+    return copyTree(srcDir, destDir, pr);
 }
 
 std::string FileSystem::parseJsonValue(const std::string& json, const char* key) {
@@ -420,6 +428,32 @@ bool FileSystem::rmdir(const char* path) {
     return ::rmdir(path) == 0;
 }
 
+bool FileSystem::removeTree(const char* path) {
+    if (!pathOk(path)) return false;
+    DIR* dir = opendir(path);
+    if (dir == nullptr) return false;
+    bool ok = true;
+    struct dirent* ent;
+    // coleta antes de apagar: remover durante o readdir pula entradas no FAT
+    std::vector<std::pair<std::string, bool>> items;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        std::string full = std::string(path) + (kstr::endsWith(path, "/") ? "" : "/") + ent->d_name;
+        bool isDir = ent->d_type == DT_DIR;
+        if (ent->d_type == DT_UNKNOWN) {
+            struct stat st;
+            isDir = stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+        }
+        items.emplace_back(full, isDir);
+    }
+    closedir(dir);
+    for (const auto& it : items) {
+        ok = it.second ? removeTree(it.first.c_str()) : (unlink(it.first.c_str()) == 0);
+        if (!ok) return false;
+    }
+    return ::rmdir(path) == 0;
+}
+
 bool FileSystem::isDirectory(const char* path) {
     if (!pathOk(path)) return false;
     struct stat st;
@@ -451,13 +485,13 @@ time_t FileSystem::getLastModified(const char* path) {
     return st.st_mtime;
 }
 
-size_t FileSystem::getTotalSpace(const char* drive) {
+uint64_t FileSystem::getTotalSpace(const char* drive) {
+    if (drive == nullptr) return 0;
     if (strncmp(drive, "/sd", 3) == 0) {
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
-        size_t clusterSize = fs->csize * 512;
-        return (size_t)((fs->n_fatent - 2) * clusterSize);
+        return (uint64_t)(fs->n_fatent - 2) * fs->csize * 512ULL;
     }
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
@@ -467,10 +501,11 @@ size_t FileSystem::getTotalSpace(const char* drive) {
     return 0;
 }
 
-size_t FileSystem::getUsedSpace(const char* drive) {
+uint64_t FileSystem::getUsedSpace(const char* drive) {
+    if (drive == nullptr) return 0;
     if (strncmp(drive, "/sd", 3) == 0) {
-        size_t total = getTotalSpace(drive);
-        size_t freeB = getFreeSpace(drive);
+        uint64_t total = getTotalSpace(drive);
+        uint64_t freeB = getFreeSpace(drive);
         return total > freeB ? (total - freeB) : 0;
     }
     if (strncmp(drive, "/local", 6) == 0) {
@@ -481,12 +516,13 @@ size_t FileSystem::getUsedSpace(const char* drive) {
     return 0;
 }
 
-size_t FileSystem::getFreeSpace(const char* drive) {
+uint64_t FileSystem::getFreeSpace(const char* drive) {
+    if (drive == nullptr) return 0;
     if (strncmp(drive, "/sd", 3) == 0) {
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
-        return (size_t)(freeClusters * fs->csize * 512);
+        return (uint64_t)freeClusters * fs->csize * 512ULL;
     }
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;

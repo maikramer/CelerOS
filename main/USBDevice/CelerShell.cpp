@@ -32,9 +32,10 @@ const char* boardName() {
     return Board::profile().name;
 }
 
-std::string humanSize(size_t bytes) {
+std::string humanSize(uint64_t bytes) {
     char buf[32];
-    if (bytes >= 1024 * 1024) snprintf(buf, sizeof(buf), "%.1fM", bytes / (1024.0 * 1024.0));
+    if (bytes >= 1024ULL * 1024 * 1024) snprintf(buf, sizeof(buf), "%.1fG", bytes / (1024.0 * 1024.0 * 1024.0));
+    else if (bytes >= 1024 * 1024) snprintf(buf, sizeof(buf), "%.1fM", bytes / (1024.0 * 1024.0));
     else if (bytes >= 1024) snprintf(buf, sizeof(buf), "%.1fK", bytes / 1024.0);
     else snprintf(buf, sizeof(buf), "%uB", (unsigned)bytes);
     return buf;
@@ -67,7 +68,8 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  uptime          tempo ligado\n"
         "  info            versao/board/rede\n"
         "  reboot          reinicia o sistema\n"
-        "  rescan          reler lista de apps do launcher\n");
+        "  rescan          reler lista de apps do launcher\n"
+        "  run <app>       abre um app (pasta, nome ou pacote)\n");
     return 0;
 }
 
@@ -196,8 +198,8 @@ int cmdDf(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
             print(ctx, "%-8s %-9s (ausente)\r\n", d.path, d.label);
             continue;
         }
-        size_t total = FileSystem::getTotalSpace(d.path);
-        size_t used = FileSystem::getUsedSpace(d.path);
+        uint64_t total = FileSystem::getTotalSpace(d.path);
+        uint64_t used = FileSystem::getUsedSpace(d.path);
         print(ctx, "%-8s %-9s total %-7s usado %-7s livre %s\r\n", d.path, d.label,
               humanSize(total).c_str(), humanSize(used).c_str(), humanSize(total - used).c_str());
     }
@@ -319,6 +321,20 @@ int cmdRescan(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: run <pasta|nome|pacote do app>\r\n");
+        return 1;
+    }
+    // junta argumentos (nomes com espaco: run App Store)
+    std::string target = argv[1];
+    for (int i = 2; i < argc; i++) target += std::string(" ") + argv[i];
+    LauncherUI::requestRescan();  // app recem-instalado entra na lista
+    LauncherUI::requestLaunch(target);
+    print(ctx, "abrindo %s (volta ao launcher quando o app atual sair)\r\n", target.c_str());
+    return 0;
+}
+
 int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -335,7 +351,7 @@ const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
-    {"rescan", cmdRescan},
+    {"rescan", cmdRescan}, {"run", cmdRun},
     {"colorbars", cmdColorBars},
 };
 
