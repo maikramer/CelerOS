@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "USBDevice/LogSink.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,10 +50,10 @@ static void bootSplash(const char* status) {
 
 static void celerSetup() {
     Serial.begin(115200);
-    Serial.println("\n--- CelerOS Booting ---");
-    Serial.printf("board: %s\n", Board::profile().name);
+    celer_log_println("\n--- CelerOS Booting ---");
+    celer_log_printf("board: %s\n", Board::profile().name);
     if (Board::profile().hasPsram) {
-        Serial.printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
+        celer_log_printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
     }
 
     // Init TFT (HAL da placa)
@@ -66,7 +67,7 @@ static void celerSetup() {
 
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
-        Serial.println("File System Warning: One or more FS failed to mount.");
+        celer_log_println("File System Warning: One or more FS failed to mount.");
         tft.setTextColor(THEME_WARN);
         tft.drawString("Aviso: falha ao montar FS", UI::cx(), UI::sy(230), UI::font(1));
         delay(1000);
@@ -90,31 +91,31 @@ static void celerSetup() {
     // o boot antigo concorria com a task e caia na tela "WiFi Setup").
     // Sem rede, o launcher mostra o banner "WiFi offline".
     WebManager::startAsync();
-    Serial.printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
+    celer_log_printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
-    Serial.println("DEBUG: Starting CelerKernel...");
+    celer_log_println("DEBUG: Starting CelerKernel...");
     CelerKernel::init(&tft);
-    Serial.println("CelerKernel initialized successfully.");
-    Serial.printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
+    celer_log_println("CelerKernel initialized successfully.");
+    celer_log_printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Init UI Components
     LauncherUI::init(&tft);
     TouchCalibrator::init(&tft);
 
     // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
-    Serial.println("DEBUG: Scanning Local Apps...");
+    celer_log_println("DEBUG: Scanning Local Apps...");
     bootSplash("Carregando apps...");
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
-    Serial.println("DEBUG: Local Apps Scanned.");
+    celer_log_println("DEBUG: Local Apps Scanned.");
 
     // Touch resistivo sem calibracao salva: roda o calibrador antes da UI.
     // Placas com touch capacitivo (GT911) pulam a calibracao.
     if (!Board::profile().capacitiveTouch) {
         uint16_t calData[5];
         if (!FileSystem::readCalData(calData)) {
-            Serial.println("No calibration data. Entering calibrator.");
+            celer_log_println("No calibration data. Entering calibrator.");
             TouchCalibrator::runCalibration();
         } else {
             tft.setTouch(calData);
@@ -125,7 +126,7 @@ static void celerSetup() {
     kui::Navigator::begin(tft);
     kui::Navigator::push(&s_launcher);
     currentState = STATE_LAUNCHER;
-    Serial.println("DEBUG: Setup complete, entering loop!");
+    celer_log_println("DEBUG: Setup complete, entering loop!");
 }
 
 static void celerLoop() {

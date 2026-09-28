@@ -1,4 +1,5 @@
 #include "WifiSetupPortal.h"
+#include "../USBDevice/LogSink.h"
 #include "WebManager.h"
 #include "CaptivePortal.h"   // componente Wifi/
 #include "NetworkManager.h"
@@ -46,7 +47,7 @@ bool WifiSetupPortal::begin() {
 
     s_credsPending = false;
     if (!s_portal.start()) {
-        Serial.println("Falha ao iniciar captive portal");
+        celer_log_println("Falha ao iniciar captive portal");
         return false;
     }
     return true;

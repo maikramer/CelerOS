@@ -9,5 +9,6 @@
   "api": 3,
   "system": true,
   "order": 30,
-  "icon": "settings"
+  "icon": "settings",
+  "topbar": true
 }

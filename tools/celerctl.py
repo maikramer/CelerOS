@@ -17,7 +17,7 @@ Comandos:
   push LOCAL REMOTO           envia arquivo para o dispositivo
   pull REMOTO [LOCAL]         baixa arquivo do dispositivo
   reboot                      reinicia a placa
-  logcat                      stream de logs em tempo real (Ctrl-C sai)
+  logcat [--dump]              logs: stream ao vivo ou absorve o buffer (--dump)
   ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
@@ -276,16 +276,31 @@ class CelerLink:
         return part, written
 
     def screenshot(self):
-        _, payload = self.xfer(KL["SCREENSHOT"], timeout=30.0)
+        # pede RLE (firmware antigo ignora o byte e manda cru, sem o 5o byte
+        # de formato no cabecalho)
+        _, payload = self.xfer(KL["SCREENSHOT"], bytes([1]), timeout=30.0)
         w, h = struct.unpack("<HH", payload[1:5])
+        rle = len(payload) >= 6 and payload[5] == 1
         need = w * h * 2
         data = bytearray()
+        pending = bytearray()
         while len(data) < need:
             cmd, more = self._read_frame(timeout=30.0)
+            if cmd == KL["LOG_DATA"]:  # log do logcat no meio: guarda e segue
+                self.push_queue.append((cmd, more))
+                continue
             if cmd != KL["SCR_DATA"]:
                 raise CelerError("frame inesperado durante screenshot")
-            data += more[1:]
-        return w, h, bytes(data)
+            if not rle:
+                data += more[1:]
+                continue
+            pending += more[1:]
+            n = len(pending) // 4 * 4
+            for i in range(0, n, 4):
+                count, px = struct.unpack_from("<HH", pending, i)
+                data += struct.pack("<H", px) * count
+            del pending[:n]
+        return w, h, bytes(data[:need])
 
     def touch(self, samples):
         """Enfileira amostras de touch sinteticas: [(down, x, y, delay_ms)]."""
@@ -493,7 +508,23 @@ def cmd_logcat(args):
     link = open_link(args)
     try:
         link.logcat_on()
-        print("aguardando logs do dispositivo (Ctrl-C para sair)", file=sys.stderr)
+        if args.dump:
+            # absorve o ring acumulado: imprime as linhas que chegarem e
+            # encerra apos uma janela sem linha nova (o dispositivo para de
+            # mandar quando o buffer acaba)
+            quiet = args.quiet_ms / 1000.0
+            last = time.monotonic()
+            while time.monotonic() - last < quiet:
+                try:
+                    cmd, payload = link.read_push_frame(timeout=0.15)
+                except Exception:
+                    continue
+                if cmd == KL["LOG_DATA"]:
+                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
+                    sys.stdout.flush()
+                    last = time.monotonic()
+            return
+        print("aguardando logs do dispositivo (Ctrl-C para sair; --dump absorve o buffer e sai)", file=sys.stderr)
         while True:
             cmd, payload = link.read_push_frame(timeout=3600.0)
             if cmd == KL["LOG_DATA"]:
@@ -729,6 +760,10 @@ def main():
     p.set_defaults(func=cmd_reboot)
 
     p = sub.add_parser("logcat", help="stream de logs do dispositivo")
+    p.add_argument("--dump", action="store_true",
+                   help="absorve o buffer acumulado no dispositivo e sai")
+    p.add_argument("--quiet-ms", type=int, default=800,
+                   help="janela de silencio do --dump em ms (padrao 800)")
     p.set_defaults(func=cmd_logcat)
 
     p = sub.add_parser("ota", help="grava firmware pela conexao (sem esptool)")

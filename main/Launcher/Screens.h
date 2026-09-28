@@ -25,6 +25,15 @@ private:
     bool m_noWifiPref = false;     // /local/nowifi.txt (lido no onEnter, nao por frame)
     uint32_t m_pollAccumMs = 0;    // relogio/wifi checados a cada 250 ms
     int m_dragDx = 0;              // arrasto horizontal em curso (pagina acompanha o dedo)
+
+    // Pressionar e segurar num app (sem arrastar) abre "Remover app?"
+    int entryAt(int x, int y) const;
+    void openAppActions(int entry);
+    void uninstall(int entry);
+    uint32_t m_pressMs = 0;
+    int m_pressEntry = -1;
+    bool m_longFired = false;      // o release desse toque nao abre o app
+    kui::Dialog m_dlg;
 };
 
 // ------------------------------------------------------------ Tela de app JS --

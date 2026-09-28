@@ -1,4 +1,5 @@
 #include "CelerKernel.h"
+#include "../../USBDevice/LogSink.h"
 #include "../../Display/Layout.h"
 #include "../../Runtime/JSBindings.h"
 #include "../../FileSystem/FileSystem.h"
@@ -120,7 +121,7 @@ static void *my_alloc(void *udata, duk_size_t size) {
     uint32_t caps = duk_caps();
     void *p = heap_caps_malloc(size, caps);
     if (!p && caps != MALLOC_CAP_8BIT) p = heap_caps_malloc(size, MALLOC_CAP_8BIT);
-    if (!p) Serial.println("out of memory");
+    if (!p) celer_log_println("out of memory");
     return p;
 }
 
@@ -133,7 +134,7 @@ static void *my_realloc(void *udata, void *ptr, duk_size_t size) {
     uint32_t caps = duk_caps();
     void *p = heap_caps_realloc(ptr, size, caps);
     if (!p && caps != MALLOC_CAP_8BIT) p = heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT);
-    if (!p) Serial.println("out of memory");
+    if (!p) celer_log_println("out of memory");
     return p;
 }
 
@@ -143,14 +144,14 @@ static void my_free(void *udata, void *ptr) {
 
 // Dummy fatal error handler if duktape aborts
 static void my_fatal(void *udata, const char *msg) {
-    Serial.print("Duktape fatal error: ");
-    Serial.println(msg ? msg : "no message");
+    celer_log_print("Duktape fatal error: ");
+    celer_log_println(msg ? msg : "no message");
     
     std::string detail = (msg && strstr(msg, "alloc")) ? std::string(kOomHint) : std::string(msg ? msg : "erro fatal");
     showRuntimeError("Erro fatal do runtime", detail + "\n\nO sistema vai reiniciar.");
 
     if (msg && strstr(msg, "alloc")) {
-        Serial.println("out of memory");
+        celer_log_println("out of memory");
     }
     ESP.restart(); // Reboot when they close it
 }
@@ -159,7 +160,7 @@ void CelerKernel::init(CelerDisplay *tft) {
     tftInstance = tft;
     // Duktape heap is no longer initialized here to save 60-80KB of RAM for the WebServer/WiFi.
     // It will be allocated on-demand in runFile() and checkSyntax().
-    Serial.println("CelerKernel initialized successfully.");
+    celer_log_println("CelerKernel initialized successfully.");
 }
 
 void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
@@ -187,8 +188,8 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             return;
         }
         
-        Serial.print("JS Execution Error: ");
-        Serial.println(errorMsg);
+        celer_log_print("JS Execution Error: ");
+        celer_log_println(errorMsg.c_str());
         
         showRuntimeError("Erro no app", errorMsg);
     }
@@ -223,7 +224,7 @@ static void syntaxCheckTask(void* param) {
     duk_int_t rc = duk_pcompile_string(tempCtx, 0, p->jsCode);
     if (rc != 0) {
         p->result = duk_safe_to_string(tempCtx, -1);
-        Serial.printf("Syntax Error: %s\n", p->result.c_str());
+        celer_log_printf("Syntax Error: %s\n", p->result.c_str());
     } else {
         p->result = "";
     }
@@ -263,7 +264,7 @@ std::string CelerKernel::checkSyntax(const char* jsCode) {
     return params.result;
 }
 
-void CelerKernel::runFile(const char* filePath) {
+void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed) {
     if (ctx) {
         duk_destroy_heap(ctx);
         ctx = nullptr;
@@ -271,18 +272,18 @@ void CelerKernel::runFile(const char* filePath) {
 
     ctx = duk_create_heap(my_alloc, my_realloc, my_free, nullptr, my_fatal);
     if (!ctx) {
-        Serial.println("Failed to create Duktape heap for app.");
+        celer_log_println("Failed to create Duktape heap for app.");
         showRuntimeError("Sem memoria", kOomHint);
         return; // Soft exit back to OS
     }
 
-    JSBindings::init(ctx, tftInstance);
+    JSBindings::init(ctx, tftInstance, appTitle, topbarFixed);
     
     {
         std::string content = FileSystem::readTextFile(filePath);
         if (content.length() == 0) {
-            Serial.print("Failed to read JS file: ");
-            Serial.println(filePath);
+            celer_log_print("Failed to read JS file: ");
+            celer_log_println(filePath);
             duk_destroy_heap(ctx);
             ctx = nullptr;
             return;

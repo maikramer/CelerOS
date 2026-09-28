@@ -311,18 +311,10 @@ function execute(line) {
 }
 
 // -------------------------------------------------------------- desenho ----
-function drawBar() {
-    System.fillRect(0, 0, W, 18, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Terminal", 6, 5, 1);
-    var right = System.getTime();
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(right, W - 6 - System.textWidth(right, 1), 5, 1);
-    System.drawFastHLine(0, 18, W, T.stroke);
-}
-
+// A barra de titulo (nome + X) agora e a topbar padrao do sistema, desenhada
+// pelo core acima do canvas — o app comeca a desenhar direto na area de saida.
 function drawOut() {
-    var top = 22, bottom = kbTop - 16;
+    var top = 0, bottom = kbTop - 16;
     if (bottom <= top) return;
     System.fillRect(0, top, W, bottom - top, T.bg);
     var n = Math.floor((bottom - top) / LINE_H);
@@ -350,7 +342,6 @@ function drawInput() {
 }
 
 function drawAll() {
-    drawBar();
     drawOut();
     drawInput();
 }

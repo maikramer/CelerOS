@@ -71,7 +71,7 @@ int logHookVprintf(const char* fmt, va_list args) {
 void enterLinkMode() {
     if (s_mode == MODE_LINK) return;
     s_mode = MODE_LINK;
-    ESP_LOGI(TAG, "celerctl conectado (logs seriais suspensos)");
+    ESP_LOGI(TAG, "celerctl conectado (logs acumulando no ring; \"celerctl logcat --dump\" absorve)");
 }
 
 void exitLinkMode() {
@@ -267,6 +267,9 @@ void celer_log_printf(const char* fmt, ...) {
     celer_log_vprintf(fmt, args);
     va_end(args);
 }
+
+void celer_log_println(const char* s) { celer_log_printf("%s\n", s); }
+void celer_log_print(const char* s) { celer_log_printf("%s", s); }
 
 void celer_logcat_set(bool on) {
     if (s_logMutex == nullptr) return;

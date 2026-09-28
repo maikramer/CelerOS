@@ -13,6 +13,10 @@
 void celer_log_vprintf(const char* fmt, va_list args);
 void celer_log_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 bool celer_log_silent(void);
+// Substitutos diretos do Serial.print/println: mesma saida roteada pelo sink
+// (ring durante sessoes celerctl, logcat ao vivo, console quando livre)
+void celer_log_println(const char* s);
+void celer_log_print(const char* s);
 
 // Logcat (uso do CelerLink)
 void celer_logcat_set(bool on);

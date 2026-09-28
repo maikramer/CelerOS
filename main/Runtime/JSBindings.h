@@ -7,12 +7,19 @@
 
 class JSBindings {
 public:
-    static void init(duk_context *ctx, CelerDisplay *tft);
+    // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
+    // retratil (swipe da borda superior revela por alguns segundos) com o
+    // app em tela cheia — campo "topbar" do app.json
+    static void init(duk_context *ctx, CelerDisplay *tft, const char* appTitle = "",
+                     bool topbarFixed = true);
 
     // Alvo de desenho do app (sprite do app > quadro automatico > display)
     static lgfx::LGFXBase* gfx();
     // Leva o quadro automatico ao vidro se houve desenho desde o ultimo
     static void present();
+    // y fisico do desenho no alvo corrente (quadro/display descontam a topbar
+    // do sistema; o sprite do app e canvas proprio, origem em 0)
+    static int mapY(int v);
 
 private:
     static CelerDisplay *tftInstance;

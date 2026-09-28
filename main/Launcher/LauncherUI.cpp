@@ -13,6 +13,7 @@ std::string LauncherUI::appPkg[50];
 std::string LauncherUI::appIcons[50];
 bool   LauncherUI::appIsFolder[50];
 bool   LauncherUI::appIsSystem[50];
+bool   LauncherUI::appTopbar[50];
 int    LauncherUI::appOrder[50];
 int LauncherUI::appCount = 0;
 bool LauncherUI::needsRescan = true;
@@ -20,6 +21,42 @@ bool LauncherUI::needsRescan = true;
 
 void LauncherUI::requestRescan() {
     needsRescan = true;
+}
+
+namespace {
+portMUX_TYPE s_launchMux = portMUX_INITIALIZER_UNLOCKED;
+std::string s_launchReq;   // protegido por s_launchMux
+volatile bool s_launchPending = false;
+}  // namespace
+
+void LauncherUI::requestLaunch(const std::string& pathOrName) {
+    std::string copy = pathOrName;  // aloca fora da secao critica
+    portENTER_CRITICAL(&s_launchMux);
+    s_launchReq.swap(copy);
+    s_launchPending = true;
+    portEXIT_CRITICAL(&s_launchMux);
+}
+
+bool LauncherUI::takeLaunchRequest(std::string& out) {
+    if (!s_launchPending) return false;
+    std::string got;
+    portENTER_CRITICAL(&s_launchMux);
+    got.swap(s_launchReq);
+    s_launchPending = false;
+    portEXIT_CRITICAL(&s_launchMux);
+    out.swap(got);
+    return true;
+}
+
+int LauncherUI::findEntry(const std::string& pathOrName) {
+    std::string want = pathOrName;
+    while (want.size() > 1 && want.back() == '/') want.pop_back();
+    for (int i = 0; i < appCount; i++) {
+        std::string p = appPaths[i];
+        while (p.size() > 1 && p.back() == '/') p.pop_back();
+        if (p == want || appNames[i] == want || appPkg[i] == want) return i;
+    }
+    return -1;
 }
 
 void LauncherUI::init(CelerDisplay *tft) {
@@ -75,7 +112,7 @@ void LauncherUI::scanLocalApps() {
             }
 
             std::string name, pkg, icon;
-            bool isFolder = false, system = false;
+            bool isFolder = false, system = false, topbar = false;
             int order = 100;
 
             if (entries[i].isDir) {
@@ -92,6 +129,7 @@ void LauncherUI::scanLocalApps() {
                 pkg    = FileSystem::parseJsonValue(jsonContent, "packageName");
                 icon   = FileSystem::parseJsonValue(jsonContent, "icon");
                 system = (FileSystem::parseJsonValue(jsonContent, "system") == "true");
+                topbar = (FileSystem::parseJsonValue(jsonContent, "topbar") == "true");
                 order  = atoi(FileSystem::parseJsonValue(jsonContent, "order").c_str());
                 if (order <= 0) order = 100;
                 isFolder = true;
@@ -126,6 +164,7 @@ void LauncherUI::scanLocalApps() {
             appIcons[appCount]    = icon;
             appIsFolder[appCount] = isFolder;
             appIsSystem[appCount] = system;
+            appTopbar[appCount]   = topbar;
             appOrder[appCount]    = order;
             appCount++;
         }
@@ -145,6 +184,7 @@ void LauncherUI::scanLocalApps() {
         std::string sPath = appPaths[best], sName = appNames[best],
                     sPkg = appPkg[best], sIcon = appIcons[best];
         bool sFolder = appIsFolder[best], sSystem = appIsSystem[best];
+        bool sTopbar = appTopbar[best];
         int sOrder = appOrder[best];
         for (int k = best; k > i; k--) {
             appPaths[k]    = appPaths[k - 1];
@@ -153,6 +193,7 @@ void LauncherUI::scanLocalApps() {
             appIcons[k]    = appIcons[k - 1];
             appIsFolder[k] = appIsFolder[k - 1];
             appIsSystem[k] = appIsSystem[k - 1];
+            appTopbar[k]   = appTopbar[k - 1];
             appOrder[k]    = appOrder[k - 1];
         }
         appPaths[i]    = sPath;
@@ -161,6 +202,7 @@ void LauncherUI::scanLocalApps() {
         appIcons[i]    = sIcon;
         appIsFolder[i] = sFolder;
         appIsSystem[i] = sSystem;
+        appTopbar[i]   = sTopbar;
         appOrder[i]    = sOrder;
     }
 }
@@ -171,10 +213,11 @@ const std::string& LauncherUI::appEntryPath(int i) { return appPaths[i]; }
 const std::string& LauncherUI::appEntryName(int i) { return appNames[i]; }
 const std::string& LauncherUI::appEntryIcon(int i) { return appIcons[i]; }
 bool LauncherUI::appEntryIsSystem(int i) { return appIsSystem[i]; }
+bool LauncherUI::appEntryTopbar(int i) { return appTopbar[i]; }
 bool LauncherUI::appEntryIsFolder(int i) { return appIsFolder[i]; }
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
-    runApp(tftInstance, appPaths[index], appIsFolder[index]);
+    runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index]);
 }
 int LauncherUI::gridCols() { return cols(); }
 int LauncherUI::gridRows() { return rows(); }
@@ -184,7 +227,7 @@ int LauncherUI::gridTotalPages() { return totalPages(); }
 // ---------------------------------------------------------------------------
 // Execucao de app JS
 // ---------------------------------------------------------------------------
-void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder) {
+void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed) {
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
 
@@ -197,7 +240,16 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
         filePath = path;
     }
 
-    CelerKernel::runFile(filePath.c_str());
+    // Titulo para a topbar do sistema: nome da pasta do app (ou do .js avulso)
+    std::string title = path;
+    while (title.size() > 1 && title.back() == '/') title.pop_back();
+    size_t slash = title.find_last_of('/');
+    title = (slash == std::string::npos) ? title : title.substr(slash + 1);
+    if (!isFolder && kstr::endsWith(title, ".js")) title.resize(title.size() - 3);
+
+    // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
+    // deixa a faixa retratil com o app em tela cheia
+    CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed);
     // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
     // coberto na hora pelo launcher — removido)
 }

@@ -1,4 +1,5 @@
 #include "WebManager.h"
+#include "../USBDevice/LogSink.h"
 #include <string>
 #include <cstring>
 #include <cstdio>
@@ -65,8 +66,8 @@ void WebManager::importLegacyWifiTxt() {
 
         if (!ssid.empty() && nm().getCredentialStore().getNetworkCount() == 0) {
             nm().getCredentialStore().saveNetwork(KnownNetwork(ssid.c_str(), pass.c_str()));
-            Serial.print("wifi.txt migrado para o credential store (NVS): ");
-            Serial.println(ssid.c_str());
+            celer_log_print("wifi.txt migrado para o credential store (NVS): ");
+            celer_log_println(ssid.c_str());
         }
         FileSystem::renameFile(path, (std::string(path) + ".migrated").c_str());
         return;  // so o primeiro que existir (SD tem preferencia)
@@ -78,7 +79,7 @@ bool WebManager::init() {
 
     ErrorCode err = nm().init(true);  // background task: reconexao/roaming
     if (err != CommonErrorCodes::None) {
-        Serial.println("NetworkManager init failed.");
+        celer_log_println("NetworkManager init failed.");
         return false;
     }
 
@@ -100,23 +101,23 @@ bool WebManager::init() {
     }
 
     if (nm().getCredentialStore().getNetworkCount() == 0) {
-        Serial.println("No saved networks (NVS store vazio).");
+        celer_log_println("No saved networks (NVS store vazio).");
         return false;
     }
     if (FileSystem::exists("/local/nowifi.txt")) {
-        Serial.println("WiFi desligado pelo usuario (nowifi.txt).");
+        celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
 
-    Serial.println("Connecting to known network(s)...");
+    celer_log_println("Connecting to known network(s)...");
     err = nm().connectToKnown();  // bloqueante: escolhe a melhor rede conhecida
     if (err != CommonErrorCodes::None || !nm().isConnected()) {
-        Serial.println("WiFi connection failed.");
+        celer_log_println("WiFi connection failed.");
         return false;
     }
 
     if (!FileSystem::exists("/local/web_on.txt")) {
-        Serial.println("Web Server disabled by user (web_on.txt not found).");
+        celer_log_println("Web Server disabled by user (web_on.txt not found).");
         return true;  // WiFi conectado, servidor nao sobe
     }
 
@@ -128,13 +129,13 @@ bool WebManager::startAsync() {
     nvs_flash_init();
 
     if (FileSystem::exists("/local/nowifi.txt")) {
-        Serial.println("WiFi desligado pelo usuario (nowifi.txt).");
+        celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
 
     ErrorCode err = nm().init(true);  // task de reconexao/roaming conecta
     if (err != CommonErrorCodes::None) {
-        Serial.println("NetworkManager init failed.");
+        celer_log_println("NetworkManager init failed.");
         return false;
     }
 
@@ -156,14 +157,14 @@ void WebManager::disable() {
     nm().setAutoReconnect(false);  // silencia a background task
     stopWebServer();
     nm().disconnect();
-    Serial.println("WiFi disabled at runtime");
+    celer_log_println("WiFi disabled at runtime");
 }
 
 void WebManager::stopWebServer() {
     if (s_server != nullptr) {
         httpd_stop(s_server);
         s_server = nullptr;
-        Serial.println("Web Server stopped");
+        celer_log_println("Web Server stopped");
     }
 }
 
@@ -177,7 +178,7 @@ void WebManager::tick() {
 
     if (s_rebootPending) {
         s_rebootPending = false;
-        Serial.println("Rebooting after web OTA...");
+        celer_log_println("Rebooting after web OTA...");
         delay(500);  // da tempo para a resposta HTTP chegar ao navegador
         ESP.restart();
     }
@@ -289,8 +290,28 @@ static bool pathAllowed(const std::string& p) {
     return kstr::startsWith(p, "/local") || kstr::startsWith(p, "/sd");
 }
 
-static void addCORS(httpd_req_t* req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+// Sem CORS ("Access-Control-Allow-Origin: *" deixava QUALQUER site aberto
+// no navegador de alguem da rede LER os arquivos do aparelho). A pagina do
+// file manager e servida pelo proprio aparelho: mesma origem, nao precisa.
+static void addCORS(httpd_req_t* req) { (void)req; }
+
+// Anti-CSRF: rotas que alteram estado (POST/DELETE) exigem o cabecalho
+// X-Celer-Request. Um formulario/fetch "simples" de outro site nao consegue
+// envia-lo (header customizado forca preflight, que o servidor nao aprova) —
+// antes, uma pagina maliciosa podia regravar o firmware via POST /update.
+// As paginas do proprio aparelho (file manager, /update) enviam o header.
+static const char* CSRF_HEADER = "X-Celer-Request";
+
+static esp_err_t csrfGuard(httpd_req_t* req) {
+    char v[8];
+    if (httpd_req_get_hdr_value_str(req, CSRF_HEADER, v, sizeof(v)) != ESP_OK) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
+        httpd_resp_sendstr(req, "Forbidden: missing X-Celer-Request header");
+        return ESP_OK;
+    }
+    auto handler = (esp_err_t (*)(httpd_req_t*))req->user_ctx;
+    return handler(req);
 }
 
 static std::string urlDecode(const std::string& str) {
@@ -795,7 +816,7 @@ void WebManager::startWebServerIfNeeded() {
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         s_server = nullptr;
-        Serial.println("Failed to start web server");
+        celer_log_println("Failed to start web server");
         return;
     }
 
@@ -803,18 +824,18 @@ void WebManager::startWebServerIfNeeded() {
         {"/",             HTTP_GET,    handler_index,       nullptr},
         {"/api/list",     HTTP_GET,    handler_list,        nullptr},
         {"/api/edit",     HTTP_GET,    handler_edit_get,    nullptr},
-        {"/api/edit",     HTTP_POST,   handler_edit_post,   nullptr},
+        {"/api/edit",     HTTP_POST,   csrfGuard,           (void*)handler_edit_post},
         {"/api/download", HTTP_GET,    handler_download,    nullptr},
-        {"/api/delete",   HTTP_DELETE, handler_delete,      nullptr},
-        {"/api/create",   HTTP_POST,   handler_create,      nullptr},
-        {"/api/rename",   HTTP_POST,   handler_rename,      nullptr},
-        {"/api/upload",   HTTP_POST,   handler_upload,      nullptr},
+        {"/api/delete",   HTTP_DELETE, csrfGuard,           (void*)handler_delete},
+        {"/api/create",   HTTP_POST,   csrfGuard,           (void*)handler_create},
+        {"/api/rename",   HTTP_POST,   csrfGuard,           (void*)handler_rename},
+        {"/api/upload",   HTTP_POST,   csrfGuard,           (void*)handler_upload},
         {"/update",       HTTP_GET,    handler_update_get,  nullptr},
-        {"/update",       HTTP_POST,   handler_update_post, nullptr},
+        {"/update",       HTTP_POST,   csrfGuard,           (void*)handler_update_post},
     };
     for (const auto& r : routes) {
         httpd_register_uri_handler(s_server, &r);
     }
 
-    Serial.println("Web Server started on port 80");
+    celer_log_println("Web Server started on port 80");
 }
