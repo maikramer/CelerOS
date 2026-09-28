@@ -98,6 +98,10 @@ static inline float appScaleY() {
 // jsy (alvo-dependent: quadro/display x sprite do app) vive depois das
 // declaracoes de tftSprite/useSprite, logo abaixo.
 static inline int jsu(int v) { return (UI::sx(v) + appSh(v)) / 2; }  // uniforme (raios)
+// jsy e mapa de COORDENADA (soma o offset da faixa no modo fixo); jsH e a
+// escala pura de TAMANHO vertical — altura/largura-vertical nunca podem
+// receber o offset (uma linha de 3px viraria uma faixa de ~31px)
+static inline int jsH(int v) { return appSh(v); }
 
 // Wrapper stdio para o drawPngFile do LGFX (a especializacao DataWrapperT<FILE>
 // do upstream so ativa com macros do newlib que nao estao definidas no IDF)
@@ -491,7 +495,7 @@ duk_ret_t JSBindings::js_drawFastVLine(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int h = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
-    gfx()->drawFastVLine(jsx(x), jsy(y), jsy(h), jsc(color));
+    gfx()->drawFastVLine(jsx(x), jsy(y), jsH(h), jsc(color));
     return 0;
 }
 
@@ -523,7 +527,7 @@ duk_ret_t JSBindings::js_fillRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    gfx()->fillRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
+    gfx()->fillRect(jsx(x), jsy(y), jsx(w), jsH(h), jsc(color));
     return 0;
 }
 
@@ -534,7 +538,7 @@ duk_ret_t JSBindings::js_drawRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
-    gfx()->drawRect(jsx(x), jsy(y), jsx(w), jsy(h), jsc(color));
+    gfx()->drawRect(jsx(x), jsy(y), jsx(w), jsH(h), jsc(color));
     return 0;
 }
 
@@ -612,7 +616,7 @@ duk_ret_t JSBindings::js_drawRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    gfx()->drawRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
+    gfx()->drawRoundRect(jsx(x), jsy(y), jsx(w), jsH(h), jsu(r), jsc(color));
     return 0;
 }
 
@@ -624,7 +628,7 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
-    gfx()->fillRoundRect(jsx(x), jsy(y), jsx(w), jsy(h), jsu(r), jsc(color));
+    gfx()->fillRoundRect(jsx(x), jsy(y), jsx(w), jsH(h), jsu(r), jsc(color));
     return 0;
 }
 
@@ -1442,7 +1446,7 @@ duk_ret_t JSBindings::js_fontHeight(duk_context *ctx) {
     if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
     int font = duk_get_int_default(ctx, 0, 2);
     int h = tftInstance->fontHeight(CelerFont(UI::font(font)));
-    duk_push_int(ctx, (int)((long)h * 320 / tftInstance->height()));
+    duk_push_int(ctx, (int)(h / appScaleY()));
     return 1;
 }
 
@@ -1564,7 +1568,7 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
 duk_ret_t JSBindings::js_setClip(duk_context *ctx) {
     // Recorte no canvas virtual: desenho fora de (x,y,w,h) e descartado
     gfx()->setClipRect(jsx(duk_require_int(ctx, 0)), jsy(duk_require_int(ctx, 1)),
-                       jsx(duk_require_int(ctx, 2)), jsy(duk_require_int(ctx, 3)));
+                       jsx(duk_require_int(ctx, 2)), jsH(duk_require_int(ctx, 3)));
     return 0;
 }
 
