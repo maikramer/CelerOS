@@ -853,3 +853,33 @@ Notas:
   a região (os jogos cobrem no frame seguinte).
 - Nada para codificar em nenhum dos modos: o mesmo main.js renderiza
   corretamente nos dois — o campo no `app.json` é o contrato inteiro.
+
+### 14.1 Conteúdo custom (API 6)
+
+Apps podem colocar texto próprio e **chips** tocáveis na faixa:
+
+#### `System.topbarText(texto)`
+Substitui o nome do app exibido na faixa (`""` restaura o nome). Redesenha sozinho.
+
+#### `System.topbarButtons(labels)` → Number
+Coloca até 3 chips tocáveis na faixa, da direita para a esquerda antes do X (`labels` = array de strings curtas, ex.: `["+", "Limpar"]`). Retorna quantos couberam. `[]` limpa.
+
+#### `System.topbarPop()` → String|null
+Consome o toque de chip mais antigo desde a última chamada (FIFO). O chip destaca enquanto pressionado e dispara no release (mesmo contrato com debounce do X).
+
+```javascript
+System.topbarText("Toques: 0");
+System.topbarButtons(["+", "Limpar"]);
+while (true) {
+    var id = System.topbarPop();
+    if (id === "+") { n += 10; System.topbarText("Toques: " + n); }
+    else if (id === "Limpar") { n = 0; System.topbarText("Toques: 0"); }
+    System.delay(20);
+}
+```
+
+No modo retrátil os chips só são tocáveis enquanto a faixa está visível.
+Para continuar instalável em firmware antigo, detecte a função
+(`typeof System.topbarText === "function"`).
+
+Implementação de referência: `data/apps/Touch Test/main.js`.
