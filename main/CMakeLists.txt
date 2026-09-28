@@ -89,5 +89,5 @@ target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/$
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.2.0"
-    CELEROS_API_LEVEL=5
+    CELEROS_API_LEVEL=6
 )

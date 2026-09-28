@@ -28,13 +28,18 @@ from pathlib import Path
 from urllib import error, request
 
 # API level maximo que os devices entendem (main/CMakeLists.txt)
-MAX_API_LEVEL = 5
+MAX_API_LEVEL = 6
 # Net.get do firmware trunca o corpo em 32KB: main.js maior quebra a install
+# (o download novo e streaming via Net.download, mas o teto segue no hub)
 MAX_MAIN_JS = 30 * 1024
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 ES5_BAD = re.compile(r"\blet\b|\bconst\b|=>|\bclass\s|\`")
+
+
+def vtuple(v):
+    return tuple(int(p) for p in v.split("."))
 
 
 def die(msg, code=1):
@@ -122,13 +127,23 @@ def validate(folder: Path):
 
 # ----------------------------------------------------------------- publish -
 def cmd_publish(args):
-    tok = token_or_die(args)
+    tok = "" if args.dry else token_or_die(args)  # dry roda offline
+    # versao publicada no hub: base do anti-downgrade local (o hub reforca)
+    hub_ver = {}
+    if not args.dry:
+        _, data = http("GET", f"{hub_url(args)}/store/all.json")
+        hub_ver = {pkg: a.get("version", "0.0.0")
+                   for pkg, a in data.get("apps", {}).items()}
     rc = 0
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
         meta, avisos, size = validate(folder)
         for a in avisos:
             print(f"aviso: {folder.name}: {a}")
+        hv = hub_ver.get(meta["packageName"])
+        if hv and vtuple(meta["version"]) <= vtuple(hv) and not args.force:
+            die(f"{folder}: v{meta['version']} <= publicada no hub (v{hv}); "
+                f"suba a version ou use --force")
         if args.dry:
             print(f"[dry] {meta['packageName']} v{meta['version']} ({size}B) ok")
             continue
@@ -148,11 +163,17 @@ def cmd_publish(args):
             "Content-Disposition: form-data; name=\"file\"; filename=\"app.zip\"\r\n"
             "Content-Type: application/zip\r\n\r\n"
         ).encode()
+        force_part = (
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"force\"\r\n\r\n"
+            f"{'1' if args.force else '0'}\r\n"
+        ).encode()
         _, out = http("POST", f"{hub_url(args)}/admin/apps", token=tok,
-                      data=part + blob + f"\r\n--{boundary}--\r\n".encode(),
+                      data=part + blob + force_part + f"--{boundary}--\r\n".encode(),
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         print(f"ok: {out.get('package')} v{out.get('version')} publicado "
-              f"({out.get('store', {}).get('apps')} apps no catalogo)")
+              f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}..., "
+              f"{out.get('store', {}).get('apps')} apps no catalogo)")
     sys.exit(rc)
 
 
@@ -179,26 +200,34 @@ def local_packages():
 def cmd_list(args):
     _, cats = http("GET", f"{hub_url(args)}/store/index.json")
     _, data = http("GET", f"{hub_url(args)}/store/all.json")
+    _, info = http("GET", f"{hub_url(args)}/api/info")
     apps = data.get("apps", {})
+    downloads = info.get("downloads", {})
     local = local_packages()
     print(f"CelerOS Hub ({hub_url(args)}) - {len(apps)} apps em "
           f"{len(cats.get('categories', {}))} categorias\n")
-    print(f"{'pacote':40} {'v':8} {'api':4} {'categoria':12} local")
+    print(f"{'pacote':40} {'v':8} {'api':4} {'tam':7} {'down':5} {'categoria':12} local")
     for pkg in sorted(apps):
         a = apps[pkg]
         lv = local.get(pkg)
+        hv = a.get("version", "?")
         if lv is None:
             mark = "-"
-        elif lv == a.get("version"):
+        elif lv == hv:
             mark = "igual"
+        elif vtuple(lv) > vtuple(hv):
+            mark = f"local v{lv} (hub atrasado)"
         else:
-            mark = f"local v{lv} (publish p/ atualizar)"
-        print(f"{pkg:40} {a.get('version', '?'):8} {a.get('api', '?'):4} "
-              f"{a.get('category', '?'):12} {mark}")
+            mark = f"hub v{hv} (device tem update)"
+        size = a.get("size")
+        size_s = f"{size // 1024}KB" if size else "-"
+        print(f"{pkg:40} {hv:8} {a.get('api', '?'):4} {size_s:7} "
+              f"{downloads.get(pkg, 0):<5} {a.get('category', '?'):12} {mark}")
     # pacotes locais que ainda nao estao no hub
     for pkg, lv in sorted(local.items()):
         if pkg not in apps:
-            print(f"{pkg:40} {'-':8} {'-':4} {'-':12} local v{lv} (nao publicado)")
+            print(f"{pkg:40} {'-':8} {'-':4} {'-':7} {'-':5} {'-':12} "
+                  f"local v{lv} (nao publicado)")
 
 
 # ------------------------------------------------------------------- delete -
@@ -215,7 +244,7 @@ def cmd_delete(args):
 def cmd_whoami(args):
     tok = token_or_die(args)
     _, out = http("GET", f"{hub_url(args)}/admin/whoami", token=tok)
-    print(f"agente: {out.get('agent')}  escopos: {', '.join(out.get('scopes', []))}")
+    print(f"agente: {out.get('name')}  escopos: {', '.join(out.get('scopes', []))}")
 
 
 # -------------------------------------------------------------------- main -
@@ -228,6 +257,8 @@ def main():
     p = sub.add_parser("publish", help="publica um ou mais pacotes")
     p.add_argument("folders", nargs="+", help="pastas com app.json + main.js")
     p.add_argument("--dry", action="store_true", help="so valida, nao envia")
+    p.add_argument("--force", action="store_true",
+                   help="republica mesmo com version <= a do hub")
     p.set_defaults(fn=cmd_publish)
 
     p = sub.add_parser("list", help="lista o catalogo e compara com o repo")

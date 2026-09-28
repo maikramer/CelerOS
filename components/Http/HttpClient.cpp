@@ -29,6 +29,13 @@ HttpClient& HttpClient::setTimeout(uint32_t timeoutMs) {
     return *this;
 }
 
+HttpClient& HttpClient::setBufferSize(uint32_t bytes) {
+    if (bytes >= 512 && bytes <= 64 * 1024) {
+        _config.bufferSize = bytes;
+    }
+    return *this;
+}
+
 HttpClient& HttpClient::setHeader(const std::string& name, const std::string& value) {
     _headers[name] = value;
     return *this;

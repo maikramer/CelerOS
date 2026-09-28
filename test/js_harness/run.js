@@ -72,7 +72,9 @@ function makeEnv() {
         },
         renameFile: function(a, b) {
             a = norm(a); b = norm(b);
-            if (!files[a] || files[a].dir || files[b]) return false;
+            // semantica do rename() POSIX (FileSystem::renameFile): substitui
+            // arquivo existente; so falha se origem nao existe ou b e diretorio
+            if (!files[a] || files[a].dir || (files[b] && files[b].dir)) return false;
             files[b] = files[a];
             delete files[a];
             return true;
@@ -196,7 +198,7 @@ function makeEnv() {
         exitApp: function() { throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
         getOSVersion: function() { return '1.2.0'; },
-        getAPILevel: function() { return 5; },
+        getAPILevel: function() { return 6; },
         getInfo: function() {
             return {
                 totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000,
@@ -226,6 +228,7 @@ function makeEnv() {
         get: function() { return null; },
         getJSON: function() { return null; },
         post: function() { return null; },
+        download: function() { return false; },  // streaming p/ arquivo (API 6)
         isConnected: function() { return false; },
         wifiScan: function() {
             return [{ ssid: 'CasaNet', rssi: -50, secure: 1 }, { ssid: 'Vizinho', rssi: -70, secure: 0 }];
@@ -272,10 +275,10 @@ function runApp(relPath, wire) {
         var fn = new Function('System', 'FS', 'Net', '__harness', src);
         fn(env.System, env.FS, env.Net, env.__harness);
     } catch (e) {
-        if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null };
-        return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e) };
+        if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
+        return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
     }
-    return { log: env.__harness.log, err: null };
+    return { log: env.__harness.log, err: null, env: env };
 }
 
 // ------------------------------------------------------------- testes -----
@@ -379,6 +382,127 @@ function joinLog(log) { return log.join('\n'); }
     var j = joinLog(r.log);
     check('header desenhado', j.indexOf('Snake') >= 0);
     check('recorde carregado do FS (17)', j.indexOf('Rec 17') >= 0);
+})();
+
+// --- App Store (fluxo de atualizacao via hub) -------------------------------
+(function() {
+    console.log('App Store:');
+    var api = null;
+    var MD5 = 'deadbeef';  // o que o stub de FS.getFileMD5 responde
+    var r = runApp('data/apps/App Store/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.Net.download = function(url, p, cb) {
+            if (!env.FS.writeTextFile(p, 'NOVO-CODIGO')) return false;
+            if (cb) { cb(1024, 4000); cb(4096, 4000); }
+            return true;
+        };
+        env.Net.get = function(url) {
+            // app.json do hub: versao nova do pacote em atualizacao
+            if (String(url).indexOf('app.json') >= 0) {
+                return JSON.stringify({ packageName: 'celeros.beta', name: 'Beta',
+                                        version: '2.0.0' });
+            }
+            return null;
+        };
+        // loja em modo teste: o arquivo termina em storeTest(...) sem loop
+        env.__harness.storeTest = function(a) { api = a; };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    check('harness recebeu as funcoes da loja', !!api);
+    if (!api) return;
+    var env = r.env;  // FS/Net vivos p/ semear o "dispositivo" nos checks
+
+    check('cmpV igual', api.cmpV('1.2.0', '1.2.0') === 0);
+    check('cmpV maior', api.cmpV('2.0.0', '1.9.9') === 1);
+    check('cmpV menor', api.cmpV('1.0.0', '1.0.1') === -1);
+    check('fmtKB', api.fmtKB(4000) === '3.9 KB' && api.fmtKB(30720) === '30 KB');
+
+    // FS: beta v1.0.0 instalado (catalogo traz v2.0.0), mesmo v1.0.0 igual
+    env.FS.mkdir('/local/apps/celeros.beta');
+    env.FS.writeTextFile('/local/apps/celeros.beta/app.json',
+        JSON.stringify({ packageName: 'celeros.beta', name: 'Beta', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.beta/main.js', 'CODIGO-ANTIGO');
+    env.FS.mkdir('/local/apps/celeros.mesmo');
+    env.FS.writeTextFile('/local/apps/celeros.mesmo/app.json',
+        JSON.stringify({ packageName: 'celeros.mesmo', name: 'Mesmo', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.mesmo/main.js', 'MMM');
+
+    api.scanLocalApps();
+    api.setCatalog([
+        { pkg: 'celeros.beta', metaUrl: 'h/beta/app.json', appUrl: 'h/beta/main.js',
+          name: 'Beta', ver: '2.0.0', api: 3, md5: MD5, size: 4000 },
+        { pkg: 'celeros.novo', metaUrl: 'h/n/app.json', appUrl: 'h/n/main.js',
+          name: 'Novo', ver: '1.0.0', api: 3 },
+        { pkg: 'celeros.mesmo', metaUrl: 'h/m/app.json', appUrl: 'h/m/main.js',
+          name: 'Mesmo', ver: '1.0.0', api: 3 },
+        { pkg: 'celeros.futuro', metaUrl: 'h/f/app.json', appUrl: 'h/f/main.js',
+          name: 'Futuro', ver: '1.0.0', api: 7 }
+    ]);
+
+    var st = function(pkg) {
+        var it = api.catalog().filter(function(x) { return x.pkg === pkg; })[0];
+        return it ? api.stateInfo(it).code : '?';
+    };
+    check('estado upd (remota maior)', st('celeros.beta') === 'upd');
+    check('estado new (nao instalado)', st('celeros.novo') === 'new');
+    check('estado inst (mesma versao)', st('celeros.mesmo') === 'inst');
+    check('estado api (exige API 7)', st('celeros.futuro') === 'api');
+    check('contador de atualizacoes = 1', api.updCount() === 1);
+
+    api.refresh();  // ordena: atualizacao vem primeiro
+    check('atualizacao ordenada no topo', api.catalog()[0].pkg === 'celeros.beta');
+
+    // update feliz: main.js trocado, app.json nova versao, sem .new sobrando
+    check('update instala', api.installApp() === 'done');
+    check('main.js substituido', env.FS.readTextFile('/local/apps/celeros.beta/main.js') === 'NOVO-CODIGO');
+    check('staging removido', !env.FS.exists('/local/apps/celeros.beta/main.js.new'));
+    check('app.json vira v2.0.0',
+          env.FS.readTextFile('/local/apps/celeros.beta/app.json').indexOf('2.0.0') >= 0);
+    check('estado vira inst apos update', st('celeros.beta') === 'inst');
+    check('contador zera apos update', api.updCount() === 0);
+
+    // icone: baixado e renomeado (sem .new sobrando)
+    env.FS.mkdir('/local/apps/celeros.ic');
+    env.FS.writeTextFile('/local/apps/celeros.ic/app.json',
+        JSON.stringify({ packageName: 'celeros.ic', name: 'Ic', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.ic/main.js', 'IC-ANTIGO');
+    api.scanLocalApps();
+    api.setCatalog([
+        { pkg: 'celeros.ic', metaUrl: 'h/ic/app.json', appUrl: 'h/ic/main.js',
+          name: 'Ic', ver: '2.0.0', api: 3, md5: MD5,
+          icon: 'http://hub/celeros.ic/icon.png' }
+    ]);
+    check('update com icone instala', api.installApp() === 'done');
+    check('icone gravado', env.FS.exists('/local/apps/celeros.ic/icon.png'));
+    check('staging do icone removido', !env.FS.exists('/local/apps/celeros.ic/icon.png.new'));
+
+    // checksum divergente: rejeita e deixa a versao instalada intacta
+    env.FS.mkdir('/local/apps/celeros.zeta');
+    env.FS.writeTextFile('/local/apps/celeros.zeta/app.json',
+        JSON.stringify({ packageName: 'celeros.zeta', name: 'Zeta', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.zeta/main.js', 'ZETA-ANTIGO');
+    api.scanLocalApps();
+    api.setCatalog([
+        { pkg: 'celeros.zeta', metaUrl: 'h/z/app.json', appUrl: 'h/z/main.js',
+          name: 'Zeta', ver: '2.0.0', api: 3, md5: 'md5-errado' }
+    ]);
+    check('update com md5 invalido falha', api.installApp() === 'err');
+    check('versao antiga intacta apos md5 invalido',
+          env.FS.readTextFile('/local/apps/celeros.zeta/main.js') === 'ZETA-ANTIGO');
+    check('staging descartado apos md5 invalido',
+          !env.FS.exists('/local/apps/celeros.zeta/main.js.new'));
+
+    // sem espaco: rejeita antes de baixar
+    var freeReal = env.FS.getFreeSpace;
+    env.FS.getFreeSpace = function() { return 100; };
+    api.setCatalog([
+        { pkg: 'celeros.grande', metaUrl: 'h/g/app.json', appUrl: 'h/g/main.js',
+          name: 'Grande', ver: '1.0.0', api: 3, md5: MD5, size: 30000 }
+    ]);
+    check('update sem espaco falha', api.installApp() === 'err');
+    check('nada gravado sem espaco',
+          !env.FS.exists('/local/apps/celeros.grande/main.js'));
+    env.FS.getFreeSpace = freeReal;
 })();
 
 // resumo

@@ -31,7 +31,7 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
   "description": "A cool app that does awesome things.",
   "type": "App",
   "category": "Utility",
-  "api": 5,
+  "api": 6,
   "changelog": "Initial release."
 }
 ```
@@ -40,13 +40,32 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
 - **`name`**: The display name of your app. This is what the user sees in the Home.
 - **`packageName`**: A globally unique identifier for your app. **Rules: lowercase, dot-separated style, no spaces** (e.g., `com.yourname.appname`). The OS uses this to detect if your app is already installed.
 - **`version`**: Semantic versioning (e.g. `1.0.0`, `1.2.1`). If a user installs an app with the same `packageName` but a higher version number, the OS will smartly prompt them to "Update" rather than "Install".
-- **`metaUrl`** *(optional)*: The raw URL to the `app.json` on the internet (e.g. your GitHub repository). The App Store uses this URL to automatically check for new versions of your app.
+- **`metaUrl`** *(optional)*: The raw URL to the `app.json` on the internet (e.g. your GitHub repository). Apps published on the **CelerOS Hub don't need it** — the store catalog itself carries name, version, changelog, size and the MD5 checksum of your `main.js`; `metaUrl` is only for self-hosted update checks outside the hub.
 - **`author`**: Your name or studio. If someone else tries to install an app with your `packageName` but a different `author` name, the OS will throw a conflict warning to protect your app from being overwritten by malicious developers.
 - **`description`**: A short summary of your app, displayed to the user when they install your app for the first time. Note: system apps avoid accented characters — stick to plain ASCII for maximum compatibility with the built-in font.
 - **`type`**: The broad classification (e.g., `App` or `Game`). You can type any value here without restriction.
 - **`category`**: The specific category (e.g., `Utilities`, `Games`, `Tools`). You can type any value here without restriction.
-- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `5`). This is verified by the system at install time.
-- **`changelog`**: A brief string detailing what changed. When a user updates your app, this replaces the description and shows up under a "What's New" header!
+- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `6`). This is verified by the system at install time.
+- **`changelog`**: A brief string detailing what changed (one line per version works well, e.g. `"1.1.0 - fixed crash\n1.0.0 - first release"`). The hub publishes it with the catalog and the device store shows it under a **"Novidades" / What's New** header on the update screen.
+
+### Fields managed by the CelerOS Hub
+
+When you publish through the hub (`tools/celerhub.py` / `publish_app.py`), four
+fields of `app.json` are computed and written by the server — **don't set them
+by hand** (a manual publish overwrites them again):
+
+- **`size`** — byte size of `main.js` (the store checks free disk space before downloading).
+- **`md5`** — checksum of `main.js`; the device validates it after downloading and aborts the update on mismatch, leaving the installed version untouched.
+- **`published_at`** — UTC timestamp of the publish.
+- **`publisher`** — token name that published the package.
+
+### App update rules (CelerOS Hub)
+
+- **The catalog is the update channel.** The device store compares each catalog version against the installed one; newer versions land under **"Atualizações (N)"** at the top of the store.
+- **Bump `version` on every publish.** The hub rejects versions ≤ the published one (`--force` to override, e.g. to republish a fixed package).
+- **You own your `packageName`.** The first publisher becomes the owner; only the same token (or the hub root) can update or remove the package afterwards.
+- **Size limits:** `main.js` ≤ 30 KB (the device's `Net.get` truncates at 32 KB) and `icon.png` ≤ 16 KB. `main.js` itself is downloaded via streaming (`Net.download`) and never goes through the JS heap.
+- **The icon ships with the update:** keep an `icon.png` (64×64 PNG, ≤ 16 KB) in the package — the store downloads it on install/update and the launcher refreshes its icon cache automatically.
 
 ## 3. The `icon.png` File (App Icon)
 

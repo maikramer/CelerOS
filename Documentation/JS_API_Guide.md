@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 5
+### API Level: 6
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -418,6 +418,14 @@ than 32 KB are truncated.
 - **Returns:** String (response body) or `null` on failure.
 - **Description:** Performs an HTTP POST. Throws an error if WiFi is not connected.
 
+#### `Net.download(url, filePath, onProgress)` (API 6)
+- **Parameters:**
+  - `url` (String, `http://` or `https://`)
+  - `filePath` (String) — destination VFS path (e.g. `"/local/apps/<pkg>/main.js.new"`)
+  - `onProgress` (Function, optional) — called per chunk with `(bytesSoFar, totalBytes)`; `totalBytes` is `-1` when the server sends no `Content-Length`
+- **Returns:** Boolean — `true` on success; on failure the partial file is removed
+- **Description:** Downloads straight to a file in **streaming** mode — the body never goes through the JS heap, so there is **no 32 KB cap** (this is how the App Store updates apps; the hub enforces the size limits). Errors inside `onProgress` don't abort the download. This is what the App Store uses to install/updates apps: it writes to a `*.new` staging file, validates `FS.getFileMD5()` against the catalog checksum, then `FS.renameFile()`s it over the old code (atomic within the same filesystem — never rename across `/local` ↔ `/sd`).
+
 ### Example
 
 ```javascript
@@ -524,6 +532,7 @@ Time configuration (persisted by TimeManager).
   "type": "Utility",
   "category": "Utility",
   "api": 3,
+  "topbar": true,
   "system": true,
   "order": 30,
   "icon": "settings"
@@ -534,6 +543,7 @@ Time configuration (persisted by TimeManager).
 - `order` — position among system apps.
 - `icon` — icon name in `/local/icons`. **Preferred:** ship `icon.png` (64x64 with alpha; decoded on load — CelerOS 1.2+) inside the app folder — it overrides the name and travels with the package when installed via SD/celerctl. Legacy `icon.bin` (v2 RGB565+A4) is still accepted.
 - `packageName` — identity used by the launcher dedup, installer and App Store.
+- `topbar: true` — fixed system topbar (see section 14). Without the field the app runs full screen with the retractable topbar.
 - Install paths: `/local/apps/<Name>/` (LittleFS) or `/sd/apps/<Name>/` (SD card). Reinstall/update with `celerctl apps install <folder> [--sd]`.
 
 ---
@@ -609,3 +619,32 @@ Reference implementation: `data/apps/Terminal/main.js` (preinstalled W9 app).
 are now registered as global RGB565 constants (before W9 the registration
 was a no-op — apps had to use `System.color()`). `System.color()` and
 `System.theme()` remain the recommended way to get colors.
+
+---
+
+## 14. System Topbar
+
+Every JS app runs under the **system topbar** — a strip drawn by the core with
+the app's name and the **X** exit button on the right. The mode comes from the
+package, not from code:
+
+- **Fixed** — `"topbar": true` in `app.json`: the strip is always visible and
+  the 240x320 virtual canvas maps to the area below it (`getTouch` coordinates
+  already account for the strip). Use it for system-style apps with
+  menus/lists/forms — Settings, App Store, Terminal.
+- **Retractable (default)** — no `topbar` field: the app runs **full screen**
+  (the canvas maps 1:1 over the whole panel, exactly like pre-topbar apps).
+  Swiping down from the very top edge reveals the strip for **3 seconds**; the
+  whole reveal gesture is consumed by the system — the app never sees its
+  press/release. Ideal for games (Snake, 2048, Breakout).
+
+Notes:
+
+- In fixed mode touches in the strip never reach the app; in retractable mode
+  only while the strip is visible (X included — it fires on release, debounced).
+- On PSRAM boards the strip is composed into the frame (no flicker, and hiding
+  it restores the area atomically). On the CYD the strip is stamped on the
+  glass at each yield; when it hides, it lingers until the app repaints that
+  region (games cover it on the next frame).
+- Nothing to code in either mode: the same main.js renders correctly on both —
+  the field in `app.json` is the whole contract.

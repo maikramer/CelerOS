@@ -115,6 +115,16 @@ public:
     HttpClient& setTimeout(uint32_t timeoutMs);
 
     /**
+     * @brief Set the receive buffer size.
+     *
+     * Bigger buffers mean fewer progress callbacks per download (the
+     * callback fires once per received chunk). Applies to the next request.
+     * @param bytes Buffer size in bytes (default 1024).
+     * @return Reference to this for chaining.
+     */
+    HttpClient& setBufferSize(uint32_t bytes);
+
+    /**
      * @brief Set a request header.
      * @param name Header name.
      * @param value Header value.

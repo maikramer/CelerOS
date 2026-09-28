@@ -38,7 +38,7 @@ segurança.
   "description": "Um app legal que faz coisas incríveis.",
   "type": "App",
   "category": "Utilities",
-  "api": 5,
+  "api": 6,
   "changelog": "Lancamento inicial."
 }
 ```
@@ -53,8 +53,10 @@ segurança.
   instalado um app com o mesmo `packageName` e número de versão maior, o SO
   oferece "Atualizar" em vez de "Instalar".
 - **`metaUrl`** *(opcional)*: URL raw do `app.json` na internet (ex.: seu
-  repositório GitHub). A App Store usa essa URL para checar automaticamente
-  se há versões novas do seu app.
+  repositório GitHub). Apps publicados no **CelerOS Hub não precisam dela** —
+  o próprio catálogo da loja carrega nome, versão, changelog, tamanho e o
+  checksum MD5 do seu `main.js`; `metaUrl` serve só para checagem de versão
+  fora do hub.
 - **`author`**: seu nome ou estúdio. Se outra pessoa tentar instalar um app
   com o seu `packageName` mas um `author` diferente, o SO emite um aviso de
   conflito para proteger o app contra sobrescrita maliciosa.
@@ -66,11 +68,41 @@ segurança.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `5`). Verificado pelo sistema na
+  JS](JS_API_Guide.pt-BR.md) — atualmente `6`). Verificado pelo sistema na
   instalação.
-- **`changelog`**: string curta descrevendo o que mudou. Quando o usuário
-  atualiza o app, este campo substitui a descrição e aparece sob o título
-  "What's New"!
+- **`changelog`**: string curta descrevendo o que mudou (uma linha por versão
+  funciona bem, ex. `"1.1.0 - conserto de crash\n1.0.0 - primeiro
+  lancamento"`). O hub publica junto com o catálogo e a loja do aparelho
+  mostra sob o título **"Novidades"** na tela de atualização.
+
+### Campos gerenciados pelo CelerOS Hub
+
+Ao publicar pelo hub (`tools/celerhub.py` / `publish_app.py`), quatro campos
+do `app.json` são calculados e gravados pelo servidor — **não escreva à mão**
+(um publish manual os recalcula de qualquer forma):
+
+- **`size`** — tamanho em bytes do `main.js` (a loja confere o espaço livre
+  no disco antes de baixar).
+- **`md5`** — checksum do `main.js`; o aparelho valida depois de baixar e
+  aborta o update em caso de divergência, sem tocar na versão instalada.
+- **`published_at`** — data/hora UTC do publish.
+- **`publisher`** — nome do token que publicou o pacote.
+
+### Regras de atualização de apps (CelerOS Hub)
+
+- **O catálogo é o canal de update.** A loja do aparelho compara a versão de
+  cada entrada com a instalada; versão mais nova aparece em
+  **"Atualizações (N)"** no topo da loja.
+- **Suba a `version` a cada publish.** O hub rejeita versão ≤ à publicada
+  (`--force` para exceções, ex. republicar um pacote corrigido).
+- **O seu `packageName` tem dono.** Quem publica primeiro vira o dono; só o
+  mesmo token (ou o root do hub) atualiza/remove o pacote depois.
+- **Limites de tamanho:** `main.js` ≤ 30 KB (o `Net.get` do aparelho trunca
+  em 32 KB) e `icon.png` ≤ 16 KB. O `main.js` em si é baixado em streaming
+  (`Net.download`) e nunca passa pela heap do JS.
+- **O ícone viaja com o update:** mantenha um `icon.png` (PNG 64×64, ≤ 16 KB)
+  no pacote — a loja baixa na instalação/atualização e o launcher renova o
+  cache de ícones sozinho.
 
 ## 3. O Arquivo `icon.png` (Ícone do App)
 
