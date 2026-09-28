@@ -71,12 +71,15 @@ inline int font(int f) {
     }
 }
 
-// ---- Botao de sair de apps JS (canto superior direito) ---------------------
-inline int exitX() { return W - sx(40); }
-inline int exitY() { return 0; }
-inline int exitW() { return sx(40); }
-inline int exitH() { return sy(30); }
-inline bool hitExit(int x, int y) { return x >= exitX() && y <= sy(40); }
+// ---- Topbar dos apps JS: faixa do sistema com titulo + X de sair -----------
+// O canvas do app (240x320) comeca ABAIXO da faixa: a escala vertical do JS
+// passa a ser (H - topbarH())/320 (jsy no JSBindings). A faixa e desenhada
+// pelo core no proprio quadro do app, atomica com o push — nao pisca e o app
+// nao consegue desenhar por cima. Toque na faixa e da UI: o app nunca ve.
+inline int topbarH() { return sy(18); }      // altura fisica da faixa
+inline int topbarExitW() { return sx(40); }  // area de toque do X (a direita)
+inline bool inTopbar(int x, int y) { return y < topbarH(); }
+inline bool hitTopbarExit(int x, int y) { return inTopbar(x, y) && x >= W - topbarExitW(); }
 
 }  // namespace UI
 

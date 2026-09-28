@@ -1,4 +1,5 @@
 #include "JSBindings.h"
+#include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
@@ -35,8 +36,52 @@ static inline uint32_t jsc(uint32_t c) {
     return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
 }
 static inline int jsx(int v) { return UI::sx(v); }
-static inline int jsy(int v) { return UI::sy(v); }
-static inline int jsu(int v) { return (UI::sx(v) + UI::sy(v)) / 2; }  // uniforme (raios)
+
+// Topbar do sistema (titulo + X de sair): s_exitArmed = dedo sobre o X no
+// ultimo poll (tambem e o estado "hot" da faixa); s_barOnGlass/s_barHotOnGlass
+// = estado da faixa que ja esta no vidro (present so recompoem quando muda).
+//
+// Dois modos (app.json "topbar"):
+//   fixo    — faixa sempre visivel; o canvas do app e a area abaixo dela;
+//   retratil — app em tela cheia; swipe de cima para baixo na borda revela a
+//              faixa por alguns segundos (RETRACT_MS). Todo o gesto de revelar
+//              e consumido: o app nunca ve press/release dele.
+static bool s_exitArmed = false;
+static bool s_barOnGlass = false;
+static bool s_barHotOnGlass = false;
+static int s_armX = 0, s_armY = 0;   // onde o toque no X comecou
+static const char* s_appTitle = "";
+static bool s_topbarFixed = true;    // setado por app pelo launcher (init)
+static bool s_barShown = false;      // retratil: faixa visivel agora
+static uint32_t s_barShownAt = 0;
+static bool s_tbSwipe = false;       // gesto de revelar em andamento
+static int s_tbSwipeY0 = 0;
+static const uint32_t RETRACT_MS = 3000;  // "aparece por alguns segundos"
+
+// expira a faixa retratil; true se ela acabou de sair
+static bool retractTick() {
+    if (!s_topbarFixed && s_barShown && millis() - s_barShownAt > RETRACT_MS) {
+        s_barShown = false;
+        s_exitArmed = false;
+        celer_log_println("[TB] auto-hide");
+        return true;
+    }
+    return false;
+}
+
+// Escala vertical do canvas JS: no modo fixo a topbar fica FORA do canvas (o
+// app desenha em 240x320 mapeado na area abaixo da faixa); no retratil o app
+// e tela cheia (mapa identico ao pre-topbar).
+static inline int appSh(int v) {
+    return s_topbarFixed ? (v * (UI::H - UI::topbarH()) / 320) : v * UI::H / 320;
+}
+// Escala vertical fracionaria (drawBMP/drawPNG escalam por float)
+static inline float appScaleY() {
+    return (float)(s_topbarFixed ? (UI::H - UI::topbarH()) : UI::H) / 320.0f;
+}
+// jsy (alvo-dependent: quadro/display x sprite do app) vive depois das
+// declaracoes de tftSprite/useSprite, logo abaixo.
+static inline int jsu(int v) { return (UI::sx(v) + appSh(v)) / 2; }  // uniforme (raios)
 
 // Wrapper stdio para o drawPngFile do LGFX (a especializacao DataWrapperT<FILE>
 // do upstream so ativa com macros do newlib que nao estao definidas no IDF)
@@ -75,8 +120,101 @@ CelerDisplay* JSBindings::tftInstance = nullptr;
 static CelerSprite* s_frame = nullptr;
 static bool s_frameDirty = false;
 
+// Topbar no estilo da barra que o Terminal desenhava: card, linha de stroke,
+// titulo a esquerda e X a direita. hot (dedo sobre o X) clareia o traco e
+// acende a pastilha — feedback antes de soltar.
+static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
+    int h = UI::topbarH();
+    g.fillRect(0, 0, UI::W, h, THEME_CARD);
+    g.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
+    if (s_appTitle && s_appTitle[0]) {
+        g.setTextDatum(ML_DATUM);
+        g.setTextColor(THEME_TEXT);
+        g.drawString(s_appTitle, UI::sx(6), h / 2, kui::type::caption());
+    }
+    if (hot) {
+        g.fillRoundRect(UI::W - UI::topbarExitW() + UI::sx(3), 1,
+                        UI::topbarExitW() - 2 * UI::sx(3), h - 2, UI::sx(6), THEME_RAISED);
+    }
+    int gx = UI::W - UI::topbarExitW() / 2;
+    int r = h * 2 / 5;   // meia-diagonal do X
+    int t = h / 8;       // meia-espessura do traco
+    if (t < 1) t = 1;
+    uint32_t col = hot ? THEME_TEXT : THEME_TEXT_DIM;
+    // barras diagonais espessas: 2 triangulos por barra (offset perpendicular)
+    auto bar = [&](int ax, int ay, int bx, int by, int px, int py) {
+        g.fillTriangle(ax + px, ay + py, bx + px, by + py, bx - px, by - py, col);
+        g.fillTriangle(ax + px, ay + py, bx - px, by - py, ax - px, ay - py, col);
+    };
+    bar(gx - r, h / 2 - r, gx + r, h / 2 + r, t, -t);  // "\"
+    bar(gx - r, h / 2 + r, gx + r, h / 2 - r, t, t);   // "/"
+}
+
+// Saida de app com "debounce": dispara so no RELEASE em que o toque comecou
+// no X (armado) e o dedo nao se afastou mais que a tolerancia de tap — jitter
+// do controlador nao desarma (bug do glifo: mudava de cor e nao saia), e
+// arrasto para a area do app devolve o gesto a ele. Toque na faixa e
+// mascarado: o app nunca ve coordenadas do chrome.
+static bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
+    const int slopX = UI::sx(18), slopY = UI::sy(18);
+
+    if (!s_topbarFixed) {
+        // ---- modo retratil: gesto de revelar + faixa transitória ----
+        retractTick();
+        if (s_tbSwipe) {  // dedo ainda descendo a partir da borda
+            if (!touched) {
+                s_tbSwipe = false;             // soltou sem arrastar o bastante
+            } else if ((int)y - s_tbSwipeY0 >= UI::sy(12)) {
+                s_tbSwipe = false;
+                s_barShown = true;             // revela por RETRACT_MS
+                s_barShownAt = millis();
+                celer_log_println("[TB] show");
+            }
+            touched = false;                   // gesto inteiro e chrome
+            return false;
+        }
+        if (touched && !s_barShown && UI::inTopbar(x, y)) {
+            s_tbSwipe = true;                  // pode virar o gesto de revelar
+            s_tbSwipeY0 = y;
+            touched = false;
+            return false;
+        }
+        if (!s_barShown) return false;         // faixa oculta: tudo e do app
+        // visivel: cai no chrome comum abaixo (X armavel, faixa mascarada)
+    }
+
+    if (touched && UI::inTopbar(x, y)) {
+        if (!s_exitArmed) {
+            if (UI::hitTopbarExit(x, y)) {
+                s_exitArmed = true;
+                s_armX = x;
+                s_armY = y;
+            }
+        } else if (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY) {
+            s_exitArmed = false;  // deslizou dentro da faixa: nao e tap no X
+        }
+        touched = false;
+        return false;
+    }
+    if (touched) {
+        if (s_exitArmed && (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY)) {
+            s_exitArmed = false;  // deslizou para a area do app: gesto do app
+        }
+        return false;
+    }
+    bool fire = s_exitArmed;
+    s_exitArmed = false;
+    return fire;
+}
+
 CelerSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
+
+int JSBindings::mapY(int v) {
+    return (useSprite && tftSprite) ? appSh(v)
+                                    : (s_topbarFixed ? UI::topbarH() : 0) + appSh(v);
+}
+static inline int jsy(int v) { return JSBindings::mapY(v); }
 
 
 lgfx::LGFXBase* JSBindings::gfx() {
@@ -89,19 +227,39 @@ lgfx::LGFXBase* JSBindings::gfx() {
 }
 
 void JSBindings::present() {
-    if (s_frame != nullptr && s_frameDirty && tftInstance != nullptr) {
+    if (tftInstance == nullptr) return;
+    retractTick();
+    bool wantBar = s_topbarFixed || s_barShown;
+    if (s_frame != nullptr) {
+        // So recompoem se algo mudou (desenho do app ou estado da faixa)
+        if (!s_frameDirty && wantBar == s_barOnGlass &&
+            (!wantBar || s_exitArmed == s_barHotOnGlass)) return;
+        // A topbar vai DENTRO do quadro, antes do push: chega ao vidro atomica
+        // com o conteudo do app (nao pisca) e o app nao consegue cobri-la. No
+        // retratil, parar de compo-la restaura a area no proximo push.
+        if (wantBar) drawAppTopbar(*s_frame, s_exitArmed);
         s_frame->pushSprite(tftInstance, 0, 0);
         s_frameDirty = false;
+        s_barOnGlass = wantBar;
+        s_barHotOnGlass = wantBar && s_exitArmed;
+    } else {
+        // Sem quadro (CYD): o app desenha direto no display, entao a barra so
+        // pode ir no vidro apos cada present (reaparece a cada cedida). Ao
+        // esconder a retratil, a faixa permanece ate o app repintar a regiao
+        // (os jogos a cobrem no frame seguinte).
+        if (wantBar) drawAppTopbar(*tftInstance, s_exitArmed);
+        s_barOnGlass = wantBar;
+        s_barHotOnGlass = wantBar && s_exitArmed;
     }
 }
 
 void JSBindings::fatalErrorHandler(void *udata, const char *msg) {
     (void) udata;
-    Serial.print("*** FATAL ERROR: ");
-    Serial.println(msg ? msg : "no message");
+    celer_log_print("*** FATAL ERROR: ");
+    celer_log_println(msg ? msg : "no message");
     
     if (msg && strstr(msg, "alloc")) {
-        Serial.println("out of memory");
+        celer_log_println("out of memory");
         if (tftInstance) {
             tftInstance->fillScreen(TFT_RED);
             tftInstance->setTextColor(TFT_WHITE, TFT_RED);
@@ -176,7 +334,7 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
     int h = duk_require_int(ctx, 1);
     // Canvas virtual: o sprite e alocado no tamanho FISICO equivalente
     int pw = jsx(w);
-    int ph = jsy(h);
+    int ph = appSh(h);  // sprite = canvas do app: area abaixo da topbar
 
     if (tftSprite) {
         tftSprite->deleteSprite();
@@ -227,11 +385,12 @@ duk_ret_t JSBindings::js_pushSprite(duk_context *ctx) {
     if (!tftInstance || !tftSprite) return 0;
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
+    // Destino (quadro/display): origem do app (abaixo da topbar no fixo)
     if (s_frame != nullptr) {
-        tftSprite->pushSprite(s_frame, jsx(x), jsy(y));
+        tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y));
         s_frameDirty = true;
     } else {
-        tftSprite->pushSprite(jsx(x), jsy(y));
+        tftSprite->pushSprite(jsx(x), JSBindings::mapY(y));
     }
     return 0;
 }
@@ -404,7 +563,8 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     }
     CelerFileWrapper file;
     bool ok = gfx()->drawBmpFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
-                                 (float)UI::W / 240.0f, (float)UI::H / 320.0f);
+                                 (float)UI::W / 240.0f,
+                                 appScaleY());
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
@@ -488,17 +648,23 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
     if (tftInstance) {
         touched = kui::readTouch(&tx, &ty);
-        
-        // Hidden OS Exit Button (Top Right Corner)
-        if (touched && UI::hitExit(tx, ty)) {
+
+        // Topbar (X de sair): dispara so no release; toque na faixa e chrome
+        if (pollAppChrome(touched, tx, ty)) {
             duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
             return 0; // Unreachable, but good practice
         }
     }
-    
-    // Coordenadas no espaco de projeto 240x320 (hit-zones dos apps batem)
+
+    // Coordenadas no espaco de projeto 240x320 (hit-zones dos apps batem);
+    // vertical desconta a topbar do sistema
     int jx = tftInstance ? ((int)tx * 240 / tftInstance->width()) : 0;
-    int jy = tftInstance ? ((int)ty * 320 / tftInstance->height()) : 0;
+    int jy = 0;
+    if (tftInstance) {
+        // fixo: vertical desconta a topbar; retratil: tela cheia 1:1
+        int offY = s_topbarFixed ? UI::topbarH() : 0;
+        jy = ((int)ty - offY) * 320 / ((int)tftInstance->height() - offY);
+    }
     duk_push_object(ctx);
     duk_push_int(ctx, touched ? jx : 0);
     duk_put_prop_string(ctx, -2, "x");
@@ -552,7 +718,7 @@ duk_ret_t JSBindings::js_delayMicroseconds(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_print(duk_context *ctx) {
     const char *msg = duk_require_string(ctx, 0);
-    Serial.println(msg);
+    celer_log_println(msg);
     return 0;
 }
 
@@ -889,19 +1055,19 @@ duk_ret_t JSBindings::js_getFileSize(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_getTotalSpace(duk_context *ctx) {
     const char *drive = duk_require_string(ctx, 0);
-    duk_push_uint(ctx, FileSystem::getTotalSpace(drive));
+    duk_push_number(ctx, (double)FileSystem::getTotalSpace(drive));  // > 4 GB no SD
     return 1;
 }
 
 duk_ret_t JSBindings::js_getUsedSpace(duk_context *ctx) {
     const char *drive = duk_require_string(ctx, 0);
-    duk_push_uint(ctx, FileSystem::getUsedSpace(drive));
+    duk_push_number(ctx, (double)FileSystem::getUsedSpace(drive));  // > 4 GB no SD
     return 1;
 }
 
 duk_ret_t JSBindings::js_getFreeSpace(duk_context *ctx) {
     const char *drive = duk_require_string(ctx, 0);
-    duk_push_uint(ctx, FileSystem::getFreeSpace(drive));
+    duk_push_number(ctx, (double)FileSystem::getFreeSpace(drive));  // > 4 GB no SD
     return 1;
 }
 
@@ -1028,7 +1194,11 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
     present();
 
     uint16_t tx = 0, ty = 0;
-    if (kui::readTouch(&tx, &ty) && UI::hitExit(tx, ty)) {
+    // pollAppChrome SEMPRE roda: o disparo da saida e no release (readTouch
+    // false) — dentro de um if(readTouch) o release nunca seria visto e o X
+    // acendia sem sair (bug do Terminal)
+    bool touched = kui::readTouch(&tx, &ty);
+    if (pollAppChrome(touched, tx, ty)) {
         keypadCloseSession();
         duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
         return 0;
@@ -1078,10 +1248,14 @@ duk_ret_t JSBindings::js_keypadText(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_keypadRect(duk_context *ctx) {
-    // Area das teclas no espaco virtual 240x320; fechado: faixa nula no rodape
+    // Area das teclas no espaco virtual 240x320; fechado: faixa nula no rodape.
+    // O espaco do app comeca abaixo da topbar do sistema.
     int topV = 320;
     if (s_kb && tftInstance) {
-        topV = (int)((long)s_kb->keysTop() * 320 / tftInstance->height());
+        int offY = s_topbarFixed ? UI::topbarH() : 0;
+        int appH = tftInstance->height() - offY;
+        if (appH < 1) appH = 1;
+        topV = (int)(((long)s_kb->keysTop() - offY) * 320 / appH);
         if (topV < 0) topV = 0;
         if (topV > 320) topV = 320;
     }
@@ -1178,7 +1352,8 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
     }
     CelerFileWrapper file;
     duk_push_boolean(ctx, gfx()->drawPngFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
-                                            (float)UI::W / 240.0f, (float)UI::H / 320.0f));
+                                            (float)UI::W / 240.0f,
+                                            appScaleY()));
     return 1;
 }
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
@@ -1499,9 +1674,13 @@ duk_ret_t JSBindings::js_wifiDisconnect(duk_context *ctx) {
 // Init - Register ALL bindings
 // =====================================================
 
-void JSBindings::init(duk_context *ctx, CelerDisplay *tft) {
+void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
+                      bool topbarFixed) {
     s_jsTft = tft;
     tftInstance = tft;
+    s_appTitle = appTitle ? appTitle : "";
+    s_topbarFixed = topbarFixed;
+    celer_log_printf("[TB] init app='%s' fixed=%d\n", s_appTitle ? s_appTitle : "", topbarFixed);
 
     // Estado grafico limpo por app: o sprite de um app anterior (que saiu
     // sem deleteSprite) vazava e ainda capturava o desenho do proximo.
@@ -1514,6 +1693,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft) {
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
+
+    // Topbar limpa: sem faixa/hot/gesto herdados do app anterior
+    s_exitArmed = false;
+    s_barOnGlass = false;
+    s_barHotOnGlass = false;
+    s_barShown = false;
+    s_tbSwipe = false;
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
     if (s_frame == nullptr && Board::profile().hasPsram) {

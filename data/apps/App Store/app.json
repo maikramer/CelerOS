@@ -9,5 +9,6 @@
   "api": 3,
   "system": true,
   "order": 10,
-  "icon": "appstore"
+  "icon": "appstore",
+  "topbar": true
 }

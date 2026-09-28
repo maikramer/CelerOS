@@ -9,5 +9,6 @@
   "api": 3,
   "system": true,
   "order": 40,
-  "icon": "help"
+  "icon": "help",
+  "topbar": true
 }

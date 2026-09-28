@@ -165,8 +165,70 @@ void LauncherScreen::draw(kui::Canvas& c) {
     }
 }
 
+int LauncherScreen::entryAt(int x, int y) const {
+    for (int entry = page * gridCellsPerPage();
+         entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
+        if (cellRect(entry).contains(x, y)) return entry;
+    }
+    return -1;
+}
+
+void LauncherScreen::openAppActions(int entry) {
+    const std::string name = LauncherUI::appEntryName(entry);
+    m_dlg.buttons.clear();
+    kui::Button cancel;
+    cancel.label = "Cancelar";
+    cancel.style = kui::Button::Ghost;
+    cancel.onTap = [] { Navigator::closeDialog(); };
+    if (LauncherUI::appEntryIsSystem(entry)) {
+        // apps de sistema nao saem pelo launcher (Settings > Reset repoe)
+        m_dlg.title = name;
+        m_dlg.body = "App de sistema";
+        cancel.label = "OK";
+        m_dlg.buttons.push_back(cancel);
+    } else {
+        m_dlg.title = "Remover " + name + "?";
+        m_dlg.body = "O app e os dados dele saem do aparelho";
+        m_dlg.buttons.push_back(cancel);
+        kui::Button rm;
+        rm.label = "Remover";
+        rm.style = kui::Button::Danger;
+        rm.onTap = [this, entry] {
+            Navigator::closeDialog();
+            uninstall(entry);
+        };
+        m_dlg.buttons.push_back(rm);
+    }
+    Navigator::showDialog(&m_dlg);
+}
+
+void LauncherScreen::uninstall(int entry) {
+    const std::string name = LauncherUI::appEntryName(entry);
+    const std::string path = LauncherUI::appEntryPath(entry);
+    bool ok = LauncherUI::appEntryIsFolder(entry) ? FileSystem::removeTree(path.c_str())
+                                                  : FileSystem::deleteFile(path.c_str());
+    LauncherUI::scanLocalApps();  // ja: a grade reflete na hora
+    LauncherUI::needsRescan = false;
+    if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
+    Navigator::toast(ok ? name + " removido" : "Falha ao remover " + name, ok ? THEME_OK : THEME_ERR);
+    markDirty();
+}
+
 bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     const int tp = LauncherUI::gridTotalPages();
+
+    if (ev.type == TouchEvent::Press) {
+        m_pressMs = millis();
+        m_pressEntry = entryAt(ev.x, ev.y);
+        m_longFired = false;
+        return false;
+    }
+    if (ev.type == TouchEvent::Release && m_longFired) {
+        m_longFired = false;  // o toque longo ja abriu o dialogo
+        m_pressEntry = -1;
+        return true;
+    }
+    if (ev.type == TouchEvent::Release) m_pressEntry = -1;
 
     // arrasto horizontal: a pagina acompanha o dedo
     if (ev.type == TouchEvent::Drag) {
@@ -208,6 +270,32 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
 }
 
 void LauncherScreen::onTick(uint32_t dtMs) {
+    // "run" do shell (celerctl shell "run <app>")
+    std::string req;
+    if (LauncherUI::takeLaunchRequest(req)) {
+        if (LauncherUI::needsRescan) {
+            LauncherUI::scanLocalApps();
+            LauncherUI::needsRescan = false;
+        }
+        int idx = LauncherUI::findEntry(req);
+        if (idx >= 0) {
+            Navigator::push(AppHostScreen::instance(idx));
+            return;
+        }
+        Navigator::toast("App nao encontrado: " + req, THEME_ERR);
+    }
+
+    // pressionar e segurar (600 ms, sem arrastar) num app: acoes do app
+    const kui::TouchState& ts = kui::touchState();
+    if (m_pressEntry >= 0 && !m_longFired) {
+        if (!ts.down || ts.moved || m_dragDx != 0) {
+            if (!ts.down) m_pressEntry = -1;
+        } else if (millis() - m_pressMs >= 600) {
+            m_longFired = true;
+            openAppActions(m_pressEntry);
+        }
+    }
+
     // relogio/rede mudam no maximo por segundo: sem formatar string a cada 5 ms
     m_pollAccumMs += dtMs;
     if (m_pollAccumMs < 250) return;
@@ -247,6 +335,10 @@ void AppHostScreen::onTick(uint32_t) {
     m_started = true;
     // Executa o app sincronamente (sai via OS_EXIT; task propria no W7d)
     LauncherUI::launchApp(m_appIndex);
+    // O toque que fechou o app (X do canto, botao do proprio app, erro) morre
+    // aqui: sem isso o release vira tap no launcher — e o WiFi mora no mesmo
+    // canto do X.
+    TouchPump::quarantine(300);
     // O app pode ter empilhado tela nativa (System.openWifiSetup + exitApp):
     // o host sai da pilha sem derrubar o que veio por cima
     if (Navigator::top() == this) Navigator::home();
