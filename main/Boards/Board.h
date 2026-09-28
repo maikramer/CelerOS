@@ -28,6 +28,7 @@ struct BoardProfile {
     bool backlightPwm;       // brilho controlavel
     bool capacitiveTouch;    // sem calibracao interativa
     int speakerPin;          // buzzer passivo p/ System.beep (LEDC); -1 = nao ha
+    int rotation;            // rotação fixa do painel no boot (0-3; CYD clássica = 3, landscape)
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).

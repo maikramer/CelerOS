@@ -66,10 +66,11 @@ static void celerSetup() {
 
     // Init TFT (HAL da placa)
     Board::init();
-    tft.setRotation(0);
+    tft.setRotation(Board::profile().rotation);
     UI::init(tft.width(), tft.height());
     ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
+
 
     bootSplash(i18n::TR("Iniciando...", "Starting..."));
 

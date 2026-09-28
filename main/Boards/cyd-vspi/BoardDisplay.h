@@ -2,96 +2,84 @@
 #define CELER_BOARDS_CYD_DISPLAY_H
 
 // ----------------------------------------------------------------------------
-// Cheap Yellow Display (ESP32-2432S028R, variante classica witnessmenow):
-// ILI9341 240x320 no HSPI NATIVO (SCK=14, MOSI=13, MISO=12, CS=15, DC=2,
-// RST=4) com backlight em GPIO21 e o touch XPT2046 em pinos DEDICADOS
-// (CLK=25, MOSI=32, MISO=39, CS=33) rodando no VSPI livre.
+// CYD variante VSPI (NAO TESTADA em hardware): ILI9341 240x320 no VSPI
+// (SCK=18, MOSI=23, MISO=19, CS=17, DC=16, RST=5), touch resistivo XPT2046
+// compartilhando o barramento (CS=21) e backlight em GPIO22.
 //
-// ATENCAO variante: a primera versao deste driver assumia o pinot do env
-// platformio do fork original (TFT no VSPI 18/23/19, touch compartilhando o
-// bus) — nessa placa esses pinos nao ligam em nada (tela branca). O pinout
-// abaixo e o da placa fisica, conferido contra um projeto que roda nela
-// (ESP32-Cheap-Yellow-Display/PINS.md). O slot microSD da variante fica no
-// MESMO HSPI do TFT (CS=5): o mount dedicado do FileSystem conflitaria com
-// o display, entao o SD fica desativado no BoardProfile ate o mount aprender
-// bus compartilhado.
+// Este era o pinout do target "cyd" original, herdado do env
+// esp32doit-devkit-v1 do platformio.ini do fork — na placa CLASSICA
+// (ESP32-2432S028R witnessmenow) esses pinos nao ligam a nada (tela branca).
+// A partir de 2026-09 o target "cyd" e a variante classica (HSPI + touch
+// dedicado); esta fica como "cyd-vspi" para quem tiver a placa com este
+// pinout. NAO FOI TESTADA: se for a sua placa e nao desenhar, abra issue
+// com o pinout.
 // ----------------------------------------------------------------------------
 
 #include "../../Display/Display.h"
 
-#include <lgfx/v1/panel/Panel_ST7789.hpp>
+#include <lgfx/v1/panel/Panel_ILI9341.hpp>
 #include <lgfx/v1/platforms/esp32/Bus_SPI.hpp>
 #include <lgfx/v1/touch/Touch_XPT2046.hpp>
 
 class BoardDisplay : public CelerDisplayBase {
 public:
-    lgfx::Bus_SPI      _bus;
-    lgfx::Panel_ST7789 _panel;
+    lgfx::Bus_SPI       _bus;
+    lgfx::Panel_ILI9341 _panel;
     lgfx::Light_PWM     _light;
     lgfx::Touch_XPT2046 _touch;
 
     BoardDisplay(void) {
         {
             auto cfg = _bus.config();
-            cfg.spi_host = SPI2_HOST;  // HSPI (pinos nativos 13/14/12)
-            cfg.freq_write = 26000000;   // 26MHz validado nesta placa
-            cfg.pin_sclk = 14;
-            cfg.pin_mosi = 13;
-            cfg.pin_miso = 12;
-            cfg.pin_dc = 2;
+            cfg.spi_host = SPI3_HOST;  // VSPI
+            cfg.freq_write = 27000000;   // 27MHz (valor validado no env original)
+            cfg.pin_sclk = 18;
+            cfg.pin_mosi = 23;
+            cfg.pin_miso = 19;
+            cfg.pin_dc = 16;
             _bus.config(cfg);
             _panel.setBus(&_bus);
         }
         {
             auto cfg = _panel.config();
-            cfg.pin_cs = 15;
-            cfg.pin_rst = 4;
-            // Vidro real desta placa: 320x240 LANDSCAPE (RAM inteira do
-            // controlador 240x320, girada). Varredura da sonda v5 confirmou:
-            // rotacao 3 + offsets 0 + painel cheio = tela toda. O CelerOS
-            // nesta placa roda em landscape (profile.rotation = 3).
+            cfg.pin_cs = 17;
+            cfg.pin_rst = 5;
             cfg.panel_width = 240;
             cfg.panel_height = 320;
             cfg.memory_width = 240;
             cfg.memory_height = 320;
             cfg.offset_x = 0;
             cfg.offset_y = 0;
-            cfg.offset_rotation = 0;
             _panel.config(cfg);
         }
         {
             auto cfg = _light.config();
-            cfg.pin_bl = 21;
+            cfg.pin_bl = 22;
             _light.config(cfg);
             _panel.setLight(&_light);
         }
         {
-            // Touch em barramento PROPRIO (nao compartilha com o TFT):
-            // XPT2046 da placa tem fio proprio — VSPI livre com pinos
-            // remapeados pela GPIO matrix.
             auto cfg = _touch.config();
-            // Faixa bruta com eixos invertidos (conferido nesta variante);
-            // a calibracao interativa de 2 pontos refina e persiste em
-            // /local/touch_cal_p.bin
-            cfg.x_min = 3800;
-            cfg.x_max = 300;
-            cfg.y_min = 3650;
-            cfg.y_max = 350;
+            // Faixa bruta de fabrica; a calibracao interativa (calibrateTouch)
+            // refina por dispositivo e persiste em /local/touch_cal_p.bin
+            cfg.x_min = 300;
+            cfg.x_max = 3900;
+            cfg.y_min = 200;
+            cfg.y_max = 3700;
             cfg.pin_int = -1;
-            cfg.bus_shared = false;
+            cfg.bus_shared = true;
             cfg.offset_rotation = 0;
-            cfg.spi_host = SPI3_HOST;  // VSPI dedicado ao touch
-            cfg.freq = 2000000;
-            cfg.pin_sclk = 25;
-            cfg.pin_mosi = 32;
-            cfg.pin_miso = 39;
-            cfg.pin_cs = 33;
+            cfg.spi_host = SPI3_HOST;  // VSPI
+            cfg.freq = 2500000;
+            cfg.pin_sclk = 18;
+            cfg.pin_mosi = 23;
+            cfg.pin_miso = 19;
+            cfg.pin_cs = 21;
             _touch.config(cfg);
             _panel.setTouch(&_touch);
         }
         setPanel(&_panel);
     }
-
 
     // Calibracao no formato proprio [x_min, x_max, y_min, y_max, 0],
     // persistida pelo TouchCalibrator em /local/touch_cal_p.bin.

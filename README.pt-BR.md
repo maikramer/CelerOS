@@ -50,7 +50,7 @@ desenvolvimento.
 
 As definições de placa ficam em `boards/<placa>/` (defaults de sdkconfig) e
 `main/Boards/<placa>/` (mapa de pinos e driver de display). Selecione o alvo
-com `-DCELEROS_BOARD=smartdisplay|cyd`. A UI é adaptativa à resolução, então
+com `-DCELEROS_BOARD=smartdisplay|cyd|cyd-vspi`. A UI é adaptativa à resolução, então
 adicionar um painel é, na maior parte, um novo perfil de placa.
 
 ## Compilando e Gravando

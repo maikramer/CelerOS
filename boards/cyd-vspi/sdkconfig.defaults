@@ -1,0 +1,23 @@
+# CYD variante VSPI (NAO TESTADA — ver main/Boards/cyd-vspi/BoardDisplay.h)
+# ESP32 classico 4MB, sem PSRAM; particionamento identico ao da cyd
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4MB.csv"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Slot OTA de 1.75MB: logs ESP_LOGD/V ficam fora do binario (o VERBOSE do
+# sdkconfig.defaults comum foi para depurar o touch I2C da SmartDisplay e
+# custava dezenas de KB de strings aqui).
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+# CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
+# Logs ESP_LOGI (IDF + componentes) tambem ficam fora: o logcat do CelerOS
+# (celer_log_*) nao passa por ESP_LOG e segue completo.
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+# CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
+
+# Bundle de CAs "comum" (~45 raizes que cobrem a grande maioria dos sites:
+# GitHub, Let's Encrypt, DigiCert...) em vez do completo: ~35 KB a menos no
+# slot de 1.75MB. A SmartDisplay (16MB) segue com o bundle completo.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set

@@ -17,6 +17,7 @@ static const BoardProfile s_profile = {
     .backlightPwm = true,
     .capacitiveTouch = true,
     .speakerPin = -1,  // sem buzzer na placa; setar o GPIO quando houver
+    .rotation = 0,     // painel quadrado 480x480, sem rotação
 };
 
 void init() {

@@ -1,7 +1,6 @@
 #include "Boards/Board.h"
 
-// Perfil da CYD classica (ESP32-2432S028R witnessmenow): TFT no HSPI nativo,
-// touch XPT2046 em pinos dedicados, backlight GPIO21. Variante testada.
+// Perfil da variante CYD com TFT no VSPI (NAO TESTADA — ver BoardDisplay.h).
 
 namespace {
 BoardDisplay s_display;
@@ -10,18 +9,15 @@ BoardDisplay s_display;
 namespace Board {
 
 static const BoardProfile s_profile = {
-    .id = "cyd",
+    .id = "cyd-vspi",
     .otaChannel = "esp32",
-    .name = "cyd (ESP32-2432S028R classica)",
-    // Slot microSD desta variante fica no MESMO HSPI do TFT (CS=5): o mount
-    // dedicado do FileSystem conflitaria com o display — desativado ate o
-    // mount suportar bus compartilhado (cs < 0 = sem SD no perfil).
-    .sd = {.cs = -1, .sck = 14, .miso = 12, .mosi = 13, .freqKhz = 0},
+    .name = "cyd-vspi (CYD pinout VSPI — nao testada)",
+    .sd = {.cs = 15, .sck = 14, .miso = 26, .mosi = 13, .freqKhz = 0},  // HSPI dedicado (0 = default do driver)
     .hasPsram = false,
     .backlightPwm = true,   // GPIO22 via Light_PWM (antes era fixo 100%)
     .capacitiveTouch = false,
     .speakerPin = -1,  // sem buzzer na placa; setar o GPIO quando houver
-    .rotation = 3,     // vidro landscape 320x240 (varredura de sonda confirmou R3)
+    .rotation = 0,     // portrait 240x320 (como o env original)
 };
 
 void init() {
