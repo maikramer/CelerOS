@@ -1,0 +1,22 @@
+# Opcoes do Duktape 2.7.0 para o CelerOS. Os apps sao ES5 puro: builtins
+# ES6+/extensoes saem do binario. VERBOSE_ERRORS/TRACEBACKS ficam (sao as
+# mensagens de erro que o dev de app ve).
+#
+# Regerar duktape.c/duktape.h/duk_config.h (a partir do release oficial):
+#   curl -LO https://duktape.org/duktape-2.7.0.tar.xz && tar xf duktape-2.7.0.tar.xz
+#   (configure.py do 2.7.0 so roda em Python 2.7 + PyYAML; ex.: imagem python:2.7-slim)
+#   python2 duktape-2.7.0/tools/configure.py --output-directory /tmp/duk \
+#       --option-file components/duktape/celeros_duk_config.yaml
+#   cp /tmp/duk/duktape.c /tmp/duk/duktape.h /tmp/duk/duk_config.h components/duktape/
+DUK_USE_ES6_PROXY: false
+DUK_USE_REFLECT_BUILTIN: false
+DUK_USE_SYMBOL_BUILTIN: false
+DUK_USE_ES7_EXP_OPERATOR: false
+DUK_USE_CBOR_SUPPORT: false
+DUK_USE_CBOR_BUILTIN: false
+DUK_USE_ENCODING_BUILTINS: false
+DUK_USE_PERFORMANCE_BUILTIN: false
+DUK_USE_BUFFEROBJECT_SUPPORT: false
+DUK_USE_COROUTINE_SUPPORT: false
+DUK_USE_JX: false
+DUK_USE_JC: false

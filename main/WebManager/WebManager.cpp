@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "sdkconfig.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_wifi.h"
@@ -18,10 +19,23 @@
 #include "../Utils/StrUtils.h"
 #include "../Kernel/TimeManager.h"
 #include "WebAuth.h"
-#include "filemanager_html.h"
-#include "ota_upload_html.h"
 
 static const char* WM_TAG = "celer.web";
+
+#if CONFIG_CELEROS_WEB_SERVER
+// Paginas web embutidas ja comprimidas (gzip gerado no build a partir de
+// filemanager.html / ota_upload.html — ver main/CMakeLists.txt)
+extern const uint8_t filemanager_gz_start[] asm("_binary_filemanager_html_gz_start");
+extern const uint8_t filemanager_gz_end[] asm("_binary_filemanager_html_gz_end");
+extern const uint8_t ota_upload_gz_start[] asm("_binary_ota_upload_html_gz_start");
+extern const uint8_t ota_upload_gz_end[] asm("_binary_ota_upload_html_gz_end");
+
+static esp_err_t sendGzipHtml(httpd_req_t* req, const uint8_t* start, const uint8_t* end) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    return httpd_resp_send(req, (const char*)start, end - start);
+}
+#endif
 
 static httpd_handle_t s_server = nullptr;
 static bool s_nmEventsBound = false;
@@ -278,6 +292,7 @@ void WebManager::forgetAllNetworks() {
     disable();
 }
 
+#if CONFIG_CELEROS_WEB_SERVER
 // ---------------------------------------------------------------------------
 // esp_http_server — helpers
 // ---------------------------------------------------------------------------
@@ -421,8 +436,7 @@ static void sendFile(httpd_req_t* req, const std::string& path, const char* type
 
 static esp_err_t handler_index(httpd_req_t* req) {
     addCORS(req);
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, filemanager_html, strlen(filemanager_html));
+    sendGzipHtml(req, filemanager_gz_start, filemanager_gz_end);
     return ESP_OK;
 }
 
@@ -808,8 +822,7 @@ static esp_err_t handler_upload(httpd_req_t* req) {
 
 static esp_err_t handler_update_get(httpd_req_t* req) {
     addCORS(req);
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, ota_upload_html, strlen(ota_upload_html));
+    sendGzipHtml(req, ota_upload_gz_start, ota_upload_gz_end);
     return ESP_OK;
 }
 
@@ -868,3 +881,9 @@ void WebManager::startWebServerIfNeeded() {
 
     celer_log_println("Web Server started on port 80 (senha: app Web Server / celerctl info)");
 }
+
+#else  // !CONFIG_CELEROS_WEB_SERVER: build sem servidor web (file manager + /update)
+
+void WebManager::startWebServerIfNeeded() {}
+
+#endif

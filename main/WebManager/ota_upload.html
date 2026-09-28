@@ -1,9 +1,4 @@
-#ifndef CELEROS_OTA_UPLOAD_HTML_H
-#define CELEROS_OTA_UPLOAD_HTML_H
-
-// Pagina de flash de firmware pelo navegador (POST /update), no mesmo estilo
-// do file manager. Conceito ElegantOTA sem dependencia externa.
-static const char ota_upload_html[] PROGMEM = R"html(<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -90,6 +85,4 @@ x.send(fd);
 }
 </script>
 </body>
-</html>)html";
-
-#endif // CELEROS_OTA_UPLOAD_HTML_H
+</html>

@@ -118,17 +118,6 @@ std::string Utility::CamelCaseToTitleCase(const std::string &toConvert) {
     return str.str();
 }
 
-void Utility::ListJsonKeys(const nlohmann::json &j) {
-    int count = 0;
-    for ([[maybe_unused]] auto item: j.items()) {
-        count++;
-    }
-    ESP_LOGI(__FUNCTION__, "Numero de Items:%d", count);
-    for (const auto &item: j.items()) {
-        ESP_LOGI(__FUNCTION__, "Item:%s", item.key().c_str());
-    }
-}
-
 uint32_t Utility::ReadOutput(gpio_num_t gpio) {
     return gpio_get_level(gpio);
 }

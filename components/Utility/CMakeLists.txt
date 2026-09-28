@@ -5,8 +5,7 @@ set(srcs Utility.cpp CrossPlatformUtility.cpp)
 # Se nameof for necessário, inicialize o submódulo: git submodule update --init --recursive
 set(include_dirs .)
 # Removido ErrorCodes da lista de requires - ErrorCodes depende de Utility, não o contrário
-# Nota: No REQUIRES usamos 'nlohmann-json' (nome do componente), não 'johboh/nlohmann-json' (nome no registry)
 # Adicionado esp_driver_gpio para suporte a GPIO (ESP-IDF v6.0)
-set(requires nvs_flash nlohmann-json esp_driver_gpio)
+set(requires nvs_flash esp_driver_gpio)
 
 idf_component_register(SRCS "${srcs}" INCLUDE_DIRS "${include_dirs}" REQUIRES "${requires}")

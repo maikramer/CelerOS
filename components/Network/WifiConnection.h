@@ -11,10 +11,9 @@
 #include "esp_netif.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "BaseConnection.h"
+#include "ErrorCode.h"
 #include "IPAddress.h"
 #include "WifiErrorCodes.h"
-#include "WifiClient.h"
 #include "Event.h"
 #include "NetworkTypes.h"
 
@@ -65,13 +64,13 @@ struct WiFiConnectionEvent {
 
 /**
  * @class WifiConnection
- * @brief Manages a WiFi connection in station (STA) mode, inheriting from BaseConnection.
+ * @brief Manages a WiFi connection in station (STA) mode.
  * 
  * This class provides a fully event-driven interface for WiFi operations. All major
  * state changes are reported through events, allowing consumers to react to WiFi
  * events without polling.
  */
-class WifiConnection : public BaseConnection {
+class WifiConnection {
 public:
     /**
      * @brief Constructor.
@@ -81,7 +80,7 @@ public:
     /**
      * @brief Destructor. Disconnects from the WiFi network if connected.
      */
-    ~WifiConnection() override;
+    ~WifiConnection();
 
     /**
      * @brief Initialize the WiFi subsystem.
@@ -108,14 +107,14 @@ public:
     /**
      * @brief Disconnects from the currently connected WiFi network.
      */
-    void disconnect() override;
+    void disconnect();
 
     /**
      * @brief Checks if the device is currently connected to a WiFi network.
      *
      * @return True if connected, false otherwise.
      */
-    [[nodiscard]] bool isConnected() const override;
+    [[nodiscard]] bool isConnected() const;
 
     /**
      * @brief Gets the current connection state.
@@ -156,29 +155,8 @@ public:
      */
     [[nodiscard]] NetworkInfo getNetworkInfo() const;
 
-    /**
-     * @brief Sends raw byte data over the WiFi connection.
-     *
-     * @param data The data buffer to send.
-     * @param length The length of the data buffer.
-     * @return ErrorCode indicating success or failure.
-     */
-    ErrorCode sendRawData(const uint8_t* data, size_t length) const override;
 
-    /**
-     * @brief Gets the connection ID associated with this WifiConnection.
-     *
-     * @return The connection ID.
-     */
-    [[nodiscard]] uint16_t getId() const;
 
-    /**
-     * @brief Sets the WiFi client for data transmission.
-     * @param wifiClient Pointer to a WifiClient object.
-     */
-    void setWifiClient(WifiClient* wifiClient) {
-        _wifiClient = wifiClient;
-    }
 
     /**
      * @brief Scans for available WiFi networks (blocking).
@@ -272,8 +250,6 @@ public:
      */
     Event<WifiConnection*, uint8_t, uint8_t> onRetrying;
 
-    // Legacy event for backward compatibility
-    Event<WifiConnection*, void*> onConnect;
 
 private:
     static void eventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
@@ -322,10 +298,8 @@ private:
     bool _asyncMode; /**< Flag indicating if in async connection mode. */
     bool _scanInProgress; /**< Flag indicating if a scan is currently running. */
     bool _blockingScan; /**< Flag indicating if current scan is blocking (results handled by caller). */
-    uint16_t _connId; /**< Connection ID for this WiFi connection. */
     WiFiConnectionState _state; /**< Current connection state. */
     WiFiScanResult _lastScanResult; /**< Results from the last scan. */
-    WifiClient* _wifiClient; /**< Pointer to the WifiClient object. */
     SemaphoreHandle_t _scanMutex; /**< Mutex to protect scan operations. */
 
     static constexpr int8_t RSSI_CHANGE_THRESHOLD = 5; /**< RSSI change threshold for events (dB). */

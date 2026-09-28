@@ -426,45 +426,59 @@ ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork&
     if (err != CommonErrorCodes::None) return err;
     if (legacyUsed != nullptr) *legacyUsed = true;
 
-    try {
-        size_t pos = 0;
-        int fieldIndex = 0;
-        while (pos <= serialized.length()) {
-            size_t bar = serialized.find('|', pos);
-            std::string field = (bar == std::string::npos)
-                                    ? serialized.substr(pos)
-                                    : serialized.substr(pos, bar - pos);
-            switch (fieldIndex) {
-                case 0:
-                    strncpy(network.ssid, field.c_str(), sizeof(network.ssid) - 1);
-                    network.ssid[sizeof(network.ssid) - 1] = '\0';
-                    break;
-                case 1:
-                    strncpy(network.password, field.c_str(), sizeof(network.password) - 1);
-                    network.password[sizeof(network.password) - 1] = '\0';
-                    break;
-                case 2:
-                    network.priority = static_cast<int8_t>(std::stoi(field));
-                    break;
-                case 3:
-                    network.lastRssi = static_cast<int8_t>(std::stoi(field));
-                    break;
-                case 4:
-                    network.lastConnected = static_cast<uint32_t>(std::stoul(field));
-                    break;
-                case 5:
-                    network.autoConnect = (field == "1");
-                    break;
-                case 6:
-                    network.authMode = static_cast<WiFiAuthMode>(std::stoi(field));
-                    break;
-            }
-            fieldIndex++;
-            if (bar == std::string::npos) break;
-            pos = bar + 1;
+    // Sem excecoes (o firmware compila com -fno-exceptions): numero invalido
+    // marca a entrada como corrompida em vez de abortar.
+    auto parseNum = [](const std::string& s, long& out) {
+        if (s.empty()) return false;
+        char* end = nullptr;
+        out = strtol(s.c_str(), &end, 10);
+        return end != nullptr && *end == '\0';
+    };
+
+    size_t pos = 0;
+    int fieldIndex = 0;
+    bool ok = true;
+    while (ok && pos <= serialized.length()) {
+        size_t bar = serialized.find('|', pos);
+        std::string field = (bar == std::string::npos)
+                                ? serialized.substr(pos)
+                                : serialized.substr(pos, bar - pos);
+        long num = 0;
+        switch (fieldIndex) {
+            case 0:
+                strncpy(network.ssid, field.c_str(), sizeof(network.ssid) - 1);
+                network.ssid[sizeof(network.ssid) - 1] = '\0';
+                break;
+            case 1:
+                strncpy(network.password, field.c_str(), sizeof(network.password) - 1);
+                network.password[sizeof(network.password) - 1] = '\0';
+                break;
+            case 2:
+                ok = parseNum(field, num);
+                network.priority = static_cast<int8_t>(num);
+                break;
+            case 3:
+                ok = parseNum(field, num);
+                network.lastRssi = static_cast<int8_t>(num);
+                break;
+            case 4:
+                ok = parseNum(field, num);
+                network.lastConnected = static_cast<uint32_t>(num);
+                break;
+            case 5:
+                network.autoConnect = (field == "1");
+                break;
+            case 6:
+                ok = parseNum(field, num);
+                network.authMode = static_cast<WiFiAuthMode>(num);
+                break;
         }
-    } catch (const std::exception& e) {
-        ESP_LOGE(TAG, "Corrupt legacy network entry at index %zu: %s", index, e.what());
+        fieldIndex++;
+        if (bar == std::string::npos) break;
+        pos = bar + 1;
+    }
+    if (!ok) {
+        ESP_LOGE(TAG, "Corrupt legacy network entry at index %zu", index);
         return CommonErrorCodes::OperationFailed;
     }
 

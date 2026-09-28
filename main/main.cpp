@@ -40,8 +40,10 @@ static LauncherScreen s_launcher;  // base da pilha do Navigator
 static void bootSplash(const char* status) {
     tft.fillScreen(THEME_BG);
     const float zoom = (float)UI::W / 240.0f;
-    tft.pushImageRotateZoom(UI::cx(), UI::sy(115), SPLASH_LOGO_W / 2.0f, SPLASH_LOGO_H / 2.0f,
-                            0.0f, zoom, zoom, SPLASH_LOGO_W, SPLASH_LOGO_H, kSplashLogo);
+    tft.drawPng(kSplashLogoPng, sizeof(kSplashLogoPng),
+                UI::cx() - (int32_t)(SPLASH_LOGO_W * zoom / 2.0f),
+                UI::sy(115) - (int32_t)(SPLASH_LOGO_H * zoom / 2.0f),
+                0, 0, 0, 0, zoom, zoom);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(THEME_TEXT_DIM);
     tft.drawString(status, UI::cx(), UI::sy(175), UI::font(1));

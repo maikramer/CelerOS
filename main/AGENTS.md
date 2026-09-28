@@ -12,14 +12,14 @@ main/
 ├── UI/               # Kui.{h,cpp}: kui:: Canvas/Screen/Widget/TouchPump/Navigator; Keyboard
 ├── Launcher/         # LauncherUI (scans /local/apps/ + /sd/apps/), Screens.cpp (system screens)
 ├── Kernel/Core/      # CelerKernel: Duktape heap, runs app main.js; Kernel/TimeManager (NTP/tz)
-├── Runtime/          # JSBindings - the JS API surface (own AGENTS.md)
+├── Runtime/          # JS API surface: JSBindings.cpp core + Js*.cpp modules (own AGENTS.md)
 ├── FileSystem/       # static FileSystem:: LittleFS(/local) + SD(/sd), atomic writes, MD5
-├── WebManager/       # WiFi boot/reconnect, httpd file manager + /update OTA upload, captive portal
-├── OTA/              # OtaManager: update.json v2 check + esp_https_ota
+├── WebManager/       # WiFi boot/reconnect, httpd file manager + /update OTA upload (gzip pages), captive portal host
+├── OTA/              # OtaManager: update.json v2 check + direct esp_https_ota flash (the only OTA path)
 ├── USBDevice/        # CelerShell, CelerLink (celerctl protocol), SerialLink (UART), LogSink
 ├── Compat/           # Arduino.h shim (millis/delay/pinMode...) over IDF - include path root
 ├── Settings/         # TouchCalibrator
-└── Assets/           # SplashLogo.h (GENERATED)
+└── Assets/           # SplashLogo.h (GENERATED: 64-color PNG drawn with drawPng)
 ```
 
 ## BOOT FLOW (main.cpp)
@@ -35,7 +35,8 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 | Touch gestures / tap vs swipe | `UI/Kui.cpp` TouchPump; injected touches (celerctl tap) go through TouchInjector |
 | celerctl device side | `USBDevice/CelerLink.cpp` (opcodes), `SerialLink.cpp` (UART transport) |
 | App discovery / launch | `Launcher/LauncherUI.cpp` (appDirs, `main.js`) |
-| Web file-manager page | edit `WebManager/filemanager.html`, then re-embed in `filemanager_html.h` |
+| Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
+| Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |
 
 ## CONVENTIONS
 - Board HAL: `#include "Boards/Board.h"` / `"BoardDisplay.h"` resolve through the board dir on the PRIVATE include path. **Never add a board `#ifdef`** anywhere else. Put compile-time differences in `BoardTraits.h` (e.g. `largeUi`).
@@ -44,6 +45,7 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 - Logging goes through `celer_log_printf/println` (LogSink -> UART/CDC and the logcat buffer), not bare `printf`.
 - Use `FileSystem::writeTextFile` for persistent state (tmp + rename; power-loss safe).
 - Comments and log strings are Portuguese without accents. Match that style.
+- Feature code behind a Kconfig flag uses `#if CONFIG_CELEROS_<X>` with a no-op `#else` stub for the public entry point, so callers never need `#if`.
 - `CONFIG_CELEROS_USB_NATIVE` (Kconfig.projbuild, S3 only, default n) swaps SerialLink for TinyUSB dual CDC. **Keep it off on SmartDisplay 4848S040**: GPIO19/20 are the GT911 touch SDA and an RGB data line. Enabling it also needs `CONFIG_TINYUSB_CDC_COUNT=2`.
 
 ## ANTI-PATTERNS
@@ -53,4 +55,4 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 - The `DEBUG:` heap prints in `celerSetup` are always on. They are known noise; don't copy the pattern.
 
 ## HOTSPOTS
-`Runtime/JSBindings.cpp` 2182 LOC, `WebManager/WebManager.cpp` 841, `UI/Kui.cpp` 820, `Launcher/Screens.cpp` 745, `FileSystem/FileSystem.cpp` 578.
+`WebManager/WebManager.cpp` ~890, `Runtime/JSBindings.cpp` ~880 (core only), `UI/Kui.cpp` 820, `Launcher/Screens.cpp` 745, `FileSystem/FileSystem.cpp` 578.

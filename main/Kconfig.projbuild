@@ -17,4 +17,26 @@ config CELEROS_USB_NATIVE
         CONFIG_TINYUSB_CDC_ENABLED=y
         CONFIG_TINYUSB_CDC_COUNT=2
 
+config CELEROS_WEB_SERVER
+    bool "Servidor web (file manager + /update pelo navegador)"
+    default y
+    help
+      Gerenciador de arquivos e pagina de upload de firmware na porta 80,
+      com senha (WebAuth). O captive portal de configuracao do WiFi nao
+      depende desta opcao.
+
+config CELEROS_SD_CARD
+    bool "Cartao SD (/sd via SPI + FAT)"
+    default y
+    help
+      Monta o cartao em /sd e procura apps em /sd/apps. Desligado, FS.mountSD()
+      retorna false e o FAT/SDSPI saem do binario.
+
+config CELEROS_JS_GPIO
+    bool "API System.gpio para apps"
+    default y
+    help
+      pinMode/digitalWrite/digitalRead/analogRead/analogWrite/pulseIn para
+      apps JS. Desligado, System.gpio fica undefined (apps podem testar).
+
 endmenu

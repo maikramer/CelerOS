@@ -14,11 +14,11 @@ const char *WifiConnection::TAG = "WifiConnection";
  */
 
 WifiConnection::WifiConnection() :
-        BaseConnection(), _ipAddress(), _rssi(0), _lastReportedRssi(0),
+        _ipAddress(), _rssi(0), _lastReportedRssi(0),
         _channel(0), _retryNum(0), _maxRetries(5), _connectionTimeout(20000),  // 20 seconds timeout
         _isConnected(false), _initialized(false), _asyncMode(false),
-        _scanInProgress(false), _blockingScan(false), _connId(0), _state(WiFiConnectionState::Idle), 
-        _wifiClient(nullptr), _scanMutex(nullptr) {
+        _scanInProgress(false), _blockingScan(false), _state(WiFiConnectionState::Idle), 
+        _scanMutex(nullptr) {
     _scanMutex = xSemaphoreCreateMutex();
 }
 
@@ -350,24 +350,6 @@ NetworkInfo WifiConnection::getNetworkInfo() const {
     return info;
 }
 
-ErrorCode WifiConnection::sendRawData(const uint8_t *data, size_t length) const {
-    if (_wifiClient == nullptr) {
-        return CommonErrorCodes::NotInitialized;
-    }
-    
-    auto error = _wifiClient->write(data, length);
-    if (error != CommonErrorCodes::None) {
-        error.log(TAG);
-        return error;
-    }
-
-    return CommonErrorCodes::None;
-}
-
-uint16_t WifiConnection::getId() const {
-    return _connId;
-}
-
 void WifiConnection::setMaxRetries(uint8_t maxRetries) {
     _maxRetries = maxRetries;
 }
@@ -674,9 +656,6 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                     
                     self->setState(WiFiConnectionState::Idle);
                     self->onDisconnected.trigger(self, event);
-                    
-                    // Also trigger legacy event
-                    self->BaseConnection::onDisconnect.trigger(self, nullptr);
                 }
                 break;
             }
@@ -729,9 +708,6 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
         connEvent.error = CommonErrorCodes::None;
         connEvent.retryCount = self->_retryNum;
         self->onConnected.trigger(self, connEvent);
-
-        // Also trigger legacy event for backward compatibility
-        self->onConnect.trigger(self, nullptr);
 
         ESP_LOGI(TAG, "Connected! IP: %s, RSSI: %d dBm, Channel: %d",
                  self->_ipAddress.toString().c_str(), self->_rssi, self->_channel);

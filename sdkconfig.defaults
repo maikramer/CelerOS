@@ -1,9 +1,10 @@
 # CelerOS — configuracao comum aos alvos (por-placa em boards/<board>/)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 
-# Biblioteca esp_components usa try/catch (nlohmann/json, etc.)
-CONFIG_COMPILER_CXX_EXCEPTIONS=y
-CONFIG_COMPILER_CXX_EXCEPTIONS_EMUL_POOL_SIZE=64
+# Sem excecoes C++: nenhum codigo do build usa try/catch (nlohmann/JsonModels
+# sairam para extras/). Erro de alocacao/std:: vira abort, como ja era na
+# pratica (nada capturava). Economiza .eh_frame + runtime de unwinding.
+# CONFIG_COMPILER_CXX_EXCEPTIONS is not set
 
 # A task main roda a UI + heap Duktape
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
@@ -35,3 +36,13 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+
+# Tamanho: recursos de rede que o CelerOS nao usa. STA segue com WPA2/WPA3
+# (SAE); o AP do captive portal e aberto ou WPA2. Nenhum codigo usa IPv6.
+# CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT is not set
+# CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA is not set
+# CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_SOFTAP is not set
+# CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT is not set
+# CONFIG_LWIP_IPV6 is not set
+# Tabela de nomes de esp_err_t (logs mostram o codigo numerico)
+# CONFIG_ESP_ERR_TO_NAME_LOOKUP is not set
