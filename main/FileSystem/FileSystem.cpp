@@ -468,7 +468,17 @@ bool FileSystem::isFile(const char* path) {
 
 bool FileSystem::renameFile(const char* pathFrom, const char* pathTo) {
     if (!pathOk(pathFrom) || !pathOk(pathTo)) return false;
-    return rename(pathFrom, pathTo) == 0;
+    if (rename(pathFrom, pathTo) == 0) return true;
+    // FAT (SD) nao renomeia por cima de arquivo existente (EEXIST), ao
+    // contrario do LittleFS: sem isso, atualizar app instalado no cartao
+    // (main.js.new -> main.js) falhava. Remove o destino e tenta de novo —
+    // nao-atomico, mas o FAT nao oferece troca atomica.
+    struct stat st;
+    if (stat(pathTo, &st) == 0 && !S_ISDIR(st.st_mode) && stat(pathFrom, &st) == 0 &&
+        !S_ISDIR(st.st_mode) && unlink(pathTo) == 0) {
+        return rename(pathFrom, pathTo) == 0;
+    }
+    return false;
 }
 
 size_t FileSystem::getFileSize(const char* path) {
