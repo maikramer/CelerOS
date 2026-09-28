@@ -1,12 +1,12 @@
 {
   "name": "Terminal",
   "packageName": "celeros.terminal",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "Shell estilo bash sobre o FS real: ls, cat, echo, mkdir, neofetch, js (eval) e mais. Teclado acoplado do OS (API 5).",
   "type": "App",
   "category": "Utility",
   "api": 5,
   "topbar": true,
-  "changelog": "1.1.0 - barra de titulo padrao do sistema (fixa) e ajustes de layout; 1.0.0 - primeiro lancamento"
+  "changelog": "1.2.0 - diretorio corrente na faixa do sistema e chip Limpar; 1.1.0 - barra de titulo padrao; 1.0.0 - primeiro lancamento"
 }

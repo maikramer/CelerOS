@@ -32,12 +32,15 @@ function ctext(s, cx, cy, f, col, bg) {
 }
 
 function drawHeader() {
+    // o nome vive na faixa do sistema (retratil); aqui e so o estado
     System.fillRoundRect(0, 0, W, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Cronometro", 12, 12, 2);
+    System.fillCircle(20, 20, 4, running ? T.ok : T.textDim);
     var st = running ? "rodando" : "parado";
-    System.setTextColor(running ? T.ok : T.textDim, T.card);
-    System.drawString(st, W - 12 - System.textWidth(st, 1), 16, 1);
+    System.setTextColor(T.text, T.card);
+    System.drawString(st, 32, 12, 2);
+    var right = "voltas: " + laps.length;
+    System.setTextColor(T.textDim, T.card);
+    System.drawString(right, W - 12 - System.textWidth(right, 1), 16, 1);
     System.fillRect(0, 40, W, 3, T.accent);
 }
 
@@ -54,6 +57,13 @@ function drawTime() {
 function drawLaps() {
     System.fillRect(0, 118, W, BTN_Y - 126, T.bg);
     System.drawFastHLine(0, 118, W, T.stroke);
+    // melhor/pior split (so faz sentido com 3+ voltas)
+    var bestI = -1, worstI = -1, best = 1e15, worst = -1;
+    for (var k = 1; k < laps.length; k++) {
+        var sp = laps[k] - laps[k - 1];
+        if (sp < best) { best = sp; bestI = k; }
+        if (sp > worst) { worst = sp; worstI = k; }
+    }
     var show = 4;
     var start = laps.length - show;
     if (start < 0) start = 0;
@@ -62,7 +72,10 @@ function drawLaps() {
         var total = laps[i];
         var split = total - (i > 0 ? laps[i - 1] : 0);
         var line = "V" + (i + 1) + "  +" + fmt(split);
-        System.setTextColor(T.text, T.bg);
+        var col = T.text;
+        if (laps.length >= 3 && i === bestI && i > 0) col = T.ok;
+        else if (laps.length >= 3 && i === worstI && i > 0) col = T.err;
+        System.setTextColor(col, T.bg);
         System.drawString(line, 16, y, 2);
         var rt = fmt(total);
         System.setTextColor(T.textDim, T.bg);

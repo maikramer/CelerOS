@@ -17,10 +17,8 @@ function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 function header(title) {
-    System.fillRoundRect(0, 0, 240, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString(title, 12, 12, 2);
-    System.fillRect(0, 40, 240, 3, T.accent);
+    // titulo na faixa do sistema (API 6) — sem cabecalho desenhado
+    if (System.topbarText) System.topbarText(title);
 }
 function waitRelease() {
     var guard = 0;
@@ -284,8 +282,7 @@ function drawMenu() {
     ctext("Ajuda Online", 120, 168, 2, T.text, T.raised);
     System.setTextColor(T.textDim, T.bg);
     System.drawString("Online le a central de ajuda", 12, 200, 1);
-    System.drawString("no GitHub (precisa de WiFi).", 12, 214, 1);
-    drawBack();
+    System.drawString("no hub (precisa de WiFi).", 12, 214, 1);
 }
 
 // retorna 0 = offline, 1 = online
@@ -296,7 +293,6 @@ function menuLoop() {
         if (t.touched) {
             if (hit(t, 20, 104, 200, 32)) { waitRelease(); return 0; }
             if (hit(t, 20, 152, 200, 32)) { waitRelease(); return 1; }
-            if (hit(t, 8, 282, 84, 30)) { waitRelease(); System.exitApp(); }
             waitRelease();
         }
         System.delay(20);

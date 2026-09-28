@@ -26,6 +26,7 @@ if (raw) { var hp = parseInt(raw, 10); if (!isNaN(hp)) hi = hp; }
 var bricks, score, lives, level, state;   // state: serve|play|over
 var paddleX, ball, speed;
 var pbx, pby, ppx;                        // posicao anterior (p/ apagar rastro)
+var nextLife = 500;                       // vida extra a cada 500 pts (max 5)
 
 function buildBricks() {
     bricks = [];
@@ -49,6 +50,7 @@ function newGame() {
     lives = 3;
     level = 1;
     speed = 130;
+    nextLife = 500;
     paddleX = (W - PADDLE_W) / 2;
     ppx = undefined;
     buildBricks();
@@ -109,6 +111,10 @@ function collide() {
             ball.y + BALL_R < b.y || ball.y - BALL_R > b.y + BRICK_H) continue;
         b.alive = false;
         score += ROW_POINTS[b.r];
+        if (score >= nextLife && lives < 5) {
+            lives++;
+            nextLife += 500;
+        }
         drawHeader();
         // reflete no eixo de menor penetracao
         var cx = (b.x + BRICK_W / 2) - ball.x;
@@ -124,6 +130,8 @@ function collide() {
             resetBall();
             drawStatic();
             drawHeader();
+            ctext("NIVEL " + level + "!", 120, 160, 2, T.warn, T.bg);
+            System.delay(900);
         }
         break;
     }
@@ -174,12 +182,13 @@ function drawPaddle() {
 }
 
 function drawHeader() {
+    // o nome vive na faixa do sistema (retratil); aqui e so o placar
     System.fillRoundRect(0, 0, W, 40, 0, T.card);
     System.setTextColor(T.text, T.card);
-    System.drawString("Breakout", 10, 5, 2);
-    var right = "PONTOS " + score + "  Vidas " + lives + "  Rec " + hi;
+    System.drawString("Pontos " + score, 10, 5, 2);
+    var right = "Vidas " + lives + "  Rec " + hi;
     System.setTextColor(T.textDim, T.card);
-    System.drawString(right, W - 10 - System.textWidth(right, 1), 15, 1);
+    System.drawString(right, W - 10 - System.textWidth(right, 1), 8, 1);
     var sub = "Nivel " + level + (state === "serve" ? "  -  toque para lancar" : "");
     System.setTextColor(T.accent, T.card);
     System.drawString(sub, 10, 24, 1);

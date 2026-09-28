@@ -15,6 +15,7 @@ var raw = FS.readTextFile(HI_FILE);
 if (raw) { var p = parseInt(raw, 10); if (!isNaN(p)) hi = p; }
 
 var board, score, won, over;
+var prevBoard = null, prevScore = 0;   // 1 passo de desfazer
 
 function idx(x, y) { return y * N + x; }
 
@@ -63,6 +64,7 @@ function setLine(dir, x, y, arr) {
 
 // move/merge em uma direcao; true se o tabuleiro mudou
 function move(dir) {
+    var snapB = board.slice(), snapS = score;
     var changed = false;
     for (var k = 0; k < N; k++) {
         var x = (dir === "L" || dir === "R") ? 0 : k;
@@ -89,7 +91,23 @@ function move(dir) {
             }
         }
     }
+    if (changed) {
+        prevBoard = snapB;
+        prevScore = snapS;
+    }
     return changed;
+}
+
+function undo() {
+    if (!prevBoard) return;
+    board = prevBoard;
+    prevBoard = null;
+    score = prevScore;
+    over = false;
+    won = false;
+    drawHeader();
+    drawBoard();
+    drawHint();
 }
 
 function canMove() {
@@ -153,19 +171,22 @@ function drawHeader() {
     System.setTextColor(T.text, T.card);
     System.drawString("2048", 12, 12, 2);
     var right = "PONTOS " + score + "  Rec " + hi;
-    System.setTextColor(T.textDim, T.card);
+    System.setTextColor(score > 0 && score >= hi ? T.ok : T.textDim, T.card);
     System.drawString(right, W - 12 - System.textWidth(right, 1), 15, 1);
     System.fillRect(0, 40, W, 3, T.accent);
+}
+
+function drawBtn(bx, bw, label) {
+    System.fillRoundRect(bx, 288, bw, 24, 8, T.raised);
+    System.drawRoundRect(bx, 288, bw, 24, 8, T.stroke);
+    ctext(label, bx + bw / 2, 300, 1, T.text, T.raised);
 }
 
 function drawHint() {
     System.fillRect(0, 266, W, H - 266, T.bg);
     ctext("deslize para mover", 120, 278, 1, T.textDim, T.bg);
-    var label = "Novo jogo";
-    var bw = 110, bx = (W - bw) / 2, by = 288;
-    System.fillRoundRect(bx, by, bw, 24, 8, T.raised);
-    System.drawRoundRect(bx, by, bw, 24, 8, T.stroke);
-    ctext(label, 120, by + 12, 1, T.text, T.raised);
+    drawBtn(12, 100, "Desfazer");
+    drawBtn(128, 100, "Novo jogo");
 }
 
 function drawOver() {
@@ -216,7 +237,11 @@ function pollGesture() {
 }
 
 function inNewGame(x, y) {
-    return y >= 288 && y <= 312 && x >= 65 && x <= 175;
+    return y >= 288 && y <= 312 && x >= 128 && x <= 228;
+}
+
+function inUndo(x, y) {
+    return y >= 288 && y <= 312 && x >= 12 && x <= 112;
 }
 
 // ------------------------------------------------------------------ main ---
@@ -231,6 +256,8 @@ while (true) {
             saveHi();
             reset();
             drawAll();
+        } else if (inUndo(g.x, g.y)) {
+            undo();
         } else if (won) {
             won = false;               // fecha o aviso e segue jogando
             drawAll();

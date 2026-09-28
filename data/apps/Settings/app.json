@@ -1,7 +1,7 @@
 {
   "name": "Settings",
   "packageName": "celeros.settings",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN), tela, atualizacao OTA e sobre.",
   "type": "System",
