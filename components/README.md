@@ -32,12 +32,10 @@ Não usados pelo `Wifi` do satisfaction-hub: `WifiServer`, `WifiClient`, `Telnet
 
 ## Fora do build (vendados para o futuro)
 
-`BluetoothServer` (precisa `h2zero/esp-nimble-cpp`), `Drivers`, `IoUtility`
-(precisa `espressif/button`), `SafeContainers`, `Supabase`, `UI` (precisa
-`lvgl ^9`), `UserManaging`, `Time` (o CelerOS tem `TimeManager` próprio com
-config em arquivo). A lista vive no `EXCLUDE_COMPONENTS` do `CMakeLists.txt`
-raiz — para ativar um, remova-o da lista e garanta as dependências do
-`idf_component.yml` dele.
+Os componentes herdados do fork que nunca entraram no build (BluetoothServer,
+Drivers, IoUtility, SafeContainers, Supabase, UI, UserManaging, Time — ~19k
+linhas) foram removidos na F3; o histórico segue no git. `EXCLUDE_COMPONENTS`
+não existe mais.
 
 ## Requisitos no projeto raiz
 

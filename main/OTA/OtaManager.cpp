@@ -39,7 +39,9 @@ static bool isVersionGreater(const std::string& newVer, const std::string& oldVe
 }
 
 std::string OtaManager::getUpdateJsonUrl() {
-    // Override para testes com servidor local (tools/ota_server.py)
+    // Override para testes com servidor local (tools/ota_server.py). Artefato
+    // de dev por design: continua como ARQUIVO (gravavel pelo file manager
+    // com auth), lido no momento do check — NVS exigiria reboot para trocar
     if (FileSystem::exists("/local/ota_url.txt")) {
         std::string url_Override = kstr::trim(FileSystem::readTextFile("/local/ota_url.txt"));
         if (url_Override.length() > 0) {

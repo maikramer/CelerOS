@@ -16,6 +16,7 @@
 #include "NetworkCredentialStore.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/CelerSettings.h"
 #include "../Kernel/TimeManager.h"
 #include "WebAuth.h"
 #include "filemanager_html.h"
@@ -33,6 +34,10 @@ static volatile bool s_rebootPending = false;
 
 static NetworkManager& nm() { return NetworkManager::instance(); }
 
+// Flags de config em NVS (F3; web_on.txt/nowifi.txt/config_install_sd.txt
+// sao importados e apagados no primeiro boot com CelerSettings::migrateLegacy)
+static bool cfgFlag(const char* key) { return CelerSettings::get(key) == "1"; }
+
 WifiConnection& WebManager::wifi() { return *nm().getWifiConnection(); }
 
 // Estado de rede: NTP na conexao e (re)subida do servidor quando habilitado.
@@ -41,7 +46,7 @@ void WebManager::onNetworkStateChanged(NetworkState /*oldState*/, NetworkState n
     if (newState == NetworkState::Connected) {
         ESP_LOGI(WM_TAG, "WiFi conectado, IP=%s", nm().getIpAddress().c_str());
         TimeManager::syncNTP();
-        if (FileSystem::exists("/local/web_on.txt")) {
+        if (cfgFlag("web_on")) {
             startWebServerIfNeeded();
         }
     }
@@ -86,6 +91,7 @@ bool WebManager::init() {
         celer_log_println("NetworkManager init failed.");
         return false;
     }
+    CelerSettings::migrateLegacy();
 
     if (!s_nmEventsBound) {
         s_nmEventsBound = true;
@@ -98,7 +104,7 @@ bool WebManager::init() {
     // Ja conectado (ex.: captive portal acabou de conectar): nao refaz
     // connectToKnown, so garante o servidor se habilitado
     if (nm().isConnected()) {
-        if (FileSystem::exists("/local/web_on.txt")) {
+        if (cfgFlag("web_on")) {
             startWebServerIfNeeded();
         }
         return true;
@@ -108,7 +114,7 @@ bool WebManager::init() {
         celer_log_println("No saved networks (NVS store vazio).");
         return false;
     }
-    if (FileSystem::exists("/local/nowifi.txt")) {
+    if (cfgFlag("nowifi")) {
         celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
@@ -120,7 +126,7 @@ bool WebManager::init() {
         return false;
     }
 
-    if (!FileSystem::exists("/local/web_on.txt")) {
+    if (!cfgFlag("web_on")) {
         celer_log_println("Web Server disabled by user (web_on.txt not found).");
         return true;  // WiFi conectado, servidor nao sobe
     }
@@ -132,7 +138,7 @@ bool WebManager::init() {
 bool WebManager::startAsync() {
     nvs_flash_init();
 
-    if (FileSystem::exists("/local/nowifi.txt")) {
+    if (cfgFlag("nowifi")) {
         celer_log_println("WiFi desligado pelo usuario (nowifi.txt).");
         return false;
     }
@@ -142,6 +148,7 @@ bool WebManager::startAsync() {
         celer_log_println("NetworkManager init failed.");
         return false;
     }
+    CelerSettings::migrateLegacy();
 
     if (!s_nmEventsBound) {
         s_nmEventsBound = true;
@@ -618,7 +625,7 @@ struct MultipartCtx {
 
         // Intercepta apps e respeita o local padrao de instalacao
         if (kstr::startsWith(filePath, "/local/apps/") || kstr::startsWith(filePath, "/sd/apps/")) {
-            bool defaultSD = FileSystem::exists("/local/config_install_sd.txt");
+            bool defaultSD = cfgFlag("install_sd");
             int appsIndex = kstr::indexOf(filePath, "/apps/");
             std::string relativePath = filePath.substr(appsIndex + 6);
             if (defaultSD && FileSystem::exists("/sd/")) {

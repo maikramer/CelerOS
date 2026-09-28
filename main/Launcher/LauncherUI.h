@@ -27,7 +27,9 @@ public:
     static bool appEntryIsSystem(int i);
     static bool appEntryTopbar(int i);
     static bool appEntryIsFolder(int i);
-    static void launchApp(int index);          // executa app (sincrono; W7d = task)
+    static void launchApp(int index);          // executa app (sincrono)
+    // F3 (CELEROS_APP_TASK): inicia na task propria; false = use launchApp
+    static bool launchAppAsync(int index);
     static int gridCols();
     static int gridRows();
     static int gridTotalEntries();
@@ -36,6 +38,8 @@ public:
 private:
     static CelerDisplay *tftInstance;
     static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder, bool topbarFixed);
+    static void resolveApp(const std::string& path, bool isFolder,
+                           std::string& filePath, std::string& title);
 
     static std::string appPaths[50];   // Path to app folder or .js file
     static std::string appNames[50];   // Display name (from app.json or filename)

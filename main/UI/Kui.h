@@ -181,6 +181,10 @@ public:
     virtual bool wantsDirectDraw() const { return false; }
     // Swipe a partir da borda esquerda volta (Navigator::pop)
     virtual bool allowsBackGesture() const { return true; }
+    // true = o conteudo desta tela e gerenciado por OUTRA task (app JS em
+    // task propria): o Navigator nao deve redesenhar o frame (o app e dono
+    // do vidro) nem os toasts por cima dele
+    virtual bool suppressRedraw() const { return false; }
 
     void markDirty() { m_dirty = true; }
     bool consumeDirty() {
@@ -304,6 +308,10 @@ public:
     // tela de baixo (ex.: X do canto -> icone de WiFi do launcher).
     static void quarantine(uint32_t ms);
 
+    // Zera o estado interno (como se o vidro estivesse limpo): usado quando
+    // a UI solta o touch para um app em task propria e depois retoma
+    void reset();
+
 private:
     bool m_down = false;
     int m_lastX = 0, m_lastY = 0;
@@ -355,6 +363,11 @@ public:
 
     // Loop: poll de touch + tick + redraw. Chamar do celerLoop.
     static void tick();
+
+    // Suspende o poll de touch da UI: usado quando um app JS roda em task
+    // propria (F3) — o app le o touch (I2C) em System.getTouch e duas tasks
+    // nao podem ler o mesmo barramento.
+    static void setInputSuspended(bool suspended);
 
     // Redesenho forcado da tela do topo
     static void repaint();

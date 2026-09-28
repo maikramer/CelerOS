@@ -18,11 +18,14 @@ set(CELEROS_SRCS
     "WebManager/WifiSetupPortal.cpp"
     "OTA/OtaManager.cpp"
     "Kernel/Core/CelerKernel.cpp"
+    "Kernel/AppRunner.cpp"
     "Kernel/TimeManager.cpp"
     "Launcher/LauncherUI.cpp"
     "Runtime/JSBindings.cpp"
+    "Runtime/JSBindings_Net.cpp"
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
+    "Utils/CelerSettings.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
     "USBDevice/CelerLink.cpp"
@@ -31,6 +34,11 @@ set(CELEROS_SRCS
     "UI/Keyboard.cpp"
     "Launcher/Screens.cpp"
 )
+# F3: app JS em task propria ("celerapp") — UI/WiFi/OTA web seguem vivas
+# durante um app. Opt-in: o caminho sincrono e o default (AppRunner.cpp
+# compila nos dois modos — com a flag OFF so existem os stubs).
+option(CELEROS_APP_TASK "Rodar apps JS em task propria (experimental)" OFF)
+
 set(CELEROS_PRIV_REQUIRES esp_driver_uart)
 if(CONFIG_CELEROS_USB_NATIVE)
     list(APPEND CELEROS_PRIV_REQUIRES esp_tinyusb)
@@ -94,3 +102,6 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.2.0"
     CELEROS_API_LEVEL=6
 )
+if(CELEROS_APP_TASK)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CELEROS_APP_TASK=1)
+endif()

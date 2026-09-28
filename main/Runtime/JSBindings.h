@@ -164,6 +164,7 @@ private:
     static duk_ret_t js_pinState(duk_context *ctx);
     static duk_ret_t js_webAuthInfo(duk_context *ctx);
     static duk_ret_t js_webAuthSetPass(duk_context *ctx);
+    static duk_ret_t js_setting(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);
     static duk_ret_t js_factoryReset(duk_context *ctx);
     static duk_ret_t js_otaCheck(duk_context *ctx);
@@ -176,6 +177,11 @@ private:
     static duk_ret_t js_getNtpEnabled(duk_context *ctx);
     static duk_ret_t js_webActive(duk_context *ctx);
     static duk_ret_t js_webSetActive(duk_context *ctx);
+
+    // Net assincrono (F3): handle + poll
+    static duk_ret_t js_netBeginGet(duk_context *ctx);
+    static duk_ret_t js_netPollGet(duk_context *ctx);
+    static duk_ret_t js_netCancelGet(duk_context *ctx);
 
     // Net nivel 3 (WiFi)
     static duk_ret_t js_wifiScan(duk_context *ctx);

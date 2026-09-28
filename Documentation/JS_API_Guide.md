@@ -494,6 +494,9 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 #### `System.md5(str)`
 - **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
 
+#### `System.setting(key)` / `System.setting(key, value)`
+System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read returns the string or `null`; write returns `true`. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).
+
 #### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
 Settings PIN, handled natively since 1.3: salted SHA-256 (`settings_pin2.bin`), no hash exposed to JS. `setPin` accepts 4–6 digits; `verifyPin` transparently upgrades a legacy MD5 PIN on first success. `pinState()` returns `0` (no PIN), `1` (active) or `2` (corrupted — flag set but file missing; the UI should ask for a redefinition).
 
@@ -513,6 +516,9 @@ Time configuration (persisted by TimeManager).
 #### `System.factoryReset(mode)`
 - `"configs"` — clears configuration files in `/local` and saved WiFi networks, **keeps** apps and icons.
 - `"total"` — formats the whole LittleFS partition (**apps are erased**; recovery requires `tools/flash_data.sh` or `celerctl apps install`). Always confirm twice in the UI.
+
+#### `Net.beginGet(url)` / `Net.pollGet(handle)` / `Net.cancelGet(handle)` (non-blocking)
+`beginGet` starts the GET on a background task and returns a handle (`-1` if no free slot or WiFi down). `pollGet` returns `null` while running, then `{done:true, ok, status, body, error}` (body capped at 32 KB, like the blocking calls). `cancelGet` abandons a request (the slot frees itself when the task times out; tasks never get killed mid-TLS). Two concurrent requests max.
 
 ### 12.4 WiFi (Net)
 

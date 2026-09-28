@@ -666,6 +666,9 @@ reboot.
   `FS.getFileMD5`). Mantido para dados legados — **não use para senhas**
   (veja `setPin` abaixo).
 
+#### `System.setting(key)` / `System.setting(key, value)`
+Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura devolve a string ou `null`; escrita devolve `true`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).
+
 #### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
 PIN do Settings, tratado nativamente desde a 1.3: SHA-256 com salt
 (`settings_pin2.bin`), sem hash exposto ao JS. `setPin` aceita 4–6 dígitos;
@@ -696,6 +699,9 @@ Configurações de horário (persistidas pelo TimeManager).
 - `"total"` — formata a partição LittleFS inteira (**apps são apagados**; a
   recuperação exige `tools/flash_data.sh` ou `celerctl apps install`).
   Confirme sempre duas vezes na UI.
+
+#### `Net.beginGet(url)` / `Net.pollGet(handle)` / `Net.cancelGet(handle)` (não-bloqueante)
+`beginGet` dispara o GET em task de fundo e devolve um handle (`-1` sem slot livre ou sem WiFi). `pollGet` devolve `null` enquanto roda e depois `{done:true, ok, status, body, error}` (corpo limitado a 32 KB, igual às chamadas bloqueantes). `cancelGet` abandona a requisição (o slot se libera quando a task estoura o timeout; tasks nunca são mortas no meio do TLS). Máximo de 2 requisições concorrentes.
 
 ### 12.4 WiFi (Net)
 

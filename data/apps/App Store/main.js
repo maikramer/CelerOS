@@ -20,7 +20,16 @@
 // duplicatas antigas sao removidas apos o update. X no canto sup. sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
+// Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo
+// legado continua valendo para firmware antigo.
 var FLAG_SD = "/local/config_install_sd.txt";
+function installOnSd() {
+    if (System.setting) {
+        var v = System.setting("install_sd");
+        if (v !== null) return v === "1";
+    }
+    return FS.exists(FLAG_SD);
+}
 var CACHE = "/local/appstore_cache.json";
 var STORE_PKG = "celeros.appstore";
 
@@ -919,7 +928,7 @@ function installApp() {
     selfUpdated = false;
 
     var dir = resolveInstalledDir(it.pkg);
-    if (!dir) dir = (FS.exists(FLAG_SD) ? "/sd/apps" : "/local/apps") + "/" + it.pkg;
+    if (!dir) dir = (installOnSd() ? "/sd/apps" : "/local/apps") + "/" + it.pkg;
     var root = dirName(dir);
     var tmp = dir + "/main.js.new";
 
