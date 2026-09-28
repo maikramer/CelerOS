@@ -134,6 +134,11 @@ private:
     static duk_ret_t js_keypadDraw(duk_context *ctx);
     static duk_ret_t js_keypadClose(duk_context *ctx);
 
+    // Topbar custom (API level 6) — texto e chips da faixa
+    static duk_ret_t js_topbarText(duk_context *ctx);
+    static duk_ret_t js_topbarButtons(duk_context *ctx);
+    static duk_ret_t js_topbarPop(duk_context *ctx);
+
     // System nivel 3 (apps de sistema em JS — W8)
     static duk_ret_t js_textWidth(duk_context *ctx);
     static duk_ret_t js_fontHeight(duk_context *ctx);

@@ -648,3 +648,33 @@ Notes:
   region (games cover it on the next frame).
 - Nothing to code in either mode: the same main.js renders correctly on both —
   the field in `app.json` is the whole contract.
+
+### 14.1 Custom content (API 6)
+
+Apps can put their own text and touchable **chips** in the strip:
+
+#### `System.topbarText(text)`
+Replaces the app name shown in the strip (`""` restores the name). Redraws automatically.
+
+#### `System.topbarButtons(labels)` → Number
+Replaces the strip content with up to 3 touchable chips, laid out right-to-left before the X (`labels` = array of short strings, e.g. `["+", "Limpar"]`). Returns how many fit. `[]` clears them.
+
+#### `System.topbarPop()` → String|null
+Pops the oldest chip tap since the last call (FIFO). The chip highlights while pressed and fires on release (same debounced contract as the X).
+
+```javascript
+System.topbarText("Toques: 0");
+System.topbarButtons(["+", "Limpar"]);
+while (true) {
+    var id = System.topbarPop();
+    if (id === "+") { n += 10; System.topbarText("Toques: " + n); }
+    else if (id === "Limpar") { n = 0; System.topbarText("Toques: 0"); }
+    System.delay(20);
+}
+```
+
+In retractable mode chips are tappable only while the strip is visible. Apps
+should feature-detect (`typeof System.topbarText === "function"`) to stay
+installable on older firmware.
+
+Reference implementation: `data/apps/Touch Test/main.js`.

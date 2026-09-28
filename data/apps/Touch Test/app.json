@@ -1,10 +1,11 @@
 {
   "name": "Touch Test",
   "packageName": "celeros.touchtest",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
-  "description": "Teste de display e touch: barras RGB + alvo de toque. Toque no X (canto superior direito) para sair.",
+  "description": "Teste de display, touch e topbar custom: barras RGB, contador de toques e chips na faixa do sistema. Toque no X (canto superior direito) para sair.",
   "type": "Utility",
   "category": "Utility",
-  "api": 1
+  "api": 6,
+  "topbar": true
 }

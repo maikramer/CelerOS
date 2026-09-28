@@ -58,6 +58,22 @@ static bool s_tbSwipe = false;       // gesto de revelar em andamento
 static int s_tbSwipeY0 = 0;
 static const uint32_t RETRACT_MS = 3000;  // "aparece por alguns segundos"
 
+// Conteudo custom da faixa (System.topbarText/topbarButtons — API 6):
+// texto no lugar do nome do app e chips tocaveis a direita, antes do X. Os
+// toques nos chips viram fila para System.topbarPop() (devolve o label).
+struct TbButton {
+    std::string label;
+    int x = 0, w = 0;   // rect virtual (240 de largura; altura = faixa inteira)
+};
+static std::vector<TbButton> s_tbButtons;      // [0] = o mais a direita
+static std::vector<std::string> s_tbTaps;      // FIFO de toques pendentes
+static std::string s_tbText;                   // vazio = usa o nome do app
+static bool s_tbTextCustom = false;
+static int s_tbHotBtn = -1;                    // chip sob o dedo (feedback)
+static int s_tbBtnArmed = 0;                   // chip armado p/ disparo no release (indice+1)
+static bool s_tbDirty = false;                 // faixa precisa recompor
+static int s_tbHotOnGlass = -2;                // hot state ja composto (-2 = nada)
+
 // expira a faixa retratil; true se ela acabou de sair
 static bool retractTick() {
     if (!s_topbarFixed && s_barShown && millis() - s_barShownAt > RETRACT_MS) {
@@ -127,18 +143,16 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
     int h = UI::topbarH();
     g.fillRect(0, 0, UI::W, h, THEME_CARD);
     g.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
-    if (s_appTitle && s_appTitle[0]) {
-        g.setTextDatum(ML_DATUM);
-        g.setTextColor(THEME_TEXT);
-        g.drawString(s_appTitle, UI::sx(6), h / 2, kui::type::caption());
-    }
+
+    // X: glifo menor e colado a direita (a zona de TOQUE continua 40 px —
+    // alvo generoso, glifo discreto)
     if (hot) {
         g.fillRoundRect(UI::W - UI::topbarExitW() + UI::sx(3), 1,
                         UI::topbarExitW() - 2 * UI::sx(3), h - 2, UI::sx(6), THEME_RAISED);
     }
-    int gx = UI::W - UI::topbarExitW() / 2;
-    int r = h * 2 / 5;   // meia-diagonal do X
-    int t = h / 8;       // meia-espessura do traco
+    int gx = UI::W - UI::sx(13);
+    int r = h / 3;       // meia-diagonal do X (menor: era h*2/5)
+    int t = h / 9;       // meia-espessura do traco
     if (t < 1) t = 1;
     uint32_t col = hot ? THEME_TEXT : THEME_TEXT_DIM;
     // barras diagonais espessas: 2 triangulos por barra (offset perpendicular)
@@ -148,18 +162,51 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
     };
     bar(gx - r, h / 2 - r, gx + r, h / 2 + r, t, -t);  // "\"
     bar(gx - r, h / 2 + r, gx + r, h / 2 - r, t, t);   // "/"
+
+    // chips custom (topbarButtons): da direita p/ a esquerda, antes do X
+    for (int i = 0; i < (int)s_tbButtons.size(); i++) {
+        const TbButton& b = s_tbButtons[i];
+        int bx = UI::sx(b.x), bw = UI::sx(b.w);
+        bool chipHot = (i == s_tbHotBtn);
+        g.fillRoundRect(bx, 2, bw, h - 4, UI::sx(5), chipHot ? THEME_ACCENT_D : THEME_RAISED);
+        g.drawRoundRect(bx, 2, bw, h - 4, UI::sx(5), THEME_STROKE);
+        g.setTextDatum(MC_DATUM);
+        g.setTextColor(chipHot ? THEME_TEXT : THEME_TEXT_DIM);
+        g.drawString(b.label.c_str(), bx + bw / 2, h / 2, kui::type::caption());
+    }
+
+    // texto: custom (topbarText) ou nome do app; corta antes do 1o chip
+    std::string label = s_tbTextCustom ? s_tbText : (s_appTitle ? s_appTitle : "");
+    int rightLimit = UI::W - UI::topbarExitW();
+    if (!s_tbButtons.empty()) rightLimit = UI::sx(s_tbButtons.back().x);
+    while (!label.empty() &&
+           g.textWidth(label.c_str(), kui::type::caption()) > rightLimit - UI::sx(10)) {
+        label.pop_back();
+    }
+    g.setTextDatum(ML_DATUM);
+    g.setTextColor(THEME_TEXT);
+    g.drawString(label.c_str(), UI::sx(6), h / 2, kui::type::caption());
+}
+
+// indice do chip sob o x virtual (ou -1)
+static int tbButtonAt(int jx) {
+    for (int i = 0; i < (int)s_tbButtons.size(); i++) {
+        if (jx >= s_tbButtons[i].x && jx < s_tbButtons[i].x + s_tbButtons[i].w) return i;
+    }
+    return -1;
 }
 
 // Saida de app com "debounce": dispara so no RELEASE em que o toque comecou
 // no X (armado) e o dedo nao se afastou mais que a tolerancia de tap — jitter
 // do controlador nao desarma (bug do glifo: mudava de cor e nao saia), e
 // arrasto para a area do app devolve o gesto a ele. Toque na faixa e
-// mascarado: o app nunca ve coordenadas do chrome.
+// mascarado: o app nunca ve coordenadas do chrome. Chips (topbarButtons)
+// seguem o mesmo contrato e viram fila em System.topbarPop().
 static bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
     const int slopX = UI::sx(18), slopY = UI::sy(18);
 
     if (!s_topbarFixed) {
-        // ---- modo retratil: gesto de revelar + faixa transitória ----
+        // ---- modo retratil: gesto de revelar + faixa transitoria ----
         retractTick();
         if (s_tbSwipe) {  // dedo ainda descendo a partir da borda
             if (!touched) {
@@ -180,26 +227,57 @@ static bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
             return false;
         }
         if (!s_barShown) return false;         // faixa oculta: tudo e do app
-        // visivel: cai no chrome comum abaixo (X armavel, faixa mascarada)
+        // visivel: cai no chrome comum abaixo (X/chips armaveis, faixa mascarada)
     }
 
     if (touched && UI::inTopbar(x, y)) {
-        if (!s_exitArmed) {
-            if (UI::hitTopbarExit(x, y)) {
-                s_exitArmed = true;
+        int jx = s_jsTft ? ((int)x * 240 / s_jsTft->width()) : 0;
+        int btn = tbButtonAt(jx);
+        if (btn >= 0) {
+            // chip: armamento proprio com disparo no release (mesmo contrato do X)
+            if (s_tbBtnArmed != btn + 1) {
+                s_tbBtnArmed = btn + 1;
+                s_tbHotBtn = btn;
                 s_armX = x;
                 s_armY = y;
+            } else if (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY) {
+                s_tbBtnArmed = 0;              // deslizou: nao e tap
+                s_tbHotBtn = -1;
             }
-        } else if (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY) {
-            s_exitArmed = false;  // deslizou dentro da faixa: nao e tap no X
+            s_exitArmed = false;
+        } else {
+            if (s_tbBtnArmed) {                // saiu do chip para a faixa
+                s_tbBtnArmed = 0;
+                s_tbHotBtn = -1;
+            }
+            if (!s_exitArmed) {
+                if (UI::hitTopbarExit(x, y)) {
+                    s_exitArmed = true;
+                    s_armX = x;
+                    s_armY = y;
+                }
+            } else if (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY) {
+                s_exitArmed = false;  // deslizou dentro da faixa: nao e tap no X
+            }
         }
         touched = false;
         return false;
     }
     if (touched) {
+        if (s_tbBtnArmed) {                    // arrastou para a area do app
+            s_tbBtnArmed = 0;
+            s_tbHotBtn = -1;
+        }
         if (s_exitArmed && (abs((int)x - s_armX) > slopX || abs((int)y - s_armY) > slopY)) {
             s_exitArmed = false;  // deslizou para a area do app: gesto do app
         }
+        return false;
+    }
+    if (s_tbBtnArmed) {                        // release no chip: evento ao app
+        int b = s_tbBtnArmed - 1;
+        s_tbBtnArmed = 0;
+        s_tbHotBtn = -1;
+        if (b < (int)s_tbButtons.size()) s_tbTaps.push_back(s_tbButtons[b].label);
         return false;
     }
     bool fire = s_exitArmed;
@@ -231,25 +309,30 @@ void JSBindings::present() {
     retractTick();
     bool wantBar = s_topbarFixed || s_barShown;
     if (s_frame != nullptr) {
-        // So recompoem se algo mudou (desenho do app ou estado da faixa)
-        if (!s_frameDirty && wantBar == s_barOnGlass &&
-            (!wantBar || s_exitArmed == s_barHotOnGlass)) return;
+        // So recompoem se algo mudou (desenho do app, topbarText/Buttons ou
+        // estado hot da faixa)
+        if (!s_frameDirty && !s_tbDirty && wantBar == s_barOnGlass &&
+            (!wantBar || (s_exitArmed == s_barHotOnGlass && s_tbHotBtn == s_tbHotOnGlass))) return;
         // A topbar vai DENTRO do quadro, antes do push: chega ao vidro atomica
         // com o conteudo do app (nao pisca) e o app nao consegue cobri-la. No
         // retratil, parar de compo-la restaura a area no proximo push.
         if (wantBar) drawAppTopbar(*s_frame, s_exitArmed);
         s_frame->pushSprite(tftInstance, 0, 0);
         s_frameDirty = false;
+        s_tbDirty = false;
         s_barOnGlass = wantBar;
         s_barHotOnGlass = wantBar && s_exitArmed;
+        s_tbHotOnGlass = s_tbHotBtn;
     } else {
         // Sem quadro (CYD): o app desenha direto no display, entao a barra so
         // pode ir no vidro apos cada present (reaparece a cada cedida). Ao
         // esconder a retratil, a faixa permanece ate o app repintar a regiao
         // (os jogos a cobrem no frame seguinte).
         if (wantBar) drawAppTopbar(*tftInstance, s_exitArmed);
+        s_tbDirty = false;
         s_barOnGlass = wantBar;
         s_barHotOnGlass = wantBar && s_exitArmed;
+        s_tbHotOnGlass = s_tbHotBtn;
     }
 }
 
@@ -1285,6 +1368,64 @@ duk_ret_t JSBindings::js_keypadClose(duk_context *ctx) {
     return 0;
 }
 
+// =====================================================
+// Topbar custom (API level 6) — texto e chips da faixa
+// =====================================================
+
+duk_ret_t JSBindings::js_topbarText(duk_context *ctx) {
+    const char *t = duk_require_string(ctx, 0);
+    s_tbText = t ? t : "";
+    s_tbTextCustom = (s_tbText[0] != '\0');   // "" volta ao nome do app
+    s_tbDirty = true;
+    return 0;
+}
+
+duk_ret_t JSBindings::js_topbarButtons(duk_context *ctx) {
+    if (!tftInstance) return 0;
+    s_tbButtons.clear();
+    s_tbHotBtn = -1;
+    s_tbBtnArmed = 0;
+    s_tbDirty = true;
+    if (!duk_is_array(ctx, 0)) {
+        duk_push_int(ctx, 0);
+        return 1;
+    }
+    int n = (int)duk_get_length(ctx, 0);
+    if (n > 3) n = 3;                          // espaco nao comporta mais que isso
+    int cursor = 240 - 40 - 4;                 // borda direita disponivel (antes do X)
+    for (int i = 0; i < n; i++) {
+        if (!duk_get_prop_index(ctx, 0, (duk_uarridx_t)i) || !duk_is_string(ctx, -1)) {
+            duk_pop(ctx);
+            continue;
+        }
+        const char *lb = duk_get_string(ctx, -1);
+        duk_pop(ctx);
+        if (!lb || !lb[0]) continue;
+        int pw = tftInstance->textWidth(lb, kui::type::caption());
+        int vw = (int)((long)pw * 240 / tftInstance->width()) + 12;   // padding virtual
+        if (vw < 28) vw = 28;
+        if (cursor - vw < 60) break;           // sem espaco: reserva o titulo
+        TbButton b;
+        b.label = lb;
+        b.w = vw;
+        b.x = cursor - vw;
+        cursor = b.x - 6;
+        s_tbButtons.push_back(b);
+    }
+    duk_push_int(ctx, (int)s_tbButtons.size());   // quantos couberam
+    return 1;
+}
+
+duk_ret_t JSBindings::js_topbarPop(duk_context *ctx) {
+    if (s_tbTaps.empty()) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    duk_push_string(ctx, s_tbTaps.front().c_str());
+    s_tbTaps.erase(s_tbTaps.begin());
+    return 1;
+}
+
 duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
     if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
     const char* str = duk_require_string(ctx, 0);
@@ -1694,12 +1835,20 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
 
-    // Topbar limpa: sem faixa/hot/gesto herdados do app anterior
+    // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
     s_barOnGlass = false;
     s_barHotOnGlass = false;
     s_barShown = false;
     s_tbSwipe = false;
+    s_tbButtons.clear();
+    s_tbTaps.clear();
+    s_tbText.clear();
+    s_tbTextCustom = false;
+    s_tbHotBtn = -1;
+    s_tbBtnArmed = 0;
+    s_tbDirty = false;
+    s_tbHotOnGlass = -2;
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
     if (s_frame == nullptr && Board::profile().hasPsram) {
@@ -1880,6 +2029,14 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_prop_string(ctx, -2, "keypadDraw");
     duk_push_c_function(ctx, js_keypadClose, 0);
     duk_put_prop_string(ctx, -2, "keypadClose");
+
+    // --- Topbar custom (API level 6): texto e chips da faixa ---
+    duk_push_c_function(ctx, js_topbarText, 1);
+    duk_put_prop_string(ctx, -2, "topbarText");
+    duk_push_c_function(ctx, js_topbarButtons, 1);
+    duk_put_prop_string(ctx, -2, "topbarButtons");
+    duk_push_c_function(ctx, js_topbarPop, 0);
+    duk_put_prop_string(ctx, -2, "topbarPop");
 
     // --- System nivel 3 (apps de sistema em JS) ---
     duk_push_c_function(ctx, js_setBrightness, 1);
