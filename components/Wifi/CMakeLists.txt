@@ -22,7 +22,8 @@ set(requires
     esp_netif 
     esp_event 
     Utility 
-    esp_https_ota 
+    esp_https_ota
+    mbedtls
     bootloader_support 
     esp_http_client 
     esp_http_server

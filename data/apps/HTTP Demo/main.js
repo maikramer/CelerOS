@@ -1,67 +1,74 @@
 // HTTP Demo — exercita a API Net.* do CelerOS (API level 2)
-// Busca a cotacao USD/BRL em uma API publica HTTP e desenha na tela.
+// Busca a cotacao USD/BRL em uma API publica e desenha na tela. Toque na
+// tela para atualizar.
 
-var W = System.screenWidth();
-var H = System.screenHeight();
+var T = System.theme();
+var URL = "http://economia.awesomeapi.com.br/json/last/USD-BRL";
 
-var DIM = System.color(139, 152, 169);
-var TXT = System.color(241, 245, 249);
-var ACC = System.color(34, 211, 238);
-var OK = System.color(34, 197, 94);
-var ERR = System.color(239, 68, 68);
+function ctext(s, cx, y, f, col) {
+    System.setTextColor(col);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
+}
 
-System.fillScreen(0);
-System.setTextColor(ACC, 0);
-System.drawString("HTTP Demo", 10, 10, 2);
-System.setTextColor(DIM, 0);
-System.drawString("Net.* API (level 2)", 10, 30, 1);
+// Tela inteira redesenhada a cada estado (sem texto novo por cima do velho)
+function draw(state, q) {
+    System.fillScreen(T.bg);
+    System.fillRect(0, 0, 240, 40, T.card);
+    System.fillRect(0, 40, 240, 3, T.accent);
+    System.setTextColor(T.text);
+    System.drawString("HTTP Demo", 12, 12, 2);
 
-System.setTextColor(TXT, 0);
-System.drawString("WiFi: " + (Net.isConnected() ? "connected" : "OFF"), 10, 55, 2);
-System.drawString("IP: " + System.getIPAddress(), 10, 75, 2);
+    System.fillRoundRect(8, 54, 224, 40, 8, T.card);
+    System.setTextColor(T.textDim);
+    System.drawString("WiFi", 20, 60, 1);
+    System.drawString("IP", 20, 76, 1);
+    var on = Net.isConnected();
+    System.setTextColor(on ? T.ok : T.warn);
+    System.drawString(on ? "conectado" : "desligado", 70, 60, 1);
+    System.setTextColor(T.text);
+    System.drawString(on ? System.getIPAddress() : "--", 70, 76, 1);
 
-System.setTextColor(DIM, 0);
-System.drawString("Fetching USD/BRL...", 10, 110, 2);
-
-var url = "http://economia.awesomeapi.com.br/json/last/USD-BRL";
-var data = null;
-var failed = false;
-
-if (Net.isConnected()) {
-    try {
-        data = Net.getJSON(url);
-    } catch (e) {
-        failed = true;
+    if (state === "loading") {
+        ctext("Buscando USD/BRL...", 120, 150, 2, T.textDim);
+    } else if (state === "fail") {
+        ctext("Falha na requisicao", 120, 136, 2, T.err);
+        ctext("Confira o WiFi / internet.", 120, 162, 1, T.textDim);
+    } else if (state === "ok") {
+        ctext("USD/BRL", 120, 110, 2, T.textDim);
+        ctext("R$ " + String(q.bid).substring(0, 5), 120, 134, 4, T.ok);
+        ctext("max " + String(q.high).substring(0, 5) + "   min " + String(q.low).substring(0, 5),
+              120, 180, 1, T.textDim);
+        var d = String(q.create_date);
+        ctext("awesomeapi  " + d.substring(0, 10) + " " + d.substring(11, 16), 120, 198, 1, T.textDim);
     }
-    if (data === null) failed = true;
-} else {
-    failed = true;
+    ctext("Toque para atualizar", 120, 290, 1, T.textDim);
 }
 
-if (failed) {
-    System.setTextColor(ERR, 0);
-    System.drawString("Request failed.", 10, 110, 2);
-    System.setTextColor(DIM, 0);
-    System.drawString("Check WiFi / internet and", 10, 132, 1);
-    System.drawString("try again.", 10, 144, 1);
-} else {
-    var q = data.USDBRL;
-    System.setTextColor(DIM, 0);
-    System.drawString("USD/BRL", 10, 105, 2);
-    System.setTextColor(OK, 0);
-    System.drawString("R$ " + String(q.bid).substring(0, 5), 10, 128, 4);
-    System.setTextColor(DIM, 0);
-    System.drawString("high " + String(q.high).substring(0, 5) +
-                      "  low " + String(q.low).substring(0, 5), 10, 170, 2);
-    var day = String(q.create_date).substring(0, 10);
-    var tim = String(q.create_date).substring(11, 16);
-    System.drawString("source: awesomeapi " + day + " " + tim, 10, 190, 1);
+function fetchQuote() {
+    draw("loading");
+    if (!Net.isConnected()) {
+        draw("fail");
+        return;
+    }
+    var data = null;
+    try {
+        data = Net.getJSON(URL);
+    } catch (e) {
+        data = null;
+    }
+    if (data && data.USDBRL) draw("ok", data.USDBRL);
+    else draw("fail");
 }
 
-System.setTextColor(DIM, 0);
-System.drawString("Tap X (top-right) to exit", 10, H - 16, 1);
-
+fetchQuote();
+var down = false;
 while (true) {
-    System.getTouch();  // o toque no X dispara o OS_EXIT
-    System.delay(50);
+    var t = System.getTouch();
+    if (t.touched) {
+        down = true;
+    } else if (down) {
+        down = false;
+        fetchQuote();  // soltou: atualiza
+    }
+    System.delay(30);
 }

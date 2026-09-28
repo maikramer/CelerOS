@@ -1,3 +1,4 @@
+#include "esp_crt_bundle.h"
 #include "WifiOta.h"
 #include <esp_log.h>
 
@@ -19,7 +20,11 @@ ErrorCode WifiOta::startUpdate(const std::string& url) {
 ErrorCode WifiOta::performUpdate(const std::string& url) {
     esp_http_client_config_t config = {};
     config.url = url.c_str();
-    config.cert_pem = nullptr; // Replace with your server certificate if needed
+    // HTTPS valida o servidor contra o bundle de CAs do IDF: sem isso (e com
+    // CONFIG_ESP_TLS_SKIP_CERT_VERIFY no sdkconfig) qualquer MITM na rede
+    // podia entregar um firmware arbitrario. HTTP puro (servidor de testes na
+    // LAN) segue permitido por CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP.
+    if (url.rfind("https://", 0) == 0) config.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_https_ota_config_t ota_config = {};
     ota_config.http_config = &config;

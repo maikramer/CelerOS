@@ -115,10 +115,18 @@ vivem no LittleFS e não são afetados por OTA — atualize-os com
 
 ## Limitações conhecidas
 
-- TLS sem validação de certificado (`setInsecure`), herdado do updater
-  original — pin de CA fica como evolução futura.
+- Downloads HTTPS (manifesto e firmware) validam o certificado do servidor
+  contra o bundle de CAs do ESP-IDF; HTTP puro segue aceito para o servidor
+  de testes local. Ainda não há assinatura de firmware (secure boot /
+  imagens assinadas ficam como evolução futura).
 - O bootloader rollback do ESP-IDF não está habilitado no core Arduino
   pré-compilado, então não há rollback automático pós-boot; a proteção é a
   validação de checksum antes da ativação do slot.
 - Nem o canal de updates nem o `/update` têm autenticação (o mesmo vale para
-  o file manager inteiro).
+  o file manager inteiro): qualquer um na rede local usa enquanto o servidor
+  web estiver ligado. Requisições cruzadas, porém, são bloqueadas: as rotas de
+  escrita (`POST`/`DELETE`, inclusive `/update`) exigem o cabeçalho
+  `X-Celer-Request`, que só as páginas do próprio aparelho enviam, e não há
+  CORS permissivo — um site malicioso não consegue mais gravar firmware nem
+  mexer em arquivos pelo navegador de quem o visita. Scripts precisam mandar o
+  cabeçalho, ex.: `curl -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.

@@ -119,10 +119,18 @@ LittleFS and are not touched by OTA — update them with
 
 ## Known limitations
 
-- TLS without certificate validation (`setInsecure`), inherited from the
-  original updater — CA pinning is future work.
+- HTTPS downloads (manifest and firmware) validate the server certificate
+  against the ESP-IDF CA bundle; plain HTTP is still accepted for the local
+  test server. There is no firmware signature yet (secure boot / signed
+  images are future work).
 - The ESP-IDF bootloader rollback is not enabled in the firmware, so there
   is no automatic post-boot rollback; the protection is the checksum
   validation before slot activation.
 - Neither the updates channel nor `/update` have authentication (the same
-  goes for the whole file manager).
+  goes for the whole file manager): anyone on the LAN can use them while the
+  web server is on. Cross-site requests are blocked, though: write routes
+  (`POST`/`DELETE`, including `/update`) require the `X-Celer-Request` header
+  that only the device's own pages send, and there is no permissive CORS —
+  a malicious website can no longer flash firmware or touch files through
+  the visitor's browser. Scripts must send the header, e.g.
+  `curl -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.

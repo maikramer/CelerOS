@@ -53,6 +53,9 @@ font-weight:600;cursor:pointer}
 <div class="warn">⚠ do not power off during the flash</div>
 </div></div>
 <script>
+// Anti-CSRF: toda requisicao desta pagina leva X-Celer-Request (o servidor
+// recusa POST/DELETE sem ele — sites de fora nao conseguem mandar o header)
+(function(){const H='X-Celer-Request';const f=window.fetch;window.fetch=function(u,o){o=o||{};const h=new Headers(o.headers||{});h.set(H,'1');o.headers=h;return f(u,o);};const op=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){op.apply(this,arguments);this.setRequestHeader(H,'1');};})();
 function st(m,c){const s=document.getElementById('status');s.textContent=m;s.className='status '+c}
 function pick(i){
 if(!i.files.length)return;

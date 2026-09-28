@@ -369,14 +369,23 @@ function tryInstall(app) {
     var base = destBase();
     var dest = base + "/" + app.pkg;
     drawInstalling(app); // copia e bloqueante, sem callback de progresso
-    var ok = true;
-    if (FS.isDirectory(dest)) {
-        if (!FS.removeDirectory(dest)) ok = false; // reinstalar = sobrescreve
-    }
+    FS.mkdir(base);
+    // Transacional: copia para <pkg>.inst e so entao troca pela versao antiga.
+    // Antes a antiga era apagada ANTES da copia — disco cheio no meio deixava
+    // o usuario sem nenhuma das duas (e com uma copia pela metade no disco).
+    var tmp = dest + ".inst";
+    if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);  // sobra de falha anterior
+    var ok = FS.copyDirectory(app.folder, tmp);
     if (ok) {
-        FS.mkdir(base);
-        ok = FS.copyDirectory(app.folder, dest);
+        if (FS.isDirectory(dest)) ok = FS.removeDirectory(dest);
+        if (ok) ok = FS.renameFile(tmp, dest);
+    } else if (FS.isDirectory(dest)) {
+        // sem espaco para duas copias: cai no modo antigo (remove e copia)
+        if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);
+        ok = FS.removeDirectory(dest) && FS.copyDirectory(app.folder, dest);
+        if (!ok && FS.isDirectory(dest)) FS.removeDirectory(dest);
     }
+    if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);
     if (ok) {
         System.rescanApps();
         showAlert("Instalado!",
