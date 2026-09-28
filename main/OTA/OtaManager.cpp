@@ -4,6 +4,7 @@
 #include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/SemVer.h"
 #include "../Boards/Board.h"
 
 OtaUpdateInfo OtaManager::info;
@@ -16,27 +17,6 @@ static const char* CELEROS_UPDATE_CHANNEL = Board::profile().otaChannel;
 // /local/ota_url.txt no dispositivo) para apontar outro servidor.
 static const char* CELEROS_UPDATE_BASE =
     "https://os.celer.tec.br/updates";
-
-static bool isVersionGreater(const std::string& newVer, const std::string& oldVer) {
-    int newParts[3] = {0,0,0}, oldParts[3] = {0,0,0};
-    auto parseV = [](const std::string& v, int* p) {
-        int pt = 0, st = 0;
-        while(pt<3 && st<(int)v.length()){
-            int d = kstr::indexOf(v, '.', st);
-            if(d==-1) { p[pt] = (int)kstr::toInt(v.substr(st)); break; }
-            p[pt] = (int)kstr::toInt(v.substr(st, d - st));
-            st = d+1; pt++;
-        }
-    };
-    parseV(newVer, newParts);
-    parseV(oldVer, oldParts);
-    if(newParts[0] > oldParts[0]) return true;
-    if(newParts[0] < oldParts[0]) return false;
-    if(newParts[1] > oldParts[1]) return true;
-    if(newParts[1] < oldParts[1]) return false;
-    if(newParts[2] > oldParts[2]) return true;
-    return false;
-}
 
 std::string OtaManager::getUpdateJsonUrl() {
     // Override para testes com servidor local (tools/ota_server.py). Artefato
@@ -113,7 +93,7 @@ bool OtaManager::checkForUpdates() {
     }
     info.hasFirmware = info.firmwareUrl.length() > 0;
 
-    if (isVersionGreater(info.version, CELEROS_VERSION)) {
+    if (celer::versionGreater(info.version, CELEROS_VERSION)) {
         info.available = true;
     }
     return info.available;

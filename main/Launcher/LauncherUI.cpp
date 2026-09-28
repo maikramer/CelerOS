@@ -1,4 +1,5 @@
 #include "LauncherUI.h"
+#include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
 #include "../Kernel/AppRunner.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
@@ -11,6 +12,7 @@ CelerDisplay *LauncherUI::tftInstance = nullptr;
 std::string LauncherUI::appPaths[50];
 std::string LauncherUI::appNames[50];
 std::string LauncherUI::appPkg[50];
+uint32_t LauncherUI::appPerms[50];
 std::string LauncherUI::appIcons[50];
 bool   LauncherUI::appIsFolder[50];
 bool   LauncherUI::appIsSystem[50];
@@ -95,6 +97,7 @@ int LauncherUI::totalPages() {
 // ---------------------------------------------------------------------------
 // Scan de apps (LittleFS + SD)
 // ---------------------------------------------------------------------------
+
 void LauncherUI::scanLocalApps() {
     appCount = 0;
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
@@ -115,6 +118,7 @@ void LauncherUI::scanLocalApps() {
             std::string name, pkg, icon;
             bool isFolder = false, system = false, topbar = false;
             int order = 100;
+            uint32_t appEntryPerms = 0xFFFFFFFFu;  // .js avulso: sem app.json = tudo
 
             if (entries[i].isDir) {
                 std::string appJsonPath = entries[i].path;
@@ -124,6 +128,7 @@ void LauncherUI::scanLocalApps() {
                 if (!FileSystem::exists(appJsonPath.c_str())) continue;
 
                 std::string jsonContent = FileSystem::readTextFile(appJsonPath.c_str());
+                appEntryPerms = celer::parsePermissions(jsonContent);
                 name = FileSystem::parseJsonValue(jsonContent, "name");
                 if (name.length() == 0) continue;
 
@@ -167,6 +172,7 @@ void LauncherUI::scanLocalApps() {
             appIsSystem[appCount] = system;
             appTopbar[appCount]   = topbar;
             appOrder[appCount]    = order;
+            appPerms[appCount]   = appEntryPerms;
             appCount++;
         }
     }
@@ -216,9 +222,12 @@ const std::string& LauncherUI::appEntryIcon(int i) { return appIcons[i]; }
 bool LauncherUI::appEntryIsSystem(int i) { return appIsSystem[i]; }
 bool LauncherUI::appEntryTopbar(int i) { return appTopbar[i]; }
 bool LauncherUI::appEntryIsFolder(int i) { return appIsFolder[i]; }
+uint32_t LauncherUI::appEntryPerms(int i) { return appPerms[i]; }
+const std::string& LauncherUI::appEntryPkg(int i) { return appPkg[i]; }
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
-    runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index]);
+    runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index],
+           appPkg[index], appPerms[index]);
 }
 
 bool LauncherUI::launchAppAsync(int index) {
@@ -230,7 +239,8 @@ bool LauncherUI::launchAppAsync(int index) {
     std::string filePath;
     std::string title;
     resolveApp(appPaths[index], appIsFolder[index], filePath, title);
-    return AppRunner::start(filePath, title, appTopbar[index]);
+    return AppRunner::start(filePath, title, appTopbar[index],
+                            appPkg[index], appPerms[index]);
 #else
     (void)index;
     return false;
@@ -262,7 +272,8 @@ void LauncherUI::resolveApp(const std::string& path, bool isFolder,
     if (!isFolder && kstr::endsWith(title, ".js")) title.resize(title.size() - 3);
 }
 
-void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed) {
+void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed,
+                        const std::string& appPkg, uint32_t perms) {
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
 
@@ -271,7 +282,8 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
 
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia
-    CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed);
+    CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed,
+                         appPkg.c_str(), perms);
     // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
     // coberto na hora pelo launcher — removido)
 }

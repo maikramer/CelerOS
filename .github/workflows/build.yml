@@ -1,0 +1,60 @@
+name: build
+
+# F5 do roadmap de maturidade: CI com build das duas placas + testes.
+# - harness JS (Node, sem hardware) e testes host C++ rodam primeiro
+# - firmware compila no container oficial do ESP-IDF 6.1 (matrix de placas)
+# - binários sobem como artifacts (flash manual/OTA de teste)
+on: [push, pull_request]
+
+jobs:
+  tests:
+    name: JS harness + C++ host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: JS apps harness
+        run: node test/js_harness/run.js
+      - name: C++ host tests (lógica pura de main/Utils)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp
+          ./celeros_tests
+
+  firmware:
+    name: firmware (${{ matrix.board }})
+    needs: tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: smartdisplay
+            target: esp32s3
+          - board: cyd
+            target: esp32
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B build-${{ matrix.board }} \
+            -DSDKCONFIG=build-${{ matrix.board }}/sdkconfig \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
+            -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }}
+          idf.py -B build-${{ matrix.board }} build
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CelerOS-${{ matrix.board }}
+          path: |
+            build-${{ matrix.board }}/CelerOS.bin
+            build-${{ matrix.board }}/bootloader/bootloader.bin
+            build-${{ matrix.board }}/partition_table/partition-table.bin
+          if-no-files-found: error

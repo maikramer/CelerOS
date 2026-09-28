@@ -9,6 +9,8 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/PinStore.h"
 #include "../Utils/CelerSettings.h"
+#include "../Boards/Board.h"
+#include "driver/ledc.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
@@ -66,6 +68,14 @@ static inline int jsx(int v) { return UI::sx(v); }
 //              faixa por alguns segundos (RETRACT_MS). Todo o gesto de revelar
 //              e consumido: o app nunca ve press/release dele.
 static bool s_exitArmed = false;
+
+// Capabilities do app corrente (F4): bindings nao concedidos nao sao
+// registrados — um app sem "net" no app.json nem ve o objeto Net.
+using celer::PERM_FS; using celer::PERM_NET; using celer::PERM_GPIO; using celer::PERM_SYSTEM;
+static uint32_t s_perms = celer::PERM_ALL;
+static bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
+// packageName do app corrente (FS.appData resolve a pasta privada)
+static std::string s_appPkg;
 static bool s_barOnGlass = false;
 static bool s_barHotOnGlass = false;
 static int s_armX = 0, s_armY = 0;   // onde o toque no X comecou
@@ -1763,6 +1773,58 @@ duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
     return 0;
 }
 
+duk_ret_t JSBindings::js_appData(duk_context *ctx) {
+    // Pasta privada do app: /local/data/<packageName> (criada na primeira
+    // chamada). Recordes/configs deixam de poluir o /local global e de
+    // colidir entre apps. Sem packageName no app.json devolve "".
+    if (s_appPkg.empty()) { duk_push_string(ctx, ""); return 1; }
+    std::string dir = "/local/data/" + s_appPkg;
+    FileSystem::mkdir("/local/data");
+    FileSystem::mkdir(dir.c_str());
+    duk_push_string(ctx, (dir + "/").c_str());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_toast(duk_context *ctx) {
+    // Notificacao do sistema a partir do app: enfileira no Navigator (na UI
+    // viva aparece na hora; com app sincrono, quando o app sair).
+    const char* msg = duk_require_string(ctx, 0);
+    kui::Navigator::toast(msg);
+    return 0;
+}
+
+duk_ret_t JSBindings::js_beep(duk_context *ctx) {
+    // Buzzer passivo via LEDC no pino do perfil da placa (speakerPin; -1 =
+    // sem buzzer -> false). Apps de sistema usam para feedback sonoro.
+    int freq = duk_require_int(ctx, 0);
+    int ms = duk_require_int(ctx, 1);
+    if (freq < 20 || freq > 20000 || ms <= 0 || ms > 5000) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    int pin = Board::profile().speakerPin;
+    if (pin < 0) { duk_push_boolean(ctx, 0); return 1; }
+    ledc_timer_config_t timer = {};
+    timer.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer.duty_resolution = LEDC_TIMER_10_BIT;
+    timer.freq_hz = (uint32_t)freq;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+    ledc_timer_config(&timer);
+    ledc_channel_config_t ch = {};
+    ch.speed_mode = LEDC_LOW_SPEED_MODE;
+    ch.channel = LEDC_CHANNEL_0;
+    ch.timer_sel = LEDC_TIMER_0;
+    ch.intr_type = LEDC_INTR_DISABLE;
+    ch.gpio_num = (gpio_num_t)pin;
+    ch.duty = 512;  // 50%
+    if (ledc_channel_config(&ch) != ESP_OK) { duk_push_boolean(ctx, 0); return 1; }
+    uint32_t t0 = millis();
+    while ((int)(millis() - t0) < ms) { esp_task_wdt_reset(); delay(10); }
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    duk_push_boolean(ctx, 1);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_setting(duk_context *ctx) {
     // Config do sistema em NVS (F3): System.setting("install_sd") -> "1" |
     // null. Apps de sistema leem/escrevem flags do OS sem tocar arquivos.
@@ -1792,11 +1854,13 @@ static void regFn(duk_context* ctx, duk_c_function fn, const char* name, duk_idx
 }
 
 void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
-                      bool topbarFixed) {
+                      bool topbarFixed, const char* appPkg, uint32_t perms) {
     s_jsTft = tft;
     tftInstance = tft;
     s_appTitle = appTitle ? appTitle : "";
     s_topbarFixed = topbarFixed;
+    s_appPkg = appPkg ? appPkg : "";
+    s_perms = perms;
     celer_log_printf("[TB] init app='%s' fixed=%d\n", s_appTitle ? s_appTitle : "", topbarFixed);
 
     // Estado grafico limpo por app: o sprite de um app anterior (que saiu
@@ -1853,6 +1917,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_push_object(ctx); // System
 
     // System.gpio sub-object
+    // GPIO cru so com a capability "gpio" declarada no app.json
+    if (perm(PERM_GPIO)) {
     duk_push_object(ctx);
     regFn(ctx, js_pinMode, "pinMode", 2);
     regFn(ctx, js_digitalWrite, "digitalWrite", 2);
@@ -1870,6 +1936,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_push_int(ctx, LOW); duk_put_prop_string(ctx, -2, "LOW");
     
     duk_put_prop_string(ctx, -2, "gpio");
+    }
 
     // --- Drawing Primitives ---
 
@@ -1917,7 +1984,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     regFn(ctx, js_getTemperature, "getTemperature", 0);
     regFn(ctx, js_hasTemperatureSensor, "hasTemperatureSensor", 0);
     regFn(ctx, js_getInfo, "getInfo", 0);
-    regFn(ctx, js_restart, "restart", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_restart, "restart", 0);
     
     regFn(ctx, js_getTime, "getTime", 0);
     regFn(ctx, js_getSeconds, "getSeconds", 0);
@@ -1955,7 +2022,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     regFn(ctx, js_setBrightness, "setBrightness", 1);
     regFn(ctx, js_getBrightness, "getBrightness", 0);
     regFn(ctx, js_backlightSupported, "backlightSupported", 0);
-    regFn(ctx, js_openWifiSetup, "openWifiSetup", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_openWifiSetup, "openWifiSetup", 0);
     regFn(ctx, js_exitApp, "exitApp", 0);
     regFn(ctx, js_setClip, "setClip", 4);
     regFn(ctx, js_clearClip, "clearClip", 0);
@@ -1967,21 +2034,24 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     regFn(ctx, js_verifyPin, "verifyPin", 1);
     regFn(ctx, js_pinClear, "pinClear", 0);
     regFn(ctx, js_pinState, "pinState", 0);
-    regFn(ctx, js_webAuthInfo, "webAuthInfo", 0);
-    regFn(ctx, js_webAuthSetPass, "webAuthSetPass", 1);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_webAuthInfo, "webAuthInfo", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_webAuthSetPass, "webAuthSetPass", 1);
     regFn(ctx, js_setting, "setting", 2);
+    regFn(ctx, js_toast, "toast", 1);
+    regFn(ctx, js_beep, "beep", 2);
     regFn(ctx, js_rescanApps, "rescanApps", 0);
-    regFn(ctx, js_factoryReset, "factoryReset", 1);
-    regFn(ctx, js_otaCheck, "otaCheck", 0);
-    regFn(ctx, js_otaStart, "otaStart", 2);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_factoryReset, "factoryReset", 1);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_otaCheck, "otaCheck", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_otaStart, "otaStart", 2);
     regFn(ctx, js_setTimezone, "setTimezone", 1);
     regFn(ctx, js_setManualTime, "setManualTime", 5);
     regFn(ctx, js_set24hFormat, "set24hFormat", 1);
     regFn(ctx, js_get24hFormat, "get24hFormat", 0);
     regFn(ctx, js_setNtpEnabled, "setNtpEnabled", 1);
     regFn(ctx, js_getNtpEnabled, "getNtpEnabled", 0);
-    regFn(ctx, js_webActive, "webActive", 0);
-    regFn(ctx, js_webSetActive, "webSetActive", 1);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_webActive, "webActive", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_webSetActive, "webSetActive", 1);
+
     regFn(ctx, js_theme, "theme", 0);
     regFn(ctx, js_drawIcon, "drawIcon", 3);
 
@@ -1989,6 +2059,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_prop_string(ctx, -2, "System");
 
     // --- Net Object (HTTP para apps, API level 2) ---
+    // Objeto Net inteiro sob a capability "net"; wifiConnect/wifiDisconnect
+    // (gravam credenciais) exigem tambem "system"
+    if (perm(PERM_NET)) {
     duk_push_object(ctx); // Net
     regFn(ctx, js_netGet, "get", 1);
     regFn(ctx, js_netGetJSON, "getJSON", 1);
@@ -1999,11 +2072,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     regFn(ctx, js_netCancelGet, "cancelGet", 1);
     regFn(ctx, js_netIsConnected, "isConnected", 0);
     regFn(ctx, js_wifiScan, "wifiScan", 0);
-    regFn(ctx, js_wifiConnect, "wifiConnect", 2);
-    regFn(ctx, js_wifiDisconnect, "wifiDisconnect", 0);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_wifiConnect, "wifiConnect", 2);
+    if (perm(PERM_SYSTEM)) regFn(ctx, js_wifiDisconnect, "wifiDisconnect", 0);
     duk_put_prop_string(ctx, -2, "Net");
+    }
 
     // --- FS Object ---
+    if (perm(PERM_FS)) {
     duk_push_object(ctx); // FS
     regFn(ctx, js_readTextFile, "readTextFile", 1);
     regFn(ctx, js_writeTextFile, "writeTextFile", 2);
@@ -2028,7 +2103,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     regFn(ctx, js_removeDirectory, "removeDirectory", 1);
     
     // Assign to global variable 'FS'
+    regFn(ctx, js_appData, "appData", 0);
     duk_put_prop_string(ctx, -2, "FS");
+    }
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex

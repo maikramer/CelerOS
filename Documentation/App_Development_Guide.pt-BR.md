@@ -67,6 +67,7 @@ segurança.
   qualquer valor, sem restrição.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
+- **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado (`FS` / `Net` / `System.gpio` e as chamadas que afetam o aparelho, como `restart`/`otaStart`, são filtradas no runtime). Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
   JS](JS_API_Guide.pt-BR.md) — atualmente `6`). Verificado pelo sistema na
   instalação.

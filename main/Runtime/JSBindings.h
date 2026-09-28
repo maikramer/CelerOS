@@ -5,13 +5,17 @@
 #include <duktape.h>
 #include "../Boards/Board.h"
 
+#include "../Utils/AppPerms.h"  // enum AppPerm/PERM_* (header testavel no host)
+using celer::PERM_ALL;
+
 class JSBindings {
 public:
     // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
     // retratil (swipe da borda superior revela por alguns segundos) com o
     // app em tela cheia — campo "topbar" do app.json
     static void init(duk_context *ctx, CelerDisplay *tft, const char* appTitle = "",
-                     bool topbarFixed = true);
+                    bool topbarFixed = true, const char* appPkg = "",
+                    uint32_t perms = PERM_ALL);
 
     // Alvo de desenho do app (sprite do app > quadro automatico > display)
     static lgfx::LGFXBase* gfx();
@@ -165,6 +169,9 @@ private:
     static duk_ret_t js_webAuthInfo(duk_context *ctx);
     static duk_ret_t js_webAuthSetPass(duk_context *ctx);
     static duk_ret_t js_setting(duk_context *ctx);
+    static duk_ret_t js_toast(duk_context *ctx);
+    static duk_ret_t js_beep(duk_context *ctx);
+    static duk_ret_t js_appData(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);
     static duk_ret_t js_factoryReset(duk_context *ctx);
     static duk_ret_t js_otaCheck(duk_context *ctx);

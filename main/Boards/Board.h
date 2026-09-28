@@ -27,6 +27,7 @@ struct BoardProfile {
     bool hasPsram;
     bool backlightPwm;       // brilho controlavel
     bool capacitiveTouch;    // sem calibracao interativa
+    int speakerPin;          // buzzer passivo p/ System.beep (LEDC); -1 = nao ha
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).

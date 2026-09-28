@@ -15,6 +15,8 @@ struct AppParams {
     std::string filePath;
     std::string title;
     bool topbarFixed;
+    std::string appPkg;
+    uint32_t perms = 0xFFFFFFFFu;
 };
 
 TaskHandle_t s_task = nullptr;
@@ -28,7 +30,8 @@ void appTask(void* raw) {
     // reinicia em ~15s — os pontos de espera ja alimentam o WDT)
     esp_task_wdt_add(nullptr);
 
-    CelerKernel::runFile(p->filePath.c_str(), p->title.c_str(), p->topbarFixed);
+    CelerKernel::runFile(p->filePath.c_str(), p->title.c_str(), p->topbarFixed,
+                         p->appPkg.c_str(), p->perms);
 
     delete p;
     s_running = false;
@@ -42,10 +45,11 @@ namespace AppRunner {
 
 bool supported() { return true; }
 
-bool start(const std::string& filePath, const std::string& title, bool topbarFixed) {
+bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
+                      const std::string& appPkg, uint32_t perms) {
     if (s_task != nullptr) return false;  // um app por vez
 
-    AppParams* p = new AppParams{filePath, title, topbarFixed};
+    AppParams* p = new AppParams{filePath, title, topbarFixed, appPkg, perms};
     if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, &s_task, 1) != pdPASS) {
         delete p;
         s_task = nullptr;
@@ -77,7 +81,7 @@ bool consumeWifiSetupRequest() {
 namespace AppRunner {
 
 bool supported() { return false; }
-bool start(const std::string&, const std::string&, bool) { return false; }
+bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t) { return false; }
 bool running() { return false; }
 void requestWifiSetup() {}
 bool consumeWifiSetupRequest() { return false; }

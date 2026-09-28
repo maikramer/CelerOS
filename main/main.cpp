@@ -23,6 +23,7 @@
 #include "Kernel/TimeManager.h"
 #include "Launcher/Screens.h"
 #include "USBDevice/SerialLink.h"
+#include "Utils/I18n.h"
 #include "Boards/Board.h"
 #if CONFIG_CELEROS_USB_NATIVE
 #include "USBDevice/USBDevice.h"
@@ -68,7 +69,7 @@ static void celerSetup() {
     ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
 
-    bootSplash("Iniciando...");
+    bootSplash(i18n::TR("Iniciando...", "Starting..."));
 
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
@@ -110,7 +111,7 @@ static void celerSetup() {
 
     // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
     celer_log_println("DEBUG: Scanning Local Apps...");
-    bootSplash("Carregando apps...");
+    bootSplash(i18n::TR("Carregando apps...", "Loading apps..."));
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
     celer_log_println("DEBUG: Local Apps Scanned.");
@@ -136,7 +137,7 @@ static void celerSetup() {
     // coredump gravado na particao dedicada viram toast no launcher
     esp_reset_reason_t rr = esp_reset_reason();
     if (rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT) {
-        kui::Navigator::toast("Um app travou e o sistema reiniciou", THEME_WARN, 4000);
+        kui::Navigator::toast(i18n::TR("Um app travou e o sistema reiniciou", "An app froze and the system restarted"), THEME_WARN, 4000);
     }
     {
         size_t cdAddr = 0, cdSize = 0;
@@ -145,7 +146,8 @@ static void celerSetup() {
         }
     }
     if (FileSystem::localMountFailed()) {
-        kui::Navigator::toast("Armazenamento interno corrompido — recupere pelo USB",
+        kui::Navigator::toast(i18n::TR("Armazenamento interno corrompido — recupere pelo USB",
+                                       "Internal storage corrupted — recover over USB"),
                               THEME_WARN, 5000);
     }
 
