@@ -298,6 +298,12 @@ public:
     // Le o touch agora e entrega 0..1 eventos ao handler.
     void poll(const Handler& onEvent);
 
+    // Janela de quarentena: os pumps descartam eventos ate a janela vencer E o
+    // vidro ler dedo solto. Para transicoes feitas pelo sistema (app JS
+    // fechando): o release do toque que fechou o app nao pode virar tap na
+    // tela de baixo (ex.: X do canto -> icone de WiFi do launcher).
+    static void quarantine(uint32_t ms);
+
 private:
     bool m_down = false;
     int m_lastX = 0, m_lastY = 0;

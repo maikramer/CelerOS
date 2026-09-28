@@ -546,6 +546,12 @@ bool TouchInjector::take(Sample& out) {
 
 // ============================================================ TouchPump =====
 
+namespace {
+uint32_t s_quarantineUntilMs = 0;
+}  // namespace
+
+void TouchPump::quarantine(uint32_t ms) { s_quarantineUntilMs = millis() + ms; }
+
 bool readTouch(uint16_t* x, uint16_t* y) {
     if (TouchInjector::active()) {
         // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e soltar
@@ -569,6 +575,17 @@ bool readTouch(uint16_t* x, uint16_t* y) {
 void TouchPump::poll(const Handler& onEvent) {
     uint16_t x = 0, y = 0;
     bool down = readTouch(&x, &y);
+
+    // Quarentena: descarta tudo ate a janela vencer com o vidro limpo. Zerar
+    // m_down evita um release fantasma do toque que motivou a quarentena.
+    if (s_quarantineUntilMs != 0) {
+        if (millis() < s_quarantineUntilMs || down) {
+            m_down = false;
+            s_touch = {};
+            return;
+        }
+        s_quarantineUntilMs = 0;
+    }
 
     TouchEvent ev;
     if (down && !m_down) {
