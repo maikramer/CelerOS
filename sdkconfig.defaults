@@ -30,6 +30,17 @@ CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 # segue valendo sempre
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
+# Resiliencia (F2): task watchdog com panic — app JS travado em while(true)
+# sem System.delay reinicia o aparelho em ~15s em vez de congelar para sempre
+# (a main task e inscrita apos o setup; durante o boot os idles ja vigiam).
+# OTA com rollback: slot novo so e confirmado apos 30s de boot sao; crash
+# antes disso reverte para o slot anterior. Coredump vai para a particao
+# dedicada (ler com celerctl coredump).
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
 # Release: tamanho (o padrao -Og estourava o slot OTA da CYD) e asserts
 # sem strings de mensagem
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y

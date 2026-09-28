@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cstring>
+#include "esp_task_wdt.h"
 
 namespace kui {
 
@@ -342,6 +343,7 @@ std::string getString(const std::string& initialText, const std::string& promptM
     Canvas canvas(Board::display());
     TouchPump pump;
     while (!done) {
+        esp_task_wdt_reset();  // digitacao pode levar mais que o WDT (15s)
         pump.poll([&](const TouchEvent& ev) {
             kb.onTouch(ev);
             if (ev.type != TouchEvent::Drag) kb.markDirty();  // tecla "afunda"

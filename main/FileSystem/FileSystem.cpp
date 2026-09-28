@@ -17,12 +17,44 @@
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "driver/gpio.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 static const char* FS_TAG = "celer.fs";
 
 // Handle do cartao para unmount; bus SPI inicializada sob demanda
 static sdmmc_card_t* s_sd_card = nullptr;
 static bool s_spi_bus_ready = false;
+static bool s_localMountFailed = false;
+
+// Flag NVS do primeiro mount de fabrica: sem ela, format_if_mount_failed
+// apagava TUDO (apps/configs do usuario) numa corrupcao silenciosa. Agora:
+// particao crua de fabrica formata UMA vez; depois disso, falha de montagem
+// preserva os dados e o boot segue sem /local (toast no launcher).
+static const char* NVS_NS = "celer";
+static const char* NVS_FLAG = "fs_mounted";
+
+static bool littlefsEverMounted() {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    uint8_t v = 0;
+    bool set = nvs_get_u8(h, NVS_FLAG, &v) == ESP_OK && v == 1;
+    nvs_close(h);
+    return set;
+}
+
+static void markLittlefsMounted() {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    uint8_t one = 1;
+    nvs_set_u8(h, NVS_FLAG, one);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool FileSystem::localMountFailed() {
+    return s_localMountFailed;
+}
 
 // O barramento do SD e sempre o SPI2 (FSPI no S3, HSPI no ESP32 classico);
 // pinos e velocidade vem do perfil da placa (Boards/<placa>/Board.cpp).
@@ -30,21 +62,25 @@ static bool s_spi_bus_ready = false;
 
 bool FileSystem::init() {
     bool success = true;
+    nvs_flash_init();  // flag do primeiro mount (idempotente: WebManager repete)
 
     // --- LittleFS em /local ---
     esp_vfs_littlefs_conf_t lfsc = {};
     lfsc.base_path = "/local";
     lfsc.partition_label = "littlefs";
-    lfsc.format_if_mount_failed = true;
+    lfsc.format_if_mount_failed = !littlefsEverMounted();  // so de fabrica
     lfsc.dont_mount = false;
     esp_err_t err = esp_vfs_littlefs_register(&lfsc);
     if (err != ESP_OK) {
-        ESP_LOGE(FS_TAG, "LittleFS mount falhou: %s", esp_err_to_name(err));
+        ESP_LOGE(FS_TAG, "LittleFS mount falhou: %s (dados preservados)",
+                 esp_err_to_name(err));
+        s_localMountFailed = true;
         success = false;
     } else {
         size_t total = 0, used = 0;
         esp_littlefs_info("littlefs", &total, &used);
         ESP_LOGI(FS_TAG, "LittleFS montado em /local (%u/%u usado)", (unsigned)used, (unsigned)total);
+        markLittlefsMounted();
         mkdir("/local/apps");  // ignora EEXIST
     }
 

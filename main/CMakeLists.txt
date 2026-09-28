@@ -77,6 +77,7 @@ idf_component_register(
         System
         esp_https_ota
         app_update
+        espcoredump
         nvs_flash
         esp_wifi
         bblanchon__arduinojson

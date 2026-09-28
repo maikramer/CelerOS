@@ -22,6 +22,9 @@ struct FileEntry {
 class FileSystem {
 public:
     static bool init();
+    // true quando o LittleFS falhou ao montar neste boot (dados preservados:
+    // desde a F2 nao se formata mais silenciosamente apos o primeiro mount)
+    static bool localMountFailed();
     static std::string readTextFile(const char* path);
     // Atomica em /local: grava em <path>.tmp e renomeia por cima (queda de
     // energia no meio deixa o arquivo antigo intacto, nunca um pela metade)

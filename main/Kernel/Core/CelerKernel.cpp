@@ -8,6 +8,7 @@
 #include "../../UI/Kui.h"
 #include <vector>
 #include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
 
 duk_context *CelerKernel::ctx = nullptr;
 CelerDisplay *CelerKernel::tftInstance = nullptr;
@@ -86,11 +87,12 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     tft->drawString("Toque para voltar", UI::cx(), by + bh / 2, body);
     tft->endWrite();
 
-    // espera soltar (o toque que causou o erro), depois um tap completo
+    // espera soltar (o toque que causou o erro), depois um tap completo —
+    // usuario pode demorar: alimenta o watchdog da main task enquanto espera
     uint16_t tx, ty;
-    while (kui::readTouch(&tx, &ty)) delay(20);
-    while (!kui::readTouch(&tx, &ty)) delay(20);
-    while (kui::readTouch(&tx, &ty)) delay(20);
+    while (kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
+    while (!kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
+    while (kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
 }
 
 static const char* kOomHint =
@@ -165,6 +167,24 @@ void CelerKernel::init(CelerDisplay *tft) {
 
 void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
     if (result != 0) {
+        // Saida limpa: erro marcado com a propriedade celerExit (throwAppExit
+        // do JSBindings) ou a string "OS_EXIT" exata lancada por apps legado
+        // (ex. Terminal relanca a que recebe). Antes comparava substring:
+        // qualquer erro contendo "OS_EXIT" fechava o app em silencio.
+        if (duk_is_error(ctx, -1)) {
+            duk_get_prop_string(ctx, -1, "celerExit");
+            bool marked = duk_is_boolean(ctx, -1) && duk_get_boolean(ctx, -1);
+            duk_pop(ctx);
+            if (marked) {
+                duk_pop(ctx);
+                return;
+            }
+        } else if (duk_is_string(ctx, -1) &&
+                   strcmp(duk_safe_to_string(ctx, -1), "OS_EXIT") == 0) {
+            duk_pop(ctx);
+            return;
+        }
+
         std::string errorMsg;
         if (duk_is_error(ctx, -1)) {
             duk_get_prop_string(ctx, -1, "stack");
@@ -174,12 +194,6 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             errorMsg = duk_safe_to_string(ctx, -1);
         }
 
-        // Intercept hidden OS Exit signal
-        if (errorMsg.find("OS_EXIT") != std::string::npos) {
-            duk_pop(ctx); // pop the error
-            return; // Cleanly exit execution without printing red screen
-        }
-
         // Intercept OOM signals
         if (errorMsg.find("alloc") != std::string::npos || errorMsg.find("out of memory") != std::string::npos) {
             showRuntimeError("Sem memoria", kOomHint);
@@ -187,10 +201,10 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             // This is a soft-error (not Duktape fatal), so we can just return safely to Launcher
             return;
         }
-        
+
         celer_log_print("JS Execution Error: ");
         celer_log_println(errorMsg.c_str());
-        
+
         showRuntimeError("Erro no app", errorMsg);
     }
     duk_pop(ctx); // pop result or error

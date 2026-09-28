@@ -11,6 +11,7 @@
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
+#include "esp_task_wdt.h"
 #include "../Display/Backlight.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
@@ -38,6 +39,18 @@ static inline uint32_t jsc(uint32_t c) {
     return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
 }
 static inline int jsx(int v) { return UI::sx(v); }
+
+// Saida limpa de app: erro MARCADO com a propriedade celerExit — o kernel
+// identifica a marcacao (ou a string "OS_EXIT" exata, compat com apps que a
+// lancam direto, ex. Terminal). Antes qualquer erro cujo texto continha
+// "OS_EXIT" fechava o app silenciosamente.
+[[noreturn]] static void throwAppExit(duk_context *ctx) {
+    duk_push_error_object(ctx, DUK_ERR_ERROR, "app exit");
+    duk_push_boolean(ctx, 1);
+    duk_put_prop_string(ctx, -2, "celerExit");
+    (void)duk_throw(ctx);  // longjmp: nunca retorna de verdade
+    while (true) { }       // so para calmar o -Wreturn-type
+}
 
 // Topbar do sistema (titulo + X de sair): s_exitArmed = dedo sobre o X no
 // ultimo poll (tambem e o estado "hot" da faixa); s_barOnGlass/s_barHotOnGlass
@@ -740,8 +753,7 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
 
         // Topbar (X de sair): dispara so no release; toque na faixa e chrome
         if (pollAppChrome(touched, tx, ty)) {
-            duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-            return 0; // Unreachable, but good practice
+            throwAppExit(ctx);  // nao retorna
         }
     }
 
@@ -791,8 +803,15 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
         lastGcMs = t0;
     }
     if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
-        uint32_t spent = millis() - t0;
-        if ((uint32_t)ms > spent) delay(ms - spent);
+        // fatias de 4s com reset do watchdog: um System.delay(30000) nao
+        // pode derrubar o WDT de 15s da main task (app rodando = sem celerLoop)
+        uint32_t remain = (uint32_t)ms - (millis() - t0);
+        while (remain > 0) {
+            esp_task_wdt_reset();
+            uint32_t slice = remain > 4000 ? 4000 : remain;
+            delay(slice);
+            remain -= slice;
+        }
     }
     return 0;
 }
@@ -1029,14 +1048,16 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     HttpClient http;
     http.setTimeout(15000);
     http.setBufferSize(4096);  // chunk maior = menos chamadas do callback
-    if (hasProgress) {
-        http.setProgressCallback([ctx](int64_t got, int64_t total) {
-            duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
-            duk_push_number(ctx, (duk_double_t)got);
-            duk_push_number(ctx, (duk_double_t)total);
-            if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) duk_pop(ctx);
-        });
-    }
+    // callback SEMPRE presente: o reset do watchdog por chunk cobre o
+    // download sem progress (o loop do app nao roda enquanto isso)
+    http.setProgressCallback([ctx, hasProgress](int64_t got, int64_t total) {
+        esp_task_wdt_reset();
+        if (!hasProgress) return;
+        duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
+        duk_push_number(ctx, (duk_double_t)got);
+        duk_push_number(ctx, (duk_double_t)total);
+        if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) duk_pop(ctx);
+    });
     HttpResponse resp = http.downloadToFile(url, path);
     if (!resp.isOk()) { duk_push_false(ctx); return 1; }
     duk_push_true(ctx);
@@ -1289,8 +1310,7 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
     bool touched = kui::readTouch(&tx, &ty);
     if (pollAppChrome(touched, tx, ty)) {
         keypadCloseSession();
-        duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-        return 0;
+        throwAppExit(ctx);  // nao retorna
     }
 
     s_kbEvent = KB_EV_NONE;
@@ -1593,10 +1613,9 @@ duk_ret_t JSBindings::js_isBuffered(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_exitApp(duk_context *ctx) {
-    // Mesmo protocolo do canto superior direito: erro "OS_EXIT" e
+    // Mesmo protocolo do canto superior direito: erro marcado celerExit,
     // interceptado como saida limpa pelo CelerKernel.
-    duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-    return 0;  // unreachable
+    throwAppExit(ctx);  // nao retorna
 }
 
 duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {

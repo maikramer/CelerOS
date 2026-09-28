@@ -302,6 +302,26 @@ class CelerLink:
             del pending[:n]
         return w, h, bytes(data[:need])
 
+
+    def coredump(self):
+        """Baixa o coredump ELF da particao dedicada (b'' se vazio)."""
+        _, payload = self.xfer(KL["COREDUMP"], timeout=30.0)
+        if len(payload) < 5:  # [0]=status, [1:5]=u32 tamanho
+            raise CelerError("resposta de coredump sem cabecalho")
+        (size,) = struct.unpack("<I", payload[1:5])
+        if size == 0:
+            return b""
+        data = bytearray(payload[5:])
+        while len(data) < size:
+            cmd, more = self._read_frame(timeout=30.0)
+            if cmd == KL["LOG_DATA"]:  # log do logcat no meio: guarda e segue
+                self.push_queue.append((cmd, more))
+                continue
+            if cmd != KL["COREDUMP_DATA"]:
+                raise CelerError("frame inesperado durante coredump")
+            data += more[1:]
+        return bytes(data[:size])
+
     def touch(self, samples):
         """Enfileira amostras de touch sinteticas: [(down, x, y, delay_ms)]."""
         if not 1 <= len(samples) <= 16:
@@ -556,6 +576,19 @@ def cmd_ota(args):
         link.close()
 
 
+
+def cmd_coredump(args):
+    link = open_link(args)
+    try:
+        data = link.coredump()
+    finally:
+        link.close()
+    if not data:
+        die("nao ha coredump gravado (nenhum crash desde o ultimo reset)")
+    Path(args.out).write_bytes(data)
+    print(f"{args.out}: {len(data)} bytes (ELF) — analise com:")
+    print(f"  idf.py -B build coredump-info -c {args.out}")
+
 def cmd_screencap(args):
     link = open_link(args)
     try:
@@ -772,6 +805,10 @@ def main():
     po.add_argument("file")
     po.add_argument("--no-reboot", action="store_true", help="nao reinicia apos gravar")
     p.set_defaults(func=cmd_ota)
+
+    p = sub.add_parser("coredump", help="baixa o coredump do ultimo crash (ELF)")
+    p.add_argument("--out", default="coredump.elf", help="arquivo de saida")
+    p.set_defaults(func=cmd_coredump)
 
     p = sub.add_parser("screencap", help="captura da tela -> PNG")
     p.add_argument("out", nargs="?", default="celer_screencap.png")
