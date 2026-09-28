@@ -508,6 +508,132 @@ function joinLog(log) { return log.join('\n'); }
     env.FS.getFreeSpace = freeReal;
 })();
 
+// --- App Store v3: pasta por packageName, desinstalar, atualizar tudo -------
+(function() {
+    console.log('App Store v3:');
+    var api = null;
+    var MD5 = 'deadbeef';
+    var dlUrls = [];
+    var r = runApp('data/apps/App Store/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.Net.download = function(url, p, cb) {
+            dlUrls.push(String(url));
+            if (!env.FS.writeTextFile(p, 'NOVO-CODIGO')) return false;
+            if (cb) { cb(1024, 4000); cb(4096, 4000); }
+            return true;
+        };
+        env.Net.get = function(url) {
+            if (String(url).indexOf('app.json') >= 0) {
+                var m = String(url).match(/celeros\.[a-z0-9.]+/);
+                return JSON.stringify({ packageName: m ? m[0] : 'x',
+                                        name: 'App', version: '2.0.0' });
+            }
+            return null;
+        };
+        env.__harness.storeTest = function(a) { api = a; };
+    });
+    check('v3 roda sem erro', r.err === null, r.err || '');
+    check('v3 harness recebeu a loja', !!api);
+    if (!api) return;
+    var env = r.env;
+
+    // preinstalado com pasta de nome diferente do packageName (caso Terminal)
+    env.FS.mkdir('/local/apps/Terminal');
+    env.FS.writeTextFile('/local/apps/Terminal/app.json',
+        JSON.stringify({ packageName: 'celeros.terminal', name: 'Terminal',
+                         version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/Terminal/main.js', 'TERMINAL-ANTIGO');
+
+    check('resolve pasta pelo packageName',
+          api.resolveInstalledDir('celeros.terminal') === '/local/apps/Terminal');
+    check('resolve null p/ nao instalado',
+          api.resolveInstalledDir('celeros.nada') === null);
+
+    // update do preinstalado: tem que ir NA PASTA existente
+    api.setCatalog([
+        { pkg: 'celeros.terminal', metaUrl: 'h/celeros.terminal/app.json',
+          appUrl: 'h/celeros.terminal/main.js', name: 'Terminal', ver: '2.0.0',
+          api: 3, md5: MD5, size: 4000 }
+    ]);
+    check('update instala', api.installApp() === 'done');
+    check('update na pasta certa (sem duplicata)',
+          env.FS.readTextFile('/local/apps/Terminal/main.js') === 'NOVO-CODIGO' &&
+          !env.FS.exists('/local/apps/celeros.terminal'));
+
+    // duplicata pre-existente: update na 1a pasta e limpa a sombreada
+    env.FS.mkdir('/local/apps/celeros.terminal');
+    env.FS.writeTextFile('/local/apps/celeros.terminal/app.json',
+        JSON.stringify({ packageName: 'celeros.terminal', name: 'Terminal',
+                         version: '1.5.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.terminal/main.js', 'SOMBRA');
+    api.scanLocalApps();
+    check('duplicata: primeira vista ganha',
+          api.resolveInstalledDir('celeros.terminal') === '/local/apps/Terminal');
+    api.setCatalog([
+        { pkg: 'celeros.terminal', metaUrl: 'h/celeros.terminal/app.json',
+          appUrl: 'h/celeros.terminal/main.js', name: 'Terminal', ver: '2.1.0',
+          api: 3, md5: MD5, size: 4000 }
+    ]);
+    check('update com duplicata instala', api.installApp() === 'done');
+    check('copia sombreada removida',
+          !env.FS.exists('/local/apps/celeros.terminal') &&
+          env.FS.readTextFile('/local/apps/Terminal/main.js') === 'NOVO-CODIGO');
+
+    // desinstalar
+    check('desinstala', api.uninstallApp('celeros.terminal') === true &&
+                        !env.FS.exists('/local/apps/Terminal'));
+    check('desinstala inexistente falha',
+          api.uninstallApp('celeros.nada') === false);
+
+    // categorias
+    api.setCatalog([
+        { pkg: 'celeros.j1', metaUrl: 'h/j1/app.json', appUrl: 'h/j1/main.js',
+          name: 'J1', ver: '1.0.0', api: 3, cat: 'Arcade' },
+        { pkg: 'celeros.u1', metaUrl: 'h/u1/app.json', appUrl: 'h/u1/main.js',
+          name: 'U1', ver: '1.0.0', api: 3, cat: 'Utilidades' }
+    ]);
+    check('categorias do catalogo',
+          api.cats().indexOf('Todos') === 0 &&
+          api.cats().indexOf('Arcade') >= 0);
+    api.setCat('Arcade');
+    check('filtro por categoria', api.filtered().length === 1 &&
+                                  api.filtered()[0].pkg === 'celeros.j1');
+    api.setCat('Todos');
+
+    // atualizar tudo: self-update (celeros.appstore) vai por ultimo
+    env.FS.mkdir('/local/apps/celeros.alpha');
+    env.FS.writeTextFile('/local/apps/celeros.alpha/app.json',
+        JSON.stringify({ packageName: 'celeros.alpha', name: 'Alpha',
+                         version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.alpha/main.js', 'A');
+    env.FS.mkdir('/local/apps/App Store');
+    env.FS.writeTextFile('/local/apps/App Store/app.json',
+        JSON.stringify({ packageName: 'celeros.appstore', name: 'App Store',
+                         version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/App Store/main.js', 'LOJA-ANTIGA');
+    dlUrls = [];
+    api.setCatalog([
+        { pkg: 'celeros.appstore', metaUrl: 'h/celeros.appstore/app.json',
+          appUrl: 'h/celeros.appstore/main.js', name: 'App Store',
+          ver: '2.0.0', api: 6, md5: MD5, size: 4000 },
+        { pkg: 'celeros.alpha', metaUrl: 'h/celeros.alpha/app.json',
+          appUrl: 'h/celeros.alpha/main.js', name: 'Alpha', ver: '2.0.0',
+          api: 3, md5: MD5, size: 4000 }
+    ]);
+    check('updCount = 2 antes do lote', api.updCount() === 2);
+    check('updateAll roda', api.updateAll() === 'batchDone');
+    check('updateAll atualiza todos', api.batchStats().ok === 2 &&
+                                      api.batchStats().fails.length === 0);
+    check('self-update flag', api.selfUpdatedFlag() === true);
+    check('self-update por ultimo',
+          dlUrls.length === 2 &&
+          dlUrls[1].indexOf('celeros.appstore') >= 0);
+    check('self-update na propria pasta',
+          env.FS.readTextFile('/local/apps/App Store/main.js') === 'NOVO-CODIGO');
+    check('updCount = 0 apos lote', api.updCount() === 0);
+    check('meus apps lista instalados', api.installed().length === 2);
+})();
+
 // resumo
 console.log('');
 if (failures) {
