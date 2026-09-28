@@ -19,6 +19,12 @@ var redrawAll = true;
 var inputDirty = true;
 var lastBlink = 0;
 var cursorOn = true;
+var hasTopbar = (typeof System.topbarText === "function");
+
+function syncBar() {
+    // faixa mostra usuario@host + diretorio corrente
+    if (hasTopbar) System.topbarText("root@celeros " + cwd);
+}
 
 // ---------------------------------------------------------------- saida ----
 function pushLine(s, col) {
@@ -149,6 +155,7 @@ var cmds = {
         var p = a.length ? resolve(a[0]) : "/";
         if (!FS.isDirectory(p)) { out("cd: " + p + ": nao e diretorio", T.err); return; }
         cwd = p;
+        syncBar();
     },
     pwd: function() { out(cwd); },
     cat: function(a) {
@@ -358,6 +365,11 @@ if (useKeypad) {
 }
 out("");
 
+// chips da faixa (API 6): Limpar zera a tela sem apagar o historico de cmds
+var hasChips = (typeof System.topbarButtons === "function");
+if (useKeypad && hasChips) System.topbarButtons(["Limpar"]);
+syncBar();
+
 while (true) {
     if (useKeypad) {
         var ev = System.keypadPoll();
@@ -377,6 +389,15 @@ while (true) {
                 System.keypadOpen({ field: false, maxLen: 96 });
                 kbTop = System.keypadRect().y;
             }
+        }
+
+        // chip "Limpar" da faixa do sistema (API 6)
+        var chip = System.topbarPop ? System.topbarPop() : null;
+        if (chip === "Limpar") {
+            lines = [];
+            redrawAll = true;
+        } else if (chip !== null) {
+            redrawAll = true;
         }
     }
 

@@ -19,10 +19,9 @@ function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 function header(title) {
-    System.fillRoundRect(0, 0, 240, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString(title, 12, 12, 2);
-    System.fillRect(0, 40, 240, 3, T.accent);
+    // o titulo da tela/sub-tela vive na faixa do sistema (API 6) — o app
+    // ganha a area inteira para o conteudo
+    if (System.topbarText) System.topbarText(title);
 }
 function trimStr(s) {
     return String(s).replace(/^\s+|\s+$/g, "");
@@ -303,9 +302,11 @@ function drawAll() {
     drawContent();
     var doneOta = (tela === "update" && otaState === "done");
     if (!doneOta) {
-        System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
-        System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
-        ctext(tela === "menu" ? "< Sair" : "< Voltar", 50, 297, 2, T.text, T.raised);
+        if (tela !== "menu") {
+            System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
+            System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
+            ctext("< Voltar", 50, 297, 2, T.text, T.raised);
+        }
         if (tela === "update" && (otaState === "nowifi" || otaState === "failed" ||
             otaState === "uptodate" || otaState === "avail")) {
             System.fillRoundRect(140, 282, 92, 30, 8, T.raised);
@@ -799,7 +800,7 @@ function onTap() {
         return;
     }
     if (tela !== "update" || otaState !== "done") {
-        if (hit(t, 8, 282, 84, 30)) { footerBack(); return; }
+        if (tela !== "menu" && hit(t, 8, 282, 84, 30)) { footerBack(); return; }
     }
     if (tela === "update" && (otaState === "nowifi" || otaState === "failed" ||
         otaState === "uptodate" || otaState === "avail")) {

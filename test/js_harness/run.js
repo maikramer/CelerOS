@@ -353,7 +353,7 @@ function joinLog(log) { return log.join('\n'); }
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('placar desenhado', j.indexOf('PONTOS') >= 0);
+    check('placar desenhado', j.indexOf('Pontos 0') >= 0);
 })();
 
 // --- Cronometro (hub_apps) --------------------------------------------------
@@ -368,7 +368,7 @@ function joinLog(log) { return log.join('\n'); }
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('titulo desenhado', j.indexOf('Cronometro') >= 0);
+    check('status parado desenhado', j.indexOf('parado') >= 0);
 })();
 
 // --- Snake ------------------------------------------------------------------
@@ -383,7 +383,7 @@ function joinLog(log) { return log.join('\n'); }
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('header desenhado', j.indexOf('Snake') >= 0);
+    check('placar desenhado', j.indexOf('Pontos 0') >= 0);
     check('recorde carregado do FS (17)', j.indexOf('Rec 17') >= 0);
 })();
 

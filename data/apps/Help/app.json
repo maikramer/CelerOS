@@ -1,7 +1,7 @@
 {
   "name": "Help",
   "packageName": "celeros.help",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Central de ajuda: como usar o CelerOS, gestos, Wi-Fi, apps e notas de versao.",
   "type": "System",

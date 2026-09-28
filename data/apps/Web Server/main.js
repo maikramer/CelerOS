@@ -14,12 +14,6 @@ function ctext(s, cx, cy, f, col, bg) {
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
-function header(title) {
-    System.fillRoundRect(0, 0, 240, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString(title, 12, 12, 2);
-    System.fillRect(0, 40, 240, 3, T.accent);
-}
 function waitRelease() {
     var guard = 0;
     while (guard < 200) {
@@ -35,10 +29,10 @@ var st;  // status atual (wifi/ip/servidor)
 function draw() {
     st = System.wifiStatus();
 
+    // o titulo vive na faixa do sistema; o app comeca direto no conteudo
     System.fillScreen(T.bg);
-    header("Web Server");
 
-    var y = 56;
+    var y = 12;
     var sp = 22;
 
     if (!st.connected) {
@@ -55,40 +49,30 @@ function draw() {
         System.drawString("e OTA pelo navegador.", 12, y, 2);
     } else {
         // card de status
-        System.fillRoundRect(8, y, 224, 84, 10, T.card);
-        System.drawRoundRect(8, y, 224, 84, 10, T.stroke);
+        var url = "http://" + st.ip;
+        System.fillRoundRect(8, y, 224, 92, 10, T.card);
+        System.drawRoundRect(8, y, 224, 92, 10, T.stroke);
+        System.fillCircle(22, y + 16, 4, T.ok);
         System.setTextColor(T.textDim, T.card);
-        System.drawString("Status", 20, y + 8, 1);
-        System.setTextColor(T.ok, T.card);
-        System.drawString("rodando", 188 - System.textWidth("rodando", 1) + 12, y + 8, 1);
-        System.setTextColor(T.textDim, T.card);
-        System.drawString("IP", 20, y + 26, 2);
+        System.drawString("rodando - porta 80", 34, y + 11, 1);
         System.setTextColor(T.accent, T.card);
-        System.drawString(st.ip, 70, y + 26, 2);
+        var show = url;
+        while (show.length > 3 && System.textWidth(show, 2) > 200) show = show.substring(1);
+        System.drawString(show, 20, y + 30, 2);
         System.setTextColor(T.textDim, T.card);
-        System.drawString("Porta", 20, y + 46, 2);
-        System.setTextColor(T.text, T.card);
-        System.drawString("80", 70, y + 46, 2);
-        y += 84 + 12;
-
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Abra o IP no navegador para", 12, y, 1); y += 14;
-        System.drawString("gerenciar arquivos e enviar firmware.", 12, y, 1);
+        System.drawString("abra no navegador do PC/celular", 20, y + 56, 1);
+        System.drawString("para arquivos e firmware (OTA)", 20, y + 70, 1);
+        y += 92 + 12;
     }
 
-    // botao toggle
+    // botao toggle (o X da faixa do sistema sai do app)
     if (st.webServer) {
-        System.fillRoundRect(60, 235, 120, 36, 10, T.err);
-        ctext("Desligar", 120, 253, 2, T.text, T.err);
+        System.fillRoundRect(30, 262, 180, 40, 10, T.err);
+        ctext("Desligar", 120, 282, 2, T.text, T.err);
     } else {
-        System.fillRoundRect(60, 235, 120, 36, 10, T.accent);
-        ctext("Ligar", 120, 253, 2, T.onAccent, T.accent);
+        System.fillRoundRect(30, 262, 180, 40, 10, T.accent);
+        ctext("Ligar", 120, 282, 2, T.onAccent, T.accent);
     }
-
-    // voltar
-    System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
-    System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
-    ctext("< Voltar", 50, 297, 2, T.text, T.raised);
 }
 
 draw();
@@ -96,12 +80,10 @@ var lastDraw = 0;
 while (true) {
     var t = System.getTouch();  // canto sup. direito => OS_EXIT automatico
     if (t.touched) {
-        if (hit(t, 60, 235, 120, 36)) {
+        if (hit(t, 30, 262, 180, 40)) {
             System.webSetActive(!st.webServer);
             waitRelease();
             draw();
-        } else if (hit(t, 8, 282, 84, 30)) {
-            System.exitApp();
         }
     }
     if (System.millis() - lastDraw > 1000) {  // IP pode chegar async

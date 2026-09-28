@@ -8,9 +8,9 @@ var W = 240, H = 320;
 
 var CELL = 12;
 var COLS = 20;                  // 240 px
-var ROWS = 22;                  // 264 px
+var ROWS = 23;                  // 276 px
 var FX = 0;                     // x fisico do campo
-var FY = 44;                    // y do campo (sob o header 40+3)
+var FY = 32;                    // y do campo (sob o placar fino)
 var FW = COLS * CELL;
 var FH = ROWS * CELL;
 var HI_FILE = "/local/config_snake_hi.txt";
@@ -34,11 +34,23 @@ function reset() {
     interval = 220;
     growPending = 0;
     newRecord = false;
-    state = "play";
+    state = "count";
     spawnFood();
     drawBoard();
     drawHeader();
     drawFood();
+}
+
+function countdown() {
+    for (var n = 3; n >= 1; n--) {
+        ctext(String(n), 120, 140, 4, T.accent, T.bg);
+        System.delay(450);
+    }
+    // o numero ficaria pintado no campo (redesenho e por celula): limpa
+    System.fillRect(FX, FY, FW, FH, T.bg);
+    drawBoard();
+    drawFood();
+    state = "play";
 }
 
 function onSnake(x, y) {
@@ -90,13 +102,16 @@ function drawFood() {
 }
 
 function drawHeader() {
-    System.fillRoundRect(0, 0, W, 40, 0, T.card);
+    // o nome vive na faixa do sistema (retratil); aqui e so o placar
+    System.fillRoundRect(0, 0, W, 26, 0, T.card);
     System.setTextColor(T.text, T.card);
-    System.drawString("Snake", 12, 12, 2);
-    var right = "Pontos " + score + "  Rec " + hi;
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(right, W - 12 - System.textWidth(right, 1), 15, 1);
-    System.fillRect(0, 40, W, 3, T.accent);
+    System.drawString("Pontos " + score, 10, 8, 2);
+    var right = "Rec " + hi;
+    var rx = W - 12 - System.textWidth(right, 1);
+    // passou o recorde em jogo: numero fica verde
+    System.setTextColor(score > 0 && score >= hi && newRecord ? T.ok : T.textDim, T.card);
+    System.drawString(right, rx, 10, 1);
+    System.fillRect(0, 26, W, 2, T.accent);
 }
 
 function ctext(s, cx, cy, f, col, bg) {
@@ -148,6 +163,10 @@ function step() {
 
     if (food && head.x === food.x && head.y === food.y) {
         score++;
+        if (score > hi && !newRecord) {
+            newRecord = true;
+            drawHeader();
+        }
         growPending += 2;
         interval = Math.max(90, 220 - score * 6);
         drawHeader();
@@ -197,12 +216,16 @@ function pollTouch() {
 // ------------------------------------------------------------------ main ---
 var win = false;
 reset();
+countdown();
 
 var lastTick = System.millis();
 while (true) {
     var done = pollTouch();
 
-    if (state === "play") {
+    if (state === "count") {
+        countdown();
+        lastTick = System.millis();
+    } else if (state === "play") {
         var now = System.millis();
         if (now - lastTick >= interval) {
             lastTick = now;
@@ -212,6 +235,7 @@ while (true) {
         // game over: toque completo reinicia
         System.fillScreen(T.bg);
         reset();
+        countdown();
         lastTick = System.millis();
     }
 

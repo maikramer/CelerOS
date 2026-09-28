@@ -28,12 +28,13 @@ function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 function header(title) {
-    System.fillRoundRect(0, 0, 240, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString(title, 12, 12, 2);
-    System.fillRect(0, 40, 240, 3, T.accent);
+    // titulo na faixa do sistema (API 6) — sem cabecalho desenhado
+    if (System.topbarText) System.topbarText(title);
 }
+// voltar so existe onde ha navegacao real (detail -> list); nas listas o X
+// da faixa sai do app
 function footer() {
+    if (state !== "detail") return;
     System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
     System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
     ctext("< Voltar", 50, 297, 2, T.text, T.raised);
@@ -406,17 +407,15 @@ function maxScroll() {
 function onTap(x, y) {
     var pt = { x: x, y: y };
     if (state === "list") {
-        if (hit(pt, 8, 282, 84, 30)) { System.exitApp(); return; }
         if (hit(pt, 8, 48, 224, 26)) { toggleDest(); return; }
         if (y >= TOP && y < 278) {
             var i = scroll + Math.floor((y - TOP) / PITCH);
             if (i >= 0 && i < apps.length) openApp(i);
         }
     } else if (state === "empty") {
-        if (hit(pt, 8, 282, 84, 30)) { System.exitApp(); return; }
         if (hit(pt, 8, 230, 224, 32)) rescan();
     } else if (state === "detail") {
-        if (hit(pt, 8, 282, 84, 30)) { state = "list"; drawList(); return; }
+        if (hit(pt, 8, 282, 84, 30)) { state = "list"; drawList(); return; }  // navegacao real
         if (hit(pt, 8, 248, 224, 32)) tryInstall(detail);
     } else if (state === "alert") {
         if (hit(pt, 8, 282, 84, 30) || hit(pt, 73, 222, 94, 32)) {
