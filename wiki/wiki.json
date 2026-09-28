@@ -1,0 +1,28 @@
+{
+  "repo_url": "https://github.com/maikramer/CelerOS",
+  "branch": "main",
+  "pages": [
+    {"page": "Home",                      "src": "wiki/pages/Home.md"},
+    {"page": "Placas-Suportadas",         "src": "wiki/pages/Placas-Suportadas.md"},
+    {"page": "Compilando-e-Gravando",     "src": "wiki/pages/Compilando-e-Gravando.md"},
+    {"page": "Arquitetura",               "src": "wiki/pages/Arquitetura.md"},
+    {"page": "Apps-de-Sistema",           "src": "wiki/pages/Apps-de-Sistema.md"},
+    {"page": "Ferramentas",               "src": "wiki/pages/Ferramentas.md"},
+    {"page": "celerctl-USB",              "src": "tools/README_USBTOOL.pt-BR.md"},
+    {"page": "Atualizacao-OTA",           "src": "tools/README_OTA.pt-BR.md"},
+    {"page": "Guia-de-Apps",              "src": "Documentation/App_Development_Guide.pt-BR.md"},
+    {"page": "API-JS",                    "src": "Documentation/JS_API_Guide.pt-BR.md"},
+    {"page": "Guia-de-Apps-(English)",    "src": "Documentation/App_Development_Guide.md"},
+    {"page": "API-JS-(English)",          "src": "Documentation/JS_API_Guide.md"},
+    {"page": "celerctl-USB-(English)",    "src": "tools/README_USBTOOL.md"},
+    {"page": "Atualizacao-OTA-(English)", "src": "tools/README_OTA.md"}
+  ],
+  "sidebar": [
+    {"section": null, "pages": ["Home"]},
+    {"section": "Comece por aqui", "pages": ["Placas-Suportadas", "Compilando-e-Gravando"]},
+    {"section": "Por dentro do sistema", "pages": ["Arquitetura", "Apps-de-Sistema"]},
+    {"section": "Ferramentas", "pages": ["Ferramentas", "celerctl-USB", "Atualizacao-OTA"]},
+    {"section": "Apps JavaScript", "pages": ["Guia-de-Apps", "API-JS"]},
+    {"section": "English", "pages": ["Guia-de-Apps-(English)", "API-JS-(English)", "celerctl-USB-(English)", "Atualizacao-OTA-(English)"]}
+  ]
+}
