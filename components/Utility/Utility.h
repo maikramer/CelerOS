@@ -7,11 +7,11 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <functional>
 #include <vector>
 #include "string"
 #include <hal/gpio_types.h>
 #include <driver/gpio.h>
-#include <nlohmann/json.hpp>
 #include "esp_log.h"
 #include "sstream"
 #include <list>
@@ -34,7 +34,6 @@ public:
 
     static void SetOutput(gpio_num_t gpioNum, bool openDrain, uint32_t initial_level = 0);
 
-    static void ListJsonKeys(const nlohmann::json &j);
 
     static std::string CamelCaseToTitleCase(const std::string &toConvert);
 

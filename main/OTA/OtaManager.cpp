@@ -1,6 +1,9 @@
 #include "OtaManager.h"
 #include <string>
-#include "WifiOta.h"
+#include <cstdio>
+#include "esp_https_ota.h"
+#include "esp_crt_bundle.h"
+#include "esp_log.h"
 #include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
@@ -99,15 +102,18 @@ bool OtaManager::checkForUpdates() {
     return info.available;
 }
 
-// Flash via componente WifiOta (esp_https_ota + eventos). O Event<int>
-// onProgress alimenta o callback C usado pela barra do SettingsUI.
-static WifiOta s_wifiOta;
-static void (*s_progressCb)(int) = nullptr;
-static bool s_otaBound = false;
+static void setOtaError(const char* stage, esp_err_t err) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "OTA failed: %s (0x%X)", stage, (unsigned)err);
+    OtaManager::lastError = msg;
+    ESP_LOGE("celer.ota", "%s", msg);
+}
 
+// Flash direto pelo esp_https_ota (bloqueante). HTTPS valida o servidor
+// contra o bundle de CAs; falha em qualquer etapa aborta e deixa o slot
+// atual intacto (a imagem so e ativada apos o checksum no finish).
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
-    s_progressCb = onProgress;
 
     if (!urlSchemeAllowed(firmwareUrl)) {
         lastError = HTTP_BLOCKED_MSG;
@@ -115,17 +121,38 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
         return false;
     }
 
-    if (!s_otaBound) {
-        s_otaBound = true;
-        s_wifiOta.onProgress.addHandler([](int pct) {
-            if (s_progressCb != nullptr) s_progressCb(pct);
-        });
+    esp_http_client_config_t http = {};
+    http.url = firmwareUrl.c_str();
+    if (kstr::startsWith(firmwareUrl, "https://")) http.crt_bundle_attach = esp_crt_bundle_attach;
+    esp_https_ota_config_t cfg = {};
+    cfg.http_config = &http;
+
+    esp_https_ota_handle_t handle = nullptr;
+    esp_err_t err = esp_https_ota_begin(&cfg, &handle);
+    if (err != ESP_OK) {
+        setOtaError("begin", err);
+        return false;
     }
 
-    // Bloqueante; falha deixa o slot atual intacto (checksum no finish)
-    ErrorCode err = s_wifiOta.startUpdate(firmwareUrl);
-    if (err != CommonErrorCodes::None) {
-        lastError = "OTA failed: " + err.description();
+    int lastPct = -1;
+    while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+        int total = esp_https_ota_get_image_size(handle);
+        if (total > 0 && onProgress != nullptr) {
+            int pct = (int)((int64_t)esp_https_ota_get_image_len_read(handle) * 100 / total);
+            if (pct != lastPct) {
+                lastPct = pct;
+                onProgress(pct);
+            }
+        }
+    }
+    if (err != ESP_OK) {
+        esp_https_ota_abort(handle);
+        setOtaError("download", err);
+        return false;
+    }
+    err = esp_https_ota_finish(handle);
+    if (err != ESP_OK) {
+        setOtaError("finish", err);
         return false;
     }
     return true;

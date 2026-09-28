@@ -22,7 +22,12 @@ set(CELEROS_SRCS
     "Kernel/TimeManager.cpp"
     "Launcher/LauncherUI.cpp"
     "Runtime/JSBindings.cpp"
-    "Runtime/JSBindings_Net.cpp"
+    "Runtime/JsGfx.cpp"
+    "Runtime/JsSystem.cpp"
+    "Runtime/JsNet.cpp"
+    "Runtime/JsFs.cpp"
+    "Runtime/JsKeypad.cpp"
+    "Runtime/JsSystemApps.cpp"
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
@@ -34,11 +39,9 @@ set(CELEROS_SRCS
     "UI/Keyboard.cpp"
     "Launcher/Screens.cpp"
 )
-# F3: app JS em task propria ("celerapp") — UI/WiFi/OTA web seguem vivas
-# durante um app. Opt-in: o caminho sincrono e o default (AppRunner.cpp
-# compila nos dois modos — com a flag OFF so existem os stubs).
-option(CELEROS_APP_TASK "Rodar apps JS em task propria (experimental)" OFF)
-
+if(CONFIG_CELEROS_JS_GPIO)
+    list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
+endif()
 set(CELEROS_PRIV_REQUIRES esp_driver_uart)
 if(CONFIG_CELEROS_USB_NATIVE)
     list(APPEND CELEROS_PRIV_REQUIRES esp_tinyusb)
@@ -79,8 +82,7 @@ idf_component_register(
         sdmmc
         joltwallet__esp_littlefs
         mbedtls
-        Wifi
-        Connection
+        Network
         Http
         System
         esp_https_ota
@@ -98,10 +100,33 @@ idf_component_register(
 
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/${CELEROS_BOARD_DIR}")
 
+# ---- Paginas web: o .html e a fonte; o build gera o .gz (servido com
+# Content-Encoding: gzip) e embute so ele — ~4x menos flash que o texto cru.
+idf_build_get_property(python PYTHON)
+set(CELEROS_WEB_PAGES)
+if(CONFIG_CELEROS_WEB_SERVER)
+    set(CELEROS_WEB_PAGES WebManager/filemanager.html WebManager/ota_upload.html)
+endif()
+foreach(page ${CELEROS_WEB_PAGES})
+    get_filename_component(page_name ${page} NAME)
+    set(page_gz "${CMAKE_CURRENT_BINARY_DIR}/${page_name}.gz")
+    add_custom_command(
+        OUTPUT ${page_gz}
+        COMMAND ${python} -c "import gzip,sys; open(sys.argv[2],'wb').write(gzip.compress(open(sys.argv[1],'rb').read(), 9, mtime=0))"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${page}" ${page_gz}
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${page}"
+        VERBATIM)
+    add_custom_target(celeros_web_${page_name} DEPENDS ${page_gz})
+    add_dependencies(${COMPONENT_LIB} celeros_web_${page_name})
+    target_add_binary_data(${COMPONENT_LIB} ${page_gz} BINARY)
+endforeach()
+
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.2.0"
     CELEROS_API_LEVEL=6
 )
-if(CELEROS_APP_TASK)
+
+# F3: app JS em task propria ("celerapp") — opt-in via Kconfig
+if(CONFIG_CELEROS_APP_TASK)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CELEROS_APP_TASK=1)
 endif()

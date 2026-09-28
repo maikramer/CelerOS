@@ -1,50 +1,44 @@
 # components/ - ESP-IDF component layer
 
 ## OVERVIEW
-Sibling ESP-IDF components vendored from the shared `esp_components` lib (satisfaction-hub), plus third-party `duktape` and `LovyanGFX`. Adoption map + CelerOS patch list: `README.md` (Portuguese, authoritative).
+Everything in `components/` is built. Code from the shared `esp_components` lib (satisfaction-hub) that CelerOS does not compile lives in `extras/esp_components/`, which is outside IDF's component search. Adoption map and CelerOS patch list: `README.md` (Portuguese, authoritative).
 
 ## BUILD MEMBERSHIP
-| Status | Components |
-|--------|------------|
-| Required by `main/` | `Wifi`, `Connection`, `Http`, `System`, `LovyanGFX`, `duktape` |
-| Transitive only | `Utility`, `ErrorCodes`, `JsonModels`, `Storage`, `config` |
-| Excluded (root `EXCLUDE_COMPONENTS`) | `BluetoothServer`, `Drivers`, `IoUtility`, `SafeContainers`, `Supabase`, `UI`, `UserManaging`, `Time` |
-
-- To enable an excluded one: remove it from the root list AND satisfy its `idf_component.yml` registry deps (`UI` -> `lvgl ^9`, `BluetoothServer` -> `esp-nimble-cpp`, `IoUtility` -> `espressif/button`).
-- Excluded code is dormant. Chunk reports/docs that call `AuthManager`/`SupabaseClient`/`SafeVector` "used by main" are wrong - nothing in `main/` includes them.
-- Name collisions: `main/` has its own `Kernel/TimeManager`, `OTA/OtaManager`, `UI/Kui` + `UI/Keyboard`. Those are NOT `components/Time`, `Wifi/OtaManager`, `components/UI` (LVGL, `ui::` namespace).
+| Component | Role |
+|-----------|------|
+| `Network` | Radio owner (`NetworkManager`), STA (`WifiConnection`), AP + captive portal, NVS credential store. Merged from the old `Connection` + `Wifi` (they required each other in a cycle). Own AGENTS.md |
+| `Http` | `HttpClient` GET/POST/download with progress; used by OTA and JS `Net.*` |
+| `System` | `SystemInfo`; backs JS `System.getInfo` |
+| `Storage` | Only the `NVS` class is compiled |
+| `Utility`, `ErrorCodes` | `Event<>`, `Singleton<>`, `ErrorCode` registry |
+| `duktape` | Duktape 2.7.0, regenerated from `celeros_duk_config.yaml` (ES5-lean) |
+| `LovyanGFX` | Upstream submodule; board config lives in `main/Boards/<board>/` |
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| WiFi radio owner (boot connect, roaming, scans) | `Connection/NetworkManager.*` | Singleton; background task; `NETWORK_MANAGER.md` |
-| Saved WiFi credentials | `Connection/NetworkCredentialStore.*` | NVS; one-shot import of legacy `wifi.txt` |
-| STA/AP/captive portal/OTA flash | `Wifi/` | Own AGENTS.md |
-| HTTP GET/POST/download w/ progress | `Http/HttpClient.*` | Used by OTA and JS `Net.*` bindings |
-| Chip/heap/PSRAM/MAC/reset info | `System/SystemInfo.*` | Backs JS `System.getInfo` |
-| Pub/sub, singleton base, timeouts | `Utility/Event.h`, `Singleton.h`, `Timeout.h` | Header templates |
+| WiFi connect/roaming/scans | `Network/NetworkManager.*` | Singleton; background task; `NETWORK_MANAGER.md` |
+| Saved WiFi credentials | `Network/NetworkCredentialStore.*` | Per-field NVS keys; legacy pipe format read-only |
+| Pub/sub, singleton base | `Utility/Event.h`, `Singleton.h` | Header templates |
 | Error codes | `ErrorCodes/ErrorCode.*`, `CommonErrorCodes.h` | One `<Category>ErrorCodes.{h,cpp}` pair per domain |
-| Pin/priority macros components expect | `config/projectConfig.h`, `config/priorities.h` | Shims so vendored includes resolve |
-| JS engine | `duktape/` | Vendored single-file amalgamation (`duktape.c`, `duk_config.h`); never edit, never document |
-| Display driver | `LovyanGFX/` | Vendored upstream library; board config lives in `main/Boards/<board>/` |
+| Change JS engine features | `duktape/celeros_duk_config.yaml` | Regenerate `duktape.c`/`duktape.h`/`duk_config.h` with the recipe in the YAML header (configure.py needs Python 2.7) |
+| Revive a dormant component | `extras/esp_components/<name>` | Move it back, satisfy its `idf_component.yml`, maybe re-enable exceptions |
 
 ## CONVENTIONS
-- Registry deps only in `idf_component.yml` (e.g. `johboh/nlohmann-json`); sibling deps go in CMake `REQUIRES`, never `path:` entries.
-- Singletons: `class X : public Singleton<X>`, ctor takes `token`; access via `X::instance()` (`Utility/Singleton.h`, Meyers static).
-- Events: `Event<Args...>` with `addHandler` / `removeHandler` / `trigger` (not subscribe/publish). Callers expose members like `onStateChanged`, `onProgress`.
-- Fallible ops return `ErrorCode` (registry: `ErrorCode::define/get`, construct-on-first-use map), not raw `esp_err_t`.
-- Each component ships a Portuguese/English `<NAME>.md` API guide beside its sources; headers carry Doxygen blocks.
-- Flat layout: sources and headers in the component root (`INCLUDE_DIRS "."`); only `UI` uses `include/` + `src/`.
-- Project sdkconfig must keep `CONFIG_COMPILER_CXX_EXCEPTIONS=y` (JsonModels/OtaManager use try/catch).
+- Registry deps only in `idf_component.yml`; sibling deps in CMake `REQUIRES`, never `path:` entries.
+- Singletons: `class X : public Singleton<X>`, ctor takes `token`; access via `X::instance()`.
+- Events: `Event<Args...>` with `addHandler` / `removeHandler` / `trigger`.
+- Fallible ops return `ErrorCode`, not raw `esp_err_t`.
+- Flat layout: sources and headers in the component root (`INCLUDE_DIRS "."`).
+- Built with `-fno-exceptions` (`CONFIG_COMPILER_CXX_EXCEPTIONS` off): no `try`/`catch`/`throw`, no `std::stoi`-style throwing parsers on untrusted input; use `strtol` + end-pointer checks.
 
 ## ANTI-PATTERNS
 - NEVER do real work inside an `Event` handler: `trigger()` holds the event mutex for the whole handler loop. Handlers set flags; the owner's loop acts.
-- NEVER call `Storage::initialize()`: it mounts SPIFFS on the `spiffs` partition that CelerOS formats as LittleFS (`/local`). Only the `NVS` class is safe; the OS filesystem is `main/FileSystem`.
-- Do not "sync" a component from upstream `esp_components` blindly: `Wifi/CaptivePortal` and `Wifi/WifiAP` carry CelerOS-only patches (see `Wifi/AGENTS.md`).
-- Do not add a `#include` of an excluded component from `main/` without un-excluding it; the build fails at link or include time.
-- `config/config/supabase_config.h` contains a hardcoded Supabase URL, anon key AND service_role key. Never copy it into logs, JS, or new code; treat it as a leaked secret to rotate.
+- NEVER hand-edit `duktape/duktape.c` or `duk_config.h`; they are generated. Change the YAML and regenerate.
+- NEVER add ES6+ builtins back to Duktape "just in case": apps are ES5 and every builtin costs flash on the CYD.
+- Do not "sync" `Network/` from upstream `esp_components` blindly: `CaptivePortal`, `WifiAP`, `WifiConnection`, `NetworkCredentialStore` carry CelerOS-only patches (see `README.md`).
+- `extras/esp_components/config/config/supabase_config.h` holds a hardcoded Supabase service_role key. Never copy it anywhere; rotate it.
 
 ## NOTES
-- Known TODOs: `CONFIG_ESP_TLS_INSECURE` / skip-cert-verify still on for dev; `Supabase/SupabaseAuth.cpp` lacks a real connectivity check.
-- No unit tests in any component. Verify by building and running on hardware.
-- Unused in CelerOS but compiled with `Wifi`: `WifiServer`, `WifiClient`, `Telnet`, `WifiTelnet`.
+- No unit tests in any component. Verify by building both boards and running on hardware.
+- Size budget: `python3 tools/size_report.py [--baseline f]` after building; fails when an OTA slot has < 64 KB free.

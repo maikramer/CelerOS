@@ -10,6 +10,7 @@
 #include <string.h>
 #include <vector>
 
+#include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_littlefs.h"
 #include "esp_vfs_fat.h"
@@ -94,6 +95,7 @@ bool FileSystem::init() {
 }
 
 bool FileSystem::mountSD() {
+#if CONFIG_CELEROS_SD_CARD
     if (s_sd_card != nullptr) return true;
 
     if (!s_spi_bus_ready) {
@@ -147,13 +149,18 @@ bool FileSystem::mountSD() {
     }
     ESP_LOGI(FS_TAG, "SD montado em /sd (%s)", s_sd_card->cid.name);
     return true;
+#else
+    return false;
+#endif
 }
 
 void FileSystem::unmountSD() {
+#if CONFIG_CELEROS_SD_CARD
     if (s_sd_card != nullptr) {
         esp_vfs_fat_sdcard_unmount("/sd", s_sd_card);
         s_sd_card = nullptr;
     }
+#endif
 }
 
 bool FileSystem::formatSD() {
@@ -533,12 +540,14 @@ time_t FileSystem::getLastModified(const char* path) {
 
 uint64_t FileSystem::getTotalSpace(const char* drive) {
     if (drive == nullptr) return 0;
+#if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
         return (uint64_t)(fs->n_fatent - 2) * fs->csize * 512ULL;
     }
+#endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
         if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
@@ -549,11 +558,13 @@ uint64_t FileSystem::getTotalSpace(const char* drive) {
 
 uint64_t FileSystem::getUsedSpace(const char* drive) {
     if (drive == nullptr) return 0;
+#if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
         uint64_t total = getTotalSpace(drive);
         uint64_t freeB = getFreeSpace(drive);
         return total > freeB ? (total - freeB) : 0;
     }
+#endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
         if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
@@ -564,12 +575,14 @@ uint64_t FileSystem::getUsedSpace(const char* drive) {
 
 uint64_t FileSystem::getFreeSpace(const char* drive) {
     if (drive == nullptr) return 0;
+#if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
         return (uint64_t)freeClusters * fs->csize * 512ULL;
     }
+#endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
         if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;

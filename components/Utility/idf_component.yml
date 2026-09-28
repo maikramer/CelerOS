@@ -6,10 +6,6 @@ version: "1.0.0"
 description: "Utilitários gerais para ESP-IDF: eventos, exceções, containers seguros, singleton, timeout"
 license: "MIT"
 
-# Dependências externas
-dependencies:
-  johboh/nlohmann-json: "^3.12.0"
-
 # Requer ESP-IDF v6.0 ou superior
 idf:
   version: ">=6.0.0"

@@ -1,0 +1,6 @@
+## Componente: Network (CelerOS) — NetworkManager + WiFi STA/AP + captive portal
+version: "3.0.0"
+description: "Rede do CelerOS: NetworkManager, WifiConnection, WifiAP, CaptivePortal, credenciais em NVS"
+license: "MIT"
+idf:
+  version: ">=6.0.0"
