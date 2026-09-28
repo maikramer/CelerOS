@@ -5,16 +5,8 @@
 #include <duktape.h>
 #include "../Boards/Board.h"
 
-// Capabilities declaradas no app.json ("permissions": ["fs","net",...]).
-// Bits de filtragem do runtime (F4); campo ausente = tudo (compat com os
-// apps existentes — o hub podera endurecer para api >= 7 no futuro).
-enum AppPerm : uint32_t {
-    PERM_FS     = 1u << 0,
-    PERM_NET    = 1u << 1,
-    PERM_GPIO   = 1u << 2,
-    PERM_SYSTEM = 1u << 3,   // restart/factoryReset/OTA/web/wifiConnect
-    PERM_ALL    = 0xFFFFFFFFu,
-};
+#include "../Utils/AppPerms.h"  // enum AppPerm/PERM_* (header testavel no host)
+using celer::PERM_ALL;
 
 class JSBindings {
 public:

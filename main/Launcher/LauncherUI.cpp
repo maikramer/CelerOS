@@ -1,5 +1,5 @@
 #include "LauncherUI.h"
-#include "../Runtime/JSBindings.h"  // enum AppPerm (permissions do app.json)
+#include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
 #include "../Kernel/AppRunner.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
@@ -98,25 +98,6 @@ int LauncherUI::totalPages() {
 // Scan de apps (LittleFS + SD)
 // ---------------------------------------------------------------------------
 
-// "permissions": ["fs","net","gpio","system"] no app.json (F4). Ausente =
-// tudo (compat com apps existentes; o hub podera endurecer para api >= 7).
-static uint32_t parsePermissions(const std::string& appJson) {
-    size_t key = appJson.find("\"permissions\"");
-    if (key == std::string::npos) return 0xFFFFFFFFu;
-    size_t open = appJson.find('[', key);
-    size_t close = appJson.find(']', key);
-    if (open == std::string::npos || close == std::string::npos || close < open) {
-        return 0xFFFFFFFFu;
-    }
-    std::string arr = appJson.substr(open, close - open);
-    uint32_t m = 0;
-    if (arr.find("\"fs\"") != std::string::npos) m |= PERM_FS;
-    if (arr.find("\"net\"") != std::string::npos) m |= PERM_NET;
-    if (arr.find("\"gpio\"") != std::string::npos) m |= PERM_GPIO;
-    if (arr.find("\"system\"") != std::string::npos) m |= PERM_SYSTEM;
-    return m == 0 ? 0xFFFFFFFFu : m;  // array vazio/invalido: nao tranca o app por engano
-}
-
 void LauncherUI::scanLocalApps() {
     appCount = 0;
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
@@ -147,7 +128,7 @@ void LauncherUI::scanLocalApps() {
                 if (!FileSystem::exists(appJsonPath.c_str())) continue;
 
                 std::string jsonContent = FileSystem::readTextFile(appJsonPath.c_str());
-                appEntryPerms = parsePermissions(jsonContent);
+                appEntryPerms = celer::parsePermissions(jsonContent);
                 name = FileSystem::parseJsonValue(jsonContent, "name");
                 if (name.length() == 0) continue;
 

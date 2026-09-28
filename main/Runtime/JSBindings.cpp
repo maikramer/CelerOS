@@ -71,7 +71,8 @@ static bool s_exitArmed = false;
 
 // Capabilities do app corrente (F4): bindings nao concedidos nao sao
 // registrados — um app sem "net" no app.json nem ve o objeto Net.
-static uint32_t s_perms = 0xFFFFFFFFu;
+using celer::PERM_FS; using celer::PERM_NET; using celer::PERM_GPIO; using celer::PERM_SYSTEM;
+static uint32_t s_perms = celer::PERM_ALL;
 static bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 // packageName do app corrente (FS.appData resolve a pasta privada)
 static std::string s_appPkg;

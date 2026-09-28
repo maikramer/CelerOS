@@ -84,6 +84,16 @@ Third-party components (ArduinoJson, esp_littlefs, nlohmann/json) are pulled
 in by the ESP-IDF component manager; LovyanGFX is a git submodule — clone with
 `--recurse-submodules` or run `git submodule update --init`.
 
+### Reproducibility & CI
+
+* **Toolchain pinned**: ESP-IDF **v6.1** (see `.tool-versions`); LovyanGFX is
+  pinned to an exact commit by the submodule.
+* **CI** ([`.github/workflows/build.yml`](.github/workflows/build.yml)): the
+  JS harness and the host C++ tests run on every push/PR, then both board
+  firmwares build in the official ESP-IDF container and are uploaded as
+  artifacts. Host tests cover the pure logic extracted to `main/Utils`
+  (`g++ -std=c++17 test/cpp/run_tests.cpp`).
+
 ## JS Apps & Documentation
 
 * [Wiki](https://github.com/maikramer/CelerOS/wiki) — architecture, build, boards, tools and guides (CI-generated from [`wiki/`](wiki/) in the repo).
