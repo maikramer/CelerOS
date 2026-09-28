@@ -1,16 +1,25 @@
-// CelerOS App Store — app de sistema (W8). Porte do AppStoreUI.cpp: le o
-// catalogo do CelerOS Hub (os.celer.tec.br; indice + categorias), lista os
-// apps com estado vs instalado (novo / atualizacao / instalado), abre o
-// detalhe (descricao, versao local x remota, API exigida) e instala direto
-// baixando app.json + main.js para /local/apps ou /sd/apps (flag
-// config_install_sd.txt), com rescan do launcher no fim. Net.get e bloqueante
-// e sem progresso: tela "Baixando..." antes de cada chamada. X no canto sup.
-// direito sai.
+// CelerOS App Store — app de sistema. Le o catalogo do CelerOS Hub
+// (os.celer.tec.br) e instala/atualiza apps em /local/apps ou /sd/apps.
+//
+// Catalogo: o hub ja manda nome/versao/autor/descricao/changelog/tamanho/md5
+// no proprio indice (all.json) — 2 HTTPS no total (indice + "Todos"); se uma
+// entrada vier sem nome (hub antigo), cai no caminho lento buscando o
+// app.json de cada app. Cache em /local/appstore_cache.json abre a loja na
+// hora (ate offline); "Atualizar" vai a rede.
+//
+// Update: estado "upd" = versao remota maior (semver). A lista ordena as
+// atualizacoes primeiro, com banner fixo e contador no cabecalho. A
+// instalacao grava main.js em <pkg>/main.js.new (streaming via Net.download,
+// sem passar pela heap), confere o MD5 do catalogo e renomeia por cima do
+// antigo (rename e atomico no mesmo FS); so entao grava app.json + icon.png.
+// Staging de um arquivo dentro do proprio pacote: littlefs/CYD nao tem
+// espaco para duas copias do app, e falha no meio nao quebra a versao
+// instalada. X no canto sup. direito sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
 var FLAG_SD = "/local/config_install_sd.txt";
 // Catalogo da ultima carga bem-sucedida: a loja abre na hora (ate offline) e
-// so vai a rede no "Atualizar" — a carga completa faz 1 HTTPS por app (~40 s).
+// so vai a rede no "Atualizar".
 var CACHE = "/local/appstore_cache.json";
 
 var T = System.theme();
@@ -26,10 +35,23 @@ function ctext(s, cx, cy, f, col, bg) {
 function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
+function updLabel(n) {
+    return n + (n === 1 ? " atualizacao" : " atualizacoes");
+}
 function header(title) {
     System.fillRoundRect(0, 0, 240, 40, 0, T.card);
     System.setTextColor(T.text, T.card);
     System.drawString(title, 12, 12, 2);
+    var w = System.textWidth(title, 2);
+    // contador de atualizacoes (so na tela raiz "App Store")
+    if (updCount > 0 && title === "App Store") {
+        var txt = updLabel(updCount);
+        var pw = System.textWidth(txt, 1) + 14;
+        if (12 + w + 8 + pw < 212) {
+            System.fillRoundRect(212 - pw, 11, pw, 18, 9, T.warn);
+            ctext(txt, 212 - pw / 2, 20, 1, T.bg, T.warn);
+        }
+    }
     System.fillRect(0, 40, 240, 3, T.accent);
 }
 function footerVoltar() {
@@ -73,11 +95,19 @@ function wrapLines(s, maxw, f, maxLines) {
     }
     if (cur.length) out.push(cur);
     while (out.length > maxLines) out.pop();
-    if (out.length > 0) out[out.length - 1] = truncLine(out[out.length - 1], maxw, f);
+    if (out.length > 0 && System.textWidth(out[out.length - 1], f) > maxw) {
+        out[out.length - 1] = truncLine(out[out.length - 1], maxw, f);
+    }
     return out;
 }
+function fmtKB(n) {
+    if (!n || n <= 0) return "";
+    if (n < 1024) return n + " B";
+    var kb = Math.round(n / 102.4) / 10;
+    return (kb % 1 ? kb : kb.toFixed(0)) + " KB";
+}
 
-// ---- rede (Net bloqueante; qualquer erro vira null) -----------------------
+// ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
 function fetchJSON(url) {
     try { return Net.getJSON(url); } catch (e) { return null; }
 }
@@ -109,17 +139,20 @@ function cmpV(v1, v2) {
 }
 
 // ---- estado ----------------------------------------------------------------
-var apps = [];       // catalogo: [{id,pkg,metaUrl,appUrl,name,desc,author,ver,api}]
+var apps = [];       // catalogo: [{id,pkg,metaUrl,appUrl,name,desc,author,
+                     //            ver,api,icon,changelog,size,md5,published}]
 var localMap = {};   // packageName -> {ver, root}
 var scrollY = 0;
 var sel = -1;        // indice do app aberto no detalhe
 var errMsg = "";
 var errHint = "";
 var retryMode = "";  // "load" | "install"
+var updCount = 0;    // apps com atualizacao (contador do cabecalho/banner)
+var wasUpdate = false;
 
 var LIST_Y = 50, LIST_END = 272, ROW_H = 44, PITCH = 50, VIS = 4;
 
-// mapia os apps instalados (/local/apps e /sd/apps) por packageName
+// mapeia os apps instalados (/local/apps e /sd/apps) por packageName
 function scanLocalApps() {
     localMap = {};
     var roots = ["/local/apps", "/sd/apps"];
@@ -152,6 +185,24 @@ function stateInfo(it) {
     return { code: "upd", txt: "atualizacao", col: T.warn };
 }
 
+function countUpdates() {
+    updCount = 0;
+    for (var i = 0; i < apps.length; i++) {
+        if (stateInfo(apps[i]).code === "upd") updCount++;
+    }
+}
+
+// atualizacoes primeiro; empate = ordem alfabetica
+function sortByUpdate() {
+    apps.sort(function (a, b) {
+        var ua = stateInfo(a).code === "upd" ? 0 : 1;
+        var ub = stateInfo(b).code === "upd" ? 0 : 1;
+        if (ua !== ub) return ua - ub;
+        var x = a.name.toLowerCase(), y = b.name.toLowerCase();
+        return x < y ? -1 : (x > y ? 1 : 0);
+    });
+}
+
 function drawLoading(msg, sub) {
     System.fillScreen(T.bg);
     header("App Store");
@@ -159,12 +210,44 @@ function drawLoading(msg, sub) {
     if (sub) ctext(truncLine(sub, 216, 1), 120, 155, 1, T.textDim, T.bg);
 }
 
-// ---- carga do catalogo (indice -> categorias -> meta de cada app) ----------
+// entrada do catalogo (all.json/categoria) -> item da loja. O entry novo ja
+// traz tudo; sem "name" (hub antigo) busca o app.json de cada app.
+function entryToItem(pkg, e) {
+    return {
+        id: pkg, pkg: pkg,
+        metaUrl: e.meta || "",
+        appUrl: e.app,
+        name: e.name || "",
+        desc: e.description || "",
+        author: e.author || "Desconhecido",
+        ver: e.version || "1.0.0",
+        api: e.api || 1,
+        icon: e.icon || "",
+        changelog: e.changelog || "",
+        size: e.size || 0,
+        md5: e.md5 || "",
+        published: e.published_at || ""
+    };
+}
+function fillItemFromMeta(it) {
+    var m = fetchJSON(it.metaUrl);
+    if (!m) return null;  // meta fora do ar: nao lista
+    it.pkg = m.packageName || it.pkg;
+    it.name = m.name || it.id;
+    it.desc = m.description || "";
+    it.author = m.author || "Desconhecido";
+    it.ver = m.version || "1.0.0";
+    it.api = m.api || 1;
+    return it;
+}
+
+// ---- carga do catalogo (indice -> "Todos" (ou categorias) -> entradas) -----
 function loadCatalog() {
     scanLocalApps();
     apps = [];
     scrollY = 0;
     sel = -1;
+    updCount = 0;
     retryMode = "load";
 
     drawLoading("Baixando catalogo...", "");
@@ -176,65 +259,66 @@ function loadCatalog() {
         return "err";
     }
 
-    // entradas de todas as categorias do indice (mesmas URLs do original)
+    // coleta as entradas {pkg, e}. O atalho "Todos" (all.json) ja tem todos
+    // os apps: evita baixar categoria a categoria (o indice do hub sempre o
+    // tem); sem ele, cai no caminho das categorias (hubs antigos).
     var entries = [];
-    var seenMeta = {};
-    var seenPkg = {};
-    var catTotal = 0, catOk = 0;
     var cats = idx.categories;
-    for (var cname in cats) {
-        if (!cats.hasOwnProperty(cname)) continue;
-        catTotal++;
-        drawLoading("Categoria: " + cname, "");
+    if (cats["Todos"]) {
+        drawLoading("Baixando catalogo...", "todos os apps");
         System.delay(30);
-        var cat = fetchJSON(cats[cname]);
-        if (!cat || !cat.apps) continue;  // categoria fora do ar: pula
-        catOk++;
-        for (var id in cat.apps) {
-            if (!cat.apps.hasOwnProperty(id)) continue;
-            var e = cat.apps[id];
-            if (!e || !e.meta || !e.app) continue;
-            if (seenMeta[e.meta]) continue;  // duplicado no catalogo
-            seenMeta[e.meta] = 1;
-            if ((e.api || 1) > API) continue;  // filtra como no original
-            entries.push({ id: id, meta: e.meta, app: e.app });
+        var all = fetchJSON(cats["Todos"]);
+        if (all && all.apps) {
+            for (var pkg in all.apps) {
+                if (!all.apps.hasOwnProperty(pkg)) continue;
+                if (all.apps[pkg] && all.apps[pkg].app) {
+                    entries.push({ pkg: pkg, e: all.apps[pkg] });
+                }
+            }
+        }
+    } else {
+        var catTotal = 0, catOk = 0;
+        for (var cname in cats) {
+            if (!cats.hasOwnProperty(cname)) continue;
+            catTotal++;
+            drawLoading("Categoria: " + cname, "");
+            System.delay(30);
+            var cat = fetchJSON(cats[cname]);
+            if (!cat || !cat.apps) continue;  // categoria fora do ar: pula
+            catOk++;
+            for (var id in cat.apps) {
+                if (!cat.apps.hasOwnProperty(id)) continue;
+                var e = cat.apps[id];
+                if (!e || !e.app) continue;
+                entries.push({ pkg: id, e: e });
+            }
+        }
+        if (entries.length === 0 && catTotal > 0 && catOk === 0) {
+            errMsg = "Falha ao baixar o catalogo";
+            errHint = "Verifique a internet.";
+            return "err";
         }
     }
-    if (entries.length === 0 && catTotal > 0 && catOk === 0) {
-        errMsg = "Falha ao baixar o catalogo";
-        errHint = "Verifique a internet.";
-        return "err";
-    }
 
-    // meta de cada app (nome/versao/descricao p/ listar e comparar)
+    // entrada -> item; busca o app.json so quando o entry nao trouxer nome
     var n = entries.length;
+    var seenPkg = {};
     for (var k = 0; k < n; k++) {
-        var en = entries[k];
-        drawLoading("Carregando apps...", (k + 1) + "/" + n + "  " + en.id);
-        System.delay(30);
-        var m = fetchJSON(en.meta);
-        if (!m) continue;  // meta fora do ar: nao lista
-        var pkg = m.packageName || en.id;
-        if (seenPkg[pkg]) continue;
-        seenPkg[pkg] = 1;
-        apps.push({
-            id: en.id,
-            pkg: pkg,
-            metaUrl: en.meta,
-            appUrl: en.app,
-            name: m.name || en.id,
-            desc: m.description || "",
-            author: m.author || "Desconhecido",
-            ver: m.version || "1.0.0",
-            api: m.api || 1
-        });
+        var it = entryToItem(entries[k].pkg, entries[k].e);
+        if ((it.api || 1) > API) continue;  // filtra como no original
+        if (!it.name && it.metaUrl) {
+            drawLoading("Carregando apps...", (k + 1) + "/" + n);
+            System.delay(30);
+            it = fillItemFromMeta(it);
+            if (!it) continue;
+        }
+        if (seenPkg[it.pkg]) continue;
+        seenPkg[it.pkg] = 1;
+        apps.push(it);
     }
 
-    // ordena por nome (igual ao original)
-    apps.sort(function (a, b) {
-        var x = a.name.toLowerCase(), y = b.name.toLowerCase();
-        return x < y ? -1 : (x > y ? 1 : 0);
-    });
+    countUpdates();
+    sortByUpdate();
     if (apps.length > 0) FS.writeTextFile(CACHE, JSON.stringify(apps));
     return "list";
 }
@@ -245,9 +329,15 @@ function maxScroll() {
     return m > 0 ? m : 0;
 }
 function clampScroll() {
-    var m = maxScroll();
+    var scrollMax = maxScroll();
     if (scrollY < 0) scrollY = 0;
-    if (scrollY > m) scrollY = m;
+    if (scrollY > scrollMax) scrollY = scrollMax;
+}
+function drawUpdBanner() {
+    // fixo entre o cabecalho e a lista (so quando ha atualizacao)
+    System.fillRoundRect(8, 47, 224, 18, 6, T.card);
+    System.drawRoundRect(8, 47, 224, 18, 6, T.stroke);
+    ctext(updLabel(updCount) + " disponiveis", 120, 56, 1, T.warn, T.card);
 }
 function drawRow(i, y) {
     var it = apps[i];
@@ -266,6 +356,7 @@ function drawRow(i, y) {
 function drawList() {
     System.fillScreen(T.bg);
     header("App Store");
+    LIST_Y = updCount > 0 ? 72 : 50;  // banner come 22px da lista
 
     if (apps.length === 0) {
         ctext("Catalogo vazio", 120, 120, 2, T.text, T.bg);
@@ -274,7 +365,9 @@ function drawList() {
         return;
     }
 
-    var maxS = maxScroll();
+    if (updCount > 0) drawUpdBanner();
+
+    var scrollMax = maxScroll();
     var first = Math.floor(scrollY / PITCH);
     var y = LIST_Y - (scrollY - first * PITCH);
     // com recorte (API 3+), linhas parciais rolam suaves pelas bordas;
@@ -288,11 +381,11 @@ function drawList() {
     if (clip) System.clearClip();
 
     drawListFooter();
-    if (maxS > 0) {
+    if (scrollMax > 0) {
         System.drawFastVLine(235, LIST_Y, LIST_END - LIST_Y, T.stroke);
         var trackH = LIST_END - LIST_Y;
         var thH = Math.max(24, Math.floor(trackH * trackH / (apps.length * PITCH)));
-        var ty = LIST_Y + Math.floor((trackH - thH) * scrollY / maxS);
+        var ty = LIST_Y + Math.floor((trackH - thH) * scrollY / scrollMax);
         System.fillRect(234, ty, 3, thH, T.accent);
     }
 }
@@ -341,6 +434,8 @@ function loadCache() {
     if (!arr || !arr.length) return false;
     apps = arr;
     scanLocalApps();  // estado instalado/atualizacao vem sempre do disco
+    countUpdates();
+    sortByUpdate();
     scrollY = 0;
     sel = -1;
     return true;
@@ -382,10 +477,11 @@ function drawDetail() {
     System.drawRoundRect(8, 50, 224, 92, 10, T.stroke);
 
     var loc = localMap[it.pkg];
+    var remote = "v" + it.ver + (it.size ? " (" + fmtKB(it.size) + ")" : "");
     var rows = [
         ["Autor", truncLine(it.author, 140, 1)],
         ["Local", loc ? ("v" + (loc.ver || "?")) : "nao instalado"],
-        ["Remota", "v" + it.ver]
+        ["Remota", remote]
     ];
     var yy = 60;
     for (var i = 0; i < rows.length; i++) {
@@ -401,14 +497,28 @@ function drawDetail() {
     System.setTextColor(st.col, T.card);
     System.drawString(st.txt, 80, yy, 1);
 
+    // descricao: 4 linhas livres; com novidades, 2 da desc + 3 do changelog
+    var news = it.changelog && (st.code === "upd" || st.code === "inst");
     System.setTextColor(T.textDim, T.bg);
     System.drawString("Descricao", 12, 154, 1);
-    var lines = wrapLines(it.desc, 216, 1, 4);
-    var y2 = 170;
+    var lines = wrapLines(it.desc, 216, 1, news ? 2 : 4);
+    var y2 = 168;
     for (var k = 0; k < lines.length; k++) {
         System.setTextColor(T.text, T.bg);
         System.drawString(lines[k], 12, y2, 1);
         y2 += 13;
+    }
+
+    if (news) {
+        System.setTextColor(T.textDim, T.bg);
+        System.drawString("Novidades", 12, 198, 1);
+        var nlines = wrapLines(it.changelog, 216, 1, 3);
+        var y3 = 210;
+        for (var j = 0; j < nlines.length; j++) {
+            System.setTextColor(T.text, T.bg);
+            System.drawString(nlines[j], 12, y3, 1);
+            y3 += 13;
+        }
     }
 
     if (it.api > API) {
@@ -442,65 +552,137 @@ function screenDetail() {
     }
 }
 
-// ---- instalacao -------------------------------------------------------------
+// ---- instalacao / atualizacao ----------------------------------------------
 function drawDownload(name, sub) {
     System.fillScreen(T.bg);
     header("App Store");
-    ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 126, 2, T.text, T.bg);
-    if (sub) ctext(sub, 120, 152, 1, T.textDim, T.bg);
-    ctext("aguarde...", 120, 168, 1, T.textDim, T.bg);
+    ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 96, 2, T.text, T.bg);
+    if (sub) ctext(sub, 120, 124, 1, T.textDim, T.bg);
 }
-// baixa tudo antes de apagar a instalacao anterior (falha nao deixa sujeira)
+function drawProgress(name, got, total) {
+    System.fillScreen(T.bg);
+    header("App Store");
+    ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 96, 2, T.text, T.bg);
+    var gotKB = Math.floor(got / 1024);
+    System.drawRoundRect(40, 126, 160, 16, 6, T.stroke);
+    if (total > 0) {
+        var pct = got / total;
+        if (pct > 1) pct = 1;
+        if (pct > 0.02) System.fillRect(43, 129, Math.floor(154 * pct), 10, T.accent);
+        ctext(Math.floor(pct * 100) + "%", 120, 160, 1, T.textDim, T.bg);
+    } else if (gotKB > 0) {
+        // sem Content-Length: preenchimento indeterminado + KB baixados
+        System.fillRect(43, 129, Math.min(154, 20 + (gotKB % 7) * 18), 10, T.accent);
+        ctext(gotKB + " KB", 120, 160, 1, T.textDim, T.bg);
+    }
+}
+// Update in-place: main.js novo entra como <pkg>/main.js.new (staging de um
+// arquivo dentro do proprio pacote — littlefs/CYD nao tem espaco para duas
+// copias do app), confere o MD5 do catalogo e so entao rename por cima do
+// antigo; app.json e icon.png vem depois. Falha no meio deixa a versao
+// instalada intacta (retry resolve).
 function installApp() {
     var it = apps[sel];
     retryMode = "install";
     var fail = "";
+    wasUpdate = stateInfo(it).code === "upd";
+
+    var root = FS.exists(FLAG_SD) ? "/sd/apps" : "/local/apps";
+    var dir = root + "/" + it.pkg;
+    var tmp = dir + "/main.js.new";
 
     if (!Net.isConnected()) {
         fail = "Sem conexao WiFi";
     } else {
+        // espaco: main.js novo + app.json + folga pro icon.png
+        var need = (it.size || 0) + 16384;
+        var free = 0;
+        try { free = FS.getFreeSpace(root); } catch (e) { free = 0; }
+        if (free > 0 && free < need) fail = "Sem espaco no disco";
+    }
+
+    // app.json do pacote (pequeno; preserva os campos do dev na instalacao)
+    var json = "";
+    if (!fail) {
         drawDownload(it.name, "app.json");
         System.delay(30);
-        var json = fetchText(it.metaUrl);
+        json = fetchText(it.metaUrl);
         if (!json) fail = "Erro ao baixar app.json";
+    }
 
-        var js = "";
-        if (!fail) {
-            drawDownload(it.name, "main.js");
-            System.delay(30);
-            js = fetchText(it.appUrl);
-            if (!js) fail = "Erro ao baixar main.js";
-        }
+    // staging: garante a pasta antes do download do codigo
+    if (!fail && !FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
+    if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
 
-        if (!fail) {
-            var root = FS.exists(FLAG_SD) ? "/sd/apps" : "/local/apps";
-            var dir = root + "/" + it.pkg;
-            if (FS.isDirectory(dir)) FS.removeDirectory(dir);  // reinstala limpo
-            if (!FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
-            if (!fail && !FS.mkdir(dir)) fail = "Erro no disco";
-            if (!fail && !FS.writeTextFile(dir + "/app.json", json)) fail = "Erro ao gravar app.json";
-            if (!fail && !FS.writeTextFile(dir + "/main.js", js)) fail = "Erro ao gravar main.js";
-            if (!fail) {
-                System.rescanApps();  // launcher rele a lista de apps
-                localMap[it.pkg] = { ver: it.ver, root: root };
-                return "done";
-            }
+    // main.js direto para .new (streaming, barra de progresso por KB)
+    if (!fail) {
+        var lastKB = -1;
+        var okDL = false;
+        try {
+            okDL = Net.download(it.appUrl, tmp, function (got, total) {
+                var kb = Math.floor(got / 1024);
+                if (kb !== lastKB) { lastKB = kb; drawProgress(it.name, got, total); }
+            });
+        } catch (e) { okDL = false; }
+        if (!okDL) fail = "Erro ao baixar main.js";
+    }
+
+    // integridade: MD5 que o hub calculou no publish (quando presente)
+    if (!fail && it.md5) {
+        var md = "";
+        try { md = FS.getFileMD5(tmp); } catch (e2) { md = ""; }
+        if (md !== it.md5) {
+            FS.deleteFile(tmp);
+            fail = "Verificacao falhou (md5)";
         }
     }
 
-    errMsg = fail;
-    errHint = it.name;
-    return "err";
+    // troca atomica do codigo; metadados por cima; icone best-effort
+    if (!fail && !FS.renameFile(tmp, dir + "/main.js")) {
+        FS.deleteFile(tmp);
+        fail = "Erro ao gravar main.js";
+    }
+    if (!fail && !FS.writeTextFile(dir + "/app.json", json)) {
+        fail = "Erro ao gravar app.json";
+    }
+    if (!fail) {
+        if (it.icon) {
+            var iconTmp = dir + "/icon.png.new";
+            drawDownload(it.name, "icon.png");
+            System.delay(30);
+            var iconOk = false;
+            try { iconOk = Net.download(it.icon, iconTmp); } catch (e3) { iconOk = false; }
+            if (iconOk && FS.renameFile(iconTmp, dir + "/icon.png")) {
+                // icone novo no lugar; o rescan revalida o cache
+            } else {
+                try { FS.deleteFile(iconTmp); } catch (e4) {}
+            }
+        } else if (FS.exists(dir + "/icon.png")) {
+            FS.deleteFile(dir + "/icon.png");  // versao nova nao tem icone
+        }
+    }
+
+    if (fail) {
+        errMsg = fail;
+        errHint = it.name;
+        return "err";
+    }
+    System.rescanApps();  // launcher re-le a lista de apps
+    localMap[it.pkg] = { ver: it.ver, root: root };
+    countUpdates();
+    sortByUpdate();
+    return "done";
 }
 function screenDone() {
     var it = apps[sel];
     System.fillScreen(T.bg);
     header("App Store");
-    ctext("Instalado!", 120, 108, 2, T.ok, T.bg);
-    ctext(truncLine(it.name, 216, 2), 120, 136, 2, T.text, T.bg);
+    ctext(wasUpdate ? "Atualizado!" : "Instalado!", 120, 100, 2, T.ok, T.bg);
+    ctext(truncLine(it.name, 216, 2), 120, 128, 2, T.text, T.bg);
+    ctext(wasUpdate ? ("agora v" + it.ver) : ("v" + it.ver), 120, 150, 1, T.textDim, T.bg);
     var root = localMap[it.pkg] ? localMap[it.pkg].root : "";
-    if (root) ctext("em " + root, 120, 162, 1, T.textDim, T.bg);
-    ctext("App pronto no launcher.", 120, 180, 1, T.textDim, T.bg);
+    if (root) ctext("em " + root, 120, 166, 1, T.textDim, T.bg);
+    ctext("App pronto no launcher.", 120, 184, 1, T.textDim, T.bg);
     footerVoltar();
     while (true) {
         var t = System.getTouch();
@@ -578,14 +760,35 @@ function screenWifi() {
 }
 
 // ---- fluxo principal --------------------------------------------------------
-var mode = loadCache() ? "list" : (Net.isConnected() ? "load" : "wifi");
-while (true) {
-    if (mode === "wifi") mode = screenWifi();
-    else if (mode === "load") mode = loadCatalog();
-    else if (mode === "err") mode = screenErr();
-    else if (mode === "list") mode = screenList();
-    else if (mode === "detail") mode = screenDetail();
-    else if (mode === "install") mode = installApp();
-    else if (mode === "done") mode = screenDone();
-    else System.exitApp();  // "exit"
+// No harness (test/js_harness) nao entra no loop de telas: expoe as funcoes
+// puras e de instalacao para os checks de update.
+if (typeof __harness !== "undefined" && __harness.storeTest) {
+    __harness.storeTest({
+        cmpV: cmpV,
+        stateInfo: stateInfo,
+        scanLocalApps: scanLocalApps,
+        updCount: function () { return updCount; },
+        refresh: function () { countUpdates(); sortByUpdate(); },
+        setCatalog: function (arr) {
+            apps = arr;
+            sel = 0;
+            countUpdates();  // mesmo pipeline do loadCatalog/loadCache
+            sortByUpdate();
+        },
+        catalog: function () { return apps; },
+        installApp: installApp,
+        fmtKB: fmtKB
+    });
+} else {
+    var mode = loadCache() ? "list" : (Net.isConnected() ? "load" : "wifi");
+    while (true) {
+        if (mode === "wifi") mode = screenWifi();
+        else if (mode === "load") mode = loadCatalog();
+        else if (mode === "err") mode = screenErr();
+        else if (mode === "list") mode = screenList();
+        else if (mode === "detail") mode = screenDetail();
+        else if (mode === "install") mode = installApp();
+        else if (mode === "done") mode = screenDone();
+        else System.exitApp();  // "exit"
+    }
 }

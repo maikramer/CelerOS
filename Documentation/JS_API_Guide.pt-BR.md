@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 5
+### Nível de API: 6
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -558,6 +558,25 @@ que 32 KB são truncadas.
 - **Descrição:** executa um HTTP POST. Lança erro se o WiFi não estiver
   conectado.
 
+#### `Net.download(url, caminho, onProgress)` (API 6)
+- **Parâmetros:**
+  - `url` (String, `http://` ou `https://`)
+  - `caminho` (String) — caminho de destino no VFS (ex.
+    `"/local/apps/<pkg>/main.js.new"`)
+  - `onProgress` (Função, opcional) — chamada por chunk com
+    `(bytesBaixados, bytesTotais)`; `bytesTotais` é `-1` quando o servidor
+    não manda `Content-Length`
+- **Retorna:** Boolean — `true` no sucesso; em falha o arquivo parcial é
+  removido
+- **Descrição:** baixa direto para um arquivo em modo **streaming** — o
+  corpo nunca passa pela heap do JS, então **não sofre o teto de 32 KB** (é
+  o mecanismo da App Store para instalar/atualizar apps; os limites de
+  tamanho ficam no hub). Erros dentro de `onProgress` não abortam o
+  download. É assim que a loja atualiza apps: grava num arquivo de staging
+  `*.new`, valida o `FS.getFileMD5()` contra o checksum do catálogo e então
+  `FS.renameFile()` por cima do código antigo (atômico dentro do mesmo
+  filesystem — nunca renomeie entre `/local` ↔ `/sd`).
+
 ### Exemplo
 
 ```javascript
@@ -691,6 +710,7 @@ Configurações de horário (persistidas pelo TimeManager).
   "type": "Utility",
   "category": "Utility",
   "api": 3,
+  "topbar": true,
   "system": true,
   "order": 30,
   "icon": "settings"
@@ -804,3 +824,32 @@ agora são registrados como constantes globais RGB565 (antes do W9 o
 registro era um no-op — os apps precisavam de `System.color()`).
 `System.color()` e `System.theme()` seguem sendo a forma recomendada de obter
 cores.
+
+---
+
+## 14. Topbar do Sistema
+
+Todo app JS roda sob a **topbar do sistema** — uma faixa desenhada pelo core
+com o nome do app e o botão **X** de sair à direita. O modo vem do pacote,
+não do código:
+
+- **Fixa** — `"topbar": true` no `app.json`: a faixa fica sempre visível e o
+  canvas virtual 240x320 mapeia a área abaixo dela (as coordenadas do
+  `getTouch` já descontam a faixa). Use em apps estilo sistema, com
+  menus/listas/formulários — Settings, App Store, Terminal.
+- **Retrátil (padrão)** — sem o campo `topbar`: o app roda em **tela cheia**
+  (canvas 1:1 sobre o painel inteiro, como os apps pré-topbar). Deslizar o
+  dedo de cima para baixo na borda superior revela a faixa por **3 segundos**;
+  todo o gesto de revelar é consumido pelo sistema — o app nunca vê o
+  press/release dele. Ideal para jogos (Snake, 2048, Breakout).
+
+Notas:
+
+- No modo fixa, toques na faixa nunca chegam ao app; no retrátil, apenas
+  enquanto ela está visível (X incluído — dispara no release, com debounce).
+- Em placas com PSRAM a faixa é composta dentro do quadro (sem flicker; ao
+  esconder, a área volta atomically no próximo push). Na CYD a faixa é
+  carimbada no vidro a cada cedida; ao esconder, permanece até o app repintar
+  a região (os jogos cobrem no frame seguinte).
+- Nada para codificar em nenhum dos modos: o mesmo main.js renderiza
+  corretamente nos dois — o campo no `app.json` é o contrato inteiro.

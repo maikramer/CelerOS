@@ -756,6 +756,38 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
     return 1;
 }
 
+// API 6: download em streaming direto para arquivo — o corpo NAO passa pela
+// heap do Duktape (chunk a chunk vai pro FILE*), entao nao sofre o teto de
+// 32KB do Net.get. Uso: Net.download(url, path[, onProgress]) -> true|false;
+// onProgress(bytes, total) por chunk (total = -1 se o server nao mandou
+// Content-Length). O callback roda DENTRO do esp_http_client: duk_pcall para
+// um erro de script nao estourar o longjmp no meio do download.
+duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
+    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
+    if (!WebManager::isWifiConnected()) {
+        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
+    }
+    const char *url = duk_require_string(ctx, 0);
+    const char *path = duk_require_string(ctx, 1);
+    const bool hasProgress = duk_is_function(ctx, 2);
+
+    HttpClient http;
+    http.setTimeout(15000);
+    http.setBufferSize(4096);  // chunk maior = menos chamadas do callback
+    if (hasProgress) {
+        http.setProgressCallback([ctx](int64_t got, int64_t total) {
+            duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
+            duk_push_number(ctx, (duk_double_t)got);
+            duk_push_number(ctx, (duk_double_t)total);
+            if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) duk_pop(ctx);
+        });
+    }
+    HttpResponse resp = http.downloadToFile(url, path);
+    if (!resp.isOk()) { duk_push_false(ctx); return 1; }
+    duk_push_true(ctx);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_netIsConnected(duk_context *ctx) {
     duk_push_boolean(ctx, WebManager::isWifiConnected());
     return 1;
@@ -1726,6 +1758,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft) {
     duk_put_prop_string(ctx, -2, "getJSON");
     duk_push_c_function(ctx, js_netPost, 3);
     duk_put_prop_string(ctx, -2, "post");
+    duk_push_c_function(ctx, js_netDownload, 3);
+    duk_put_prop_string(ctx, -2, "download");
     duk_push_c_function(ctx, js_netIsConnected, 0);
     duk_put_prop_string(ctx, -2, "isConnected");
     duk_push_c_function(ctx, js_wifiScan, 0);
