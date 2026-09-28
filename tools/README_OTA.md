@@ -77,6 +77,11 @@ The published version comes from `CELEROS_VERSION`
 (`main/CMakeLists.txt`); for the device to "see" the update, the published
 version must be greater than the installed one.
 
+Since 1.3 the OTA guard refuses plain `http://` URLs unless the opt-in file
+**`/local/ota_allow_http.txt`** exists on the device (create an empty file
+with that name — `celerctl push`, web file manager or SD card). HTTPS works
+with no opt-in, which is why the production channel is unaffected.
+
 ## Testing over the USB cable (no network, no esptool)
 
 With the board on the serial cable, `celerctl` flashes the firmware straight
@@ -120,17 +125,15 @@ LittleFS and are not touched by OTA — update them with
 ## Known limitations
 
 - HTTPS downloads (manifest and firmware) validate the server certificate
-  against the ESP-IDF CA bundle; plain HTTP is still accepted for the local
-  test server. There is no firmware signature yet (secure boot / signed
-  images are future work).
+  against the ESP-IDF CA bundle; plain HTTP requires the
+  `/local/ota_allow_http.txt` opt-in since 1.3. There is no firmware
+  signature yet (secure boot / signed images are future work).
 - The ESP-IDF bootloader rollback is not enabled in the firmware, so there
   is no automatic post-boot rollback; the protection is the checksum
   validation before slot activation.
-- Neither the updates channel nor `/update` have authentication (the same
-  goes for the whole file manager): anyone on the LAN can use them while the
-  web server is on. Cross-site requests are blocked, though: write routes
-  (`POST`/`DELETE`, including `/update`) require the `X-Celer-Request` header
-  that only the device's own pages send, and there is no permissive CORS —
-  a malicious website can no longer flash firmware or touch files through
-  the visitor's browser. Scripts must send the header, e.g.
-  `curl -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.
+- Since 1.3 every web route — `/update` and the whole file manager included —
+  requires HTTP Basic Auth (user `admin`, password generated on first boot;
+  see it in the Web Server app or `celerctl info`). 5 wrong passwords lock
+  the web server for 30 s. Write routes still require the `X-Celer-Request`
+  header on top (defense in depth), e.g.
+  `curl -u admin:<pass> -H 'X-Celer-Request: 1' -F 'update=@CelerOS.bin' http://<ip>/update`.

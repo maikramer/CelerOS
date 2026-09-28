@@ -1,9 +1,9 @@
 {
   "name": "Web Server",
   "packageName": "celeros.webserver",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
-  "description": "Liga e desliga o servidor web (file manager, upload de arquivos e de firmware na porta 80) e mostra o IP de acesso.",
+  "description": "Liga e desliga o servidor web (file manager, upload de arquivos e de firmware na porta 80) e mostra o IP e a senha de acesso.",
   "type": "System",
   "category": "System",
   "api": 3,

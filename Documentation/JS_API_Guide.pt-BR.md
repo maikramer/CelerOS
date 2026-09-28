@@ -663,7 +663,20 @@ reboot.
 
 #### `System.md5(str)`
 - **Retorna:** MD5 em hex minúsculo da string (mesmo formato de
-  `FS.getFileMD5`; compatível com o `/local/settings_pin.txt` legado).
+  `FS.getFileMD5`). Mantido para dados legados — **não use para senhas**
+  (veja `setPin` abaixo).
+
+#### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
+PIN do Settings, tratado nativamente desde a 1.3: SHA-256 com salt
+(`settings_pin2.bin`), sem hash exposto ao JS. `setPin` aceita 4–6 dígitos;
+`verifyPin` faz upgrade transparente de um PIN MD5 legado no primeiro
+sucesso. `pinState()` retorna `0` (sem PIN), `1` (ativo) ou `2` (corrompido —
+flag setada sem arquivo; a UI deve pedir redefinição).
+
+#### `System.webAuthInfo()` / `System.webAuthSetPass(senha)`
+Credenciais do servidor web (Basic Auth desde a 1.3 — toda rota exige a
+senha). `webAuthInfo()` → `{user, pass}` para exibição ao dono do aparelho;
+`webAuthSetPass` aceita 6–31 caracteres.
 
 #### `System.otaCheck()`
 - **Retorna:** `{fetchFailed, available, hasFirmware, version, url, changelog, guide, type}` — resultado do manifest do canal de updates do aparelho.

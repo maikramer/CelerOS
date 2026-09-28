@@ -25,8 +25,35 @@ ErrorCode NVS::eraseData() {
         ESP_LOGE("NVS", "Failed to erase NVS partition: %s", esp_err_to_name(err));
         return CommonErrorCodes::OperationFailed;
     }
-    // Re-initialize NVS after erasing 
+    // Re-initialize NVS after erasing
     return initialize();
+}
+
+ErrorCode NVS::eraseKey(const std::string& namespaceName, const std::string& key) {
+    nvs_handle_t handle;
+    ErrorCode err = openNamespace(namespaceName, handle, NVS_READWRITE);
+    if (err != CommonErrorCodes::None) {
+        // READWRITE on a namespace that was never written: nothing to erase
+        if (err == CommonErrorCodes::FileNotFound) return CommonErrorCodes::None;
+        return err;
+    }
+    esp_err_t esp_err = nvs_erase_key(handle, key.c_str());
+    if (esp_err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
+        return CommonErrorCodes::None;  // no-op, not an error
+    }
+    if (esp_err != ESP_OK) {
+        nvs_close(handle);
+        ESP_LOGE("NVS", "Failed to erase key '%s': %s", key.c_str(), esp_err_to_name(esp_err));
+        return CommonErrorCodes::OperationFailed;
+    }
+    esp_err = nvs_commit(handle);
+    nvs_close(handle);
+    if (esp_err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to commit NVS erase: %s", esp_err_to_name(esp_err));
+        return CommonErrorCodes::OperationFailed;
+    }
+    return CommonErrorCodes::None;
 }
 
 ErrorCode NVS::openNamespace(const std::string& namespaceName, nvs_handle_t& handle, nvs_open_mode_t readWriteMode) {

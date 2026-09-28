@@ -4,8 +4,10 @@
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
 #include "../WebManager/WebManager.h"
+#include "../WebManager/WebAuth.h"
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/PinStore.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
@@ -1627,6 +1629,51 @@ duk_ret_t JSBindings::js_md5(duk_context *ctx) {
     return 1;
 }
 
+// ---- PIN do Settings (nativo, com salt) -----------------------------------
+// Substitui o fluxo JS antigo (md5 em settings_pin.txt): qualquer app podia
+// ler o hash e apagar o arquivo para destravar o Settings. O estado mora no
+// nativo (PinStore: settings_pin2.bin + flag NVS) e nao ha hash exposto.
+
+duk_ret_t JSBindings::js_setPin(duk_context *ctx) {
+    const char* pin = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, PinStore::set(pin) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_verifyPin(duk_context *ctx) {
+    const char* pin = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, PinStore::verify(pin) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_pinClear(duk_context *ctx) {
+    PinStore::clear();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_pinState(duk_context *ctx) {
+    // 0 = sem PIN, 1 = ativo, 2 = corrompido (flag NVS sem arquivo)
+    duk_push_int(ctx, PinStore::state());
+    return 1;
+}
+
+// ---- senha do Web Server ---------------------------------------------------
+
+duk_ret_t JSBindings::js_webAuthInfo(duk_context *ctx) {
+    duk_push_object(ctx);
+    duk_push_string(ctx, "admin");
+    duk_put_prop_string(ctx, -2, "user");
+    duk_push_string(ctx, WebAuth::password());
+    duk_put_prop_string(ctx, -2, "pass");
+    return 1;
+}
+
+duk_ret_t JSBindings::js_webAuthSetPass(duk_context *ctx) {
+    const char* p = duk_require_string(ctx, 0);
+    duk_push_boolean(ctx, WebAuth::setPassword(p) ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_rescanApps(duk_context *ctx) {
     LauncherUI::requestRescan();
     return 0;
@@ -1641,6 +1688,8 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         // reflashe de data/ (tools/flash_data.sh) ou celerctl apps install.
         WebManager::forgetAllNetworks();
         FileSystem::formatLittleFS();
+        PinStore::clear();     // flag NVS nao vive no LittleFS
+        WebAuth::regenerate();
         duk_push_boolean(ctx, 1);
         return 1;
     }
@@ -1650,8 +1699,11 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         "/local/brightness.txt", "/local/settings_pin.txt", "/local/nowifi.txt",
         "/local/web_on.txt", "/local/config_install_sd.txt", "/local/ota_url.txt",
         "/local/config_time.txt", "/local/touch_cal_p.bin", "/local/wifi.txt",
+        "/local/settings_pin2.bin", "/local/ota_allow_http.txt",
     };
     for (const char* f : cfgFiles) FileSystem::deleteFile(f);
+    PinStore::clear();        // limpa tambem a flag NVS do PIN
+    WebAuth::regenerate();    // senha web nova (a antiga era "config")
     WebManager::forgetAllNetworks();
     duk_push_boolean(ctx, 1);
     return 1;
@@ -2065,6 +2117,18 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_prop_string(ctx, -2, "wifiStatus");
     duk_push_c_function(ctx, js_md5, 1);
     duk_put_prop_string(ctx, -2, "md5");
+    duk_push_c_function(ctx, js_setPin, 1);
+    duk_put_prop_string(ctx, -2, "setPin");
+    duk_push_c_function(ctx, js_verifyPin, 1);
+    duk_put_prop_string(ctx, -2, "verifyPin");
+    duk_push_c_function(ctx, js_pinClear, 0);
+    duk_put_prop_string(ctx, -2, "pinClear");
+    duk_push_c_function(ctx, js_pinState, 0);
+    duk_put_prop_string(ctx, -2, "pinState");
+    duk_push_c_function(ctx, js_webAuthInfo, 0);
+    duk_put_prop_string(ctx, -2, "webAuthInfo");
+    duk_push_c_function(ctx, js_webAuthSetPass, 1);
+    duk_put_prop_string(ctx, -2, "webAuthSetPass");
     duk_push_c_function(ctx, js_rescanApps, 0);
     duk_put_prop_string(ctx, -2, "rescanApps");
     duk_push_c_function(ctx, js_factoryReset, 1);

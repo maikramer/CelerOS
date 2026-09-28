@@ -43,9 +43,13 @@ raiz — para ativar um, remova-o da lista e garanta as dependências do
 
 ```
 CONFIG_COMPILER_CXX_EXCEPTIONS=y      # JsonModels/OtaManager usam try/catch
-CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y     # OTA dev via HTTP na LAN
-CONFIG_ESP_TLS_INSECURE / SKIP_CERT_VERIFY  # (dev) TODO endurecer p/ producao
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y     # OTA dev via HTTP na LAN — e ainda exige
+                                      # /local/ota_allow_http.txt (guard no OtaManager)
 ```
+
+TLS valida certificados desde a 1.3 (`ESP_TLS_INSECURE`/`SKIP_CERT_VERIFY`
+saíram do `sdkconfig.defaults`): HttpClient e o OTA anexam
+`esp_crt_bundle_attach`.
 
 Partições com `nvs` (credential store) + `ota_0`/`ota_1` + `otadata` — ver
 `partitions_16MB.csv` / `partitions_4MB.csv`. `config/projectConfig.h` e

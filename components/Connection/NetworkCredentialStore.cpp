@@ -5,6 +5,7 @@
 #include "esp_timer.h"
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 NetworkCredentialStore::NetworkCredentialStore() 
     : _initialized(false) {
@@ -128,10 +129,12 @@ ErrorCode NetworkCredentialStore::clearAllNetworks() {
 
     _networks.clear();
 
-    // Clear NVS
-    ErrorCode err = NVS::eraseData();
+    // Apaga apenas as chaves deste namespace. NAO usar NVS::eraseData():
+    // ele apaga a particao NVS inteira e levaria junto dados de outros
+    // namespaces (webauth/pin do "celer", otadata, ...).
+    ErrorCode err = saveToNvs();  // count=0 + limpeza das keys residuais
     if (err != CommonErrorCodes::None) {
-        ESP_LOGW(TAG, "Failed to erase NVS data: %s", err.description().c_str());
+        ESP_LOGW(TAG, "Failed to clear NVS keys: %s", err.description().c_str());
     }
 
     // Trigger events for each removed network
@@ -263,14 +266,14 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
 
     // Read the network count
     uint8_t count = 0;
-    ErrorCode err = NVS::readValue<uint8_t>(NetworkStoreConstants::NVS_NAMESPACE, 
+    ErrorCode err = NVS::readValue<uint8_t>(NetworkStoreConstants::NVS_NAMESPACE,
                                             NetworkStoreConstants::INDEX_KEY, count);
-    
+
     if (err == CommonErrorCodes::FileNotFound) {
         ESP_LOGI(TAG, "No stored networks found");
         return CommonErrorCodes::None;
     }
-    
+
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to read network count: %s", err.description().c_str());
         return err;
@@ -279,9 +282,12 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
     ESP_LOGI(TAG, "Loading %d networks from NVS...", count);
 
     // Load each network
-    for (uint8_t i = 0; i < count; i++) {
+    bool sawLegacy = false;
+    for (uint8_t i = 0; i < count && i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
         KnownNetwork network;
-        err = loadNetworkFromNvs(i, network);
+        bool legacy = false;
+        err = loadNetworkFromNvs(i, network, &legacy);
+        if (legacy) sawLegacy = true;
         if (err == CommonErrorCodes::None) {
             _networks.push_back(network);
             ESP_LOGD(TAG, "Loaded network: %s (priority: %d)", network.ssid, network.priority);
@@ -290,16 +296,40 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
         }
     }
 
+    // Entrada vinda do formato pipe legado: regrava tudo no formato por
+    // campo (migracao transparente, uma unica vez)
+    if (sawLegacy && !_networks.empty()) {
+        ESP_LOGI(TAG, "Migrating legacy pipe format to per-field keys...");
+        saveToNvs();
+    }
+
     ESP_LOGI(TAG, "Successfully loaded %zu networks", _networks.size());
     return CommonErrorCodes::None;
 }
+
+// Keys por campo do formato v2: "net<i>" + sufixo curto (limite NVS: 15
+// chars). Campos ausentes assumem default — redes salvas por versoes antigas
+// ganham os campos novos sem invalidar o registro.
+static std::string fieldKey(size_t index, const char* suffix) {
+    char key[16];
+    snprintf(key, sizeof(key), "net%u%s", (unsigned)index, suffix);
+    return std::string(key);
+}
+
+static const char* F_SSID = "s";
+static const char* F_PASS = "w";
+static const char* F_PRIO = "pr";
+static const char* F_RSSI = "r";
+static const char* F_LASTC = "lc";
+static const char* F_AUTO = "ac";
+static const char* F_AUTH = "am";
 
 ErrorCode NetworkCredentialStore::saveToNvs() {
     // Save the network count
     uint8_t count = static_cast<uint8_t>(_networks.size());
     ErrorCode err = NVS::storeValue<uint8_t>(NetworkStoreConstants::NVS_NAMESPACE,
                                              NetworkStoreConstants::INDEX_KEY, count, true);
-    
+
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to save network count: %s", err.description().c_str());
         return err;
@@ -314,82 +344,128 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
         }
     }
 
+    // Chaves residuais de redes removidas (indices >= count): sem isso, uma
+    // rede apagada deixava senha/ssid fantasma no NVS para sempre.
+    for (size_t i = _networks.size(); i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_SSID));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PASS));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PRIO));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_RSSI));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_LASTC));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_AUTO));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_AUTH));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE,
+                      getNetworkKey(i));  // chave do formato pipe legado
+    }
+
     ESP_LOGD(TAG, "Saved %zu networks to NVS", _networks.size());
     return CommonErrorCodes::None;
 }
 
 ErrorCode NetworkCredentialStore::saveNetworkToNvs(size_t index, const KnownNetwork& network) {
-    std::string key = getNetworkKey(index);
-    
-    // Serialize network to a string format: ssid|password|priority|lastRssi|lastConnected|autoConnect|authMode
-    // We use a simple format that can be stored as a single NVS string
-    char buffer[256];
-    snprintf(buffer, sizeof(buffer), "%s|%s|%d|%d|%lu|%d|%d",
-             network.ssid,
-             network.password,
-             static_cast<int>(network.priority),
-             static_cast<int>(network.lastRssi),
-             static_cast<unsigned long>(network.lastConnected),
-             network.autoConnect ? 1 : 0,
-             static_cast<int>(network.authMode));
-
-    std::string serialized(buffer);
-    return NVS::storeValue<std::string>(NetworkStoreConstants::NVS_NAMESPACE, key, serialized, true);
+    const std::string ns = NetworkStoreConstants::NVS_NAMESPACE;
+    ErrorCode err = NVS::storeValue<std::string>(ns, fieldKey(index, F_SSID), network.ssid, true);
+    if (err != CommonErrorCodes::None) return err;
+    err = NVS::storeValue<std::string>(ns, fieldKey(index, F_PASS), network.password, true);
+    if (err != CommonErrorCodes::None) return err;
+    err = NVS::storeValue<int8_t>(ns, fieldKey(index, F_PRIO), network.priority, true);
+    if (err != CommonErrorCodes::None) return err;
+    err = NVS::storeValue<int8_t>(ns, fieldKey(index, F_RSSI), network.lastRssi, true);
+    if (err != CommonErrorCodes::None) return err;
+    err = NVS::storeValue<uint32_t>(ns, fieldKey(index, F_LASTC), network.lastConnected, true);
+    if (err != CommonErrorCodes::None) return err;
+    err = NVS::storeValue<uint8_t>(ns, fieldKey(index, F_AUTO),
+                                   network.autoConnect ? 1 : 0, true);
+    if (err != CommonErrorCodes::None) return err;
+    return NVS::storeValue<uint8_t>(ns, fieldKey(index, F_AUTH),
+                                    static_cast<uint8_t>(network.authMode), true);
 }
 
-ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork& network) {
-    std::string key = getNetworkKey(index);
-    std::string serialized;
-    
-    ErrorCode err = NVS::readValue<std::string>(NetworkStoreConstants::NVS_NAMESPACE, key, serialized);
-    if (err != CommonErrorCodes::None) {
-        return err;
-    }
+ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork& network,
+                                                     bool* legacyUsed) {
+    if (legacyUsed != nullptr) *legacyUsed = false;
+    const std::string ns = NetworkStoreConstants::NVS_NAMESPACE;
 
-    // Parse the serialized format: ssid|password|priority|lastRssi|lastConnected|autoConnect|authMode
-    // Find delimiters
-    size_t pos = 0;
-    size_t nextPos;
-    int fieldIndex = 0;
-    
-    while ((nextPos = serialized.find('|', pos)) != std::string::npos || pos < serialized.length()) {
-        std::string field;
-        if (nextPos != std::string::npos) {
-            field = serialized.substr(pos, nextPos - pos);
-            pos = nextPos + 1;
+    std::string ssid;
+    ErrorCode err = NVS::readValue<std::string>(ns, fieldKey(index, F_SSID), ssid);
+    if (err == CommonErrorCodes::None) {
+        strncpy(network.ssid, ssid.c_str(), sizeof(network.ssid) - 1);
+        network.ssid[sizeof(network.ssid) - 1] = '\0';
+
+        std::string pass;
+        if (NVS::readValue<std::string>(ns, fieldKey(index, F_PASS), pass) ==
+            CommonErrorCodes::None) {
+            strncpy(network.password, pass.c_str(), sizeof(network.password) - 1);
+            network.password[sizeof(network.password) - 1] = '\0';
         } else {
-            field = serialized.substr(pos);
-            pos = serialized.length();
+            network.password[0] = '\0';
         }
 
-        switch (fieldIndex) {
-            case 0: // ssid
-                strncpy(network.ssid, field.c_str(), sizeof(network.ssid) - 1);
-                network.ssid[sizeof(network.ssid) - 1] = '\0';
-                break;
-            case 1: // password
-                strncpy(network.password, field.c_str(), sizeof(network.password) - 1);
-                network.password[sizeof(network.password) - 1] = '\0';
-                break;
-            case 2: // priority
-                network.priority = static_cast<int8_t>(std::stoi(field));
-                break;
-            case 3: // lastRssi
-                network.lastRssi = static_cast<int8_t>(std::stoi(field));
-                break;
-            case 4: // lastConnected
-                network.lastConnected = static_cast<uint32_t>(std::stoul(field));
-                break;
-            case 5: // autoConnect
-                network.autoConnect = (field == "1");
-                break;
-            case 6: // authMode
-                network.authMode = static_cast<WiFiAuthMode>(std::stoi(field));
-                break;
-        }
-        fieldIndex++;
+        int8_t prio = 0, rssi = 0;
+        uint32_t lastC = 0;
+        uint8_t autoC = 1, auth = 0;
+        NVS::readValue<int8_t>(ns, fieldKey(index, F_PRIO), prio);
+        NVS::readValue<int8_t>(ns, fieldKey(index, F_RSSI), rssi);
+        NVS::readValue<uint32_t>(ns, fieldKey(index, F_LASTC), lastC);
+        NVS::readValue<uint8_t>(ns, fieldKey(index, F_AUTO), autoC);
+        NVS::readValue<uint8_t>(ns, fieldKey(index, F_AUTH), auth);
+        network.priority = prio;
+        network.lastRssi = rssi;
+        network.lastConnected = lastC;
+        network.autoConnect = autoC != 0;
+        network.authMode = static_cast<WiFiAuthMode>(auth);
+        return CommonErrorCodes::None;
+    }
+    if (err != CommonErrorCodes::FileNotFound) return err;
 
-        if (nextPos == std::string::npos) break;
+    // Formato legado: "ssid|password|priority|lastRssi|lastConnected|autoConnect|authMode"
+    // em uma unica string. Quebrava com '|' no SSID/senha e parseava numeros
+    // sem try/catch. Mantido so para leitura + migracao.
+    std::string serialized;
+    err = NVS::readValue<std::string>(ns, getNetworkKey(index), serialized);
+    if (err != CommonErrorCodes::None) return err;
+    if (legacyUsed != nullptr) *legacyUsed = true;
+
+    try {
+        size_t pos = 0;
+        int fieldIndex = 0;
+        while (pos <= serialized.length()) {
+            size_t bar = serialized.find('|', pos);
+            std::string field = (bar == std::string::npos)
+                                    ? serialized.substr(pos)
+                                    : serialized.substr(pos, bar - pos);
+            switch (fieldIndex) {
+                case 0:
+                    strncpy(network.ssid, field.c_str(), sizeof(network.ssid) - 1);
+                    network.ssid[sizeof(network.ssid) - 1] = '\0';
+                    break;
+                case 1:
+                    strncpy(network.password, field.c_str(), sizeof(network.password) - 1);
+                    network.password[sizeof(network.password) - 1] = '\0';
+                    break;
+                case 2:
+                    network.priority = static_cast<int8_t>(std::stoi(field));
+                    break;
+                case 3:
+                    network.lastRssi = static_cast<int8_t>(std::stoi(field));
+                    break;
+                case 4:
+                    network.lastConnected = static_cast<uint32_t>(std::stoul(field));
+                    break;
+                case 5:
+                    network.autoConnect = (field == "1");
+                    break;
+                case 6:
+                    network.authMode = static_cast<WiFiAuthMode>(std::stoi(field));
+                    break;
+            }
+            fieldIndex++;
+            if (bar == std::string::npos) break;
+            pos = bar + 1;
+        }
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Corrupt legacy network entry at index %zu: %s", index, e.what());
+        return CommonErrorCodes::OperationFailed;
     }
 
     return CommonErrorCodes::None;

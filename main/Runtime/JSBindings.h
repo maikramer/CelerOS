@@ -158,6 +158,12 @@ private:
     static duk_ret_t js_isBuffered(duk_context *ctx);
     static duk_ret_t js_wifiStatus(duk_context *ctx);
     static duk_ret_t js_md5(duk_context *ctx);
+    static duk_ret_t js_setPin(duk_context *ctx);
+    static duk_ret_t js_verifyPin(duk_context *ctx);
+    static duk_ret_t js_pinClear(duk_context *ctx);
+    static duk_ret_t js_pinState(duk_context *ctx);
+    static duk_ret_t js_webAuthInfo(duk_context *ctx);
+    static duk_ret_t js_webAuthSetPass(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);
     static duk_ret_t js_factoryReset(duk_context *ctx);
     static duk_ret_t js_otaCheck(duk_context *ctx);

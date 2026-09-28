@@ -492,7 +492,13 @@ Backlight control (5–100). `setBrightness` persists to `/local/brightness.txt`
 Web server (file manager + web upload) state and toggle — live, no reboot.
 
 #### `System.md5(str)`
-- **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`; compatible with the legacy `/local/settings_pin.txt`).
+- **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
+
+#### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
+Settings PIN, handled natively since 1.3: salted SHA-256 (`settings_pin2.bin`), no hash exposed to JS. `setPin` accepts 4–6 digits; `verifyPin` transparently upgrades a legacy MD5 PIN on first success. `pinState()` returns `0` (no PIN), `1` (active) or `2` (corrupted — flag set but file missing; the UI should ask for a redefinition).
+
+#### `System.webAuthInfo()` / `System.webAuthSetPass(pass)`
+Web server credentials (Basic Auth since 1.3 — every route requires the password). `webAuthInfo()` → `{user, pass}` for display to the device owner; `webAuthSetPass` accepts 6–31 characters.
 
 #### `System.otaCheck()`
 - **Returns:** `{fetchFailed, available, hasFirmware, version, url, changelog, guide, type}` — result of the device's update channel manifest.

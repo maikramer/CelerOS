@@ -21,6 +21,7 @@
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
 #include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
+#include "../WebManager/WebAuth.h"  // senha do web server no `celerctl info`
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
@@ -178,11 +179,13 @@ void handleInfo() {
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":1,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
+             "\"web_user\":\"admin\",\"web_pass\":\"%s\","
              "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              hasIp ? ip : "", hasSd ? "true" : "false",
+             WebAuth::password(),
              lt, lu, st, su);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
 }

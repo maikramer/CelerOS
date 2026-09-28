@@ -53,9 +53,29 @@ std::string OtaManager::getUpdateJsonUrl() {
     return std::string(CELEROS_UPDATE_BASE) + "/" + CELEROS_UPDATE_CHANNEL + "/update.json";
 }
 
+// Flash de firmware so por HTTPS, ou HTTP com opt-in local explicito
+// (/local/ota_allow_http.txt — criado pelo dono via celerctl/file manager
+// para o fluxo dev com tools/ota_server.py). Sem isso, gravar
+// /local/ota_url.txt apontando para um servidor do atacante bastava para
+// instalar firmware arbitrario na proxima atualizacao.
+static bool urlSchemeAllowed(const std::string& url) {
+    if (kstr::startsWith(url, "https://")) return true;
+    return kstr::startsWith(url, "http://") &&
+           FileSystem::exists("/local/ota_allow_http.txt");
+}
+
+static const char* HTTP_BLOCKED_MSG =
+    "OTA bloqueado: http:// requer /local/ota_allow_http.txt no aparelho";
+
 bool OtaManager::checkForUpdates() {
     info = OtaUpdateInfo();
     std::string url = getUpdateJsonUrl();
+    if (!urlSchemeAllowed(url)) {
+        info.fetchFailed = true;
+        lastError = HTTP_BLOCKED_MSG;
+        ESP_LOGE("celer.ota", "%s (url: %s)", HTTP_BLOCKED_MSG, url.c_str());
+        return false;
+    }
 
     HttpClient http;
     http.setTimeout(20000);
@@ -106,6 +126,12 @@ static bool s_otaBound = false;
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
     s_progressCb = onProgress;
+
+    if (!urlSchemeAllowed(firmwareUrl)) {
+        lastError = HTTP_BLOCKED_MSG;
+        ESP_LOGE("celer.ota", "%s (url: %s)", HTTP_BLOCKED_MSG, firmwareUrl.c_str());
+        return false;
+    }
 
     if (!s_otaBound) {
         s_otaBound = true;
