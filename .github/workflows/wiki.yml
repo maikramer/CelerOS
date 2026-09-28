@@ -1,0 +1,65 @@
+# Publica a wiki do GitHub a partir das fontes do repositorio.
+#
+# Fonte de verdade: wiki/wiki.json + wiki/pages/ (paginas escritas a mao) e os
+# guias em Documentation/ + tools/README*.md reaproveitados por caminho.
+# O gerador tools/wiki/generate.py monta as paginas e este workflow empurra o
+# resultado para o repo da wiki (maikramer/CelerOS.wiki.git, branch master).
+#
+# - push no main com mudancas em docs -> publica a wiki
+# - pull_request -> publica um preview do conteudo do PR na wiki
+# - workflow_dispatch -> publicaacao manual
+#
+# O push usa o GITHUB_TOKEN do proprio workflow com permissions: contents:
+# write (o repo .wiki.git aceita o token da mesma repo). Se um dia for
+# necessario disparar workflows a partir do push na wiki, troque por um PAT
+# guardado em secrets.
+
+name: Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/wiki.yml"
+      - "wiki/**"
+      - "Documentation/**"
+      - "README.md"
+      - "README.pt-BR.md"
+      - "tools/README*.md"
+      - "tools/wiki/**"
+  pull_request:
+    paths:
+      - ".github/workflows/wiki.yml"
+      - "wiki/**"
+      - "Documentation/**"
+      - "README.md"
+      - "README.pt-BR.md"
+      - "tools/README*.md"
+      - "tools/wiki/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gerar paginas da wiki
+        run: python3 tools/wiki/generate.py --out "$RUNNER_TEMP/wiki"
+
+      - name: Publicar no repositorio da wiki
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/wiki"
+          git init -q -b master
+          git config user.name "celeros-ci"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Wiki gerada do commit ${GITHUB_SHA::7} - edite em wiki/ no repositorio"
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          # branch default da wiki do GitHub e master; force = conteudo 100% gerado
+          git push -q --force origin master
