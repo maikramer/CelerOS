@@ -17,7 +17,8 @@ bool supported();
 
 // Inicia o app em task propria. Retorna false se nao suportado/ocupado
 // (o chamador deve cair no caminho sincrono).
-bool start(const std::string& filePath, const std::string& title, bool topbarFixed);
+bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
+            const std::string& appPkg = "", uint32_t perms = 0xFFFFFFFFu);
 
 // false quando nao ha app rodando (ou ja terminou — o chamador faz o pop)
 bool running();

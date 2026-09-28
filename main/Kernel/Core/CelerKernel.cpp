@@ -6,6 +6,7 @@
 #include "../../Utils/StrUtils.h"
 #include "../../Display/Theme.h"
 #include "../../UI/Kui.h"
+#include "../../Utils/I18n.h"
 #include <vector>
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
@@ -84,7 +85,7 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     tft->fillRoundRect(UI::sx(40), by, UI::W - UI::sx(80), bh, UI::sx(8), THEME_RAISED);
     tft->setTextDatum(MC_DATUM);
     tft->setTextColor(THEME_TEXT);
-    tft->drawString("Toque para voltar", UI::cx(), by + bh / 2, body);
+    tft->drawString(i18n::TR("Toque para voltar", "Touch to go back"), UI::cx(), by + bh / 2, body);
     tft->endWrite();
 
     // espera soltar (o toque que causou o erro), depois um tap completo —
@@ -95,9 +96,14 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     while (kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
 }
 
-static const char* kOomHint =
-    "O app ficou sem memoria. Feche outros recursos (servidor web, WiFi) "
-    "e tente de novo.";
+// dica de OOM no idioma configurado (primeiro uso trava o idioma)
+static const char* oomHint() {
+    return i18n::TR("O app ficou sem memoria. Feche outros recursos (servidor web, "
+                    "WiFi) e tente de novo.",
+                    "The app ran out of memory. Close other resources (web server, "
+                    "WiFi) and try again.");
+}
+#define kOomHint oomHint()
 
 // ---------------------------------------------------------------------------
 // Alocador do Duktape.
@@ -150,7 +156,8 @@ static void my_fatal(void *udata, const char *msg) {
     celer_log_println(msg ? msg : "no message");
     
     std::string detail = (msg && strstr(msg, "alloc")) ? std::string(kOomHint) : std::string(msg ? msg : "erro fatal");
-    showRuntimeError("Erro fatal do runtime", detail + "\n\nO sistema vai reiniciar.");
+    showRuntimeError(i18n::TR("Erro fatal do runtime", "Runtime fatal error"),
+                    detail + i18n::TR("\n\nO sistema vai reiniciar.", "\n\nThe system will restart."));
 
     if (msg && strstr(msg, "alloc")) {
         celer_log_println("out of memory");
@@ -196,7 +203,7 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
 
         // Intercept OOM signals
         if (errorMsg.find("alloc") != std::string::npos || errorMsg.find("out of memory") != std::string::npos) {
-            showRuntimeError("Sem memoria", kOomHint);
+            showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
             duk_pop(ctx);
             // This is a soft-error (not Duktape fatal), so we can just return safely to Launcher
             return;
@@ -205,7 +212,7 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
         celer_log_print("JS Execution Error: ");
         celer_log_println(errorMsg.c_str());
 
-        showRuntimeError("Erro no app", errorMsg);
+        showRuntimeError(i18n::TR("Erro no app", "App error"), errorMsg);
     }
     duk_pop(ctx); // pop result or error
 }
@@ -278,7 +285,8 @@ std::string CelerKernel::checkSyntax(const char* jsCode) {
     return params.result;
 }
 
-void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed) {
+void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed,
+                         const char* appPkg, uint32_t perms) {
     if (ctx) {
         duk_destroy_heap(ctx);
         ctx = nullptr;
@@ -287,11 +295,11 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     ctx = duk_create_heap(my_alloc, my_realloc, my_free, nullptr, my_fatal);
     if (!ctx) {
         celer_log_println("Failed to create Duktape heap for app.");
-        showRuntimeError("Sem memoria", kOomHint);
+        showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
 
-    JSBindings::init(ctx, tftInstance, appTitle, topbarFixed);
+    JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
     
     {
         std::string content = FileSystem::readTextFile(filePath);

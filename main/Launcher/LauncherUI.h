@@ -4,6 +4,7 @@
 #include "../Boards/Board.h"
 #include <Arduino.h>
 #include <string>
+#include <cstdint>
 
 class LauncherUI {
 public:
@@ -27,6 +28,8 @@ public:
     static bool appEntryIsSystem(int i);
     static bool appEntryTopbar(int i);
     static bool appEntryIsFolder(int i);
+    static uint32_t appEntryPerms(int i);
+    static const std::string& appEntryPkg(int i);
     static void launchApp(int index);          // executa app (sincrono)
     // F3 (CELEROS_APP_TASK): inicia na task propria; false = use launchApp
     static bool launchAppAsync(int index);
@@ -37,13 +40,15 @@ public:
 
 private:
     static CelerDisplay *tftInstance;
-    static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder, bool topbarFixed);
+    static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder, bool topbarFixed,
+                       const std::string& appPkg, uint32_t perms);
     static void resolveApp(const std::string& path, bool isFolder,
                            std::string& filePath, std::string& title);
 
     static std::string appPaths[50];   // Path to app folder or .js file
     static std::string appNames[50];   // Display name (from app.json or filename)
     static std::string appPkg[50];     // packageName do app.json (dedup)
+    static uint32_t appPerms[50];      // capabilities declaradas (F4)
     static std::string appIcons[50];   // nome do icone em /local/icons ("" = sem)
     static bool   appIsFolder[50]; // true = folder app, false = legacy .js
     static bool   appIsSystem[50]; // true = "system": true no app.json

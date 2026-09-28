@@ -45,6 +45,7 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
 - **`description`**: A short summary of your app, displayed to the user when they install your app for the first time. Note: system apps avoid accented characters — stick to plain ASCII for maximum compatibility with the built-in font.
 - **`type`**: The broad classification (e.g., `App` or `Game`). You can type any value here without restriction.
 - **`category`**: The specific category (e.g., `Utilities`, `Games`, `Tools`). You can type any value here without restriction.
+- **`permissions`** (optional, F4): array of capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Without the field the app keeps everything (compat with the existing store); with it, only what is declared is registered (`FS` / `Net` / `System.gpio` and the device-affecting calls such as `restart`/`otaStart` are filtered at runtime). System apps (`"system": true`) always get everything.
 - **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `6`). This is verified by the system at install time.
 - **`changelog`**: A brief string detailing what changed (one line per version works well, e.g. `"1.1.0 - fixed crash\n1.0.0 - first release"`). The hub publishes it with the catalog and the device store shows it under a **"Novidades" / What's New** header on the update screen.
 

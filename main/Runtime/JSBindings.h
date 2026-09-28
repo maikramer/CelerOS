@@ -5,13 +5,25 @@
 #include <duktape.h>
 #include "../Boards/Board.h"
 
+// Capabilities declaradas no app.json ("permissions": ["fs","net",...]).
+// Bits de filtragem do runtime (F4); campo ausente = tudo (compat com os
+// apps existentes — o hub podera endurecer para api >= 7 no futuro).
+enum AppPerm : uint32_t {
+    PERM_FS     = 1u << 0,
+    PERM_NET    = 1u << 1,
+    PERM_GPIO   = 1u << 2,
+    PERM_SYSTEM = 1u << 3,   // restart/factoryReset/OTA/web/wifiConnect
+    PERM_ALL    = 0xFFFFFFFFu,
+};
+
 class JSBindings {
 public:
     // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
     // retratil (swipe da borda superior revela por alguns segundos) com o
     // app em tela cheia — campo "topbar" do app.json
     static void init(duk_context *ctx, CelerDisplay *tft, const char* appTitle = "",
-                     bool topbarFixed = true);
+                    bool topbarFixed = true, const char* appPkg = "",
+                    uint32_t perms = PERM_ALL);
 
     // Alvo de desenho do app (sprite do app > quadro automatico > display)
     static lgfx::LGFXBase* gfx();
@@ -165,6 +177,9 @@ private:
     static duk_ret_t js_webAuthInfo(duk_context *ctx);
     static duk_ret_t js_webAuthSetPass(duk_context *ctx);
     static duk_ret_t js_setting(duk_context *ctx);
+    static duk_ret_t js_toast(duk_context *ctx);
+    static duk_ret_t js_beep(duk_context *ctx);
+    static duk_ret_t js_appData(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);
     static duk_ret_t js_factoryReset(duk_context *ctx);
     static duk_ret_t js_otaCheck(duk_context *ctx);

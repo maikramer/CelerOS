@@ -666,6 +666,12 @@ reboot.
   `FS.getFileMD5`). Mantido para dados legados — **não use para senhas**
   (veja `setPin` abaixo).
 
+#### Permissões do app (`app.json` → runtime, F4)
+`"permissions": ["fs","net","gpio","system"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio` e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) ficam ausentes. **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
+
+#### `System.toast(mensagem)` / `System.beep(freq, ms)`
+`toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` aciona buzzer passivo via LEDC no `speakerPin` da placa (devolve `false` quando a placa não tem — as duas atuais saem com `-1` até haver buzzer ligado).
+
 #### `System.setting(key)` / `System.setting(key, value)`
 Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura devolve a string ou `null`; escrita devolve `true`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).
 

@@ -494,6 +494,12 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 #### `System.md5(str)`
 - **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
 
+#### App permissions (`app.json` → runtime, F4)
+`"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) are absent. **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
+
+#### `System.toast(message)` / `System.beep(freq, ms)`
+`toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` drives a passive buzzer via LEDC on the board's `speakerPin` (returns `false` when the board has none — both current boards ship with `-1` until a buzzer is wired).
+
 #### `System.setting(key)` / `System.setting(key, value)`
 System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read returns the string or `null`; write returns `true`. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).
 

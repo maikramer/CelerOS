@@ -9,7 +9,8 @@
 class CelerKernel {
 public:
     static void init(CelerDisplay *tft);
-    static void runFile(const char* filePath, const char* appTitle = "", bool topbarFixed = true);
+    static void runFile(const char* filePath, const char* appTitle = "", bool topbarFixed = true,
+                        const char* appPkg = "", uint32_t perms = 0xFFFFFFFFu);
     static void loop();
     static void executeJS(const char* jsCode);
     static std::string checkSyntax(const char* jsCode);

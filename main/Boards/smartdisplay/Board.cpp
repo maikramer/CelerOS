@@ -16,6 +16,7 @@ static const BoardProfile s_profile = {
     .hasPsram = true,
     .backlightPwm = true,
     .capacitiveTouch = true,
+    .speakerPin = -1,  // sem buzzer na placa; setar o GPIO quando houver
 };
 
 void init() {
