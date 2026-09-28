@@ -41,7 +41,7 @@ public:
 private:
     static CelerDisplay *tftInstance;
     static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder, bool topbarFixed,
-                       const std::string& appPkg, uint32_t perms);
+                       const std::string& appPkg, uint32_t perms, bool usesNet = true);
     static void resolveApp(const std::string& path, bool isFolder,
                            std::string& filePath, std::string& title);
 
@@ -49,6 +49,7 @@ private:
     static std::string appNames[50];   // Display name (from app.json or filename)
     static std::string appPkg[50];     // packageName do app.json (dedup)
     static uint32_t appPerms[50];      // capabilities declaradas (F4)
+    static bool appUsesNet[50];        // declarou "net" (radio off se sem PSRAM)
     static std::string appIcons[50];   // nome do icone em /local/icons ("" = sem)
     static bool   appIsFolder[50]; // true = folder app, false = legacy .js
     static bool   appIsSystem[50]; // true = "system": true no app.json

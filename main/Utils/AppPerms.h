@@ -40,4 +40,18 @@ inline uint32_t parsePermissions(const std::string& appJson) {
     return m == 0 ? PERM_ALL : m;
 }
 
+// true se o app.json DECLARA a capability "net" (campo presente + net na
+// lista). Apps sem campo sao tratados como basicos: em placas sem PSRAM o
+// radio WiFi e desligado durante a execucao (devolve ~35KB de heap — sem
+// isso nenhum app JS abre na RAM interna). Um app que use Net sem declarar
+// recebe "WiFi is not connected" (nao rodava mesmo com o radio ligado).
+inline bool declaresNet(const std::string& appJson) {
+    size_t key = appJson.find("\"permissions\"");
+    if (key == std::string::npos) return false;
+    size_t open = appJson.find('[', key);
+    size_t close = appJson.find(']', key);
+    if (open == std::string::npos || close == std::string::npos || close < open) return false;
+    return appJson.substr(open, close - open).find("\"net\"") != std::string::npos;
+}
+
 }  // namespace celer

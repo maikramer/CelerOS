@@ -78,3 +78,18 @@ Caminhos futuros (em ordem de custo/beneficio):
 2. Desligar WiFi durante apps sem permissao "net" (+~35KB).
 3. Heap Duktape em buffer estatico unico (sem fragmentar o heap do sistema).
 A SmartDisplay (8MB PSRAM) nao e afetada.
+
+## Niveis de hardware (2026-09, rodada 2)
+
+Apps JS agora rodam na CYD (sem PSRAM) por nivel:
+- **Nivel 1 (basico)**: ate ~20KB de main.js e sem a capability "net" — o
+  launcher DESLIGA o radio WiFi durante o app (WebManager::suspendRadio,
+  ~35KB de heap de volta) e o heap base do Duktape (~50KB) cabe nos ~87KB
+  livres. Terminal/Help/Installer/Snake/2048/etc rodam.
+- **Nivel 2 (PSRAM)**: >20KB ou com "net" declarado (Settings, App Store,
+  Web Server) — o radio precisa ficar de pe (ou o script e grande demais);
+  so em hardware com PSRAM. A loja marca "Requer PSRAM" e recusa install
+  em placas sem (stateInfo code "hw", gate no installApp).
+- Apps sem campo permissions sao tratados como nivel 1 (radio off em placas
+  sem PSRAM); um app que use Net sem declarar ve "WiFi is not connected"
+  (nao rodaria de qualquer forma com o radio ligado).

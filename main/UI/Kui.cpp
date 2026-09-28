@@ -60,6 +60,12 @@ constexpr size_t BAND_BYTES = 16 * 1024;  // faixa na RAM interna (sem PSRAM)
 bool ensureBuffer(CelerDisplay& dev) {
     if (s_bufTried) return s_buf != nullptr;
     s_bufTried = true;
+    // Sem PSRAM: desenho DIRETO. O modo bandas (sprite 320x25) renderiza
+    // desalinhado no ST7789 landscape da CYD classica (riscos, medido no
+    // device) — bandas ficam desativadas ate o pushImage/enderecamento de
+    // janela nesse painel ser depurado. O custo e o flicker em redraw
+    // completo, mitigado no LauncherScreen (clear so quando necessario).
+    if (!Board::profile().hasPsram) return false;
     const int w = dev.width(), h = dev.height();
 
     s_buf = new CelerSprite(&dev);
@@ -554,6 +560,7 @@ void TouchPump::quarantine(uint32_t ms) { s_quarantineUntilMs = millis() + ms; }
 
 void TouchPump::reset() {
     m_down = false;
+    m_releaseDebounce = 0;
 }
 
 bool readTouch(uint16_t* x, uint16_t* y) {
@@ -589,6 +596,17 @@ void TouchPump::poll(const Handler& onEvent) {
             return;
         }
         s_quarantineUntilMs = 0;
+    }
+
+    // Debounce do release (touch resistivo XPT2046: a pressao oscila no
+    // fim/lateral do dedo e, principalmente, ao DESLIZAR — o getTouch pisca
+    // solto/pressionado e cada re-deteccao disparava um redraw completo).
+    // So considera solto apos 6 leituras vazias seguidas (~120ms).
+    if (!down && m_down) {
+        if (++m_releaseDebounce < 6) return;
+        m_releaseDebounce = 0;
+    } else if (down) {
+        m_releaseDebounce = 0;
     }
 
     TouchEvent ev;
@@ -705,6 +723,8 @@ void dispatchTouch(const TouchEvent& ev) {
 }
 
 }  // namespace
+
+bool canvasBuffered() { return s_buf != nullptr; }
 
 void Navigator::begin(CelerDisplay& dev) {
     if (s_canvas == nullptr) s_canvas = new Canvas(dev);

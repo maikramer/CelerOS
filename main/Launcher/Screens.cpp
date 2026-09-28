@@ -109,7 +109,13 @@ void LauncherScreen::drawStatusBar(kui::Canvas& c) {
 }
 
 void LauncherScreen::draw(kui::Canvas& c) {
-    c.fill(THEME_BG);
+    // Sem sprite (Direct): limpar o fundo e redesenhar tudo pisca a tela.
+    // O fundo so precisa ser repintado quando a composicao MUDA (entrada,
+    // troca/arrasto de pagina, estado de clique) — no resto, o conteudo
+    // redesenha opaco sobre as mesmas coordenadas (sem blink).
+    bool clearBg = m_needClear || m_dragDx != 0;
+    m_needClear = false;
+    if (clearBg) c.fill(THEME_BG);
     drawStatusBar(c);
 
     // grid: pagina atual deslocada pelo arrasto + vizinha entrando pela borda
@@ -126,7 +132,7 @@ void LauncherScreen::draw(kui::Canvas& c) {
             int labelH = c.fontHeight(labelFont);
             int iconY = cell.y + (cell.h - Icon::SIZE - labelGap - labelH) / 2;
 
-            if (xOff == 0 && kui::isPressed(cell)) {
+            if (xOff == 0 && kui::canvasBuffered() && kui::isPressed(cell)) {
                 int pad = UI::sx(6);
                 c.fillRoundRect({cell.x + pad, iconY - pad, cell.w - 2 * pad, Icon::SIZE + labelGap + labelH + 2 * pad},
                                 UI::sx(12), THEME_RAISED);
@@ -222,18 +228,34 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
         m_pressMs = millis();
         m_pressEntry = entryAt(ev.x, ev.y);
         m_longFired = false;
+        // realce do pressionado so com buffer (offscreen); no modo direto
+        // cada press/release limparia a tela inteira — e o Z do touch
+        // resistivo oscila ao deslizar (re-deteccoes = piscadas)
+        if (kui::canvasBuffered()) m_needClear = true;
         return false;
     }
     if (ev.type == TouchEvent::Release && m_longFired) {
         m_longFired = false;  // o toque longo ja abriu o dialogo
         m_pressEntry = -1;
+        if (kui::canvasBuffered()) m_needClear = true;
         return true;
     }
-    if (ev.type == TouchEvent::Release) m_pressEntry = -1;
+    if (ev.type == TouchEvent::Release) {
+        m_pressEntry = -1;
+        if (kui::canvasBuffered()) m_needClear = true;
+    }
 
     // arrasto horizontal: a pagina acompanha o dedo
     if (ev.type == TouchEvent::Drag) {
         if (kui::touchState().moved && ev.startY > gridHeaderH() && abs(ev.dx()) > abs(ev.dy())) {
+            // Sem buffer offscreen (modo direto): seguir o dedo exige um
+            // redraw completo POR EVENTO — dezenas de piscadas por gesto.
+            // Acumula o deslocamento e troca a pagina no release (redraw
+            // unico). Com buffer, o arrasto continuo segue como sempre.
+            if (!kui::canvasBuffered()) {
+                m_dragAccum = ev.dx();
+                return false;
+            }
             int dx = ev.dx();
             if ((page == 0 && dx > 0) || (page == tp - 1 && dx < 0)) dx /= 3;  // resistencia nas pontas
             if (dx != m_dragDx) {
@@ -245,6 +267,16 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     }
     if (ev.type != TouchEvent::Release) return false;
 
+    if (!kui::canvasBuffered() && m_dragAccum != 0) {
+        // flip direto pelo acumulado do arrasto (modo sem buffer)
+        int dx = m_dragAccum;
+        m_dragAccum = 0;
+        bool fast = ev.swipe() == TouchEvent::SwipeLeft || ev.swipe() == TouchEvent::SwipeRight;
+        if ((dx < -UI::W / 4 || (fast && dx < 0)) && page < tp - 1) page++;
+        else if ((dx > UI::W / 4 || (fast && dx > 0)) && page > 0) page--;
+        m_needClear = true;
+        return true;
+    }
     if (m_dragDx != 0 || ev.swipe() == TouchEvent::SwipeLeft || ev.swipe() == TouchEvent::SwipeRight) {
         int dx = ev.dx();
         bool fast = ev.swipe() == TouchEvent::SwipeLeft || ev.swipe() == TouchEvent::SwipeRight;
@@ -356,6 +388,7 @@ void AppHostScreen::onTick(uint32_t) {
 }
 
 void AppHostScreen::finishApp() {
+    if (AppRunner::consumeResumeRadio()) WebManager::resumeRadio();
     // O toque que fechou o app (X do canto, botao do proprio app, erro) morre
     // aqui: sem isso o release vira tap no launcher — e o WiFi mora no mesmo
     // canto do X.

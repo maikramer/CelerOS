@@ -18,10 +18,15 @@ bool supported();
 // Inicia o app em task propria. Retorna false se nao suportado/ocupado
 // (o chamador deve cair no caminho sincrono).
 bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
-            const std::string& appPkg = "", uint32_t perms = 0xFFFFFFFFu);
+            const std::string& appPkg = "", uint32_t perms = 0xFFFFFFFFu,
+            bool usesNet = true);
 
 // false quando nao ha app rodando (ou ja terminou — o chamador faz o pop)
 bool running();
+
+// radio WiFi: suspenso no start (app sem rede em placa sem PSRAM); o
+// chamador consome o pedido de religar quando a task termina (main task)
+bool consumeResumeRadio();
 
 // System.openWifiSetup vindo de um app: o push da tela nativa tem que
 // acontecer na main task (Navigator nao e thread-safe). O AppHostScreen

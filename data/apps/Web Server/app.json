@@ -10,5 +10,9 @@
   "system": true,
   "order": 50,
   "icon": "web",
-  "topbar": true
+  "topbar": true,
+  "permissions": [
+    "net",
+    "system"
+  ]
 }

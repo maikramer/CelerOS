@@ -25,6 +25,8 @@ private:
     bool m_noWifiPref = false;     // /local/nowifi.txt (lido no onEnter, nao por frame)
     uint32_t m_pollAccumMs = 0;    // relogio/wifi checados a cada 250 ms
     int m_dragDx = 0;              // arrasto horizontal em curso (pagina acompanha o dedo)
+    int m_dragAccum = 0;           // modo direto: dx acumulado do arrasto (flip no release)
+    bool m_needClear = true;       // Direct sem sprite: so limpa o fundo quando o desenho muda de fato (anti-flicker)
 
     // Pressionar e segurar num app (sem arrastar) abre "Remover app?"
     int entryAt(int x, int y) const;

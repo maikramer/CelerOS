@@ -1,5 +1,6 @@
 #include "TouchCalibrator.h"
 #include "../FileSystem/FileSystem.h"
+#include "esp_system.h"
 
 extern int currentState;
 
@@ -24,6 +25,13 @@ void TouchCalibrator::runCalibration() {
     tftInstance->fillScreen(TFT_BLACK);
     tftInstance->drawString("Calibration Saved!", 120, 120, 2);
 
+    if (calData[4]) {
+        // calibrador rejeitou as amostras: nada a salvar — reinicia e o
+        // calibrador roda de novo (sem arquivo valido no LittleFS)
+        celer_log_println("calibracao rejeitada — reiniciando para nova tentativa");
+        delay(400);
+        ESP.restart();
+    }
     FileSystem::writeCalData(calData);
     tftInstance->setTouch(calData);
 

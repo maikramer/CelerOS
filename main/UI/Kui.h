@@ -163,6 +163,11 @@ private:
     int Y(int y) const { return y - m_offY; }
 };
 
+// True quando o Canvas tem buffer offscreen (full-frame PSRAM): telas podem
+// optar por animacoes de arrasto continuo; no modo direto (sem PSRAM) cada
+// redraw e visivel — melhor trocar paginas no release do que seguir o dedo.
+bool canvasBuffered();
+
 // Cabecalho padrao das telas Kui: faixa com titulo; devolve a altura.
 int headerHeight();
 void drawHeader(Canvas& c, const char* title);
@@ -314,6 +319,7 @@ public:
 
 private:
     bool m_down = false;
+    int m_releaseDebounce = 0;  // leituras vazias seguidas (release resistivo)
     int m_lastX = 0, m_lastY = 0;
     int m_pressX = 0, m_pressY = 0;
     uint32_t m_pressMs = 0;

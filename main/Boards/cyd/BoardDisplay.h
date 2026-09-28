@@ -17,6 +17,8 @@
 // bus compartilhado.
 // ----------------------------------------------------------------------------
 
+#include <cstdio>
+#include "esp_log.h"
 #include "../../Display/Display.h"
 
 #include <lgfx/v1/panel/Panel_ST7789.hpp>
@@ -73,10 +75,12 @@ public:
             // Faixa bruta com eixos invertidos (conferido nesta variante);
             // a calibracao interativa de 2 pontos refina e persiste em
             // /local/touch_cal_p.bin
-            cfg.x_min = 3800;
-            cfg.x_max = 300;
-            cfg.y_min = 3650;
-            cfg.y_max = 350;
+            // Frame PORTRAIT do sensor (o LGFX normaliza p/ 240x320 e so
+            // entao aplica a rotacao do painel): valores classicos XPT2046.
+            cfg.x_min = 300;
+            cfg.x_max = 3800;
+            cfg.y_min = 200;
+            cfg.y_max = 3700;
             cfg.pin_int = -1;
             cfg.bus_shared = false;
             cfg.offset_rotation = 0;
@@ -94,7 +98,9 @@ public:
 
 
     // Calibracao no formato proprio [x_min, x_max, y_min, y_max, 0],
-    // persistida pelo TouchCalibrator em /local/touch_cal_p.bin.
+    // persistida pelo TouchCalibrator em /local/touch_cal_p.bin. Os eixos
+    // crus ja vem no frame correto: o calibrador de 5 pontos deriva qual
+    // eixo do XPT2046 e X/Y logico (abaixo) — o load e 1:1.
     void setTouch(uint16_t* calData) override {
         auto cfg = _touch.config();
         cfg.x_min = calData[0];
@@ -102,60 +108,163 @@ public:
         cfg.y_min = calData[2];
         cfg.y_max = calData[3];
         _touch.config(cfg);
+        // CRITICO: sem isto a matriz afina do painel NAO e recalculada — a
+        // calibracao salva era ignorada e o mapeamento usava os defaults do
+        // driver para sempre (bug da calibracao 'que nao pegava').
+        _panel.setTouch(&_touch);
     }
 
-    // Calibracao interativa de 2 pontos (cantos opostos): le o raw do
-    // XPT2046 em duas marcas e deriva a faixa de mapeamento.
+    // Calibracao interativa de 5 PONTOS (4 cantos + centro) AUTO-DERIVANTE:
+    // descobre em runtime qual eixo cru do XPT2046 mapeia para X/Y logico
+    // (TL->TR define X, TL->BL define Y) — funciona em qualquer
+    // rotacao/variante, sem flips chumbados. Tela limpa por ponto,
+    // contador n/5, ack verde e timeouts (leitura fantasma nao trava).
     void calibrateTouch(uint16_t* calData, uint32_t color, uint32_t bg, uint8_t size) override {
         (void)size;
-        static constexpr int MARGIN_DIV = 8;
-        static constexpr int SAMPLES = 8;
-
-        int32_t w = width();
-        int32_t h = height();
-        lgfx::touch_point_t tp;
-
-        fillScreen(bg);
-        setTextDatum(MC_DATUM);
-        setTextColor(color, bg);
-
-        lgfx::touch_point_t pts[2];
-        const int32_t pos[2][2] = {
-            {w / MARGIN_DIV, h / MARGIN_DIV},
-            {w - w / MARGIN_DIV, h - h / MARGIN_DIV},
+        const int N = 5;
+        const int32_t w = width(), h = height();
+        const int32_t m = 26;
+        const int32_t pos[N][2] = {
+            {m, m}, {w - m, m}, {w - m, h - m}, {m, h - m}, {w / 2, h / 2},
         };
+        lgfx::touch_point_t raw[N];
+        bool ok[N] = {false, false, false, false, false};
 
-        for (int i = 0; i < 2; i++) {
-            drawLine(pos[i][0] - 10, pos[i][1], pos[i][0] + 10, pos[i][1], color);
-            drawLine(pos[i][0], pos[i][1] - 10, pos[i][0], pos[i][1] + 10, color);
-            drawString("touch the crosshair", w / 2, h - 16, 2);
+        for (int i = 0; i < N; i++) {
+            for (int tent = 0; tent < 3 && !ok[i]; tent++) {
+                fillScreen(bg);
+                setTextDatum(MC_DATUM);
+                setTextColor(color, bg);
+                drawLine(pos[i][0] - 20, pos[i][1], pos[i][0] + 20, pos[i][1], color);
+                drawLine(pos[i][0], pos[i][1] - 20, pos[i][0], pos[i][1] + 20, color);
+                fillCircle(pos[i][0], pos[i][1], 5, color);
+                char lbl[8];
+                snprintf(lbl, sizeof(lbl), "%d/%d", i + 1, N);
+                setTextColor(0xFFFF, bg);
+                drawString(lbl, w / 2, h / 2 - 46, 4);
+                drawString("touch the crosshair", w / 2, h / 2 + 28, 2);
 
-            // espera soltar
-            do { delay(20); } while (getTouchRaw(&tp, 1));
-
-            // acumula amostras
-            int32_t sx = 0, sy = 0;
-            int valid = 0;
-            for (int s = 0; s < SAMPLES;) {
-                if (getTouchRaw(&tp, 1)) {
-                    sx += tp.x;
-                    sy += tp.y;
-                    valid++;
-                    s++;
+                lgfx::touch_point_t tp;
+                // espera soltar (max 3s — leitura fantasma nao trava)
+                uint32_t t0 = lgfx::millis();
+                while (getTouchRaw(&tp, 1) && lgfx::millis() - t0 < 3000) delay(20);
+                delay(300);
+                // espera tocar (max 12s)
+                t0 = lgfx::millis();
+                bool touched = false;
+                while (lgfx::millis() - t0 < 12000) {
+                    if (getTouchRaw(&tp, 1)) { touched = true; break; }
+                    delay(20);
                 }
-                delay(10);
+                if (!touched) continue;
+
+                int32_t sx = 0, sy = 0;
+                int got = 0;
+                t0 = lgfx::millis();
+                while (got < 10 && lgfx::millis() - t0 < 1500) {
+                    if (getTouchRaw(&tp, 1)) { sx += tp.x; sy += tp.y; got++; }
+                    delay(15);
+                }
+                if (got >= 6) {
+                    raw[i].x = sx / got;
+                    raw[i].y = sy / got;
+                    ok[i] = true;
+                    fillCircle(pos[i][0], pos[i][1], 11, 0x07E0);  // ack verde
+                    delay(350);
+                }
             }
-            pts[i].x = sx / valid;
-            pts[i].y = sy / valid;
-            delay(300);
         }
 
-        calData[0] = (uint16_t)pts[0].x;  // x_min (top-left)
-        calData[1] = (uint16_t)pts[1].x;  // x_max (bottom-right)
-        calData[2] = (uint16_t)pts[0].y;  // y_min
-        calData[3] = (uint16_t)pts[1].y;  // y_max
+        for (int i = 0; i < N; i++) {
+            ESP_LOGI("cyd.cal", "ponto %d ok=%d raw=(%d,%d)", i, ok[i] ? 1 : 0, (int)raw[i].x, (int)raw[i].y);
+        }
+
+        // Derivacao em DOIS passos:
+        //  (1) qual eixo CRU rastreia X/Y logico (TL->TR varia X, TL->BL Y);
+        //  (2) em qual LADO LOGICO esta cada extremo do frame PORTRAIT do
+        //      sensor — e o frame que a matriz afina do LGFX espera
+        //      (x_min/y_min = canto sup-esq do PORTRAIT 240x320, antes da
+        //      rotacao do painel), replicando a formula do convertRawXY.
+        int32_t dTRx = raw[1].x - raw[0].x, dTRy = raw[1].y - raw[0].y;
+        int32_t dBLx = raw[3].x - raw[0].x, dBLy = raw[3].y - raw[0].y;
+        bool xIsRawX = (dTRx >= 0 ? dTRx : -dTRx) >= (dTRy >= 0 ? dTRy : -dTRy);
+        bool yIsRawX = (dBLx >= 0 ? dBLx : -dBLx) >= (dBLy >= 0 ? dBLy : -dBLy);
+        bool valid = ok[0] && ok[1] && ok[2] && ok[3] && (xIsRawX != yIsRawX);
+        if (valid) {
+            // Agregados por lado LOGICO projetados no eixo cru que rastreia
+            // cada eixo, e EXTRAPOLACAO linear ate as bordas reais: os
+            // cruzes ficam a `m` px da borda e o LGFX mapeia x_min->0 /
+            // x_max->fim — usar o raw do cruz como borda estica o espaco e
+            // deixa as beiradas inclicaveis (painel resistivo e linear, a
+            // extrapolacao e exata).
+            auto projX = [&](int i) { return xIsRawX ? raw[i].x : raw[i].y; };
+            auto projY = [&](int i) { return yIsRawX ? raw[i].x : raw[i].y; };
+            int32_t rxL = (projX(0) + projX(3)) / 2;  // cruz na coluna x=m
+            int32_t rxR = (projX(1) + projX(2)) / 2;  // x=w-m
+            int32_t ryT = (projY(0) + projY(1)) / 2;  // y=m
+            int32_t ryB = (projY(3) + projY(2)) / 2;  // y=h-m
+            float kX = (float)(rxR - rxL) / (float)(w - 2 * m);  // raw por px logico
+            float kY = (float)(ryB - ryT) / (float)(h - 2 * m);
+            int32_t xAt[2] = {(int32_t)(rxL - kX * m), (int32_t)(rxR + kX * m)};  // raw em x=0 / x=w
+            int32_t yAt[2] = {(int32_t)(ryT - kY * m), (int32_t)(ryB + kY * m)};  // raw em y=0 / y=h
+
+            // portrait -> logico (formula do Panel_Device::convertRawXY)
+            const int32_t r = getRotation() & 3;
+            const bool vflip = ((1 << r) & 0b10010110) != 0;
+            auto rot = [&](int32_t px, int32_t py, int32_t* ox, int32_t* oy) {
+                int32_t a = px, b = py;
+                if (r) {
+                    if (r & 1) std::swap(a, b);
+                    if (r & 2) a = width() - 1 - a;
+                    if (vflip) b = height() - 1 - b;
+                }
+                *ox = a; *oy = b;
+            };
+            // para onde aponta +x e +y do PORTRAIT no espaco logico
+            int32_t ax, ay, bx, by;
+            rot(24, 160, &ax, &ay); rot(0, 160, &bx, &by);
+            int32_t dpxx = ax - bx, dpxy = ay - by;
+            rot(120, 24, &ax, &ay); rot(120, 0, &bx, &by);
+            int32_t dpyx = ax - bx, dpyy = ay - by;
+
+            // portrait x: eixo logico dominante + ordem (px pequeno = x_min)
+            if ((dpxx >= 0 ? dpxx : -dpxx) >= (dpxy >= 0 ? dpxy : -dpxy)) {
+                calData[0] = (uint16_t)(dpxx > 0 ? xAt[0] : xAt[1]);
+                calData[1] = (uint16_t)(dpxx > 0 ? xAt[1] : xAt[0]);
+            } else {
+                calData[0] = (uint16_t)(dpxy > 0 ? yAt[0] : yAt[1]);
+                calData[1] = (uint16_t)(dpxy > 0 ? yAt[1] : yAt[0]);
+            }
+            // portrait y
+            if ((dpyx >= 0 ? dpyx : -dpyx) >= (dpyy >= 0 ? dpyy : -dpyy)) {
+                calData[2] = (uint16_t)(dpyx > 0 ? xAt[0] : xAt[1]);
+                calData[3] = (uint16_t)(dpyx > 0 ? xAt[1] : xAt[0]);
+            } else {
+                calData[2] = (uint16_t)(dpyy > 0 ? yAt[0] : yAt[1]);
+                calData[3] = (uint16_t)(dpyy > 0 ? yAt[1] : yAt[0]);
+            }
+            int32_t rr = (int32_t)calData[1] - calData[0];
+            int32_t rs = (int32_t)calData[3] - calData[2];
+            ESP_LOGI("cyd.cal", "xIsRawX=%d yIsRawX=%d cal=[%d %d %d %d] ranges=%d/%d rot=%d",
+                     xIsRawX ? 1 : 0, yIsRawX ? 1 : 0, calData[0], calData[1], calData[2], calData[3],
+                     (int)rr, (int)rs, (int)getRotation());
+            valid = (rr >= 0 ? rr : -rr) > 300 && (rs >= 0 ? rs : -rs) > 300;
+        }
         calData[4] = 0;
+        if (!valid) {
+            // amostras inconsistentes: NAO salva padroes como se fossem
+            // calibracao — sinaliza falha (calData[4]=1) p/ o chamador
+            // reiniciar e tentar de novo com toques mais firmes
+            calData[4] = 1;
+            fillScreen(bg);
+            setTextDatum(MC_DATUM);
+            setTextColor(0xF800, bg);
+            drawString("calibracao falhou", w / 2, h / 2 - 12, 2);
+            drawString("toque mais firme - de novo", w / 2, h / 2 + 14, 2);
+            ESP_LOGW("cyd.cal", "derivacao invalida — recusa");
+            delay(1800);
+        }
     }
 };
 
-#endif  // CELER_BOARDS_CYD_DISPLAY_H
+#endif  // CELEROS_BOARDS_CYD_DISPLAY_H

@@ -20,6 +20,14 @@
 // duplicatas antigas sao removidas apos o update. X no canto sup. sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
+// Compatibilidade de hardware: nesta build (sem PSRAM) so rodam apps
+// BASICOS — main.js ate 20KB (o heap base do runtime + o script tem que
+// caber na RAM interna; apps com radio ligado ficam p/ hardware com PSRAM).
+var HWINFO = System.getInfo ? System.getInfo() : null;
+var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
+var PSRAM_MAX_JS = 20 * 1024;
+function needsPsram(it) { return (it.size || 0) > PSRAM_MAX_JS; }
+
 // Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo
 // legado continua valendo para firmware antigo.
 var FLAG_SD = "/local/config_install_sd.txt";
@@ -230,6 +238,7 @@ function catalogByPkg(pkg) {
 function stateInfo(it) {
     var loc = localMap[it.pkg];
     if ((it.api || 1) > API) return { code: "api", txt: "API " + it.api, col: T.warn };
+    if (NO_PSRAM && needsPsram(it)) return { code: "hw", txt: "Requer PSRAM", col: T.warn };
     if (!loc) return { code: "new", txt: "Novo", col: T.ok };
     if (cmpV(it.ver, loc.ver) === 0) {
         return { code: "inst", txt: "Instalado", col: T.textDim };
@@ -795,6 +804,9 @@ function drawDetail() {
     // botoes: primario + desinstalar (se instalado)
     if (it.appUrl && (it.api || 1) > API) {
         ctext("Requer API " + it.api + " (sistema: " + API + ")", 120, 254, 1, T.warn, T.bg);
+    } else if (it.appUrl && st.code === "hw") {
+        ctext("Incompativel: requer hardware com PSRAM", 120, 250, 1, T.warn, T.bg);
+        ctext("(a RAM interna nao basta p/ este app)", 120, 264, 1, T.textDim, T.bg);
     } else if (it.appUrl) {
         var lbl = st.code === "upd" ? "Atualizar" :
                   st.code === "inst" ? "Reinstalar" : "Instalar";
@@ -922,6 +934,12 @@ function drawProgress(name, got, total) {
 // mesmo pkg sao removidas no fim. Falha no meio nao quebra a versao ativa.
 function installApp() {
     var it = selIt;
+    if (it && stateInfo(it).code === "hw") {
+        // incompativel com esta placa: mesmo caminho das falhas de install
+        errMsg = "Incompativel com esta placa";
+        errHint = "Este app exige hardware com PSRAM (a RAM interna nao basta para o runtime dele).";
+        return "err";
+    }
     retryMode = "install";
     var fail = "";
     wasUpdate = stateInfo(it).code === "upd";

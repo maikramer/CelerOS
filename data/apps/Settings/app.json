@@ -10,5 +10,10 @@
   "system": true,
   "order": 30,
   "icon": "settings",
-  "topbar": true
+  "topbar": true,
+  "permissions": [
+    "fs",
+    "system",
+    "net"
+  ]
 }

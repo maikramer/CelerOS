@@ -1,7 +1,7 @@
 {
   "name": "App Store",
   "packageName": "celeros.appstore",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "author": "CelerOS",
   "description": "Loja de apps do CelerOS Hub: catalogo, atualizacoes com checksum, desinstalacao e self-update.",
   "type": "System",
@@ -11,5 +11,10 @@
   "system": true,
   "order": 10,
   "icon": "appstore",
-  "topbar": true
+  "topbar": true,
+  "permissions": [
+    "net",
+    "fs",
+    "system"
+  ]
 }
