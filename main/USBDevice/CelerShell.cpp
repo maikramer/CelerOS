@@ -139,14 +139,15 @@ int cmdCat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 
 int cmdRm(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
-        print(ctx, "uso: rm <arquivo>\n");
+        print(ctx, "uso: rm <arquivo|diretorio vazio>\n");
         return 1;
     }
     if (!CelerShell::pathAllowed(argv[1])) {
         print(ctx, "rm: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
-    if (!FileSystem::deleteFile(argv[1])) {
+    if (!FileSystem::deleteFile(argv[1]) &&
+        !(FileSystem::isDirectory(argv[1]) && FileSystem::rmdir(argv[1]))) {
         print(ctx, "rm: falhou em %s\n", argv[1]);
         return 1;
     }
@@ -224,10 +225,16 @@ int cmdFree(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 }
 
 int cmdPs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
-    static char table[4096];
+    // tabela so durante o comando (4KB estaticos eram RAM fixa tirada dos apps)
+    char* table = (char*)malloc(4096);
+    if (table == nullptr) {
+        print(ctx, "sem memoria\r\n");
+        return 1;
+    }
     vTaskList(table);
     print(ctx, "task            estado  prio  stack\r\n");
     print(ctx, "%s", table);
+    free(table);
     return 0;
 }
 

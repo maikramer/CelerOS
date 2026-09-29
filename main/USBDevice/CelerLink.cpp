@@ -40,21 +40,30 @@ CelerLink::BaudFn s_baudHook = nullptr;
 
 // ---------------------------------------------------------------- utilidades
 
-void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
+// Frame de resposta: frame inteiro numa unica escrita — logs concorrentes
+// (logcat) nunca intercalam bytes no meio de uma resposta. Quem produz dados
+// grandes (READ) escreve direto em txPayload() e chama sendFrame: sem um
+// segundo buffer de 4KB estatico (RAM interna e o que sobra para apps JS).
+uint8_t s_txFrame[4 + 1 + CelerLink::MAX_PAYLOAD];
+
+uint8_t* txPayload() { return s_txFrame + 5; }
+
+void sendFrame(uint8_t cmd, uint8_t status, uint16_t dataLen) {
     if (s_writer == nullptr) return;  // nenhum transporte instalado
-    // frame inteiro numa unica escrita: logs concorrentes (logcat) nunca
-    // intercalam bytes no meio de uma resposta
-    static uint8_t frame[4 + 1 + CelerLink::MAX_PAYLOAD];
     uint16_t total = (uint16_t)(1 + dataLen);
-    frame[0] = 0x43;
-    frame[1] = cmd;
-    frame[2] = (uint8_t)total;
-    frame[3] = (uint8_t)(total >> 8);
-    frame[4] = status;
-    if (data != nullptr && dataLen > 0) {
-        memcpy(frame + 5, data, dataLen);
+    s_txFrame[0] = 0x43;
+    s_txFrame[1] = cmd;
+    s_txFrame[2] = (uint8_t)total;
+    s_txFrame[3] = (uint8_t)(total >> 8);
+    s_txFrame[4] = status;
+    s_writer(s_txFrame, (size_t)(4 + total));
+}
+
+void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
+    if (data != nullptr && dataLen > 0 && data != txPayload()) {
+        memcpy(txPayload(), data, dataLen);
     }
-    s_writer(frame, (size_t)(4 + total));
+    sendFrame(cmd, status, dataLen);
 }
 
 void respondError(uint8_t cmd, const char* msg) {
@@ -284,14 +293,13 @@ void handleRead(const uint8_t* payload, uint16_t len) {
         respondError(KL_READ, "nao abriu");
         return;
     }
-    static uint8_t buf[CelerLink::MAX_PAYLOAD];
     size_t got = 0;
     if (fseek(f, (long)offset, SEEK_SET) == 0) {
-        got = fread(buf, 1, want, f);
+        got = fread(txPayload(), 1, want, f);  // direto no frame de resposta
     }
     fclose(f);
-    // respond() acrescenta o status; EOF e sinalizado por got < want
-    respond(KL_READ, 0, buf, (uint16_t)got);
+    // o frame acrescenta o status; EOF e sinalizado por got < want
+    sendFrame(KL_READ, 0, (uint16_t)got);
 }
 
 void handleWriteBegin(const uint8_t* payload, uint16_t len) {
@@ -344,7 +352,10 @@ void handleDelete(const uint8_t* payload, uint16_t len) {
         respondError(KL_DELETE, "caminho invalido");
         return;
     }
-    respond(KL_DELETE, FileSystem::deleteFile(path) ? 0 : 1, nullptr, 0);
+    // arquivo, ou diretorio VAZIO (o `apps rm` apaga o conteudo e depois a
+    // pasta: o unlink do LittleFS recusa diretorio e a pasta ficava orfa)
+    bool ok = FileSystem::deleteFile(path) || (FileSystem::isDirectory(path) && FileSystem::rmdir(path));
+    respond(KL_DELETE, ok ? 0 : 1, nullptr, 0);
 }
 
 void handleMkdir(const uint8_t* payload, uint16_t len) {
@@ -515,19 +526,18 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     const uint16_t h = (uint16_t)tft.height();
     uint16_t* row = (uint16_t*)malloc((size_t)w * 2);
     const size_t cap = (CelerLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
-    uint8_t* out = (uint8_t*)malloc(cap);
-    if (row == nullptr || out == nullptr) {
-        free(row);
-        free(out);
+    if (row == nullptr) {
         respondError(KL_SCREENSHOT, "sem memoria para captura");
         return;
     }
     uint8_t head[5] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8), (uint8_t)(rle ? 1 : 0)};
     respond(KL_SCREENSHOT, 0, head, sizeof(head));
+    // blocos montados direto no frame de resposta (sem 4KB extras de heap)
+    uint8_t* out = txPayload();
 
     size_t used = 0;
     auto flush = [&]() {
-        if (used > 0 && s_writer != nullptr) respond(KL_SCR_DATA, 0, out, (uint16_t)used);
+        if (used > 0 && s_writer != nullptr) sendFrame(KL_SCR_DATA, 0, (uint16_t)used);
         used = 0;
     };
     uint16_t runPx = 0, runLen = 0;
@@ -569,7 +579,6 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     emitRun();
     flush();
     free(row);
-    free(out);
 }
 
 // ------------------------------------------------------------- touch inject

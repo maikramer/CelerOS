@@ -61,3 +61,11 @@ CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # >= 4KB — com CONFIG_MBEDTLS_DYNAMIC_BUFFER os buffers viravam pedacos
 # menores e caiam todos no heap 8-bit (handshake OOM medido).
 # CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
+
+# IRAM livre = heap (unicore + IRAM acessivel a byte): codigo que so esta na
+# IRAM por desempenho vai para a flash. O WiFi perde throughput de pico (a
+# CYD baixa JSON e apps pequenos, nao video); a IRAM liberada vira espaco
+# para o transbordo do heap JS, o fonte do compile e o TLS.
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y

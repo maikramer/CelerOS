@@ -35,6 +35,9 @@ O flash de OTA nao depende de componente: `main/OTA/OtaManager` chama o
   `WifiClient`/`sendRawData`/eventos legados `onConnect`/`onDisconnect`).
 - **`Network/NetworkCredentialStore`**: leitura do formato legado sem
   excecoes (`strtol` validado).
+- **`Network/NetworkManager`**: o scan de fundo (roaming) so roda com mais
+  de uma rede salva — com uma so ele apenas derrubava pacotes de
+  requisicoes em curso a cada 30s.
 - **`Utility`**: sem `nlohmann/json` (`ListJsonKeys` removido).
 - **`Storage`**: so `NVS.cpp` compila (o resto esta em `extras/`).
 

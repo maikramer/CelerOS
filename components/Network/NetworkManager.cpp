@@ -508,10 +508,17 @@ void NetworkManager::backgroundTaskFunc(void* param) {
             continue;
         }
 
-        // Check if it's time for a background scan (only when connected for roaming)
-        if (self->isConnected() && self->_config.enableRoaming && 
+        // Check if it's time for a background scan (only when connected for roaming).
+        // CelerOS: so com MAIS DE UMA rede salva — com uma so nao ha para onde
+        // migrar, e o scan conectado derruba pacotes de requisicoes em curso
+        // (HTTP chunked falhando, medido) e aloca resultados a cada 30s.
+        if (self->isConnected() && self->_config.enableRoaming &&
             timeSinceLastScan >= self->_config.backgroundScanInterval) {
-            self->performBackgroundScan();
+            if (NetworkCredentialStore::instance().getKnownNetworks().size() > 1) {
+                self->performBackgroundScan();
+            } else {
+                self->_lastScanTime = now;  // reavalia no proximo intervalo
+            }
         }
 
         // If disconnected and auto-reconnect enabled, try to reconnect with backoff

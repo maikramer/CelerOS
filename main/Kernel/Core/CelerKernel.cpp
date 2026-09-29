@@ -11,6 +11,8 @@
 #include "../../Utils/I18n.h"
 #include <vector>
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
+#include <cstring>
 #include "esp_task_wdt.h"
 #include "esp_debug_helpers.h"
 
@@ -253,10 +255,27 @@ static void my_free(void *udata, void *ptr) {
     free(ptr);
 }
 
+// Motivo do ultimo fatal do Duktape: RAM RTC sobrevive ao ESP.restart (nao
+// a um power-on). O fatal reinicia sem coredump e o logcat (RAM) se perde —
+// sem isto o reinicio era mudo. Lido uma vez no boot (takeLastFatal).
+RTC_NOINIT_ATTR static uint32_t s_fatalMagic;
+RTC_NOINIT_ATTR static char s_fatalMsg[80];
+static constexpr uint32_t kFatalMagic = 0xCE1EFA7Au;
+
+const char* CelerKernel::takeLastFatal() {
+    if (s_fatalMagic != kFatalMagic) return nullptr;
+    s_fatalMagic = 0;
+    s_fatalMsg[sizeof(s_fatalMsg) - 1] = 0;
+    return s_fatalMsg;
+}
+
 // Dummy fatal error handler if duktape aborts
 static void my_fatal(void *udata, const char *msg) {
     celer_log_print("Duktape fatal error: ");
     celer_log_println(msg ? msg : "no message");
+    strncpy(s_fatalMsg, msg ? msg : "sem mensagem", sizeof(s_fatalMsg) - 1);
+    s_fatalMsg[sizeof(s_fatalMsg) - 1] = 0;
+    s_fatalMagic = kFatalMagic;
 
     // Tela estatica SEM alocacao: o fatal tipico e OOM ("alloc failed") e o
     // heap do sistema pode estar esgotado — std::string aqui era abort()
@@ -421,7 +440,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         kui::releaseCanvasBuffer();
         Icon::releaseAll();
     }
-    appLaunchFreeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    // heap que o app pode usar: DRAM + IRAM de transbordo (duk_caps)
+    appLaunchFreeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT) + heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT);
 
     const uint32_t t0 = millis();
     // Fonte PRIMEIRO: o bloco contiguo sai do heap ainda pouco fragmentado

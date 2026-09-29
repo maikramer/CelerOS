@@ -142,6 +142,13 @@ static void celerSetup() {
     // Diagnostico pos-boot: reinicio por watchdog de task (app travado) ou
     // coredump gravado na particao dedicada viram toast no launcher
     esp_reset_reason_t rr = esp_reset_reason();
+    celer_log_printf("reset: motivo %d\n", (int)rr);  // esp_reset_reason_t
+    if (const char* fatal = CelerKernel::takeLastFatal()) {
+        celer_log_printf("reiniciou por fatal do runtime JS: %s\n", fatal);
+        kui::Navigator::toast(i18n::TR("Um app ficou sem memoria e o sistema reiniciou",
+                                       "An app ran out of memory and the system restarted"),
+                              THEME_WARN, 4000);
+    }
     if (rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT) {
         kui::Navigator::toast(i18n::TR("Um app travou e o sistema reiniciou", "An app froze and the system restarted"), THEME_WARN, 4000);
     }
