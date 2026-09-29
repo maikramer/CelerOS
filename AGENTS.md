@@ -58,7 +58,8 @@ Boot order: Board::init -> UI::init -> FileSystem::init -> SerialLink -> USBDevi
 - Board selected via CMake cache `-DCELEROS_BOARD=smartdisplay|cyd` (default smartdisplay; any other value is FATAL_ERROR). smartdisplay = Guition ESP32-S3 4848S040 (16MB, PSRAM); cyd = ESP32-2432S028R (4MB).
 - Version lives in TWO places: root `CMakeLists.txt` `project(CelerOS VERSION x)` and `main/CMakeLists.txt` `CELEROS_VERSION`. Keep them in sync.
 - Dormant shared-lib code lives in `extras/esp_components/` (no `EXCLUDE_COMPONENTS` list). Subsystems can be compiled out per board via Kconfig: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (default y).
-- Built with `-fno-exceptions` and an ES5-lean Duktape (`components/duktape/celeros_duk_config.yaml`).
+- Built with `-fno-exceptions` and an ES5-lean Duktape (`components/duktape/celeros_duk_config.yaml`) whose builtins live in ROM (base heap ~8KB); JS bindings are lightfuncs. A `std::string`/`new` that cannot grow **aborts** the device: on the no-PSRAM path use malloc/realloc (see `HttpClient::setBodySink`, `CelerKernel` source loader).
+- CYD runs **unicore** with `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: the free IRAM holds the app source during compile, the TLS buffers, and Duktape overflow past a 24KB DRAM reserve. Tasks must not be pinned to core 1 (use `portNUM_PROCESSORS - 1`).
 - The littlefs partition has CSV subtype `spiffs` but is mounted as LittleFS at `/local`. The SD card is at `/sd`.
 - JS apps use a 240x320 virtual coordinate space, scaled by `UI::sx/sy`.
 - Comments, logs, and CLI output are in Portuguese (no accents). Headers use Doxygen.

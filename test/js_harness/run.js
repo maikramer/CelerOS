@@ -204,7 +204,7 @@ function makeEnv() {
         getAPILevel: function() { return 6; },
         getInfo: function() {
             return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000,
+                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 110000,
                 totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
                 chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'

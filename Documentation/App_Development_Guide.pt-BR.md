@@ -67,7 +67,7 @@ segurança.
   qualquer valor, sem restrição.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
-- **Níveis de hardware / `"net"`**: em placas sem PSRAM (ex.: a CYD clássica) o rádio WiFi é desligado durante apps **que não declaram `"net"`** — esses ~35KB são o que fazem o runtime JS caber na RAM interna. Apps com `main.js` maior que ~20KB exigem hardware com PSRAM; a loja marca "Requer PSRAM" e recusa a instalação nessas placas.
+- **Placas sem PSRAM** (ex.: a CYD clássica): apps rodam na RAM interna com o WiFi ligado, inclusive os de rede. O teto prático é um `main.js` de ~45KB (comentários e indentação são removidos antes do compile, não custam nada); a loja calcula o limite por `System.getInfo().appRAM` e marca apps maiores como "Requer PSRAM".
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado (`FS` / `Net` / `System.gpio` e as chamadas que afetam o aparelho, como `restart`/`otaStart`, são filtradas no runtime). Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
   JS](JS_API_Guide.pt-BR.md) — atualmente `6`). Verificado pelo sistema na

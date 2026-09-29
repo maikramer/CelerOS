@@ -132,12 +132,13 @@ para o SO do ESP32.
   e força o fechamento do app para impedir que o usuário fique preso no SO.
 
 #### `System.getInfo()`
-- **Retorna:** `Object` -> `{ totalRAM, freeRAM, minFreeRAM, maxAllocRAM, cpuFreqMHz, chipModel, chipCores, chipRevision, flashSize, uptimeMs }` (Integers, exceto chipModel: String)
+- **Retorna:** `Object` -> `{ totalRAM, freeRAM, minFreeRAM, maxAllocRAM, cpuFreqMHz, chipModel, chipCores, chipRevision, flashSize, uptimeMs, appRAM }` (Integers, exceto chipModel: String)
 - **Descrição:** devolve um objeto com o estado atual do hardware ESP32,
   incluindo uso de memória, velocidade de CPU e especificações. Útil para
   depurar vazamentos de memória e checar uptime.
   - `minFreeRAM`: o menor valor de RAM livre registrado desde o boot.
   - `maxAllocRAM`: o maior bloco contíguo único que se pode alocar.
+  - `appRAM`: heap livre quando o app atual foi aberto (antes de carregar o código) — quanto de RAM a placa dá a um app. `freeRAM` é medido agora, com o app já carregado. Ausente em firmware antigo.
 
 #### `System.getIPAddress()`
 - **Retorna:** String
@@ -873,9 +874,10 @@ Notas:
 - No modo fixa, toques na faixa nunca chegam ao app; no retrátil, apenas
   enquanto ela está visível (X incluído — dispara no release, com debounce).
 - Em placas com PSRAM a faixa é composta dentro do quadro (sem flicker; ao
-  esconder, a área volta atomically no próximo push). Na CYD a faixa é
-  carimbada no vidro a cada cedida; ao esconder, permanece até o app repintar
-  a região (os jogos cobrem no frame seguinte).
+  esconder, a área volta atomically no próximo push). Na CYD (desenho direto) a faixa só é
+  desenhada quando muda, e o display fica recortado abaixo dela — o app não
+  consegue pintar por cima (`System.setClip` é intersectado com essa área); ao
+  esconder, ela permanece até o app repintar a região.
 - Nada para codificar em nenhum dos modos: o mesmo main.js renderiza
   corretamente nos dois — o campo no `app.json` é o contrato inteiro.
 

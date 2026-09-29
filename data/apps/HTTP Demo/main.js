@@ -3,7 +3,7 @@
 // tela para atualizar.
 
 var T = System.theme();
-var URL = "http://economia.awesomeapi.com.br/json/last/USD-BRL";
+var URL = "https://economia.awesomeapi.com.br/json/last/USD-BRL";
 
 function ctext(s, cx, y, f, col) {
     System.setTextColor(col);

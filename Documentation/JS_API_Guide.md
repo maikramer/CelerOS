@@ -98,10 +98,11 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Hidden Exit Trigger:** If a user touches `x >= 200` and `y <= 40` (Top-Right corner), the C++ Kernel will instantly abort the JS Engine and force-close the app to prevent users from getting permanently locked out of the OS.
 
 #### `System.getInfo()`
-- **Returns:** `Object` -> `{ totalRAM: Integer, freeRAM: Integer, minFreeRAM: Integer, maxAllocRAM: Integer, cpuFreqMHz: Integer, chipModel: String, chipCores: Integer, chipRevision: Integer, flashSize: Integer, uptimeMs: Integer }`
+- **Returns:** `Object` -> `{ totalRAM: Integer, freeRAM: Integer, minFreeRAM: Integer, maxAllocRAM: Integer, cpuFreqMHz: Integer, chipModel: String, chipCores: Integer, chipRevision: Integer, flashSize: Integer, uptimeMs: Integer, appRAM: Integer }`
 - **Description:** Returns an object containing the current state of the ESP32 hardware, including memory usage, CPU speed, and hardware specifications. Useful for debugging memory leaks and checking uptime.
   - `minFreeRAM`: The lowest free RAM amount recorded since boot.
   - `maxAllocRAM`: The largest single contiguous block of RAM you can allocate.
+  - `appRAM`: Free heap when the current app was launched (before its code was loaded) — how much RAM this board gives an app. `freeRAM` is measured now, with your app already loaded. Absent on older firmware.
 
 #### `System.getIPAddress()`
 - **Returns:** String
@@ -661,9 +662,10 @@ Notes:
 - In fixed mode touches in the strip never reach the app; in retractable mode
   only while the strip is visible (X included — it fires on release, debounced).
 - On PSRAM boards the strip is composed into the frame (no flicker, and hiding
-  it restores the area atomically). On the CYD the strip is stamped on the
-  glass at each yield; when it hides, it lingers until the app repaints that
-  region (games cover it on the next frame).
+  it restores the area atomically). On the CYD (direct drawing) the strip is
+  drawn only when it changes, and the display is clipped below it so the app
+  cannot paint over it (`System.setClip` is intersected with that area); when
+  it hides, it lingers until the app repaints that region.
 - Nothing to code in either mode: the same main.js renders correctly on both —
   the field in `app.json` is the whole contract.
 

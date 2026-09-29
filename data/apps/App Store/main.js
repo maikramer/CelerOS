@@ -20,16 +20,17 @@
 // duplicatas antigas sao removidas apos o update. X no canto sup. sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
-// Compatibilidade de hardware: nesta build (sem PSRAM) so rodam apps
-// BASICOS — main.js ate 20KB (o heap base do runtime + o script tem que
-// caber na RAM interna; apps com radio ligado ficam p/ hardware com PSRAM).
+// Compatibilidade de hardware: sem PSRAM, o main.js (compilado + dados do
+// app) tem que caber na RAM interna. Teto DINAMICO pela RAM que a placa da
+// a um app (getInfo().appRAM: heap livre no inicio do app — freeRAM
+// agora mede a loja ja carregada): ~0,55 byte de fonte por byte livre acima
+// da folga do sistema (CYD: ~48KB; Settings/App Store rodam). Firmware
+// antigo sem appRAM: formula antiga (heap base de ~52KB).
 var HWINFO = System.getInfo ? System.getInfo() : null;
 var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
-// Limiar DINAMICO pela RAM livre do aparelho: heap base do runtime (~52KB)
-// + script em compilacao (~1.7x) tem que caber. Placa com folga sobe o teto.
-var PSRAM_MAX_JS = NO_PSRAM
-    ? Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7))
-    : Infinity;
+var PSRAM_MAX_JS = !NO_PSRAM ? Infinity
+    : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 28000) * 0.55))
+    : Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7));
 function needsPsram(it) { return (it.size || 0) > PSRAM_MAX_JS; }
 
 // Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo
@@ -376,15 +377,18 @@ function loadCatalog() {
         return "err";
     }
 
-    // atalho "Todos" (all.json): todos os apps em 1 request; sem ele,
-    // categoria a categoria (hubs antigos)
+    // atalho "Todos" (all.json): todos os apps em 1 request; sem ele (hubs
+    // antigos) ou se ele nao couber na RAM (placa sem PSRAM: o JSON inteiro
+    // + o parse de uma vez), categoria a categoria — pedacos menores
     var entries = [];
     var catsIdx = idx.categories;
+    var gotAll = false;
     if (catsIdx["Todos"]) {
         drawLoading("Baixando catalogo...", "todos os apps");
         System.delay(30);
         var all = fetchJSON(catsIdx["Todos"]);
         if (all && all.apps) {
+            gotAll = true;
             for (var pkg in all.apps) {
                 if (!all.apps.hasOwnProperty(pkg)) continue;
                 if (all.apps[pkg] && all.apps[pkg].app) {
@@ -392,10 +396,12 @@ function loadCatalog() {
                 }
             }
         }
-    } else {
+        all = null;
+    }
+    if (!gotAll) {
         var catTotal = 0, catOk = 0;
         for (var cname in catsIdx) {
-            if (!catsIdx.hasOwnProperty(cname)) continue;
+            if (!catsIdx.hasOwnProperty(cname) || cname === "Todos") continue;
             catTotal++;
             drawLoading("Categoria: " + cname, "");
             System.delay(30);

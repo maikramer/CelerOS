@@ -51,7 +51,7 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 ## ANTI-PATTERNS
 - Hand-editing `Assets/SplashLogo.h`: regenerate it with `tools/make_splash.py`.
 - Blocking WiFi or network calls in the UI tick. WebManager is async by design, and `scanNetworks`/`connect` block for seconds.
-- Hot-path heap churn on the no-PSRAM board (CYD/ESP32): the frame sprite exists only when `Board::profile().hasPsram` is set.
+- Hot-path heap churn on the no-PSRAM board (CYD/ESP32): the frame sprite exists only when `Board::profile().hasPsram` is set. There the Kui canvas renders in two ping-pong bands (async DMA: never draw into a band still being pushed); screens skip off-band work with `Canvas::visible()`. The band buffer and icon caches are released while a JS app runs (`CelerKernel::runFile`).
 - The `DEBUG:` heap prints in `celerSetup` are always on. They are known noise; don't copy the pattern.
 
 ## HOTSPOTS

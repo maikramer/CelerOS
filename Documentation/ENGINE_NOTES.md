@@ -58,7 +58,33 @@ infraestrutura (i18n do firmware + `System.toast`) já cobre o caso nativo.
 - Background/services: adiado deliberadamente — depende da `CELEROS_APP_TASK`
   amadurecer em campo; `System.toast` é a fundação de UI para notificações.
 
-## CYD classica: heap para apps JS (limitacao de hardware, 2026-09)
+## CYD sem PSRAM: estado atual (2026-09, rodada 3)
+
+Substitui as duas secoes historicas abaixo. Todos os apps de sistema rodam
+na CYD classica, inclusive os com rede (Settings, App Store), com o radio
+WiFi LIGADO. O que mudou, medido no device:
+
+| alavanca | onde | ganho |
+|---|---|---|
+| builtins do Duktape em ROM (`DUK_USE_ROM_OBJECTS/STRINGS`, global herdado) + nomes da API forcados na ROM (`tools/duk_rom_strings.py`) | `components/duktape` | heap base ~50KB -> 7,6KB (base + API inteira) |
+| bindings como lightfunc (`putFns`) | `JSBindings.cpp` | ~130 objetos funcao a menos por app |
+| fonte enxuto em streaming (`Utils/JsStrip.h`: sem comentarios/indentacao, linhas preservadas; AST identico, testado no host) em bloco exato, lido ANTES do heap JS | `CelerKernel::runFile` | App Store 44KB -> 31KB contiguos; sem abort de `std::string` |
+| unicore + `ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: fonte do compile e buffers TLS (>=4KB) na IRAM livre | `boards/cyd` | ~30KB fora do pico do compile; ~20KB de TLS fora do heap 8-bit |
+| buffer do Canvas e cache de icones devolvidos ao abrir app | `runFile` | +16KB +~46KB |
+| WiFi RX 10->4 estaticos, sem AMPDU; stacks sys_evt/esp_timer pelo uso | `boards/cyd` | ~15KB |
+
+Numeros (CYD): heap 8-bit livre no inicio de um app ~100KB; App Store
+compilado ocupa ~62KB (fica ~40KB para o app + TLS). O orcamento do create
+(`dukHeapNeed`) e: folga 20KB + base 8KB + 0,75x o fonte enxuto (temporarios
+do compile). `System.getInfo().appRAM` expoe o heap livre no inicio do app;
+a loja usa `(appRAM - 28000) * 0,55` como teto de main.js sem PSRAM.
+
+Nao existe mais "radio desligado durante o app" (rendia ~3KB e quebrava apps
+que usam `Net` sem declarar). Limite pratico: main.js de ~45KB sem PSRAM.
+O proximo degrau, se preciso: `DUK_USE_PC2LINE` off so na CYD (-9% no
+residente, perde numero de linha nos erros).
+
+## CYD classica: heap para apps JS (historico, 2026-09)
 
 A CYD classica (sem PSRAM) tem ~70KB de RAM interna livre no boot; com o
 canvas do Kui em bandas (16KB) e o WiFi, sobram ~51KB. O heap base do
@@ -79,7 +105,7 @@ Caminhos futuros (em ordem de custo/beneficio):
 3. Heap Duktape em buffer estatico unico (sem fragmentar o heap do sistema).
 A SmartDisplay (8MB PSRAM) nao e afetada.
 
-## Niveis de hardware (2026-09, rodada 2)
+## Niveis de hardware (historico, 2026-09, rodada 2 — substituido pela rodada 3)
 
 Apps JS agora rodam na CYD (sem PSRAM) por nivel:
 - **Nivel 1 (basico)**: ate ~20KB de main.js e sem a capability "net" — o
