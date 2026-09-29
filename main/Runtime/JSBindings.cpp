@@ -752,7 +752,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // --- Keyboard ---
     static const JsFn kFns13[] = {
-        {"prompt", js_prompt, 2},
+        {"prompt", js_prompt, 3},  // (msg, initial, {mask}) — opts e API level 7
     };
     putFns(ctx, kFns13);
 

@@ -10,11 +10,18 @@ namespace kui {
 // ---- keysets ---------------------------------------------------------------
 // Letras em minusculo (Upper aplica toupper ao desenhar/digitar). Simbolos
 // cobrem todo o ASCII imprimivel entre as duas paginas (chars comuns de
-// senha se repetem entre paginas de proposito).
+// senha se repetem entre paginas de proposito). A pagina de acentos cobre
+// os diacriticos PT-BR uteis (literais em UTF-8; o glifo vive na DejaVu).
 
 static const char* LET_ROWS[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
 static const char* SY1_ROWS[3] = {"1234567890", "@#$%&-+()/", "*\"':;!?"};
 static const char* SY2_ROWS[3] = {"~`|\\_<>[]{", "}=^*\"'-+/", "*\"'=+!?"};
+// Pagina de acentos: literais UTF-8 estaticos (a tecla aponta p/ a flash)
+static const char* AC_ROWS[3][5] = {
+    {"á", "à", "â", "ã", nullptr},
+    {"é", "ê", "í", "ó", "ô"},
+    {"õ", "ú", "ü", "ç", nullptr},
+};
 
 // ---- glifos desenhados (fontes nativas nao tem setas) ----------------------
 // Setinha de shift (contorno, cheia quando ativo) e backspace classico
@@ -77,7 +84,52 @@ Rect KeyboardScreen::fieldRect() const {
 
 Rect KeyboardScreen::cancelRect() const {
     int m = UI::sx(4);
-    return {UI::W - m - UI::sx(34), UI::sy(2), UI::sx(34), UI::sy(20)};
+    int h = UI::sy(20);
+    if (h < 20) h = 20;  // piso fisico: alvo de toque (CYD landscape sy(20)=15)
+    return {UI::W - m - UI::sx(34), UI::sy(2), UI::sx(34), h};
+}
+
+Rect KeyboardScreen::eyeRect() const {
+    // botao ver/ocu do mask, a esquerda do X na mesma faixa do cabecalho
+    Rect xr = cancelRect();
+    return {xr.x - UI::sx(4) - UI::sx(30), xr.y, UI::sx(30), xr.h};
+}
+
+const char* KeyboardScreen::modeLabel() const {
+    if (isLetters(m_mode)) return "?123";
+    return (m_mode == Accents) ? "ABC" : "àç";
+}
+
+// Hit-test com snap: a tecla mais proxima vence se o toque cair a ate ~1
+// unidade/4 fora dela (perdoa gap de 2px e beirada do bloco — zona morta
+// nao existe); alem disso (ex.: eco do Terminal acima do teclado) = nada.
+int KeyboardScreen::keyAt(int x, int y) const {
+    const int snap = m_keyW / 4 + UI::sx(3);
+    int best = -1;
+    int bestD = snap + 1;
+    for (int i = 0; i < (int)m_keys.size(); i++) {
+        const Rect& r = m_keys[i].r;
+        int dx = (x < r.x) ? r.x - x : (x >= r.x + r.w) ? x - (r.x + r.w) + 1 : 0;
+        int dy = (y < r.y) ? r.y - y : (y >= r.y + r.h) ? y - (r.y + r.h) + 1 : 0;
+        int d = dx > dy ? dx : dy;
+        if (d < bestD) {
+            bestD = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+// Apaga 1 codepoint: remove a sequencia UTF-8 inteira (acento = 2 bytes)
+void KeyboardScreen::backspace() {
+    if (m_text.empty()) return;
+    m_text.pop_back();
+    while (!m_text.empty()) {
+        unsigned char b = (unsigned char)m_text.back();
+        if (b >= 0x80 && b < 0xC0) m_text.pop_back();  // byte de continuacao
+        else break;
+    }
+    if (onChange) onChange();
 }
 
 void KeyboardScreen::rebuild() {
@@ -87,6 +139,7 @@ void KeyboardScreen::rebuild() {
     // unidade = largura de uma tecla da linha de cima (10 keys)
     const int u = (UI::W - 2 * UI::sx(4) - 9 * g) / 10;
     if (u < 4) return;  // display impossivel: sem keys, so field
+    m_keyW = u;
 
     const int rowGap = UI::sy(2);
     // Tecla com proporcao fixa (~1.25x a largura), bloco ancorado no rodape:
@@ -96,6 +149,19 @@ void KeyboardScreen::rebuild() {
     int keyH = u + u / 4;
     int top = bottom - (4 * keyH + 3 * rowGap);
     const int minTop = m_showField ? fieldRect().y + fieldRect().h + UI::sy(5) : UI::sy(2);
+    // Tela baixa com campo (CYD landscape): estica as teclas ate encostar no
+    // campo em vez de deixar uma faixa morta no meio da tela — com teto de
+    // 5/3 da largura para nao reincidir no "teclado comendo a tela". Sem
+    // campo (Terminal acoplado) nada muda: o app precisa do espaco de eco.
+    if (m_showField && top > minTop) {
+        int fillH = (bottom - minTop - 3 * rowGap) / 4;
+        const int cap = u * 5 / 3;
+        if (fillH > cap) fillH = cap;
+        if (fillH > keyH) {
+            keyH = fillH;
+            top = bottom - (4 * keyH + 3 * rowGap);
+        }
+    }
     if (top < minTop) {  // pouco espaco: encolhe as teclas para caber
         top = minTop;
         keyH = (bottom - top - 3 * rowGap) / 4;
@@ -103,8 +169,10 @@ void KeyboardScreen::rebuild() {
     }
     m_keysTop = top;
 
-    const bool letters = isLetters(m_mode);
-    const char* const* rows = (m_mode == Sym1) ? SY1_ROWS : (m_mode == Sym2) ? SY2_ROWS : LET_ROWS;
+    // Rotulo por tamanho fisico da tecla: DejaVu24 quando a tecla e larga o
+    // bastante (CYD landscape ~29px; o 480x480 ja entra nisso via UI::big)
+    m_labelFont = (!UI::big && u >= 26) ? 4 : UI::font(2);
+    m_legendFont = (m_labelFont >= 4) ? 2 : 1;
 
     auto addRow = [&](int row, const float* wu, int n, const Kind* kinds, const char* chars) {
         float units = 0;
@@ -114,10 +182,49 @@ void KeyboardScreen::rebuild() {
         int y = top + row * (keyH + rowGap);
         for (int i = 0; i < n; i++) {
             int w = (int)(wu[i] * u);
-            m_keys.push_back({{x, y, w, keyH}, kinds[i], chars ? chars[i] : '\0'});
+            m_keys.push_back({{x, y, w, keyH}, kinds[i], chars ? chars[i] : '\0', nullptr});
             x += w + g;
         }
     };
+
+    if (m_mode == Accents) {
+        // Pagina de acentos: teclas 2u (alvos generosos para o resistivo),
+        // agrupadas por vogal; rotulo e saida vem dos literais estaticos
+        auto addSymRow = [&](int row, const char* const* syms, int n) {
+            const int w = 2 * u;
+            int total = n * w + (n - 1) * g;
+            int x = (UI::W - total) / 2;
+            int y = top + row * (keyH + rowGap);
+            for (int i = 0; i < n; i++) {
+                m_keys.push_back({{x, y, w, keyH}, KChar, 0, syms[i]});
+                x += w + g;
+            }
+        };
+        addSymRow(0, AC_ROWS[0], 4);
+        addSymRow(1, AC_ROWS[1], 5);
+        // linha 2: acentos + backspace alinhado a direita como nas outras
+        const int bw = (int)(1.5f * u);
+        const int bkspX = UI::W - UI::sx(4) - bw;
+        const int avail = bkspX - g - UI::sx(4);
+        const int total = 4 * (2 * u) + 3 * g;
+        int x = UI::sx(4) + (avail - total) / 2;
+        if (x < UI::sx(4)) x = UI::sx(4);
+        int y2 = top + 2 * (keyH + rowGap);
+        for (int i = 0; i < 4; i++) {
+            m_keys.push_back({{x, y2, 2 * u, keyH}, KChar, 0, AC_ROWS[2][i]});
+            x += 2 * u + g;
+        }
+        m_keys.push_back({{bkspX, y2, bw, keyH}, KBksp, 0, nullptr});
+        // linha 3 padrao
+        float w3[5] = {1.5f, 1, 4, 1, 1.5f};
+        Kind k3[5] = {KMode, KChar, KSpace, KChar, KOk};
+        char c3[5] = {0, ',', 0, '.', 0};
+        addRow(3, w3, 5, k3, c3);
+        return;
+    }
+
+    const bool letters = isLetters(m_mode);
+    const char* const* rows = (m_mode == Sym1) ? SY1_ROWS : (m_mode == Sym2) ? SY2_ROWS : LET_ROWS;
 
     // linhas 0/1: so caracteres, centradas (9 keys na do meio = escalonado)
     float one10[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
@@ -148,27 +255,53 @@ char KeyboardScreen::labelChar(char ch) const {
 void KeyboardScreen::draw(Canvas& c) {
     Rect f = fieldRect();
     if (m_showField) {
-        // cabecalho: prompt (esquerda, cortado se nao couber) + X cancelar
+        // cabecalho: prompt (esquerda, cortado se nao couber) + ver/ocu (mask)
+        // + X cancelar
         Rect xr = cancelRect();
         c.fillRoundRect(xr, UI::sx(6), THEME_CARD);
         c.drawRoundRect(xr, UI::sx(6), THEME_STROKE);
         c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
 
+        int promptMaxX = xr.x;
+        if (m_mask) {
+            Rect er = eyeRect();
+            promptMaxX = er.x;
+            c.fillRoundRect(er, UI::sx(6), m_showPlain ? THEME_ACCENT : THEME_CARD);
+            c.drawRoundRect(er, UI::sx(6), THEME_STROKE);
+            c.text(m_showPlain ? "ocu" : "ver", er.x + er.w / 2, er.y + er.h / 2, UI::font(1),
+                   m_showPlain ? THEME_ON_ACCENT : THEME_TEXT_DIM, MC_DATUM);
+        }
+
         if (!m_prompt.empty()) {
             std::string p = m_prompt;
-            int avail = xr.x - UI::sx(8);
+            int avail = promptMaxX - UI::sx(8);
             while (!p.empty() && c.textWidth(p.c_str(), UI::font(1)) > avail) p.pop_back();
             c.text(p, UI::sx(4), f.y / 2, UI::font(1), THEME_TEXT_DIM, ML_DATUM);
         }
 
-        // campo de texto com cursor piscando; texto longo mostra o final
+        // campo de texto com cursor piscando; texto longo mostra o final.
+        // Com mask, o campo mostra um bullet por codepoint (ver/ocu revela).
         c.fillRoundRect(f, UI::sx(6), THEME_CARD);
         c.drawRoundRect(f, UI::sx(6), THEME_STROKE);
         const int pad = UI::sx(8);
         const int avail = f.w - 2 * pad - UI::sx(4);
-        std::string shown = m_text;
+        std::string shown;
+        if (m_mask && !m_showPlain) {
+            size_t glyphs = 0;
+            for (unsigned char ch : m_text) {
+                if ((ch & 0xC0) != 0x80) glyphs++;
+            }
+            shown.reserve(glyphs * 3);
+            for (size_t i = 0; i < glyphs; i++) shown += "\xE2\x80\xA2";  // U+2022
+        } else {
+            shown = m_text;
+        }
         while (!shown.empty() && c.textWidth(shown.c_str(), UI::font(2)) > avail) {
+            // UTF-8: descarta bytes de continuacao junto com o glifo
             shown.erase(shown.begin());
+            while (!shown.empty() && ((unsigned char)shown.front() & 0xC0) == 0x80) {
+                shown.erase(shown.begin());
+            }
         }
         int ty = f.y + f.h / 2;
         if (!shown.empty()) {
@@ -191,29 +324,37 @@ void KeyboardScreen::draw(Canvas& c) {
         switch (k.kind) {
             case KOk:
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_ACCENT);
-                c.text("OK", r.x + r.w / 2, r.y + r.h / 2, UI::font(2), flash ? THEME_TEXT : THEME_ON_ACCENT, MC_DATUM);
+                c.text("OK", r.x + r.w / 2, r.y + r.h / 2, m_labelFont, flash ? THEME_TEXT : THEME_ON_ACCENT,
+                       MC_DATUM);
                 break;
             case KChar: {
                 char s[2] = {labelChar(k.ch), 0};
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
-                c.text(s, r.x + r.w / 2, r.y + r.h / 2, UI::font(2), THEME_TEXT, MC_DATUM);
+                c.text(k.sym ? k.sym : s, r.x + r.w / 2, r.y + r.h / 2, m_labelFont, THEME_TEXT, MC_DATUM);
                 break;
             }
             case KSpace:
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
-                c.text("space", r.x + r.w / 2, r.y + r.h / 2, UI::font(1), THEME_TEXT_DIM, MC_DATUM);
+                c.text("space", r.x + r.w / 2, r.y + r.h / 2, m_legendFont, THEME_TEXT_DIM, MC_DATUM);
                 break;
             case KShift:
                 c.fillRoundRect(r, UI::sx(3), (m_mode == Upper || flash) ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
                 drawShiftGlyph(c, r, m_mode == Upper ? THEME_TEXT : THEME_TEXT_DIM, m_mode == Upper);
+                if (m_capsLock && m_mode == Upper) {  // travado: pino sob a seta
+                    const int s = r.w < r.h ? r.w : r.h;
+                    const int bw = s * 2 / 5;
+                    int bh = s / 12;
+                    if (bh < 2) bh = 2;
+                    c.fillRect({r.x + r.w / 2 - bw / 2, r.y + r.h - bh - r.h / 8, bw, bh}, THEME_ACCENT);
+                }
                 break;
             case KSymPage:
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
-                c.text(m_mode == Sym2 ? "?123" : "*+=", r.x + r.w / 2, r.y + r.h / 2, UI::font(1),
+                c.text(m_mode == Sym2 ? "?123" : "*+=", r.x + r.w / 2, r.y + r.h / 2, m_legendFont,
                        THEME_TEXT, MC_DATUM);
                 break;
             case KBksp:
@@ -224,26 +365,59 @@ void KeyboardScreen::draw(Canvas& c) {
             case KMode:
                 c.fillRoundRect(r, UI::sx(3), flash ? THEME_ACCENT_D : THEME_CARD);
                 c.drawRoundRect(r, UI::sx(3), THEME_STROKE);
-                c.text(isLetters(m_mode) ? "?123" : "ABC", r.x + r.w / 2, r.y + r.h / 2, UI::font(1),
-                       THEME_TEXT, MC_DATUM);
+                c.text(modeLabel(), r.x + r.w / 2, r.y + r.h / 2, m_legendFont, THEME_TEXT, MC_DATUM);
                 break;
         }
     }
 }
 
 bool KeyboardScreen::onTouch(const TouchEvent& ev) {
-    if (m_done || !ev.isTap()) return false;
-    if (cancelRect().contains(ev.x, ev.y)) {
-        finish(false);
-        return true;
+    if (m_done) return false;
+
+    // press no backspace arma o auto-repeat (onTick dispara segurando)
+    if (ev.type == TouchEvent::Press) {
+        int idx = keyAt(ev.startX, ev.startY);
+        if (idx >= 0 && m_keys[idx].kind == KBksp) {
+            uint32_t now = millis();
+            m_repeatArmMs = now ? now : 1;
+            m_nextRepeatMs = m_repeatArmMs + 450;
+        }
+        return idx >= 0;
     }
-    for (int i = 0; i < (int)m_keys.size(); i++) {
-        if (m_keys[i].r.contains(ev.x, ev.y)) {
-            handleKey(i);
+    if (ev.type != TouchEvent::Release) return false;  // arrasto: nada
+
+    // Tap local SEM teto de tempo: no resistivo e normal segurar firme um
+    // pouco mais (o isTap global corta em 800ms e o toque "sumia"). So nao
+    // pode ter deslocado alem da tolerancia.
+    if (abs(ev.dx()) >= TouchEvent::slopX() || abs(ev.dy()) >= TouchEvent::slopY()) return false;
+
+    // Hit-test na posicao do POUSO: entre o press e o release o dedo deriva
+    // (a tolerancia de tap e ~2 teclas na CYD) — mira onde o usuario pousou,
+    // nao onde o dedo escorregou ao soltar.
+    const int hx = ev.startX, hy = ev.startY;
+    if (m_showField) {
+        if (cancelRect().contains(hx, hy)) {
+            finish(false);
+            return true;
+        }
+        if (m_mask && eyeRect().contains(hx, hy)) {
+            m_showPlain = !m_showPlain;
+            markDirty();
             return true;
         }
     }
-    return false;
+    int idx = keyAt(hx, hy);
+    if (idx < 0) return false;
+    if (m_keys[idx].kind == KBksp) {
+        // repeat ja apagou durante o hold: o release nao apaga de novo
+        if (m_repeatArmMs && millis() - m_repeatArmMs >= 450) {
+            m_repeatArmMs = 0;
+            return true;
+        }
+        m_repeatArmMs = 0;  // soltou rapido: repeat nao chega a rodar
+    }
+    handleKey(idx);
+    return true;
 }
 
 void KeyboardScreen::handleKey(int idx) {
@@ -255,8 +429,9 @@ void KeyboardScreen::handleKey(int idx) {
     switch (k.kind) {
         case KChar:
             if ((int)m_text.size() < m_maxLen) {
-                m_text += labelChar(k.ch);
-                if (m_mode == Upper) {  // shift one-shot
+                if (k.sym) m_text += k.sym;  // acento: literal UTF-8
+                else m_text += labelChar(k.ch);
+                if (m_mode == Upper && !m_capsLock) {  // shift one-shot
                     m_mode = Lower;
                     rebuild();
                 }
@@ -270,21 +445,31 @@ void KeyboardScreen::handleKey(int idx) {
             }
             break;
         case KBksp:
-            if (!m_text.empty()) {
-                m_text.pop_back();
-                if (onChange) onChange();
-            }
+            backspace();
             break;
-        case KShift:
-            m_mode = (m_mode == Upper) ? Lower : Upper;
+        case KShift: {
+            // toque simples alterna; toque duplo (<=400ms) trava o caps lock
+            uint32_t now = millis();
+            bool dbl = (m_mode == Upper && !m_capsLock && now - m_lastShiftMs < 400);
+            m_lastShiftMs = now;
+            if (dbl) {
+                m_capsLock = true;
+            } else {
+                m_capsLock = false;
+                m_mode = (m_mode == Upper) ? Lower : Upper;
+            }
             rebuild();
             break;
+        }
         case KSymPage:
             m_mode = (m_mode == Sym2) ? Sym1 : Sym2;
             rebuild();
             break;
         case KMode:
-            m_mode = isLetters(m_mode) ? Sym1 : Lower;
+            // ciclo de paginas: ABC -> ?123 -> acentos -> ABC
+            if (isLetters(m_mode)) m_mode = Sym1;
+            else if (m_mode == Accents) m_mode = Lower;
+            else m_mode = Accents;
             rebuild();
             break;
         case KOk:
@@ -293,7 +478,7 @@ void KeyboardScreen::handleKey(int idx) {
                 // teclado segue aberto para o proximo comando/linha
                 if (onEnter) onEnter(m_text);
                 m_text.clear();
-                if (m_mode == Upper) {  // shift nao "gruda" p/ a proxima linha
+                if (m_mode == Upper && !m_capsLock) {  // shift nao "gruda"
                     m_mode = Lower;
                     rebuild();
                 }
@@ -322,12 +507,36 @@ void KeyboardScreen::onTick(uint32_t dtMs) {
         m_flashKey = -1;
         markDirty();
     }
+
+    // Auto-repeat do backspace: dedo ainda seguro na tecla. Tolerancia de
+    // deriva propria (segurar firme no resistivo sempre escorrega um pouco;
+    // o isPressed global corta no primeiro arrasto). Todo TouchPump —
+    // Navigator, getString e keypad JS — alimenta o touchState global.
+    if (m_repeatArmMs) {
+        const TouchState& t = touchState();
+        int idx = keyAt(t.startX, t.startY);
+        bool held = t.down && idx >= 0 && m_keys[idx].kind == KBksp &&
+                    abs(t.x - t.startX) < UI::sx(12) && abs(t.y - t.startY) < UI::sy(12);
+        if (!held) {
+            m_repeatArmMs = 0;
+        } else {
+            uint32_t now = millis();
+            if ((int32_t)(now - m_nextRepeatMs) >= 0) {
+                backspace();
+                m_nextRepeatMs = now + 130;
+                m_flashKey = idx;  // tecla segue "afundada" durante o repeat
+                m_flashMs = now;
+                markDirty();
+            }
+        }
+    }
 }
 
 // ============================================================ getString =====
 
-std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen) {
+std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen, bool mask) {
     KeyboardScreen kb(promptMsg, initialText, maxLen);
+    kb.setMask(mask);
 
     std::string result;
     bool done = false;

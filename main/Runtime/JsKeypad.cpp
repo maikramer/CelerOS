@@ -27,12 +27,21 @@
 duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     const char *promptMsg = "";
     if (duk_is_string(ctx, 0)) promptMsg = duk_require_string(ctx, 0);
-    
+
     const char *initialText = "";
     if (duk_is_string(ctx, 1)) initialText = duk_require_string(ctx, 1);
 
+    // API level 7: 3o argumento opcional {mask} — senha/PIN em bullets
+    bool mask = false;
+    if (duk_is_object(ctx, 2)) {
+        if (duk_get_prop_string(ctx, 2, "mask") && duk_is_boolean(ctx, -1)) {
+            mask = duk_get_boolean(ctx, -1) != 0;
+        }
+        duk_pop(ctx);
+    }
+
     present();
-    std::string result = kui::getString(initialText, promptMsg);
+    std::string result = kui::getString(initialText, promptMsg, 64, mask);
     // o teclado desenhou direto no display: o proximo present repoe o app
     s_frameDirty = true;
 
@@ -81,6 +90,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     std::string title, initial;
     int maxLen = 64;
     bool field = true;
+    bool mask = false;
     if (duk_is_object(ctx, 0)) {
         if (duk_get_prop_string(ctx, 0, "title") && duk_is_string(ctx, -1)) title = duk_get_string(ctx, -1);
         duk_pop(ctx);
@@ -90,6 +100,8 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
         duk_pop(ctx);
         if (duk_get_prop_string(ctx, 0, "field") && duk_is_boolean(ctx, -1)) field = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
+        if (duk_get_prop_string(ctx, 0, "mask") && duk_is_boolean(ctx, -1)) mask = duk_get_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
     }
     if (maxLen < 1) maxLen = 1;
 
@@ -97,6 +109,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     s_kb = new kui::KeyboardScreen(title, initial, maxLen);
     s_kb->setPersistent(true);
     s_kb->setShowField(field);
+    s_kb->setMask(mask);
     s_kb->onChange = [] { s_kbEvent = KB_EV_CHANGE; };
     s_kb->onEnter = [](const std::string& t) {
         s_kbEnterText = t;

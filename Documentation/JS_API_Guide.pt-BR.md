@@ -182,14 +182,17 @@ para o SO do ESP32.
 - **Retorna:** `String` (ex.: `"UTC-8"`)
 - **Descrição:** devolve o offset/fuso horário configurado pelo usuário.
 
-#### `System.prompt(promptMsg, initialText)`
+#### `System.prompt(promptMsg, initialText, options)`
 - **Parâmetros:**
   - `promptMsg` (String) - Cabeçalho exibido acima do teclado.
   - `initialText` (String) - Texto pré-preenchido na caixa de entrada.
+  - `options` (Object, opcional, API level 7) - `{mask: true}` oculta o texto
+    digitado atrás de bullets, com botão ver/ocultar ao lado do X (senhas, PINs).
 - **Retorna:** `String`
 - **Descrição:** suspende completamente a execução do JavaScript e abre o
-  teclado QWERTY nativo em C++ em tela cheia (com shift e duas páginas de
-  símbolos). Quando o usuário toca em "OK", a execução retoma e a string
+  teclado QWERTY nativo em C++ em tela cheia (com shift — toque duplo trava o
+  caps lock —, duas páginas de símbolos e uma página de acentos PT-BR).
+  Quando o usuário toca em "OK", a execução retoma e a string
   digitada é devolvida. Devolve string vazia `""` se o usuário tocar em "X"
   (cancelar).
 
@@ -776,13 +779,15 @@ um bloco compacto ancorado no rodapé da tela; tudo acima de
 ### 13.1 API de Sessão
 
 #### `System.keypadOpen(options)` → Boolean
-- **Parâmetros:** `options` (Object, opcional): `{title, initial, maxLen, field}`.
+- **Parâmetros:** `options` (Object, opcional): `{title, initial, maxLen, field, mask}`.
   - `title` (String) — rótulo do cabeçalho (exibido só com campo).
   - `initial` (String) — texto pré-preenchido.
   - `maxLen` (Number, padrão 64, máx 256) — limite do buffer.
   - `field` (Boolean, padrão true) — desenha o campo de input nativo + botão
     X em cima. `field: false` desenha o teclado puro acoplado no rodapé (o
     app ecoa a linha por conta própria).
+  - `mask` (Boolean, padrão false, API level 7) — oculta o texto do campo
+    atrás de bullets, com botão ver/ocultar ao lado do X.
 - **Retorna:** `false` se já há uma sessão aberta (uma por vez) ou não há
   display.
 - **Descrição:** abre a sessão de teclado e a desenha imediatamente. Enter

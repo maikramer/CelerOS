@@ -527,6 +527,7 @@ void WifiSetupScreen::updateStatus() {
 
 void WifiSetupScreen::askPassword(const std::string& ssid) {
     KeyboardScreen* kb = new KeyboardScreen("Senha: " + ssid, "", 64);
+    kb->setMask(true);  // campo em bullets com botao ver/ocu no cabecalho
     m_kbTrash = m_kb;  // teclado anterior sai fora da cadeia de chamadas dele
     m_kb = kb;
     kb->onResult = [this, ssid](const std::string& text, bool ok) {

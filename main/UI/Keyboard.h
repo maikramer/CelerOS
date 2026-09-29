@@ -5,11 +5,16 @@
 // Keyboard — teclado QWERTY on-screen do CelerOS.
 //
 // Layout padrao de teclado virtual (Android/iOS): linhas escalonadas, shift
-// one-shot, duas paginas de simbolos, espaco/backspace/OK na linha de baixo
-// e X (cancelar) no cabecalho. A geometria e calculada por tela (240x320 de
-// design via UI::sx/sy no cabecalho; teclas ~1.25x mais altas que largas,
-// bloco ancorado no rodape — nunca "preenche o resto da tela") e a MESMA
-// lista de Rects desenha e faz hit-test.
+// one-shot (toque duplo = caps lock), paginas de simbolos + acentos PT-BR,
+// espaco/backspace/OK na linha de baixo e X (cancelar) no cabecalho. A
+// geometria e calculada por tela (240x320 de design via UI::sx/sy; no modo
+// com campo as teclas crescem ate 5/3 da largura para aproveitar telas baixas
+// como a CYD landscape) e a MESMA lista de Rects desenha e faz hit-test.
+//
+// Otimizacoes p/ touch resistivo pequeno (CYD): tecla dispara no release na
+// posicao do POUSO (o dedo deriva ao soltar), snap para a tecla mais proxima
+// (gaps/beiradas nao sao zona morta), tap sem teto de tempo (pressionar firme
+// digita) e backspace com auto-repeat ao segurar.
 //
 // Duas formas de usar:
 //   1. Modal sincrono: kui::getString() — bloqueia com loop proprio (Canvas
@@ -46,6 +51,10 @@ public:
     // nem X — as teclas comecam no topo e o cancelamento e por keypadClose().
     void setShowField(bool s) { m_showField = s; }
 
+    // Texto oculto (senha/PIN): campo em bullets com botao ver/ocu ao lado do
+    // X. O botao so existe quando o mask esta ligado.
+    void setMask(bool m) { m_mask = m; }
+
     // Topo da area das teclas (fisico): quem acopla o teclado nao desenha
     // abaixo desta linha (System.keypadRect devolve o mesmo espaco em 240x320)
     int keysTop() const { return m_keysTop; }
@@ -58,12 +67,13 @@ public:
     bool allowsBackGesture() const override { return false; }
 
 private:
-    enum Mode { Lower, Upper, Sym1, Sym2 };
+    enum Mode { Lower, Upper, Sym1, Sym2, Accents };
     enum Kind { KChar, KShift, KSymPage, KBksp, KMode, KSpace, KOk };
     struct Key {
         Rect r;
         Kind kind;
-        char ch;  // só KChar
+        char ch;           // KChar ASCII (rotulo e saida)
+        const char* sym;   // KChar UTF-8 da pagina de acentos (NULL nos demais)
     };
 
     void rebuild();  // (re)calcula a geometria dos keys do modo atual
@@ -73,6 +83,10 @@ private:
     char labelChar(char ch) const;
     Rect fieldRect() const;
     Rect cancelRect() const;
+    Rect eyeRect() const;   // botao ver/ocu (existe so com mask)
+    int keyAt(int x, int y) const;  // hit-test com snap p/ tecla mais proxima
+    void backspace();       // apaga 1 codepoint (UTF-8) e notifica onChange
+    const char* modeLabel() const;  // rotulo da tecla de pagina (KMode)
 
     std::string m_prompt;
     std::string m_text;
@@ -81,6 +95,15 @@ private:
     std::vector<Key> m_keys;
     bool m_persistent = false;
     bool m_showField = true;
+    bool m_mask = false;
+    bool m_showPlain = false;      // botao ver/ocu revela apesar do mask
+    bool m_capsLock = false;       // toque duplo no shift trava o Upper
+    uint32_t m_lastShiftMs = 0;    // deteccao do toque duplo no shift
+    uint32_t m_repeatArmMs = 0;    // press no backspace (0 = sem auto-repeat)
+    uint32_t m_nextRepeatMs = 0;
+    uint8_t m_labelFont = 2;       // rotulo das teclas (por largura fisica)
+    uint8_t m_legendFont = 1;      // "space"/"?123"/"àç"
+    int m_keyW = 0;                // unidade de largura (p/ o snap do keyAt)
     int m_keysTop = 0;
     int m_flashKey = -1;       // feedback visual do ultimo toque
     uint32_t m_flashMs = 0;
@@ -91,7 +114,8 @@ private:
 
 // Ponte sincrona: exibe o teclado modal e devolve o texto digitado
 // (string vazia se cancelado ou confirmado vazio).
-std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen = 64);
+std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen = 64,
+                      bool mask = false);
 
 }  // namespace kui
 
