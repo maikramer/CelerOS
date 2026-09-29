@@ -696,6 +696,19 @@ void CelerLink::feed(uint8_t byte) {
     static enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } state = WANT_MAGIC;
     static uint8_t cmd = 0;
     static uint16_t need = 0, got = 0;
+    static int64_t lastByteUs = 0;
+
+    // Ressincronia: o host escreve cada frame de uma vez, entao um silencio
+    // no MEIO de um frame significa frame cortado (celerctl morto por
+    // timeout, byte 0x43 solto do console no boot). Sem isto o parser ficava
+    // esperando ate 4KB de "payload" e engolia os comandos seguintes — o
+    // link parecia morto ate reiniciar a placa (medido).
+    const int64_t now = esp_timer_get_time();
+    if (state != WANT_MAGIC && now - lastByteUs > 250000) {
+        state = WANT_MAGIC;
+        got = 0;
+    }
+    lastByteUs = now;
 
     switch (state) {
         case WANT_MAGIC:
