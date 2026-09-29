@@ -101,6 +101,7 @@ private:
     uint32_t m_lastShiftMs = 0;    // deteccao do toque duplo no shift
     uint32_t m_repeatArmMs = 0;    // press no backspace (0 = sem auto-repeat)
     uint32_t m_nextRepeatMs = 0;
+    int m_repeatCount = 0;         // repeat acelera apos as primeiras delecoes
     uint8_t m_labelFont = 2;       // rotulo das teclas (por largura fisica)
     uint8_t m_legendFont = 1;      // "space"/"?123"/"àç"
     int m_keyW = 0;                // unidade de largura (p/ o snap do keyAt)

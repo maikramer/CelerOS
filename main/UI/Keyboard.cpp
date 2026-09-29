@@ -253,64 +253,79 @@ char KeyboardScreen::labelChar(char ch) const {
 }
 
 void KeyboardScreen::draw(Canvas& c) {
+    // Render em faixas (CYD sem PSRAM): draw() roda uma vez por faixa e o
+    // visible() faz cada faixa pagar so o que cruza — sem isso eram ~20
+    // passadas x todas as teclas por redraw (cursor piscando inclusive).
     Rect f = fieldRect();
     if (m_showField) {
         // cabecalho: prompt (esquerda, cortado se nao couber) + ver/ocu (mask)
         // + X cancelar
         Rect xr = cancelRect();
-        c.fillRoundRect(xr, UI::sx(6), THEME_CARD);
-        c.drawRoundRect(xr, UI::sx(6), THEME_STROKE);
-        c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
+        Rect hdr = {0, 0, UI::W, xr.y + xr.h};  // faixa toda do cabecalho
+        if (c.visible(hdr)) {
+            c.fillRoundRect(xr, UI::sx(6), THEME_CARD);
+            c.drawRoundRect(xr, UI::sx(6), THEME_STROKE);
+            c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
 
-        int promptMaxX = xr.x;
-        if (m_mask) {
-            Rect er = eyeRect();
-            promptMaxX = er.x;
-            c.fillRoundRect(er, UI::sx(6), m_showPlain ? THEME_ACCENT : THEME_CARD);
-            c.drawRoundRect(er, UI::sx(6), THEME_STROKE);
-            c.text(m_showPlain ? "ocu" : "ver", er.x + er.w / 2, er.y + er.h / 2, UI::font(1),
-                   m_showPlain ? THEME_ON_ACCENT : THEME_TEXT_DIM, MC_DATUM);
-        }
-
-        if (!m_prompt.empty()) {
-            std::string p = m_prompt;
-            int avail = promptMaxX - UI::sx(8);
-            while (!p.empty() && c.textWidth(p.c_str(), UI::font(1)) > avail) p.pop_back();
-            c.text(p, UI::sx(4), f.y / 2, UI::font(1), THEME_TEXT_DIM, ML_DATUM);
-        }
-
-        // campo de texto com cursor piscando; texto longo mostra o final.
-        // Com mask, o campo mostra um bullet por codepoint (ver/ocu revela).
-        c.fillRoundRect(f, UI::sx(6), THEME_CARD);
-        c.drawRoundRect(f, UI::sx(6), THEME_STROKE);
-        const int pad = UI::sx(8);
-        const int avail = f.w - 2 * pad - UI::sx(4);
-        std::string shown;
-        if (m_mask && !m_showPlain) {
-            size_t glyphs = 0;
-            for (unsigned char ch : m_text) {
-                if ((ch & 0xC0) != 0x80) glyphs++;
+            int promptMaxX = xr.x;
+            if (m_mask) {
+                Rect er = eyeRect();
+                promptMaxX = er.x;
+                c.fillRoundRect(er, UI::sx(6), m_showPlain ? THEME_ACCENT : THEME_CARD);
+                c.drawRoundRect(er, UI::sx(6), THEME_STROKE);
+                c.text(m_showPlain ? "ocu" : "ver", er.x + er.w / 2, er.y + er.h / 2, UI::font(1),
+                       m_showPlain ? THEME_ON_ACCENT : THEME_TEXT_DIM, MC_DATUM);
             }
-            shown.reserve(glyphs * 3);
-            for (size_t i = 0; i < glyphs; i++) shown += "\xE2\x80\xA2";  // U+2022
-        } else {
-            shown = m_text;
+
+            if (!m_prompt.empty()) {
+                const int avail = promptMaxX - UI::sx(8);
+                std::string p = m_prompt;
+                if (c.textWidth(p.c_str(), UI::font(1)) > avail) {
+                    const int dots = c.textWidth("..", UI::font(1));
+                    while (!p.empty() && c.textWidth(p.c_str(), UI::font(1)) + dots > avail) {
+                        p.pop_back();  // UTF-8: descarta continuacao junto
+                        while (!p.empty() && ((unsigned char)p.back() & 0xC0) == 0x80) p.pop_back();
+                    }
+                    p += "..";
+                }
+                c.text(p, UI::sx(4), f.y / 2, UI::font(1), THEME_TEXT_DIM, ML_DATUM);
+            }
         }
-        while (!shown.empty() && c.textWidth(shown.c_str(), UI::font(2)) > avail) {
-            // UTF-8: descarta bytes de continuacao junto com o glifo
-            shown.erase(shown.begin());
-            while (!shown.empty() && ((unsigned char)shown.front() & 0xC0) == 0x80) {
+
+        if (c.visible(f)) {
+            // campo de texto com cursor piscando; texto longo mostra o final.
+            // Com mask, o campo mostra um bullet por codepoint (ver/ocu revela).
+            c.fillRoundRect(f, UI::sx(6), THEME_CARD);
+            c.drawRoundRect(f, UI::sx(6), THEME_STROKE);
+            const int pad = UI::sx(8);
+            const int avail = f.w - 2 * pad - UI::sx(4);
+            std::string shown;
+            if (m_mask && !m_showPlain) {
+                size_t glyphs = 0;
+                for (unsigned char ch : m_text) {
+                    if ((ch & 0xC0) != 0x80) glyphs++;
+                }
+                shown.reserve(glyphs * 3);
+                for (size_t i = 0; i < glyphs; i++) shown += "\xE2\x80\xA2";  // U+2022
+            } else {
+                shown = m_text;
+            }
+            while (!shown.empty() && c.textWidth(shown.c_str(), UI::font(2)) > avail) {
+                // UTF-8: descarta bytes de continuacao junto com o glifo
                 shown.erase(shown.begin());
+                while (!shown.empty() && ((unsigned char)shown.front() & 0xC0) == 0x80) {
+                    shown.erase(shown.begin());
+                }
             }
-        }
-        int ty = f.y + f.h / 2;
-        if (!shown.empty()) {
-            c.text(shown, f.x + pad, ty, UI::font(2), THEME_TEXT, ML_DATUM);
-        }
-        if (m_cursorOn) {
-            int tw = c.textWidth(shown.c_str(), UI::font(2));
-            int ch = c.fontHeight(CelerFont(UI::font(2)));
-            c.fillRect({f.x + pad + tw + UI::sx(1), ty - ch / 2, UI::sx(2), ch}, THEME_ACCENT);
+            int ty = f.y + f.h / 2;
+            if (!shown.empty()) {
+                c.text(shown, f.x + pad, ty, UI::font(2), THEME_TEXT, ML_DATUM);
+            }
+            if (m_cursorOn) {
+                int tw = c.textWidth(shown.c_str(), UI::font(2));
+                int ch = c.fontHeight(CelerFont(UI::font(2)));
+                c.fillRect({f.x + pad + tw + UI::sx(1), ty - ch / 2, UI::sx(2), ch}, THEME_ACCENT);
+            }
         }
     }
 
@@ -319,6 +334,7 @@ void KeyboardScreen::draw(Canvas& c) {
     for (int i = 0; i < (int)m_keys.size(); i++) {
         const Key& k = m_keys[i];
         const Rect& r = k.r;
+        if (!c.visible(r)) continue;
         bool flash = (i == m_flashKey && now - m_flashMs < 150) || isPressed(r);
 
         switch (k.kind) {
@@ -381,6 +397,7 @@ bool KeyboardScreen::onTouch(const TouchEvent& ev) {
             uint32_t now = millis();
             m_repeatArmMs = now ? now : 1;
             m_nextRepeatMs = m_repeatArmMs + 450;
+            m_repeatCount = 0;
         }
         return idx >= 0;
     }
@@ -424,6 +441,8 @@ void KeyboardScreen::handleKey(int idx) {
     const Key& k = m_keys[idx];
     m_flashKey = idx;
     m_flashMs = millis();
+    m_blinkMs = 0;      // cursor solido enquanto digita (nao some no meio)
+    m_cursorOn = true;
     markDirty();
 
     switch (k.kind) {
@@ -470,6 +489,7 @@ void KeyboardScreen::handleKey(int idx) {
             if (isLetters(m_mode)) m_mode = Sym1;
             else if (m_mode == Accents) m_mode = Lower;
             else m_mode = Accents;
+            if (m_mode == Lower && m_capsLock) m_mode = Upper;  // caps volta travado
             rebuild();
             break;
         case KOk:
@@ -523,7 +543,10 @@ void KeyboardScreen::onTick(uint32_t dtMs) {
             uint32_t now = millis();
             if ((int32_t)(now - m_nextRepeatMs) >= 0) {
                 backspace();
-                m_nextRepeatMs = now + 130;
+                // acelera depois das primeiras: apagar frase longa nao custa
+                // um toque a cada 130ms ate o fim
+                m_nextRepeatMs = now + (m_repeatCount >= 8 ? 80 : 130);
+                m_repeatCount++;
                 m_flashKey = idx;  // tecla segue "afundada" durante o repeat
                 m_flashMs = now;
                 markDirty();
