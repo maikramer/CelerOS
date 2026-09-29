@@ -20,9 +20,42 @@ desenvolvimento.
 | :---: | :---: | :---: |
 | <img src="Documentation/assets/imgs/celeros-splash.png" width="260" alt="Splash de boot"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> |
 | **Settings → Sobre** | **Snake** | |
-| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="Sobre"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | *Screenshots da CYD em breve* |
+| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="Sobre"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | |
 
 *Capturas do framebuffer real de uma SmartDisplay 4" via `celerctl screencap`.*
+
+### CYD (2.8" 320x240, sem PSRAM)
+
+| Launcher | App Store | Settings |
+| :---: | :---: | :---: |
+| <img src="Documentation/assets/imgs/cyd-launcher.png" width="260" alt="Launcher na CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="260" alt="App Store na CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="260" alt="Settings na CYD"/> |
+| **Terminal** | **HTTP Demo** | **Snake** |
+| <img src="Documentation/assets/imgs/cyd-terminal.png" width="260" alt="Terminal na CYD"/> | <img src="Documentation/assets/imgs/cyd-httpdemo.png" width="260" alt="HTTP Demo na CYD"/> | <img src="Documentation/assets/imgs/cyd-snake.png" width="260" alt="Snake na CYD"/> |
+
+*Capturas de uma ESP32-2432S028R clássica via `celerctl screencap`.*
+
+#### O que esperar da CYD
+
+A CYD roda o mesmo firmware e os mesmos apps, mas é uma máquina bem menor que
+a SmartDisplay (ESP32 com ~320 KB de RAM e sem PSRAM, painel SPI de 2.8" e
+toque resistivo), então a experiência é visivelmente mais simples:
+
+* **Apps esticados.** Os apps JS são desenhados para um canvas 240x320 em
+  retrato; no vidro 320x240 em paisagem eles são escalados 1,33x na largura e
+  0,75x na altura — texto e formas ficam achatados.
+* **Apps podem piscar.** Não há RAM para um quadro fora da tela, então os
+  apps JS desenham direto no painel (`System.isBuffered()` é `false`). A UI
+  do sistema (launcher, diálogos, barra superior dos apps) é composta em duas
+  faixas pequenas e não pisca, mas um app que limpa e redesenha a tela
+  inteira a cada evento vai piscar.
+* **Mais lenta.** Um redesenho de tela cheia é limitado pelo SPI de 40 MHz
+  (~31 ms); apps grandes levam 1–2 s compilando ao abrir (Settings, App Store).
+* **Memória apertada.** Um app recebe ~100 KB; o teto prático é um `main.js`
+  de ~45 KB. A App Store funciona, perto do limite; apps maiores aparecem como
+  "Requer PSRAM" na loja.
+* **Toque resistivo.** Pede um toque mais firme e calibração no primeiro
+  boot; os alvos são pequenos (ícones de 48 px, barra superior de 20 px).
+* **Sem cartão SD** por enquanto (o slot divide o barramento do display).
 
 ## Funcionalidades
 

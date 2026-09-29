@@ -19,9 +19,43 @@ development.
 | :---: | :---: | :---: |
 | <img src="Documentation/assets/imgs/celeros-splash.png" width="260" alt="Boot splash"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> |
 | **Settings → About** | **Snake** | |
-| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="About"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | *CYD screenshots coming soon* |
+| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="About"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | |
 
 *Screenshots captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
+
+### CYD (2.8" 320x240, no PSRAM)
+
+| Launcher | App Store | Settings |
+| :---: | :---: | :---: |
+| <img src="Documentation/assets/imgs/cyd-launcher.png" width="260" alt="CYD launcher"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="260" alt="CYD App Store"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="260" alt="CYD Settings"/> |
+| **Terminal** | **HTTP Demo** | **Snake** |
+| <img src="Documentation/assets/imgs/cyd-terminal.png" width="260" alt="CYD Terminal"/> | <img src="Documentation/assets/imgs/cyd-httpdemo.png" width="260" alt="CYD HTTP Demo"/> | <img src="Documentation/assets/imgs/cyd-snake.png" width="260" alt="CYD Snake"/> |
+
+*Captured on a classic ESP32-2432S028R via `celerctl screencap`.*
+
+#### What to expect on the CYD
+
+The CYD runs the same firmware and the same apps, but it is a much smaller
+machine than the SmartDisplay (an ESP32 running on one core, ~320 KB of RAM
+and no PSRAM, a 2.8" SPI panel and a resistive touch), so the experience is
+noticeably simpler:
+
+* **Stretched apps.** JS apps are designed for a 240x320 portrait canvas; on
+  the 320x240 landscape glass they are scaled 1.33x wide and 0.75x tall, so
+  text and shapes look squashed.
+* **Apps can flicker.** There is no RAM for an off-screen frame, so JS apps
+  draw straight to the panel (`System.isBuffered()` is `false`). The system
+  UI (launcher, dialogs, app top bar) is composed in two small bands and does
+  not flicker, but an app that clears and redraws the whole screen on every
+  event will.
+* **Slower.** A full-screen redraw is bound by the 40 MHz SPI bus (~31 ms);
+  big apps take 1–2 s to compile when they open (Settings, App Store).
+* **Tight memory.** An app gets ~100 KB; the practical ceiling is a `main.js`
+  of ~45 KB. The App Store works, close to the limit; bigger apps are marked
+  "Requer PSRAM" in the store.
+* **Resistive touch.** It needs a firmer press and a calibration on first
+  boot; targets are small (48 px icons, 20 px top bar).
+* **No SD card** for now (the slot shares the display bus).
 
 ## Features
 

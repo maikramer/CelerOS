@@ -18,6 +18,13 @@ desenvolvimento.
 
 *Capturas do framebuffer real de uma SmartDisplay 4" via `celerctl screencap`.*
 
+| Launcher na CYD | App Store na CYD | Terminal na CYD |
+| :---: | :---: | :---: |
+| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher na CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store na CYD"/> | <img src="Documentation/assets/imgs/cyd-terminal.png" width="240" alt="Terminal na CYD"/> |
+
+*CYD (320x240, sem PSRAM): mesma base, experiência mais simples — veja
+[Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas#cyd-esp32-clássico).*
+
 ## Mapa da wiki
 
 | Página | O que cobre |
