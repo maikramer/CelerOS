@@ -1,10 +1,10 @@
 {
   "name": "HTTP Demo",
   "packageName": "celeros.httpdemo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "CelerOS",
   "description": "Demonstra a API Net.* (nivel 2): busca a cotacao USD/BRL em uma API publica e mostra na tela. Requer WiFi conectado.",
   "type": "Utility",
   "category": "Utility",
-  "api": 2
+  "api": 7
 }

@@ -92,7 +92,7 @@ function promptStr() {
 // ------------------------------------------------------------- comandos ----
 function fsRow(p) {
     var tot = FS.getTotalSpace(p), used = FS.getUsedSpace(p);
-    if (!tot) { out(p + ": nao montado", T.textDim); return; }
+    if (!tot) { out(p + ": não montado", T.textDim); return; }
     out(p + "  " + fmtKB(used) + " usados de " + fmtKB(tot));
 }
 
@@ -134,11 +134,11 @@ var cmds = {
         out("  mv cp df free uname date uptime whoami");
         out("  history clear neofetch js wifi reboot exit");
         out("Dica: echo txt > arquivo grava no FS;", T.textDim);
-        out("js 2+2 avalia expressoes JavaScript.", T.textDim);
+        out("js 2+2 avalia expressões JavaScript.", T.textDim);
     },
     ls: function(a) {
         var p = a.length ? resolve(a[0]) : cwd;
-        if (!FS.isDirectory(p)) { out("ls: " + p + ": nao e diretorio", T.err); return; }
+        if (!FS.isDirectory(p)) { out("ls: " + p + ": não é diretório", T.err); return; }
         var ent = FS.listDir(p);
         if (!ent || ent.length === 0) { out("(vazio)", T.textDim); return; }
         var names = [];
@@ -153,7 +153,7 @@ var cmds = {
     },
     cd: function(a) {
         var p = a.length ? resolve(a[0]) : "/";
-        if (!FS.isDirectory(p)) { out("cd: " + p + ": nao e diretorio", T.err); return; }
+        if (!FS.isDirectory(p)) { out("cd: " + p + ": não é diretório", T.err); return; }
         cwd = p;
         syncBar();
     },
@@ -162,7 +162,7 @@ var cmds = {
         if (!a.length) { out("uso: cat <arquivo>", T.warn); return; }
         var p = resolve(a[0]);
         var txt = FS.readTextFile(p);
-        if (txt === null) { out("cat: " + p + ": nao encontrado", T.err); return; }
+        if (txt === null) { out("cat: " + p + ": não encontrado", T.err); return; }
         if (txt.length > 600) {
             out(txt.substring(0, 600));
             out("... (truncado, " + txt.length + " bytes)", T.textDim);
@@ -190,7 +190,7 @@ var cmds = {
     touch: function(a) {
         if (!a.length) { out("uso: touch <arquivo>", T.warn); return; }
         var p = resolve(a[0]);
-        if (FS.exists(p)) { out("ja existe: " + p, T.textDim); return; }
+        if (FS.exists(p)) { out("já existe: " + p, T.textDim); return; }
         var ok = FS.writeTextFile(p, "");
         out(ok ? "ok: " + p : "falha: " + p, ok ? T.ok : T.err);
     },
@@ -216,7 +216,7 @@ var cmds = {
         var p = resolve(alvo);
         var ok;
         if (FS.isDirectory(p)) {
-            if (!rec) { out("rm: " + p + " e diretorio (use -r)", T.warn); return; }
+            if (!rec) { out("rm: " + p + " é diretório (use -r)", T.warn); return; }
             ok = FS.removeDirectory(p);
         } else {
             ok = FS.deleteFile(p);
@@ -259,7 +259,7 @@ var cmds = {
         out(System.getDate() + " " + System.getTime());
     },
     uptime: function() {
-        out("ligado ha " + fmtUptime(System.getInfo().uptimeMs));
+        out("ligado há " + fmtUptime(System.getInfo().uptimeMs));
     },
     whoami: function() { out("root"); },
     history: function() {
@@ -273,7 +273,7 @@ var cmds = {
         for (; i < info.length; i++) out("             " + info[i]);
     },
     js: function(a) {
-        if (!a.length) { out("uso: js <expressao JS>", T.warn); return; }
+        if (!a.length) { out("uso: js <expressão JS>", T.warn); return; }
         var expr = a.join(" ");
         try {
             var r = eval(expr);
@@ -313,7 +313,7 @@ function execute(line) {
             out(name + ": erro: " + e, T.err);
         }
     } else {
-        out(name + ": comando nao encontrado", T.err);
+        out(name + ": comando não encontrado", T.err);
     }
 }
 

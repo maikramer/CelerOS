@@ -2,6 +2,7 @@
 #define CELEROS_DISPLAY_H
 
 #include <Arduino.h>
+#include "../Assets/Fonts/CelerFonts.h"  // fontes com acentos (Latin-1)
 #include <string>
 
 // ============================================================================
@@ -66,13 +67,13 @@
 // ---------------------------------------------------------------------------
 inline const lgfx::IFont* CelerFont(uint8_t font) {
     switch (font) {
-        case 1: return &lgfx::fonts::DejaVu9;
-        case 2: return &lgfx::fonts::DejaVu12;
-        case 4: return &lgfx::fonts::DejaVu24;
+        case 1: return &celer::fonts::DejaVu9;
+        case 2: return &celer::fonts::DejaVu12;
+        case 4: return &celer::fonts::DejaVu24;
         case 6:
             // so a tela grande pede 6 para texto (UI::font(4)); na CYD fica
             // a nativa e a DejaVu40 nem entra no binario
-            if constexpr (BoardTraits::largeUi) return &lgfx::fonts::DejaVu40;
+            if constexpr (BoardTraits::largeUi) return &celer::fonts::DejaVu40;
             return lgfx::fontdata[font];
         default: return lgfx::fontdata[font];
     }

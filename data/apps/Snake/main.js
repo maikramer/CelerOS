@@ -122,7 +122,7 @@ function ctext(s, cx, cy, f, col, bg) {
 function drawGameOver(win) {
     System.fillRoundRect(25, 105, 190, 116, 10, T.card);
     System.drawRoundRect(25, 105, 190, 116, 10, T.accent);
-    ctext(win ? "Voce venceu!" : "Fim de jogo", 120, 126, 2, T.warn, T.card);
+    ctext(win ? "Você venceu!" : "Fim de jogo", 120, 126, 2, T.warn, T.card);
     ctext("Pontos: " + score, 120, 150, 2, T.text, T.card);
     if (newRecord) {
         ctext("Novo recorde!", 120, 170, 1, T.ok, T.card);

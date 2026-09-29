@@ -33,6 +33,17 @@ firmware; ficou anotado como evolução do hub (repo CelerOS-Server).
 
 ## Acentos nas fontes
 
+**Implementado (2026-09):** `tools/make_fonts.py` gera
+`main/Assets/Fonts/CelerFonts.{h,cpp}` com as MESMAS fontes da UI (DejaVu
+9/12/24/40, FreeSans 9/12, FreeSans Bold 12/18/24) cobrindo Latin-1. O ASCII
+é copiado verbatim do LovyanGFX (nenhum texto existente muda um pixel); cada
+letra acentuada é a letra base original + só o acento, extraído de um render
+FreeType (diferença entre a acentuada e a base). Custo: ~21KB de flash na CYD.
+`tools/acentuar.py` restaurou os acentos das strings dos apps de sistema e da
+UI nativa (só onde a forma sem acento não é palavra — "e/é", "esta/está"
+foram revisados à mão). O texto abaixo é a análise anterior, mantida como
+histórico.
+
 As fontes builtin 1/2 do LovyanGFX (compat Adafruit) são ASCII — acentos
 saem como glifos vazios. O LGFX já embute a família **u8g2** com Latin
 completo (por ex. `lgfx::v1::fonts::lgfx_minifont` / `Wendl610`), pagando

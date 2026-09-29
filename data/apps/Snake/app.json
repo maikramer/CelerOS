@@ -1,11 +1,11 @@
 {
   "name": "Snake",
   "packageName": "celeros.snake",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "CelerOS",
   "description": "Classico da cobrinha: deslize o dedo para virar, coma as frutas, acelere e bata o recorde (salvo no littlefs).",
   "type": "Game",
   "category": "Arcade",
-  "api": 3,
-  "changelog": "1.1.0 - placar fino, contagem 3-2-1 e recorde destacado ao vivo; 1.0.0 - primeiro lancamento"
+  "api": 7,
+  "changelog": "1.1.1 - textos com acentos (API 7: fontes Latin-1)\n1.1.0 - placar fino, contagem 3-2-1 e recorde destacado ao vivo; 1.0.0 - primeiro lancamento"
 }

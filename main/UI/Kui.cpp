@@ -1,4 +1,5 @@
 #include "Kui.h"
+#include "../Assets/Fonts/CelerFonts.h"
 
 #include "../Display/Icon.h"
 #include <Arduino.h>
@@ -29,20 +30,20 @@ namespace type {
 // BoardTraits::largeUi e constexpr: na CYD os ramos da tela grande (e as
 // fontes deles) somem do binario
 const lgfx::IFont* caption() {
-    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSans9pt7b;
-    return &lgfx::fonts::DejaVu9;
+    if constexpr (BoardTraits::largeUi) return &celer::fonts::FreeSans9pt;
+    return &celer::fonts::DejaVu9;
 }
 const lgfx::IFont* body() {
-    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSans12pt7b;
-    return &lgfx::fonts::DejaVu12;
+    if constexpr (BoardTraits::largeUi) return &celer::fonts::FreeSans12pt;
+    return &celer::fonts::DejaVu12;
 }
 const lgfx::IFont* title() {
-    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSansBold18pt7b;
-    return &lgfx::fonts::FreeSansBold12pt7b;
+    if constexpr (BoardTraits::largeUi) return &celer::fonts::FreeSansBold18pt;
+    return &celer::fonts::FreeSansBold12pt;
 }
 const lgfx::IFont* display() {
-    if constexpr (BoardTraits::largeUi) return &lgfx::fonts::FreeSansBold24pt7b;
-    return &lgfx::fonts::FreeSansBold18pt7b;
+    if constexpr (BoardTraits::largeUi) return &celer::fonts::FreeSansBold24pt;
+    return &celer::fonts::FreeSansBold18pt;
 }
 }  // namespace type
 

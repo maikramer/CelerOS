@@ -75,26 +75,26 @@ function wrapText(s, font, maxW) {
 // ---- conteudo offline (porte do HelpCenterUI.cpp, PT-BR resumido) ----------
 var CATS = [
     { name: "Primeiros Passos", topics: [
-        { t: "O que e o CelerOS", d: "Visao do sistema",
-          c: "O CelerOS e um sistema operacional rapido e leve, feito para o ESP32. Traz loja de apps integrada, execucao de apps JavaScript pelo cartao SD e uma interface fluida no toque." },
-        { t: "Como comecar", d: "WiFi e cartao SD",
-          c: "Va em Configuracoes > WiFi para conectar o aparelho. Se for instalar novos apps de usuario, insira um cartao SD formatado em FAT32." },
-        { t: "Tipos de app", d: "Sistema vs usuario",
-          c: "Apps de sistema (Configuracoes, Launcher) rodam em C++ integrado, com maxima velocidade. Apps de usuario rodam no runtime JavaScript, do cartao SD ou da memoria local." }
+        { t: "O que é o CelerOS", d: "Visão do sistema",
+          c: "O CelerOS é um sistema operacional rápido e leve, feito para o ESP32. Traz loja de apps integrada, execução de apps JavaScript pelo cartão SD e uma interface fluida no toque." },
+        { t: "Como começar", d: "WiFi e cartão SD",
+          c: "Vá em Configurações > WiFi para conectar o aparelho. Se for instalar novos apps de usuário, insira um cartão SD formatado em FAT32." },
+        { t: "Tipos de app", d: "Sistema vs usuário",
+          c: "Apps de sistema (Configurações, Launcher) rodam em C++ integrado, com máxima velocidade. Apps de usuário rodam no runtime JavaScript, do cartão SD ou da memória local." }
     ]},
-    { name: "Navegacao Basica", topics: [
-        { t: "Tela inicial", d: "Visao da home",
-          c: "A tela inicial mostra os apps de sistema no topo e os seus apps de usuario instalados abaixo. Toque ou arraste a lista para navegar." },
-        { t: "Abrir e fechar", d: "Toque e botao X",
-          c: "Toque no nome de um app para abri-lo. Para fechar um app em execucao, toque no X do canto superior direito e volte ao launcher." }
+    { name: "Navegação Básica", topics: [
+        { t: "Tela inicial", d: "Visão da home",
+          c: "A tela inicial mostra os apps de sistema no topo e os seus apps de usuário instalados abaixo. Toque ou arraste a lista para navegar." },
+        { t: "Abrir e fechar", d: "Toque e botão X",
+          c: "Toque no nome de um app para abri-lo. Para fechar um app em execução, toque no X do canto superior direito e volte ao launcher." }
     ]},
     { name: "Conectividade", topics: [
         { t: "Conectar WiFi", d: "Config > WiFi",
-          c: "Va em Configuracoes > WiFi. O aparelho escaneia as redes. Toque numa rede, digite a senha no teclado na tela e toque em Conectar. O aparelho reinicia para aplicar." }
+          c: "Vá em Configurações > WiFi. O aparelho escaneia as redes. Toque numa rede, digite a senha no teclado na tela e toque em Conectar. O aparelho reinicia para aplicar." }
     ]},
     { name: "Problemas Comuns", topics: [
         { t: "Tela preta", d: "Travamento em apps",
-          c: "Se a tela ficar preta ou o ESP travar ao rodar apps JS, desligue o WiFi. Isso libera RAM e o app volta a funcionar normalmente." }
+          c: "Se um app travar ou ficar sem memória, o sistema mostra uma tela de erro: toque para voltar ao launcher. Em placas sem PSRAM (como a CYD), apps muito grandes podem não caber; a loja marca esses apps como Requer PSRAM." }
     ]}
 ];
 
@@ -124,10 +124,12 @@ function drawList() {
         System.fillRoundRect(LIST_X, y, LIST_W, ROW_H, 10, bgc);
         System.drawRoundRect(LIST_X, y, LIST_W, ROW_H, 10, T.stroke);
         if (i === L_sel) System.fillRect(LIST_X + 3, y + 6, 4, ROW_H - 12, T.accent);
-        System.setTextColor(T.text, bgc);
+        // texto transparente (a linha ja pintou o fundo): com fundo opaco a
+        // caixa do subtitulo apagava cedilhas/descendentes do titulo
+        System.setTextColor(T.text);
         System.drawString(fitText(L_items[i], 2, LIST_W - 42), LIST_X + 14, y + 7, 2);
         if (L_sub !== null && L_sub[i]) {
-            System.setTextColor(T.textDim, bgc);
+            System.setTextColor(T.textDim);
             System.drawString(L_sub[i], LIST_X + 14, y + 25, 1);
         }
     }
@@ -281,7 +283,7 @@ function drawMenu() {
     System.drawRoundRect(20, 152, 200, 32, 8, T.stroke);
     ctext("Ajuda Online", 120, 168, 2, T.text, T.raised);
     System.setTextColor(T.textDim, T.bg);
-    System.drawString("Online le a central de ajuda", 12, 200, 1);
+    System.drawString("Online lê a central de ajuda", 12, 200, 1);
     System.drawString("no hub (precisa de WiFi).", 12, 214, 1);
 }
 
@@ -325,7 +327,7 @@ function fetchJSON(url, msg) {
         return null;
     }
     if (d === null || d === undefined) {
-        errMsg = "Sem conexao. Use a Ajuda Offline.";
+        errMsg = "Sem conexão. Use a Ajuda Offline.";
         return null;
     }
     return d;
@@ -365,7 +367,7 @@ function errorLoop() {
 
 // indice -> categoria -> artigo; erro em qualquer etapa volta ao menu
 function onlineFlow() {
-    var d = fetchJSON(IDX_URL, "Buscando indice...");
+    var d = fetchJSON(IDX_URL, "Buscando índice...");
     if (d === null) { errorLoop(); return; }
     var catNames = [], catUrls = [];
     var cats = d.categories || [];
@@ -373,12 +375,12 @@ function onlineFlow() {
         catNames.push(String(cats[i].name));
         catUrls.push(String(cats[i].url));
     }
-    if (catNames.length === 0) { errMsg = "Indice vazio."; errorLoop(); return; }
+    if (catNames.length === 0) { errMsg = "Índice vazio."; errorLoop(); return; }
     while (true) {
         setList("Ajuda Online", catNames, null);
         var c = listLoop();
         if (c < 0) return;
-        var a = fetchJSON(catUrls[c], "Carregando topicos...");
+        var a = fetchJSON(catUrls[c], "Carregando tópicos...");
         if (a === null) { errorLoop(); return; }
         var artTitles = [], artUrls = [];
         var arts = a.articles || [];
@@ -393,7 +395,7 @@ function onlineFlow() {
             if (k < 0) break;
             var art = fetchJSON(artUrls[k], "Carregando artigo...");
             if (art === null) { errorLoop(); return; }
-            var content = "Conteudo nao encontrado.";
+            var content = "Conteúdo não encontrado.";
             if (art.content !== undefined && art.content !== null) content = String(art.content);
             setViewer(artTitles[k], content);
             viewerLoop();
@@ -407,7 +409,7 @@ function offlineFlow() {
         var names = [], subs = [];
         for (var i = 0; i < CATS.length; i++) {
             names.push(CATS[i].name);
-            subs.push(CATS[i].topics.length + (CATS[i].topics.length === 1 ? " topico" : " topicos"));
+            subs.push(CATS[i].topics.length + (CATS[i].topics.length === 1 ? " tópico" : " tópicos"));
         }
         setList("Ajuda Offline", names, subs);
         var c = listLoop();

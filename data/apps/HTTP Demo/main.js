@@ -31,7 +31,7 @@ function draw(state, q) {
     if (state === "loading") {
         ctext("Buscando USD/BRL...", 120, 150, 2, T.textDim);
     } else if (state === "fail") {
-        ctext("Falha na requisicao", 120, 136, 2, T.err);
+        ctext("Falha na requisição", 120, 136, 2, T.err);
         ctext("Confira o WiFi / internet.", 120, 162, 1, T.textDim);
     } else if (state === "ok") {
         ctext("USD/BRL", 120, 110, 2, T.textDim);

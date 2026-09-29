@@ -199,9 +199,9 @@ function drawEmpty() {
     ctext("SD sem apps", 120, 92, 2, T.warn, T.card);
     var y = 122;
     if (sdOk) lcenter("Nenhum app em /sd/apps", 120, y, 1, T.text, T.card);
-    else lcenter("Cartao SD nao encontrado", 120, y, 1, T.text, T.card);
+    else lcenter("Cartão SD não encontrado", 120, y, 1, T.text, T.card);
     y += 20;
-    lcenter("Copie apps para o cartao ou", 120, y, 1, T.textDim, T.card);
+    lcenter("Copie apps para o cartão ou", 120, y, 1, T.textDim, T.card);
     y += 14;
     lcenter("use o celerctl / App Store.", 120, y, 1, T.textDim, T.card);
     System.fillRoundRect(8, 230, 224, 32, 8, T.accent);
@@ -277,8 +277,8 @@ function drawDetail() {
     System.drawRoundRect(8, 204, 224, 22, 8, T.stroke);
     var stTxt;
     var stCol;
-    if (inst === null) { stTxt = "Nao instalado"; stCol = T.textDim; }
-    else if (isUpd) { stTxt = "Nova versao: v" + app.version; stCol = T.warn; }
+    if (inst === null) { stTxt = "Não instalado"; stCol = T.textDim; }
+    else if (isUpd) { stTxt = "Nova versão: v" + app.version; stCol = T.warn; }
     else { stTxt = "Instalado v" + (inst.version ? String(inst.version) : "?"); stCol = T.ok; }
     System.setTextColor(stCol, T.card);
     System.drawString(stTxt, 16, 210, 1);
@@ -317,7 +317,7 @@ function drawInstalling(app) {
     lcenter(trunc(app.name, 30, 1), 120, 136, 1, T.textDim, T.card);
     System.drawRoundRect(40, 160, 160, 14, 7, T.stroke);
     System.fillRoundRect(41, 161, 94, 12, 6, T.accent);
-    lcenter("Nao desligue o aparelho", 120, 186, 1, T.textDim, T.card);
+    lcenter("Não desligue o aparelho", 120, 186, 1, T.textDim, T.card);
     System.delay(250); // garante o render antes da copia bloqueante
 }
 
@@ -334,16 +334,16 @@ function openApp(i) {
     sel = i;
     var lvl = System.getAPILevel();
     if (app.api > lvl) {
-        showAlert("Incompativel",
+        showAlert("Incompatível",
                   ["O app requer API " + app.api + ".",
                    "Este OS tem API " + lvl + ".",
                    "Atualize o CelerOS."], true);
         return;
     }
     if (!validPkg(app.pkg)) {
-        showAlert("Pacote invalido",
+        showAlert("Pacote inválido",
                   ["packageName incorreto.",
-                   "Use minusculas, sem espacos",
+                   "Use minúsculas, sem espaços",
                    "e com ponto (a.b.c)."], true);
         return;
     }
@@ -361,9 +361,9 @@ function openApp(i) {
 }
 function tryInstall(app) {
     if (!validPkg(app.pkg)) {
-        showAlert("Pacote invalido",
+        showAlert("Pacote inválido",
                   ["packageName incorreto.",
-                   "Use minusculas, sem espacos",
+                   "Use minúsculas, sem espaços",
                    "e com ponto (a.b.c)."], true);
         return;
     }
@@ -396,8 +396,8 @@ function tryInstall(app) {
     } else {
         var livre = Math.round(FS.getFreeSpace(base) / 1024);
         showAlert("Falhou",
-                  ["Nao foi possivel copiar o app.",
-                   "Espaco livre: " + livre + " KB"], true);
+                  ["Não foi possível copiar o app.",
+                   "Espaço livre: " + livre + " KB"], true);
     }
 }
 function maxScroll() {

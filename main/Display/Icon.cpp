@@ -1,4 +1,5 @@
 #include "Icon.h"
+#include "../Assets/Fonts/CelerFonts.h"
 #include "Theme.h"
 #include "Layout.h"
 #include <Arduino.h>
@@ -596,7 +597,7 @@ void Icon::drawAppTile(lgfx::LGFXBase* tft, const char* appName, int x, int y) {
     char s[2] = {letter, 0};
     tft->setTextColor((uint32_t)0xFFFFFF);  // transparente sobre o gradiente
     tft->setTextDatum(MC_DATUM);
-    tft->drawString(s, x + SIZE / 2, y + SIZE / 2 + 1, &lgfx::fonts::FreeSansBold18pt7b);
+    tft->drawString(s, x + SIZE / 2, y + SIZE / 2 + 1, &celer::fonts::FreeSansBold18pt);
 }
 
 void Icon::drawFallback(lgfx::LGFXBase* tft, int x, int y) {
@@ -604,5 +605,5 @@ void Icon::drawFallback(lgfx::LGFXBase* tft, int x, int y) {
     tft->drawRoundRect(x, y, SIZE, SIZE, SIZE / 4, THEME_STROKE);
     tft->setTextColor(THEME_TEXT_DIM);
     tft->setTextDatum(MC_DATUM);
-    tft->drawString("?", x + SIZE / 2, y + SIZE / 2, &lgfx::fonts::FreeSansBold18pt7b);
+    tft->drawString("?", x + SIZE / 2, y + SIZE / 2, &celer::fonts::FreeSansBold18pt);
 }

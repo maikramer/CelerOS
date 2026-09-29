@@ -263,7 +263,7 @@ Double Buffering allows you to draw shapes invisibly to an off-screen RAM buffer
   - `text` (String) - Text to render.
   - `x`, `y` (Ints) - Top-Left coordinate to begin rendering.
   - `font` (Integer 1, 2, or 4) - Hardware font selection. 2 is standard, 4 is bold/large.
-- **Description:** Renders high-speed string buffers to the display.
+- **Description:** Renders high-speed string buffers to the display. Text is UTF-8 and every font covers Latin-1 (U+0020..U+00FF), so Portuguese accents work: `"Configurações"`, `"25°C"`. Characters outside that range (em dash, curly quotes, €, emoji) are not drawn.
 
 ---
 

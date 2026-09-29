@@ -379,7 +379,10 @@ física numa única transferência instantânea de DMA de hardware. Isso
   - `x`, `y` (Ints) - Coordenada topo-esquerda onde começa a renderização.
   - `font` (Integer 1, 2 ou 4) - Seleção de fonte de hardware. 2 é padrão, 4
     é negrito/grande.
-- **Descrição:** renderiza strings em alta velocidade no display.
+- **Descrição:** renderiza strings em alta velocidade no display. O texto é
+  UTF-8 e todas as fontes cobrem Latin-1 (U+0020..U+00FF), então acentos
+  funcionam: `"Configurações"`, `"25°C"`. Caracteres fora dessa faixa
+  (travessão, aspas curvas, €, emoji) não são desenhados.
 
 ---
 

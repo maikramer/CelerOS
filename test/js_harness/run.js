@@ -319,7 +319,7 @@ function joinLog(log) { return log.join('\n'); }
     check('ls lista apps', j.indexOf('apps') >= 0);
     check('neofetch mostra OS', j.indexOf('OS: CelerOS') >= 0);
     check('uname -a completo', j.indexOf('IDF v6.1') >= 0);
-    check('comando inexistente', j.indexOf('naoexiste: comando nao encontrado') >= 0);
+    check('comando inexistente', j.indexOf('naoexiste: comando não encontrado') >= 0);
     check('history numerado', j.indexOf('17  history') >= 0);
     check('exit sai', r.err === null);
 })();

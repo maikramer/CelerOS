@@ -105,10 +105,10 @@ static void showRuntimeError(const char* title, const std::string& detail) {
 
 // dica de OOM no idioma configurado (primeiro uso trava o idioma)
 static const char* oomHint() {
-    return i18n::TR("O app ficou sem memoria. Feche outros recursos (servidor web, "
-                    "WiFi) e tente de novo.",
-                    "The app ran out of memory. Close other resources (web server, "
-                    "WiFi) and try again.");
+    return i18n::TR("O app precisa de mais memória do que esta placa tem livre. "
+                    "Em placas sem PSRAM, prefira apps menores.",
+                    "The app needs more memory than this board has free. "
+                    "On boards without PSRAM, prefer smaller apps.");
 }
 #define kOomHint oomHint()
 
@@ -295,7 +295,7 @@ static void my_fatal(void *udata, const char *msg) {
         tft->setTextDatum(TL_DATUM);
         tft->setTextColor(THEME_TEXT_DIM);
         bool oom = (msg && strstr(msg, "alloc"));
-        tft->drawString(oom ? i18n::TR("O app ficou sem memoria.", "The app ran out of memory.")
+        tft->drawString(oom ? i18n::TR("O app ficou sem memória.", "The app ran out of memory.")
                             : i18n::TR("O app travou o runtime.", "The app broke the runtime."),
                         UI::sx(14), hdr + UI::sy(16), kui::type::body());
         tft->drawString(i18n::TR("O sistema vai reiniciar...", "The system will restart..."),
@@ -344,7 +344,7 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
 
         // Intercept OOM signals
         if (errorMsg.find("alloc") != std::string::npos || errorMsg.find("out of memory") != std::string::npos) {
-            showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+            showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
             duk_pop(ctx);
             // This is a soft-error (not Duktape fatal), so we can just return safely to Launcher
             return;
@@ -452,7 +452,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     if (src == nullptr) {
         celer_log_printf(srcOom ? "sem bloco para o fonte: %s (maior bloco %u)\n" : "Failed to read JS file: %s\n",
                          filePath, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-        if (srcOom) showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+        if (srcOom) showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return;
     }
 
@@ -461,7 +461,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)dukHeapNeed(srcLen),
                          (unsigned)srcLen);
         free(src);
-        showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+        showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
 
@@ -471,7 +471,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     if (!ctx) {
         free(src);
         celer_log_println("Failed to create Duktape heap for app.");
-        showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+        showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
 

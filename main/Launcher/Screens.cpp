@@ -321,7 +321,7 @@ void LauncherScreen::onTick(uint32_t dtMs) {
             Navigator::push(AppHostScreen::instance(idx));
             return;
         }
-        Navigator::toast("App nao encontrado: " + req, THEME_ERR);
+        Navigator::toast("App não encontrado: " + req, THEME_ERR);
     }
 
     // pressionar e segurar (600 ms, sem arrastar) num app: acoes do app
@@ -577,7 +577,7 @@ void WifiSetupScreen::tryConnect(const std::string& ssid, const std::string& pas
     ConnJob* job = new ConnJob{ssid, password};
     if (xTaskCreate(connectTask, "wifi_conn", 6144, job, 5, nullptr) != pdPASS) {
         delete job;
-        Navigator::toast("Sem memoria para conectar", THEME_ERR);
+        Navigator::toast("Sem memória para conectar", THEME_ERR);
         return;
     }
     s_connRunning = true;
@@ -671,7 +671,7 @@ void WifiSetupScreen::draw(Canvas& c) {
         c.text("2. Abra no navegador:", UI::cx(), UI::sy(144), UI::font(2), THEME_TEXT, MC_DATUM);
         c.text("http://192.168.4.1", UI::cx(), UI::sy(166), UI::font(2), THEME_ACCENT, MC_DATUM);
 
-        const char* status = "Aguardando configuracao...";
+        const char* status = "Aguardando configuração...";
         uint32_t statusColor = THEME_TEXT_DIM;
         if (!m_portalStarted) {
             status = "Falha ao iniciar o portal";

@@ -120,6 +120,15 @@ var TZS = [
     ["UTC+11 AEDT", "UTC-11"], ["UTC+12 NZST", "UTC-12"]
 ];
 
+// Rotulo legivel do fuso: o valor salvo e POSIX ("UTC3" = UTC-3, sinal
+// invertido) e confundia na tela; mostra so a parte "UTC-3" da tabela
+function tzLabel(tz) {
+    for (var i = 0; i < TZS.length; i++) {
+        if (TZS[i][1] === tz) return TZS[i][0].split(" ")[0];
+    }
+    return tz;
+}
+
 // ---- lista generica (linhas h=38, pitch 44, rolagem por arraste) -----------
 
 function listMax() {
@@ -201,21 +210,21 @@ function validPin(p) {
     return /^[0-9]{4,6}$/.test(p);
 }
 function flowNewPin() {
-    var p1 = System.prompt("Novo PIN (4-6 digitos)", "");
+    var p1 = System.prompt("Novo PIN (4-6 dígitos)", "");
     if (!validPin(p1)) {
-        note("Seguranca", "PIN invalido: use 4 a 6 digitos", 1200);
+        note("Segurança", "PIN inválido: use 4 a 6 dígitos", 1200);
         return false;
     }
     var p2 = System.prompt("Confirmar PIN", "");
     if (p1 !== p2) {
-        note("Seguranca", "PINs nao conferem", 1200);
+        note("Segurança", "PINs não conferem", 1200);
         return false;
     }
     if (!System.setPin(p1)) {
-        note("Seguranca", "Falha ao salvar o PIN", 1200);
+        note("Segurança", "Falha ao salvar o PIN", 1200);
         return false;
     }
-    note("Seguranca", "PIN salvo", 1000);
+    note("Segurança", "PIN salvo", 1000);
     return true;
 }
 
@@ -225,10 +234,10 @@ function titleNow() {
     if (tela === "appdetail" && appsArr[selApp]) return trunc(appsArr[selApp].name, 216, 2);
     if (tela === "manual") return "Ajuste manual";
     if (tela === "time") return "Hora e fuso";
-    if (tela === "tz") return "Fuso horario";
-    if (tela === "security") return "Seguranca";
+    if (tela === "tz") return "Fuso horário";
+    if (tela === "security") return "Segurança";
     if (tela === "display") return "Tela";
-    if (tela === "update") return "Atualizacao";
+    if (tela === "update") return "Atualização";
     if (tela === "about") return "Sobre";
     if (tela === "wifi") return "Wi-Fi";
     if (tela === "apps") return "Aplicativos";
@@ -347,13 +356,13 @@ function buildMenu() {
     a.push({ l: "Wi-Fi", v: w.connected ? "ON" : "OFF", a: "wifi" });
     a.push({ l: "Aplicativos", a: "apps" });
     a.push({ l: "Hora e fuso", a: "time" });
-    a.push({ l: "Seguranca", v: System.pinState() > 0 ? "PIN" : "--", a: "sec" });
+    a.push({ l: "Segurança", v: System.pinState() > 0 ? "PIN" : "--", a: "sec" });
     a.push({
         l: "Tela",
         v: System.backlightSupported() ? System.getBrightness() + "%" : "--",
         a: "display"
     });
-    a.push({ l: "Atualizacao", a: "ota" });
+    a.push({ l: "Atualização", a: "ota" });
     a.push({ l: "Sobre", v: "v" + System.getOSVersion(), a: "about" });
     a.push({ l: "Reset", a: "reset" });
     return a;
@@ -384,7 +393,7 @@ function drawWifi() {
     ctext("Configurar", 120, 168, 2, T.onAccent, T.accent);
 
     System.setTextColor(T.textDim, T.bg);
-    System.drawString("Abre o assistente nativo de conexao", 12, 208, 1);
+    System.drawString("Abre o assistente nativo de conexão", 12, 208, 1);
     System.drawString("(scan + senha + portal). Este app sai", 12, 222, 1);
     System.drawString("para dar lugar ao assistente.", 12, 236, 1);
 }
@@ -456,13 +465,13 @@ function drawAppDetail() {
     if (!ap) return;
     System.fillRoundRect(8, 52, 224, 76, 10, T.card);
     System.drawRoundRect(8, 52, 224, 76, 10, T.stroke);
-    infoLine("Versao", ap.ver ? "v" + ap.ver : "--", 60);
+    infoLine("Versão", ap.ver ? "v" + ap.ver : "--", 60);
     infoLine("API", ap.api ? ap.api : "--", 76);
     infoLine("Tipo", ap.sys ? "app do sistema" : "comum", 92);
-    infoLine("Origem", ap.sd ? "cartao SD" : "interno", 108);
+    infoLine("Origem", ap.sd ? "cartão SD" : "interno", 108);
 
     System.setTextColor(T.textDim, T.bg);
-    System.drawString("Descricao", 12, 140, 1);
+    System.drawString("Descrição", 12, 140, 1);
     var ls = wrapLines(ap.desc, 216, 1);
     var y = 156;
     for (var i = 0; i < ls.length && y < 244; i++, y += 14) {
@@ -503,7 +512,7 @@ function buildTime() {
     a.push({ l: "Agora", v: System.getTime(), i: 1 });
     a.push({ l: "Data", v: System.getDate(), i: 1 });
     a.push({ l: "NTP (internet)", v: System.getNtpEnabled() ? "ON" : "OFF", a: "ntp" });
-    a.push({ l: "Fuso", v: System.getTimezone(), a: "tz" });
+    a.push({ l: "Fuso", v: tzLabel(System.getTimezone()), a: "tz" });
     a.push({ l: "Formato", v: System.get24hFormat() ? "24h" : "12h", a: "fmt" });
     a.push({ l: "Ajuste manual", a: "manual", d: System.getNtpEnabled() ? 1 : 0 });
     return a;
@@ -528,7 +537,7 @@ function nowHM() {
 function drawManual(step, vals) {
     System.fillScreen(T.bg);
     header("Ajuste manual");
-    var names = ["Ano", "Mes", "Dia", "Hora", "Minuto"];
+    var names = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
     var y = 64;
     for (var i = 0; i < 5; i++, y += 28) {
         var col = i < step ? T.text : (i === step ? T.accent : T.textDim);
@@ -548,13 +557,13 @@ function askNum(label, cur, lo, hi) {
             var n = parseInt(s, 10);
             if (n >= lo && n <= hi) return n;
         }
-        note(label, "Valor invalido", 700);
+        note(label, "Valor inválido", 700);
     }
 }
 function runManual() {
     var hm = nowHM();
     var vals = [System.getYear(), System.getMonth(), System.getDay(), hm[0], hm[1]];
-    var labels = ["Ano", "Mes", "Dia", "Hora", "Minuto"];
+    var labels = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
     var lo = [2000, 1, 1, 0, 0];
     var hi = [2100, 12, 31, 23, 59];
     tela = "manual";
@@ -593,7 +602,7 @@ function drawDisplay() {
     if (!System.backlightSupported()) {
         ctext("Backlight fixo", 120, 120, 2, T.warn, T.bg);
         ctext("nesta placa.", 120, 146, 2, T.textDim, T.bg);
-        ctext("Controle de brilho indisponivel", 120, 190, 1, T.textDim, T.bg);
+        ctext("Controle de brilho indisponível", 120, 190, 1, T.textDim, T.bg);
         ctext("neste hardware.", 120, 204, 1, T.textDim, T.bg);
         return;
     }
@@ -631,15 +640,15 @@ function buildOtaLines() {
 }
 function drawUpdate() {
     if (otaState === "idle") {
-        ctext("Versao atual", 120, 92, 1, T.textDim, T.bg);
+        ctext("Versão atual", 120, 92, 1, T.textDim, T.bg);
         ctext("CelerOS v" + System.getOSVersion(), 120, 116, 2, T.text, T.bg);
         System.fillRoundRect(48, 150, 144, 36, 8, T.accent);
         ctext("Verificar", 120, 168, 2, T.onAccent, T.accent);
         ctext("requer Wi-Fi conectado", 120, 205, 1, T.textDim, T.bg);
     } else if (otaState === "checking") {
-        ctext("Verificando atualizacoes...", 120, 150, 1, T.textDim, T.bg);
+        ctext("Verificando atualizações...", 120, 150, 1, T.textDim, T.bg);
     } else if (otaState === "nowifi") {
-        ctext("Sem conexao Wi-Fi.", 120, 116, 2, T.err, T.bg);
+        ctext("Sem conexão Wi-Fi.", 120, 116, 2, T.err, T.bg);
         ctext("Conecte em Wi-Fi primeiro", 120, 146, 1, T.textDim, T.bg);
         ctext("e toque em Verificar.", 120, 160, 1, T.textDim, T.bg);
     } else if (otaState === "failed") {
@@ -653,7 +662,7 @@ function drawUpdate() {
         ctext("Sistema atualizado!", 120, 110, 2, T.ok, T.bg);
         ctext("CelerOS v" + System.getOSVersion(), 120, 140, 1, T.textDim, T.bg);
     } else if (otaState === "avail") {
-        ctext(trunc(otaInfo.type || "Atualizacao disponivel", 224, 1), 120, 60, 1, T.accent, T.bg);
+        ctext(trunc(otaInfo.type || "Atualização disponível", 224, 1), 120, 60, 1, T.accent, T.bg);
         ctext(trunc("v" + System.getOSVersion() + " -> v" + otaInfo.version, 224, 2), 120, 78, 2, T.text, T.bg);
         // bloco rolavel (changelog + guia), janela 98..(98+otaRegionH)
         var yEnd = 98 + otaRegionH();
@@ -670,7 +679,7 @@ function drawUpdate() {
             }
         }
         if (otaInfo.hasFirmware) {
-            ctext("nao desligue na atualizacao", 120, 208, 1, T.err, T.bg);
+            ctext("não desligue na atualização", 120, 208, 1, T.err, T.bg);
             System.fillRoundRect(60, 222, 120, 32, 8, T.ok);
             ctext("Instalar", 120, 238, 2, T.text, T.ok);
         } else {
@@ -679,10 +688,10 @@ function drawUpdate() {
         }
     } else if (otaState === "installing") {
         ctext("Atualizando sistema", 120, 96, 2, T.text, T.bg);
-        ctext("Nao desligue a alimentacao!", 120, 118, 1, T.err, T.bg);
+        ctext("Não desligue a alimentação!", 120, 118, 1, T.err, T.bg);
         System.drawRoundRect(30, 158, 180, 18, 4, T.stroke);
     } else if (otaState === "done") {
-        ctext("Atualizacao concluida!", 120, 104, 2, T.ok, T.bg);
+        ctext("Atualização concluída!", 120, 104, 2, T.ok, T.bg);
         ctext("Reinicie para concluir.", 120, 132, 1, T.textDim, T.bg);
         System.fillRoundRect(60, 170, 120, 36, 8, T.accent);
         ctext("Reiniciar", 120, 188, 2, T.onAccent, T.accent);
@@ -700,8 +709,8 @@ function doCheck() {
     otaInfo = info;
     if (info.fetchFailed) {
         otaState = "failed";
-        otaErrTitle = "Falha na verificacao";
-        otaErr = "Confira a conexao e tente de novo.";
+        otaErrTitle = "Falha na verificação";
+        otaErr = "Confira a conexão e tente de novo.";
     } else if (!info.available) {
         otaState = "uptodate";
     } else {
@@ -725,7 +734,7 @@ function startInstall() {
         otaState = "done";
     } else {
         otaState = "failed";
-        otaErrTitle = "Falha na instalacao";
+        otaErrTitle = "Falha na instalação";
         otaErr = (res && res.error) ? res.error : "erro desconhecido";
     }
     drawAll();
@@ -737,7 +746,7 @@ function buildAbout() {
     var inf = System.getInfo();
     var sdTot = FS.getTotalSpace("/sd");
     var a = [];
-    a.push({ l: "Versao", v: "v" + System.getOSVersion(), i: 1 });
+    a.push({ l: "Versão", v: "v" + System.getOSVersion(), i: 1 });
     a.push({ l: "API", v: "" + System.getAPILevel(), i: 1 });
     a.push({ l: "Chip", v: inf.chipModel || "--", i: 1 });
     a.push({ l: "CPU", v: inf.cpuFreqMHz + " MHz x" + inf.chipCores, i: 1 });
@@ -756,10 +765,10 @@ function drawReset() {
     System.fillRoundRect(8, 52, 224, 76, 10, T.card);
     System.drawRoundRect(8, 52, 224, 76, 10, T.stroke);
     System.setTextColor(T.text, T.card);
-    System.drawString("Limpar configuracoes", 20, 62, 2);
+    System.drawString("Limpar configurações", 20, 62, 2);
     System.setTextColor(T.textDim, T.card);
     System.drawString("Apaga Wi-Fi, PIN, brilho e outras", 20, 88, 1);
-    System.drawString("configuracoes. Apps sao mantidos.", 20, 102, 1);
+    System.drawString("configurações. Apps são mantidos.", 20, 102, 1);
     System.fillRoundRect(48, 136, 144, 32, 8, T.err);
     ctext("Limpar", 120, 152, 2, T.text, T.err);
 
@@ -768,9 +777,9 @@ function drawReset() {
     System.setTextColor(T.text, T.card);
     System.drawString("Reset total", 20, 190, 2);
     System.setTextColor(T.warn, T.card);
-    System.drawString("APAGA TUDO: apps, icones e configs.", 20, 216, 1);
+    System.drawString("APAGA TUDO: apps, ícones e configs.", 20, 216, 1);
     System.setTextColor(T.textDim, T.card);
-    System.drawString("Recuperacao exige cabo USB.", 20, 230, 1);
+    System.drawString("Recuperação exige cabo USB.", 20, 230, 1);
     System.fillRoundRect(48, 258, 144, 32, 8, T.err);
     ctext("Reset total", 120, 274, 2, T.text, T.err);
 }
@@ -863,7 +872,7 @@ function onTap() {
         var idx4 = rowAt(t);
         if (idx4 < 0) return;
         System.setTimezone(TZS[idx4][1]);
-        note("Fuso horario", "Fuso aplicado", 800);
+        note("Fuso horário", "Fuso aplicado", 800);
         go("time");
     } else if (tela === "security") {
         var idx5 = rowAt(t);
@@ -874,24 +883,24 @@ function onTap() {
         } else if (a5 === "chg") {
             var cur = System.prompt("PIN atual", "");
             if (cur === null || cur === "") return;
-            if (!pinOk(cur)) { note("Seguranca", "PIN incorreto", 1100); return; }
+            if (!pinOk(cur)) { note("Segurança", "PIN incorreto", 1100); return; }
             if (flowNewPin()) { rebuildItems(); drawAll(); }
         } else if (a5 === "rm") {
             var cur2 = System.prompt("PIN atual", "");
             if (cur2 === null || cur2 === "") return;
-            if (!pinOk(cur2)) { note("Seguranca", "PIN incorreto", 1100); return; }
+            if (!pinOk(cur2)) { note("Segurança", "PIN incorreto", 1100); return; }
             System.pinClear();
-            note("Seguranca", "PIN removido", 1000);
+            note("Segurança", "PIN removido", 1000);
             rebuildItems();
             drawAll();
         } else if (a5 === "wpw") {
             var np = System.prompt("Nova senha web (6+ chars)", "");
             if (np === null || np === "") return;
             if (!System.webAuthSetPass(np)) {
-                note("Seguranca", "Use 6 a 31 caracteres", 1200);
+                note("Segurança", "Use 6 a 31 caracteres", 1200);
                 return;
             }
-            note("Seguranca", "Senha web alterada", 1000);
+            note("Segurança", "Senha web alterada", 1000);
             rebuildItems();
             drawAll();
         }
@@ -901,18 +910,18 @@ function onTap() {
         else if (otaState === "done" && hit(t, 60, 170, 120, 36)) System.restart();
     } else if (tela === "reset") {
         if (hit(t, 48, 136, 144, 32)) {
-            askConfirm("Limpar configuracoes?",
-                "Apaga redes Wi-Fi, PIN, brilho e outras configuracoes. Apps e icones sao mantidos.",
+            askConfirm("Limpar configurações?",
+                "Apaga redes Wi-Fi, PIN, brilho e outras configurações. Apps e ícones são mantidos.",
                 "Continuar", function () {
-                    askConfirm("Confirmar limpeza", "Limpar todas as configuracoes agora?", "Apagar",
+                    askConfirm("Confirmar limpeza", "Limpar todas as configurações agora?", "Apagar",
                         function () { doReset("configs"); });
                 });
         } else if (hit(t, 48, 258, 144, 32)) {
             askConfirm("Reset total?",
-                "APAGA TUDO: apps, icones e configuracoes. A recuperacao exige cabo USB.",
+                "APAGA TUDO: apps, ícones e configurações. A recuperação exige cabo USB.",
                 "Continuar", function () {
                     askConfirm("Apagar tudo?",
-                        "O armazenamento interno sera formatado. Os apps somem!",
+                        "O armazenamento interno será formatado. Os apps somem!",
                         "Formatar", function () { doReset("total"); });
                 });
         }

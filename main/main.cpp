@@ -145,7 +145,7 @@ static void celerSetup() {
     celer_log_printf("reset: motivo %d\n", (int)rr);  // esp_reset_reason_t
     if (const char* fatal = CelerKernel::takeLastFatal()) {
         celer_log_printf("reiniciou por fatal do runtime JS: %s\n", fatal);
-        kui::Navigator::toast(i18n::TR("Um app ficou sem memoria e o sistema reiniciou",
+        kui::Navigator::toast(i18n::TR("Um app ficou sem memória e o sistema reiniciou",
                                        "An app ran out of memory and the system restarted"),
                               THEME_WARN, 4000);
     }
@@ -159,8 +159,8 @@ static void celerSetup() {
         }
     }
     if (FileSystem::localMountFailed()) {
-        kui::Navigator::toast(i18n::TR("Armazenamento interno corrompido — recupere pelo USB",
-                                       "Internal storage corrupted — recover over USB"),
+        kui::Navigator::toast(i18n::TR("Armazenamento interno corrompido: recupere pelo USB",
+                                       "Internal storage corrupted: recover over USB"),
                               THEME_WARN, 5000);
     }
 

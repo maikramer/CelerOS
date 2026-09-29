@@ -62,8 +62,8 @@ Boot order: Board::init -> UI::init -> FileSystem::init -> SerialLink -> USBDevi
 - CYD runs **unicore** with `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: the free IRAM holds the app source during compile, the TLS buffers, and Duktape overflow past a 24KB DRAM reserve. Tasks must not be pinned to core 1 (use `portNUM_PROCESSORS - 1`).
 - The littlefs partition has CSV subtype `spiffs` but is mounted as LittleFS at `/local`. The SD card is at `/sd`.
 - JS apps use a 240x320 virtual coordinate space, scaled by `UI::sx/sy`.
-- Comments, logs, and CLI output are in Portuguese (no accents). Headers use Doxygen.
-- Generated but committed: `main/Assets/SplashLogo.h` (make_splash.py, PNG), `data/icons/*.png` (make_icons.py + icons.json), `components/duktape/duktape.c|h`, `duk_config.h` (Duktape configure.py). Web pages are gzipped at build time from `main/WebManager/*.html`.
+- Comments, logs, and CLI output are in Portuguese (no accents). Headers use Doxygen. Text shown on screen (UI, toasts, app strings) may use accents: the fonts cover Latin-1 (U+0020..U+00FF; no em dash, curly quotes or emoji). `tools/acentuar.py` restores accents inside string literals.
+- Generated but committed: `main/Assets/Fonts/CelerFonts.{h,cpp}` (make_fonts.py: LovyanGFX ASCII verbatim + Latin-1 accents), `main/Assets/SplashLogo.h` (make_splash.py, PNG), `data/icons/*.png` (make_icons.py + icons.json), `components/duktape/duktape.c|h`, `duk_config.h` (Duktape configure.py). Web pages are gzipped at build time from `main/WebManager/*.html`.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - NEVER call `Storage::initialize()`: it mounts SPIFFS over `/local`. Use `main/FileSystem`.

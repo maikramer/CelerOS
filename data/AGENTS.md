@@ -30,7 +30,7 @@ data/
 - The app loop is a blocking `while` with `System.delay()`; there are no events or callbacks. Exit through `System.exitApp()`.
 - Work in 240x320 virtual coords and take colors from `System.theme()`. Never hardcode the screen size.
 - Persist state under `/local/...`, never inside another app's folder.
-- UI strings are Portuguese.
+- UI strings are Portuguese, with accents (the fonts cover Latin-1: á é ç ã õ ô °...; not em dash, curly quotes or emoji). `python3 tools/acentuar.py --write <main.js>` restores accents inside strings.
 
 ## ANTI-PATTERNS
 - Assuming an OTA firmware update refreshes these apps. It doesn't: LittleFS is untouched by OTA. Update devices with `tools/flash_data.sh`, `celerctl apps install`, or the App Store.

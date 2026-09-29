@@ -370,11 +370,11 @@ function loadCatalog() {
     selIt = null;
     retryMode = "load";
 
-    drawLoading("Baixando catalogo...", "");
+    drawLoading("Baixando catálogo...", "");
     System.delay(30);
     var idx = fetchJSON(INDEX_URL);
     if (!idx || !idx.categories) {
-        errMsg = "Falha ao baixar o catalogo";
+        errMsg = "Falha ao baixar o catálogo";
         errHint = "Verifique a internet.";
         return "err";
     }
@@ -386,7 +386,7 @@ function loadCatalog() {
     var catsIdx = idx.categories;
     var gotAll = false;
     if (catsIdx["Todos"]) {
-        drawLoading("Baixando catalogo...", "todos os apps");
+        drawLoading("Baixando catálogo...", "todos os apps");
         System.delay(30);
         var all = fetchJSON(catsIdx["Todos"]);
         if (all && all.apps) {
@@ -418,7 +418,7 @@ function loadCatalog() {
             }
         }
         if (entries.length === 0 && catTotal > 0 && catOk === 0) {
-            errMsg = "Falha ao baixar o catalogo";
+            errMsg = "Falha ao baixar o catálogo";
             errHint = "Verifique a internet.";
             return "err";
         }
@@ -461,7 +461,7 @@ function loadCache() {
 function drawTabs() {
     System.fillRect(0, 0, 240, TAB_H, T.card);
     System.drawFastHLine(0, TAB_H, 240, T.stroke);
-    var names = ["Loja", "Atualizacoes", "Meus apps"];
+    var names = ["Loja", "Atualizações", "Meus apps"];
     for (var i = 0; i < 3; i++) {
         var col;
         if (i === curTab) col = T.text;
@@ -534,9 +534,9 @@ function listY() {
 }
 function drawCountLine() {
     if (curTab === 1) {
-        ctext(updCount === 0 ? "Nenhuma atualizacao" :
-              (updCount + (updCount === 1 ? " atualizacao disponivel"
-                                          : " atualizacoes disponiveis")),
+        ctext(updCount === 0 ? "Nenhuma atualização" :
+              (updCount + (updCount === 1 ? " atualização disponível"
+                                          : " atualizações disponíveis")),
               120, 41, 1, updCount ? T.warn : T.textDim, T.bg);
     } else if (curTab === 2) {
         var n = 0;
@@ -773,7 +773,7 @@ function drawDetail() {
                            : "-";
     var rows = [
         ["Autor", truncLine(it.author || "-", 118, 1)],
-        ["Local", lm ? ("v" + (lm.ver || "?")) : "nao instalado"],
+        ["Local", lm ? ("v" + (lm.ver || "?")) : "não instalado"],
         ["Remota", remote]
     ];
     var yy = 42;
@@ -793,8 +793,8 @@ function drawDetail() {
     // descricao + novidades
     var news = it.changelog && st.code !== "new" && st.code !== "api";
     System.setTextColor(T.textDim, T.bg);
-    System.drawString("Descricao", 10, 130, 1);
-    var lines = wrapLines(it.desc || "Sem descricao.", 220, 1, news ? 2 : 4);
+    System.drawString("Descrição", 10, 130, 1);
+    var lines = wrapLines(it.desc || "Sem descrição.", 220, 1, news ? 2 : 4);
     var y2 = 142;
     for (var k = 0; k < lines.length; k++) {
         System.setTextColor(T.text, T.bg);
@@ -817,8 +817,8 @@ function drawDetail() {
     if (it.appUrl && (it.api || 1) > API) {
         ctext("Requer API " + it.api + " (sistema: " + API + ")", 120, 254, 1, T.warn, T.bg);
     } else if (it.appUrl && st.code === "hw") {
-        ctext("Incompativel: requer hardware com PSRAM", 120, 250, 1, T.warn, T.bg);
-        ctext("(a RAM interna nao basta p/ este app)", 120, 264, 1, T.textDim, T.bg);
+        ctext("Incompatível: requer hardware com PSRAM", 120, 250, 1, T.warn, T.bg);
+        ctext("(a RAM interna não basta p/ este app)", 120, 264, 1, T.textDim, T.bg);
     } else if (it.appUrl) {
         var lbl = st.code === "upd" ? "Atualizar" :
                   st.code === "inst" ? "Reinstalar" : "Instalar";
@@ -948,8 +948,8 @@ function installApp() {
     var it = selIt;
     if (it && stateInfo(it).code === "hw") {
         // incompativel com esta placa: mesmo caminho das falhas de install
-        errMsg = "Incompativel com esta placa";
-        errHint = "Este app exige hardware com PSRAM (a RAM interna nao basta para o runtime dele).";
+        errMsg = "Incompatível com esta placa";
+        errHint = "Este app exige hardware com PSRAM (a RAM interna não basta para o runtime dele).";
         return "err";
     }
     retryMode = "install";
@@ -963,12 +963,12 @@ function installApp() {
     var tmp = dir + "/main.js.new";
 
     if (!Net.isConnected()) {
-        fail = "Sem conexao WiFi";
+        fail = "Sem conexão WiFi";
     } else {
         var need = (it.size || 0) + 16384;
         var free = 0;
         try { free = FS.getFreeSpace(root); } catch (e) { free = 0; }
-        if (free > 0 && free < need) fail = "Sem espaco no disco";
+        if (free > 0 && free < need) fail = "Sem espaço no disco";
     }
 
     var json = "";
@@ -999,7 +999,7 @@ function installApp() {
         try { md = FS.getFileMD5(tmp); } catch (e2) { md = ""; }
         if (md !== it.md5) {
             FS.deleteFile(tmp);
-            fail = "Verificacao falhou (md5)";
+            fail = "Verificação falhou (md5)";
         }
     }
 
@@ -1067,7 +1067,7 @@ function drawBatch(k, n, name) {
     drawTabs();
     ctext("Atualizando " + k + " de " + n, 120, 96, 2, T.text, T.bg);
     ctext(truncLine(name, 216, 1), 120, 124, 1, T.textDim, T.bg);
-    ctext("nao feche a loja", 120, 150, 1, T.textDim, T.bg);
+    ctext("não feche a loja", 120, 150, 1, T.textDim, T.bg);
 }
 function screenBatch() {
     updateAll();

@@ -8,6 +8,7 @@
 # e habilitacao explicita (CELEROS_USB_NATIVE). Na SmartDisplay 4848S040 o
 # GPIO19 e o SDA do touch GT911: o celerctl roda na UART via SerialLink.
 set(CELEROS_SRCS
+    "Assets/Fonts/CelerFonts.cpp"
     "main.cpp"
     "Compat/CelerCompat.cpp"
     "FileSystem/FileSystem.cpp"
