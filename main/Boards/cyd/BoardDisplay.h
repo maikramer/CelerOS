@@ -45,6 +45,9 @@ public:
             // (3-wire, le pelo MOSI) devolvia tudo preto no readRect —
             // screencap vazio e blend de icone no modo direto sobre preto.
             cfg.spi_3wire = false;
+            // leitura (screencap/readRect) a 8MHz trazia erros de bit
+            // esparsos (pixels vermelhos soltos); 5MHz le limpo
+            cfg.freq_read = 5000000;
             _bus.config(cfg);
             _panel.setBus(&_bus);
         }
@@ -63,6 +66,12 @@ public:
             cfg.offset_x = 0;
             cfg.offset_y = 0;
             cfg.offset_rotation = 0;
+            // Leitura (readRect: screencap, blend de icone no modo direto):
+            // o controlador desta placa le com 8 bits de dummy (padrao
+            // ILI9341), nao os 16 do Panel_ST7789 — com 16 cada pixel lido
+            // saia deslocado 1 byte (canais rotacionados: vermelho virava
+            // azul). A escrita nao depende disso.
+            cfg.dummy_read_pixel = 8;
             _panel.config(cfg);
         }
         {

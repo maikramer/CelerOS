@@ -628,6 +628,9 @@ void TouchPump::poll(const Handler& onEvent) {
             return;
         }
         s_quarantineUntilMs = 0;
+        // o frame desenhado durante a quarentena pode ter o realce do toque
+        // que fechou o app (ex.: WiFi sob o X): redesenha ja com o vidro limpo
+        Navigator::repaint();
     }
 
     // Debounce do release (touch resistivo XPT2046: a pressao oscila no
