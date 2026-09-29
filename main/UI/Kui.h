@@ -179,6 +179,10 @@ public:
 
     virtual void onEnter() {}                    // entrou na pilha
     virtual void onExit() {}                     // saiu da pilha
+    // voltou ao TOPO da pilha (pop/home/remove de quem estava em cima, ou
+    // dialog fechou): telas com estado visual incremental usam para saber
+    // que precisam redesenhar do zero (ex.: launcher limpa o fundo)
+    virtual void onResume() {}
     virtual void draw(Canvas& c) = 0;            // redesenho completo da tela
     virtual bool onTouch(const TouchEvent& ev) { (void)ev; return false; }
     virtual void onTick(uint32_t dtMs) { (void)dtMs; }

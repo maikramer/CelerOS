@@ -64,6 +64,12 @@ kui::Rect LauncherScreen::cellRect(int entryIndex) const {
     return {gridLeft() + col * gridCellW(), gridTop() + row * gridCellH(), gridCellW(), gridCellH()};
 }
 
+void LauncherScreen::onResume() {
+    // voltou de app/dialog/erro: o vidro contem conteudo de outra tela —
+    // o proximo draw precisa limpar o fundo (modo direto sem sprite)
+    m_needClear = true;
+}
+
 void LauncherScreen::onEnter() {
     if (LauncherUI::needsRescan) {
         LauncherUI::scanLocalApps();

@@ -12,6 +12,7 @@
 class LauncherScreen : public kui::Screen {
 public:
     void onEnter() override;
+    void onResume() override;
     void draw(kui::Canvas& c) override;
     bool onTouch(const kui::TouchEvent& ev) override;
     void onTick(uint32_t dtMs) override;

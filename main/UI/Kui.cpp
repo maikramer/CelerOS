@@ -744,6 +744,7 @@ void Navigator::pop() {
     s_stack.pop_back();
     if (!s_stack.empty()) s_stack.back()->onEnter();
     s_repaint = true;
+    if (!s_stack.empty()) s_stack.back()->onResume();
 }
 
 void Navigator::replace(Screen* s) {
@@ -769,6 +770,7 @@ void Navigator::remove(Screen* s) {
         s_repaint = true;
         return;
     }
+    if (!s_stack.empty()) s_stack.back()->onResume();
 }
 
 void Navigator::home() {
@@ -779,6 +781,7 @@ void Navigator::home() {
     if (!s_stack.empty()) s_stack.back()->onEnter();
     closeDialog();
     s_repaint = true;
+    if (!s_stack.empty()) s_stack.back()->onResume();
 }
 
 Screen* Navigator::top() { return s_stack.empty() ? nullptr : s_stack.back(); }
@@ -796,6 +799,7 @@ void Navigator::closeDialog() {
         s_dialog = nullptr;
         s_repaint = true;
     }
+    if (!s_stack.empty()) s_stack.back()->onResume();
 }
 
 void Navigator::toast(const std::string& message, uint32_t color, uint32_t durationMs) {
