@@ -204,7 +204,7 @@ function makeEnv() {
         getAPILevel: function() { return 6; },
         getInfo: function() {
             return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 110000,
+                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000,
                 totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
                 chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
@@ -429,6 +429,10 @@ function joinLog(log) { return log.join('\n'); }
     env.FS.writeTextFile('/local/apps/celeros.mesmo/app.json',
         JSON.stringify({ packageName: 'celeros.mesmo', name: 'Mesmo', version: '1.0.0' }));
     env.FS.writeTextFile('/local/apps/celeros.mesmo/main.js', 'MMM');
+    env.FS.mkdir('/local/apps/celeros.dev');
+    env.FS.writeTextFile('/local/apps/celeros.dev/app.json',
+        JSON.stringify({ packageName: 'celeros.dev', name: 'Dev', version: '2.1.2' }));
+    env.FS.writeTextFile('/local/apps/celeros.dev/main.js', 'DDD');
 
     api.scanLocalApps();
     api.setCatalog([
@@ -439,7 +443,9 @@ function joinLog(log) { return log.join('\n'); }
         { pkg: 'celeros.mesmo', metaUrl: 'h/m/app.json', appUrl: 'h/m/main.js',
           name: 'Mesmo', ver: '1.0.0', api: 3 },
         { pkg: 'celeros.futuro', metaUrl: 'h/f/app.json', appUrl: 'h/f/main.js',
-          name: 'Futuro', ver: '1.0.0', api: 7 }
+          name: 'Futuro', ver: '1.0.0', api: 7 },
+        { pkg: 'celeros.dev', metaUrl: 'h/d/app.json', appUrl: 'h/d/main.js',
+          name: 'Dev', ver: '2.0.1', api: 3 }
     ]);
 
     var st = function(pkg) {
@@ -450,6 +456,7 @@ function joinLog(log) { return log.join('\n'); }
     check('estado new (nao instalado)', st('celeros.novo') === 'new');
     check('estado inst (mesma versao)', st('celeros.mesmo') === 'inst');
     check('estado api (exige API 7)', st('celeros.futuro') === 'api');
+    check('estado inst (local mais nova que o hub: sem downgrade)', st('celeros.dev') === 'inst');
     check('contador de atualizacoes = 1', api.updCount() === 1);
 
     api.refresh();  // ordena: atualizacao vem primeiro

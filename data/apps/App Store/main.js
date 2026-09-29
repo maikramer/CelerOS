@@ -22,14 +22,14 @@
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
 // Compatibilidade de hardware: sem PSRAM, o main.js (compilado + dados do
 // app) tem que caber na RAM interna. Teto DINAMICO pela RAM que a placa da
-// a um app (getInfo().appRAM: heap livre no inicio do app — freeRAM
-// agora mede a loja ja carregada): ~0,55 byte de fonte por byte livre acima
-// da folga do sistema (CYD: ~48KB; Settings/App Store rodam). Firmware
-// antigo sem appRAM: formula antiga (heap base de ~52KB).
+// a um app (getInfo().appRAM: DRAM + IRAM livres no inicio do app — freeRAM
+// agora mede a loja ja carregada). Calibrado na CYD (appRAM ~225KB): app de
+// 61KB roda, de 82KB nao compila -> (appRAM - 60000) * 0,4 = ~66KB.
+// Firmware antigo sem appRAM: formula antiga (heap base de ~52KB).
 var HWINFO = System.getInfo ? System.getInfo() : null;
 var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
 var PSRAM_MAX_JS = !NO_PSRAM ? Infinity
-    : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 28000) * 0.55))
+    : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 60000) * 0.4))
     : Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7));
 function needsPsram(it) { return (it.size || 0) > PSRAM_MAX_JS; }
 
@@ -245,7 +245,9 @@ function stateInfo(it) {
     if ((it.api || 1) > API) return { code: "api", txt: "API " + it.api, col: T.warn };
     if (NO_PSRAM && needsPsram(it)) return { code: "hw", txt: "Requer PSRAM", col: T.warn };
     if (!loc) return { code: "new", txt: "Novo", col: T.ok };
-    if (cmpV(it.ver, loc.ver) === 0) {
+    // so oferece update se o hub for MAIS NOVO: versao local mais nova (dev,
+    // imagem da flash a frente do hub) nao pode virar "Atualizar" (downgrade)
+    if (cmpV(it.ver, loc.ver) <= 0) {
         return { code: "inst", txt: "Instalado", col: T.textDim };
     }
     return { code: "upd", txt: "Atualizar", col: T.warn };
