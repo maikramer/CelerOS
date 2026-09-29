@@ -5,8 +5,10 @@
 # Regerar duktape.c/duktape.h/duk_config.h (a partir do release oficial):
 #   curl -LO https://duktape.org/duktape-2.7.0.tar.xz && tar xf duktape-2.7.0.tar.xz
 #   (configure.py do 2.7.0 so roda em Python 2.7 + PyYAML; ex.: imagem python:2.7-slim)
-#   python2 duktape-2.7.0/tools/configure.py --output-directory /tmp/duk \
-#       --option-file components/duktape/celeros_duk_config.yaml
+#   python3 tools/duk_rom_strings.py   (nomes da API JS -> celeros_rom_strings.yaml)
+#   python2 duktape-2.7.0/tools/configure.py --output-directory /tmp/duk --rom-support \
+#       --option-file components/duktape/celeros_duk_config.yaml \
+#       --builtin-file components/duktape/celeros_rom_strings.yaml
 #   cp /tmp/duk/duktape.c /tmp/duk/duktape.h /tmp/duk/duk_config.h components/duktape/
 DUK_USE_ES6_PROXY: false
 DUK_USE_REFLECT_BUILTIN: false
@@ -20,3 +22,23 @@ DUK_USE_BUFFEROBJECT_SUPPORT: false
 DUK_USE_COROUTINE_SUPPORT: false
 DUK_USE_JX: false
 DUK_USE_JC: false
+
+# ---- Memoria (CYD sem PSRAM: heap Duktape disputa ~90KB de RAM interna) ----
+# Builtins (Object/Array/Math/JSON... e as strings deles) na FLASH: o heap
+# base cai de ~50KB para poucos KB. O global e um objeto RAM que herda do
+# global ROM (apps continuam criando globais). Custo: builtins read-only
+# (nenhum app do CelerOS altera prototypes de builtin).
+DUK_USE_ROM_STRINGS: true
+DUK_USE_ROM_OBJECTS: true
+DUK_USE_ROM_GLOBAL_INHERIT: true
+DUK_USE_ROM_GLOBAL_CLONE: false
+# Tabela de strings menor no inicio (cresce sob demanda): -3KB por heap
+DUK_USE_STRTAB_MINSIZE: 256
+# Hash part so em objetos grandes; sem cache de activation/catcher
+DUK_USE_HOBJECT_HASH_PROP_LIMIT: 32
+DUK_USE_CACHE_ACTIVATION: false
+DUK_USE_CACHE_CATCHER: false
+# fileName por funcao compilada (nao-padrao): o erro segue com linha (pc2line)
+DUK_USE_FUNC_FILENAME_PROPERTY: false
+# Indice de array cacheado na string: incompativel com builtins em ROM
+DUK_USE_HSTRING_ARRIDX: false
