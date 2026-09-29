@@ -102,7 +102,7 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Description:** Returns an object containing the current state of the ESP32 hardware, including memory usage, CPU speed, and hardware specifications. Useful for debugging memory leaks and checking uptime.
   - `minFreeRAM`: The lowest free RAM amount recorded since boot.
   - `maxAllocRAM`: The largest single contiguous block of RAM you can allocate.
-  - `appRAM`: Free heap when the current app was launched (before its code was loaded) — how much RAM this board gives an app. `freeRAM` is measured now, with your app already loaded. Absent on older firmware.
+  - `appRAM`: Free heap when the current app was launched (before its code was loaded; on boards without PSRAM, internal RAM plus the byte-accessible IRAM the runtime overflows into) — how much RAM this board gives an app. `freeRAM` is measured now, with your app already loaded. Absent on older firmware.
 
 #### `System.getIPAddress()`
 - **Returns:** String

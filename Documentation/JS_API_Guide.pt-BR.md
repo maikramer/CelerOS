@@ -138,7 +138,7 @@ para o SO do ESP32.
   depurar vazamentos de memória e checar uptime.
   - `minFreeRAM`: o menor valor de RAM livre registrado desde o boot.
   - `maxAllocRAM`: o maior bloco contíguo único que se pode alocar.
-  - `appRAM`: heap livre quando o app atual foi aberto (antes de carregar o código) — quanto de RAM a placa dá a um app. `freeRAM` é medido agora, com o app já carregado. Ausente em firmware antigo.
+  - `appRAM`: heap livre quando o app atual foi aberto (antes de carregar o código; em placas sem PSRAM, RAM interna mais a IRAM acessível a byte para onde o runtime transborda) — quanto de RAM a placa dá a um app. `freeRAM` é medido agora, com o app já carregado. Ausente em firmware antigo.
 
 #### `System.getIPAddress()`
 - **Retorna:** String

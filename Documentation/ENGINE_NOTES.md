@@ -80,7 +80,8 @@ do compile). `System.getInfo().appRAM` expoe o heap livre no inicio do app;
 a loja usa `(appRAM - 28000) * 0,55` como teto de main.js sem PSRAM.
 
 Nao existe mais "radio desligado durante o app" (rendia ~3KB e quebrava apps
-que usam `Net` sem declarar). Limite pratico: main.js de ~45KB sem PSRAM.
+que usam `Net` sem declarar). Limite pratico: main.js de ~45KB sem PSRAM
+(~60KB apos a rodada 4).
 O proximo degrau, se preciso: `DUK_USE_PC2LINE` off so na CYD (-9% no
 residente, perde numero de linha nos erros).
 
@@ -119,3 +120,30 @@ Apps JS agora rodam na CYD (sem PSRAM) por nivel:
 - Apps sem campo permissions sao tratados como nivel 1 (radio off em placas
   sem PSRAM); um app que use Net sem declarar ve "WiFi is not connected"
   (nao rodaria de qualquer forma com o radio ligado).
+
+## CYD sem PSRAM: rodada 4 (2026-09) — mais RAM para apps
+
+Objetivo: folga para apps JS maiores sem mexer na aparencia (fontes, icones
+48px e as faixas do Canvas ficam como estao). Medido na CYD:
+
+| alavanca | ganho |
+|---|---|
+| codigo do WiFi que so estava na IRAM por throughput (`ESP_WIFI_IRAM_OPT`, `ESP_WIFI_RX_IRAM_OPT`) e do heap para a flash | IRAM de codigo 85,6KB -> 50,7KB: ~+35KB de IRAM livre (vira heap: transbordo do JS, fonte do compile, TLS) |
+| link serial (celerctl): READ e screencap escrevem direto no frame de resposta; tabela do `ps` so durante o comando | .bss 51,4KB -> 43,2KB (+8KB de DRAM) e screencap sem 4KB de heap |
+| scan de fundo do WiFi (roaming) so com mais de uma rede salva | sem scan a cada 30s derrubando pacotes/alocando resultados |
+
+Resultado: no launcher, DRAM livre 53 -> 64KB e IRAM livre ~75 -> ~109KB;
+App Store rodando com 29KB de DRAM livre (antes ~19KB). Teste com apps
+sinteticos (funcoes + strings no estilo dos apps reais): 61KB de main.js
+roda (52KB enxuto, 128 funcoes); 82KB nao compila (tela "Sem memoria" limpa).
+`appRAM` passa a contar DRAM + IRAM (~225KB na CYD) e a loja usa
+`(appRAM - 60000) * 0,4` (~66KB).
+
+Descartado por render pouco: opcoes de objeto do Duktape (`FUNC_NAME_PROPERTY`
+off: -2% e perde nomes nos erros; `HSTRING_CLEN`/`HASH_PART`: ~0) e `-O2` no
+duktape (+54KB de flash, compile igual).
+
+Diagnostico novo: o fatal do Duktape (que reinicia sem coredump) grava o
+motivo em RAM RTC e o boot loga `reset: motivo N` + a mensagem do fatal, com
+toast. `reset: motivo 1` (POWERON) na CYD costuma ser o host mexendo nas
+linhas DTR/RTS da serial, nao crash.
