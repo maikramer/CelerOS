@@ -21,6 +21,10 @@ public:
     static lgfx::LGFXBase* gfx();
     // Leva o quadro automatico ao vidro se houve desenho desde o ultimo
     static void present();
+    // Recorte do display quando o app desenha direto nele (sem quadro PSRAM):
+    // o do app (System.setClip) intersectado com a area abaixo da topbar
+    static void setAppDisplayClip(bool on, int x, int y, int w, int h);
+    static void applyDisplayClip();
     // y fisico do desenho no alvo corrente (quadro/display descontam a topbar
     // do sistema; o sprite do app e canvas proprio, origem em 0)
     static int mapY(int v);

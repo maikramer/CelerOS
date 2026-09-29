@@ -6,8 +6,6 @@
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
 #include "Core/CelerKernel.h"
-#include "../../WebManager/WebManager.h"
-#include "../../Boards/Board.h"
 #include "../../UI/Kui.h"
 #include "../../USBDevice/LogSink.h"
 
@@ -50,10 +48,9 @@ bool supported() { return true; }
 bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
                       const std::string& appPkg, uint32_t perms) {
     if (s_task != nullptr) return false;  // um app por vez
-    if (!Board::profile().hasPsram && !usesNet) WebManager::suspendRadio();
 
     AppParams* p = new AppParams{filePath, title, topbarFixed, appPkg, perms};
-    if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, &s_task, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, &s_task, portNUM_PROCESSORS - 1) != pdPASS) {
         delete p;
         s_task = nullptr;
         return false;
@@ -68,12 +65,6 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
 }
 
 bool running() { return s_running; }
-
-bool consumeResumeRadio() {
-    // o suspend acontece no start (main task); o resume fica pro fim do app
-    // na main task — ver AppHostScreen::finishApp
-    return false;
-}
 
 void requestWifiSetup() { s_wifiSetupRequested = true; }
 
@@ -90,9 +81,8 @@ bool consumeWifiSetupRequest() {
 namespace AppRunner {
 
 bool supported() { return false; }
-bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t, bool) { return false; }
+bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t) { return false; }
 bool running() { return false; }
-bool consumeResumeRadio() { return false; }
 void requestWifiSetup() {}
 bool consumeWifiSetupRequest() { return false; }
 

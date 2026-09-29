@@ -37,13 +37,6 @@ public:
     // abrir o captive portal, que precisa da porta 80
     static void stopWebServer();
 
-    // Liga/desliga o RADIO (esp_wifi_stop libera ~35KB de heap do WiFi/lwIP).
-    // Usado em placas sem PSRAM durante apps JS que nao usam rede: e o que
-    // cabe o runtime Duktape na RAM interna. Resume deixa a task do
-    // NetworkManager reconectar sozinha.
-    static void suspendRadio();
-    static void resumeRadio();
-
     // Deve ser chamado no loop principal: consumir o reboot diferido do
     // upload web de firmware
     static void tick();

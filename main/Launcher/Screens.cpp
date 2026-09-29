@@ -122,7 +122,7 @@ void LauncherScreen::draw(kui::Canvas& c) {
     bool clearBg = m_needClear || m_dragDx != 0;
     m_needClear = false;
     if (clearBg) c.fill(THEME_BG);
-    drawStatusBar(c);
+    if (c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
 
     // grid: pagina atual deslocada pelo arrasto + vizinha entrando pela borda
     const lgfx::IFont* labelFont = kui::type::caption();
@@ -133,7 +133,7 @@ void LauncherScreen::draw(kui::Canvas& c) {
              entry < LauncherUI::gridTotalEntries() && entry < (pg + 1) * gridCellsPerPage(); entry++) {
             kui::Rect cell = cellRect(entry);
             cell.x += xOff;
-            if (cell.x + cell.w <= 0 || cell.x >= UI::W) continue;
+            if (cell.x + cell.w <= 0 || cell.x >= UI::W || !c.visible(cell)) continue;
             int iconX = cell.x + (cell.w - Icon::SIZE) / 2;
             int labelH = c.fontHeight(labelFont);
             int iconY = cell.y + (cell.h - Icon::SIZE - labelGap - labelH) / 2;
@@ -394,7 +394,6 @@ void AppHostScreen::onTick(uint32_t) {
 }
 
 void AppHostScreen::finishApp() {
-    if (AppRunner::consumeResumeRadio()) WebManager::resumeRadio();
     // O toque que fechou o app (X do canto, botao do proprio app, erro) morre
     // aqui: sem isso o release vira tap no launcher — e o WiFi mora no mesmo
     // canto do X.

@@ -50,13 +50,23 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_setClip(duk_context *ctx) {
     // Recorte no canvas virtual: desenho fora de (x,y,w,h) e descartado
-    gfx()->setClipRect(jsx(duk_require_int(ctx, 0)), jsy(duk_require_int(ctx, 1)),
-                       jsx(duk_require_int(ctx, 2)), jsH(duk_require_int(ctx, 3)));
+    const int x = jsx(duk_require_int(ctx, 0)), y = jsy(duk_require_int(ctx, 1));
+    const int w = jsx(duk_require_int(ctx, 2)), h = jsH(duk_require_int(ctx, 3));
+    if (gfx() == tftInstance) {
+        // direto no display: intersecta com o recorte da faixa do sistema
+        setAppDisplayClip(true, x, y, w, h);
+        return 0;
+    }
+    gfx()->setClipRect(x, y, w, h);
     return 0;
 }
 
 duk_ret_t JSBindings::js_clearClip(duk_context *ctx) {
     (void)ctx;
+    if (gfx() == tftInstance) {
+        setAppDisplayClip(false, 0, 0, 0, 0);  // o recorte da faixa continua
+        return 0;
+    }
     gfx()->clearClipRect();
     return 0;
 }

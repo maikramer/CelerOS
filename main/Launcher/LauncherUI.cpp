@@ -7,7 +7,6 @@
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../Boards/Board.h"
-#include "../WebManager/WebManager.h"
 #include "../Utils/StrUtils.h"
 
 CelerDisplay *LauncherUI::tftInstance = nullptr;
@@ -15,7 +14,6 @@ std::string LauncherUI::appPaths[50];
 std::string LauncherUI::appNames[50];
 std::string LauncherUI::appPkg[50];
 uint32_t LauncherUI::appPerms[50];
-bool LauncherUI::appUsesNet[50];   // declarou "net"? (sem PSRAM: radio off durante o app)
 std::string LauncherUI::appIcons[50];
 bool   LauncherUI::appIsFolder[50];
 bool   LauncherUI::appIsSystem[50];
@@ -77,7 +75,9 @@ int LauncherUI::totalEntries() {
 }
 
 int LauncherUI::cols() {
-    return (UI::W >= 400) ? 4 : 3;
+    // 4 colunas a partir de 300px (SmartDisplay 480 e CYD landscape 320,
+    // celula de 80px com icone de 48); retrato estreito fica com 3
+    return (UI::W >= 300) ? 4 : 3;
 }
 
 int LauncherUI::rows() {
@@ -122,7 +122,6 @@ void LauncherUI::scanLocalApps() {
             bool isFolder = false, system = false, topbar = false;
             int order = 100;
             uint32_t appEntryPerms = 0xFFFFFFFFu;  // .js avulso: sem app.json = tudo
-            bool appEntryUsesNet = false;          // .js avulso: basico
 
             if (entries[i].isDir) {
                 std::string appJsonPath = entries[i].path;
@@ -133,7 +132,6 @@ void LauncherUI::scanLocalApps() {
 
                 std::string jsonContent = FileSystem::readTextFile(appJsonPath.c_str());
                 appEntryPerms = celer::parsePermissions(jsonContent);
-                appEntryUsesNet = celer::declaresNet(jsonContent);
                 name = FileSystem::parseJsonValue(jsonContent, "name");
                 if (name.length() == 0) continue;
 
@@ -169,6 +167,10 @@ void LauncherUI::scanLocalApps() {
             }
             if (duplicate) continue;
 
+            // tela pequena: icone reduzido fica pronto no cache em flash
+            // (o scan do boot roda com o heap cheio, antes do WiFi)
+            Icon::prewarm(icon.c_str());
+
             appPaths[appCount]    = entries[i].path;
             appNames[appCount]    = name;
             appPkg[appCount]      = pkg;
@@ -178,7 +180,6 @@ void LauncherUI::scanLocalApps() {
             appTopbar[appCount]   = topbar;
             appOrder[appCount]    = order;
             appPerms[appCount]   = appEntryPerms;
-            appUsesNet[appCount] = appEntryUsesNet;
             appCount++;
         }
     }
@@ -233,7 +234,7 @@ const std::string& LauncherUI::appEntryPkg(int i) { return appPkg[i]; }
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
     runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index],
-           appPkg[index], appPerms[index], appUsesNet[index]);
+           appPkg[index], appPerms[index]);
 }
 
 bool LauncherUI::launchAppAsync(int index) {
@@ -246,7 +247,7 @@ bool LauncherUI::launchAppAsync(int index) {
     std::string title;
     resolveApp(appPaths[index], appIsFolder[index], filePath, title);
     return AppRunner::start(filePath, title, appTopbar[index],
-                            appPkg[index], appPerms[index], appUsesNet[index]);
+                            appPkg[index], appPerms[index]);
 #else
     (void)index;
     return false;
@@ -279,27 +280,17 @@ void LauncherUI::resolveApp(const std::string& path, bool isFolder,
 }
 
 void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed,
-                        const std::string& appPkg, uint32_t perms, bool usesNet) {
+                        const std::string& appPkg, uint32_t perms) {
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
 
     std::string filePath, title;
     resolveApp(path, isFolder, filePath, title);
 
-    // Placa sem PSRAM + app sem rede: desce o radio WiFi (~35KB de heap do
-    // WiFi/lwIP volta pro sistema) para o heap base do Duktape caber na RAM
-    // interna; sobe de novo quando o app sai
-    bool radioOff = false;
-    if (!Board::profile().hasPsram && !usesNet) {
-        WebManager::suspendRadio();
-        radioOff = true;
-    }
-
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia
     CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed,
                          appPkg.c_str(), perms);
-    if (radioOff) WebManager::resumeRadio();
     // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
     // coberto na hora pelo launcher — removido)
 }

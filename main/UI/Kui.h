@@ -16,7 +16,8 @@
 //      e o widget, por retangulo inteiro. Fundos "estranhos" acabam.
 //   5. Canvas com buffer: o frame e composto fora da tela e enviado de uma
 //      vez (zero flicker). Com PSRAM: sprite full-screen; sem PSRAM (CYD):
-//      faixas horizontais na RAM interna — a tela e desenhada N vezes, uma
+//      duas faixas horizontais em ping-pong na RAM interna (uma compoe
+//      enquanto a outra sai por DMA) — a tela e desenhada N vezes, uma
 //      por faixa, entao draw() deve ser idempotente (sem efeitos colaterais
 //      alem de calcular geometria).
 //   6. Feedback de toque: widgets consultam kui::isPressed(rect) no draw e
@@ -116,6 +117,14 @@ public:
     // Modo do frame em andamento
     Mode mode() const { return m_mode; }
 
+    // r cruza a area desenhada nesta passada? (Bands: a faixa corrente;
+    // demais modos: sempre). Telas pulam blocos inteiros fora da faixa — o
+    // recorte do sprite descarta os pixels, mas nao o custo de calcular.
+    bool visible(const Rect& r) const {
+        if (m_mode != Bands) return true;
+        return r.y < m_offY + m_target->height() && r.y + r.h > m_offY;
+    }
+
     // Primitivas (unidades fisicas; cores RGB888 como o resto do firmware)
     void fill(uint32_t color);
     void fillRect(const Rect& r, uint32_t color);
@@ -167,6 +176,10 @@ private:
 // optar por animacoes de arrasto continuo; no modo direto (sem PSRAM) cada
 // redraw e visivel — melhor trocar paginas no release do que seguir o dedo.
 bool canvasBuffered();
+
+// Devolve o buffer do Canvas ao heap (16KB de RAM interna sem PSRAM): usado
+// antes de um app JS assumir o vidro. O proximo render realoca sozinho.
+void releaseCanvasBuffer();
 
 // Cabecalho padrao das telas Kui: faixa com titulo; devolve a altura.
 int headerHeight();
@@ -323,7 +336,7 @@ public:
 
 private:
     bool m_down = false;
-    int m_releaseDebounce = 0;  // leituras vazias seguidas (release resistivo)
+    uint32_t m_releaseSinceMs = 0;  // 1a leitura vazia do release pendente (0 = nenhum)
     int m_lastX = 0, m_lastY = 0;
     int m_pressX = 0, m_pressY = 0;
     uint32_t m_pressMs = 0;

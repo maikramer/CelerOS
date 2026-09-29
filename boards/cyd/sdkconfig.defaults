@@ -27,6 +27,37 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # CONFIG_CELEROS_SD_CARD is not set
 
 # Heap para apps JS (32KB padrao roubam 12KB da RAM interna que o runtime
-# Duktape precisa). 16KB NAO serve: medido no device, JSBindings::init +
-# readTextFile nao cabem — o main.js do app vinha vazio ("Failed to read").
+# Duktape precisa). Pico medido: ~8,5KB compilando o App Store (o compile
+# do Duktape e recursivo); 20KB deixa folga para apps mais aninhados.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
+
+# RAM interna (sem PSRAM): o WiFi reservava 10 buffers RX estaticos (~16KB
+# fixos) e o AMPDU RX segura mais. 4 estaticos + 16 dinamicos sobram para o
+# trafego da CYD (loja, OTA, web server) — throughput menor, heap maior.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+
+# Stacks do sistema pelo uso medido (celerctl ps, App Store rodando com
+# HTTPS): sys_evt usa ~2KB dos 8KB do comum; esp_timer ~0,4KB de 3,5KB.
+# O que sobra vira heap 8-bit — o handshake TLS de um app com rede precisa.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
+
+# Unicore: habilita a IRAM livre (~40KB, so acesso 32-bit) como memoria
+# acessivel a byte (emulacao por excecao, ~167 ciclos por acesso). Recebem
+# essa regiao, fora do heap 8-bit: o buffer do fonte durante o compile de
+# app JS (CelerKernel) e os buffers do TLS (mbedTLS). Sem isso os apps com
+# rede de ~30KB (Settings, App Store) nao cabiam na RAM interna. O segundo
+# core pouco rendia aqui (UI single-thread; WiFi divide o core 0).
+CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y
+CONFIG_FREERTOS_UNICORE=y
+CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
+CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+# Buffers TLS FIXOS (16KB RX + 4KB TX): o modo IRAM so desvia alocacoes
+# >= 4KB — com CONFIG_MBEDTLS_DYNAMIC_BUFFER os buffers viravam pedacos
+# menores e caiam todos no heap 8-bit (handshake OOM medido).
+# CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set

@@ -32,9 +32,45 @@
 // ~90KB do runtime JS. Limitar payloads a dezenas de KB.
 #define NET_MAX_BODY 32768
 
-// Executa GET/POST e devolve o body em "out". Sem WiFi conectado: duk_error
-// (o script ve um erro legivel em vez de um null silencioso).
-static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
+// Corpo acumulado em malloc/realloc (sink do HttpClient): sem RAM a
+// requisicao falha limpa (null no script). Com std::string, o crescimento
+// sem excecao abortava o aparelho no heap apertado da CYD (medido).
+struct NetBody {
+    char* p = nullptr;
+    size_t n = 0, cap = 0;
+    bool append(const char* d, size_t len) {
+        if (n >= NET_MAX_BODY) return true;  // teto: descarta o excedente
+        if (len > NET_MAX_BODY - n) len = NET_MAX_BODY - n;
+        if (n + len > cap) {
+            size_t want = cap * 2 > n + len ? cap * 2 : n + len;
+            if (want < 1024) want = 1024;
+            if (want > NET_MAX_BODY) want = NET_MAX_BODY;
+            char* q = (char*)realloc(p, want);
+            if (q == nullptr) q = (char*)realloc(p, want = n + len);  // exato
+            if (q == nullptr) return false;
+            p = q;
+            cap = want;
+        }
+        memcpy(p + n, d, len);
+        n += len;
+        return true;
+    }
+};
+
+struct NetPush {
+    const NetBody* body;
+};
+
+static duk_ret_t netPushBody(duk_context *ctx, void *udata) {
+    const NetBody* b = ((NetPush*)udata)->body;
+    duk_push_lstring(ctx, b->p ? b->p : "", b->n);
+    return 1;
+}
+
+// Executa GET/POST e EMPILHA o body (string). false = falhou (nada
+// empilhado). Sem WiFi conectado: duk_error (o script ve um erro legivel em
+// vez de um null silencioso).
+static bool netFetch(duk_context *ctx, bool isPost) {
     JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
     if (!WebManager::isWifiConnected()) {
         duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
@@ -50,39 +86,41 @@ static bool netFetch(duk_context *ctx, bool isPost, std::string &out) {
     }
 
     // Componente Http (esp_http_client): https usa o cert bundle do sistema
-    HttpClient http;
-    http.setTimeout(10000);
-    HttpResponse resp;
-    if (isPost) {
-        resp = http.post(url, body, contentType);
-    } else {
-        resp = http.get(url);
+    NetBody got;
+    bool ok;
+    {
+        HttpClient http;
+        http.setTimeout(10000);
+        http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
+        HttpResponse resp = isPost ? http.post(url, body, contentType) : http.get(url);
+        ok = resp.isOk();
+    }  // TLS/cliente liberados antes de copiar o corpo para o heap JS
+    if (!ok) {
+        free(got.p);
+        return false;
     }
-    if (!resp.isOk()) return false;
-    out = resp.body;
-    if (out.length() > NET_MAX_BODY) out.resize(NET_MAX_BODY);
+    // Copia para o heap JS protegida: sem RAM o Duktape lanca (longjmp) — o
+    // buffer C e liberado antes de repassar o erro ao script
+    NetPush args{&got};
+    duk_int_t rc = duk_safe_call(ctx, netPushBody, &args, 0, 1);
+    free(got.p);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
     return true;
 }
 
 duk_ret_t JSBindings::js_netGet(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
+    if (!netFetch(ctx, false)) duk_push_null(ctx);
     return 1;
 }
 
 duk_ret_t JSBindings::js_netGetJSON(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, false, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
+    if (!netFetch(ctx, false)) { duk_push_null(ctx); return 1; }
     duk_json_decode(ctx, -1);  // parse falho vira erro visivel no script
     return 1;
 }
 
 duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
-    std::string body;
-    if (!netFetch(ctx, true, body)) { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, body.c_str());
+    if (!netFetch(ctx, true)) duk_push_null(ctx);
     return 1;
 }
 

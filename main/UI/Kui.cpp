@@ -49,52 +49,74 @@ const lgfx::IFont* display() {
 // ============================================================ Canvas =======
 
 namespace {
-// Buffer unico de composicao (um loop de UI): alocado no primeiro render.
-CelerSprite* s_buf = nullptr;
+// Buffer de composicao (um loop de UI): alocado no primeiro render.
+// Full-frame (PSRAM): so s_bufs[0]. Faixas (RAM interna): DUAS faixas em
+// ping-pong — o pushSprite de um sprite na RAM interna sai por DMA
+// ASSINCRONO; desenhar a faixa seguinte no mesmo buffer enquanto o DMA
+// ainda le era a origem dos "riscos" no vidro da CYD. Com duas, uma faixa
+// e composta enquanto a outra transmite (sem corrida e mais rapido).
+CelerSprite* s_bufs[2] = {nullptr, nullptr};
+CelerSprite*& s_buf = s_bufs[0];
 Canvas::Mode s_bufMode = Canvas::Direct;
 bool s_bufTried = false;
 int s_bandH = 0;
 
-constexpr size_t BAND_BYTES = 16 * 1024;  // faixa na RAM interna (sem PSRAM)
+constexpr size_t BAND_BYTES = 16 * 1024;  // total das duas faixas (sem PSRAM)
+
+CelerSprite* newSprite(CelerDisplay& dev, bool psram) {
+    auto* s = new CelerSprite(&dev);
+    s->setColorDepth(16);
+    // Mesma convencao do display: arrays RGB565 LE (icones) e readRect
+    s->setSwapBytes(true);
+    s->setPsram(psram);
+    return s;
+}
+
+void freeBuffers() {
+    for (auto*& b : s_bufs) {
+        if (b == nullptr) continue;
+        b->deleteSprite();
+        delete b;
+        b = nullptr;
+    }
+}
 
 bool ensureBuffer(CelerDisplay& dev) {
     if (s_bufTried) return s_buf != nullptr;
     s_bufTried = true;
-    // Sem PSRAM: desenho DIRETO. O modo bandas (sprite 320x25) renderiza
-    // desalinhado no ST7789 landscape da CYD classica (riscos, medido no
-    // device) — bandas ficam desativadas ate o pushImage/enderecamento de
-    // janela nesse painel ser depurado. O custo e o flicker em redraw
-    // completo, mitigado no LauncherScreen (clear so quando necessario).
-    if (!Board::profile().hasPsram) return false;
     const int w = dev.width(), h = dev.height();
 
-    s_buf = new CelerSprite(&dev);
-    s_buf->setColorDepth(16);
-    // Mesma convencao do display: arrays RGB565 LE (icones) e readRect
-    s_buf->setSwapBytes(true);
-
     if (Board::profile().hasPsram) {
-        s_buf->setPsram(true);
-        if (s_buf->createSprite(w, h) != nullptr) {
+        s_bufs[0] = newSprite(dev, true);
+        if (s_bufs[0]->createSprite(w, h) != nullptr) {
             s_bufMode = Canvas::FullFrame;
             ESP_LOGI(TAG, "canvas: full-frame %dx%d (PSRAM)", w, h);
             return true;
         }
+        freeBuffers();
     }
-    s_buf->setPsram(false);
-    s_bandH = (int)(BAND_BYTES / ((size_t)w * 2));
+    s_bandH = (int)(BAND_BYTES / 2 / ((size_t)w * 2));
     if (s_bandH > h) s_bandH = h;
-    if (s_bandH >= 8 && s_buf->createSprite(w, s_bandH) != nullptr) {
-        s_bufMode = Canvas::Bands;
-        ESP_LOGI(TAG, "canvas: faixas %dx%d (%d passadas)", w, s_bandH, (h + s_bandH - 1) / s_bandH);
-        return true;
+    if (s_bandH >= 8) {
+        s_bufs[0] = newSprite(dev, false);
+        s_bufs[1] = newSprite(dev, false);
+        if (s_bufs[0]->createSprite(w, s_bandH) != nullptr && s_bufs[1]->createSprite(w, s_bandH) != nullptr) {
+            s_bufMode = Canvas::Bands;
+            ESP_LOGI(TAG, "canvas: faixas 2x %dx%d (%d passadas)", w, s_bandH, (h + s_bandH - 1) / s_bandH);
+            return true;
+        }
     }
     ESP_LOGW(TAG, "canvas: sem memoria para buffer, desenho direto");
-    delete s_buf;
-    s_buf = nullptr;
+    freeBuffers();
     return false;
 }
 }  // namespace
+
+void releaseCanvasBuffer() {
+    Board::display().waitDMA();
+    freeBuffers();
+    s_bufTried = false;  // o proximo render realoca
+}
 
 Canvas::Canvas(CelerDisplay& dev) : m_dev(dev), m_target(&dev) {}
 
@@ -119,15 +141,23 @@ void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
         fn(*this);
         s_buf->pushSprite(&m_dev, 0, 0);
     } else {
-        // Uma passada por faixa: tudo fora dela e recortado pelo sprite
+        // Uma passada por faixa: tudo fora dela e recortado pelo sprite.
+        // Ping-pong: compoe a faixa N no buffer livre enquanto o DMA envia a
+        // N-1; antes de reusar um buffer, espera o DMA que le dele.
         m_dev.startWrite();
+        int cur = 0;
         for (int y = 0; y < m_dev.height(); y += s_bandH) {
+            CelerSprite* b = s_bufs[cur];
+            m_target = b;
             m_offY = y;
-            s_buf->clearClipRect();
-            s_buf->fillScreen(THEME_BG);
+            b->clearClipRect();
+            b->fillScreen(THEME_BG);
             fn(*this);
-            s_buf->pushSprite(&m_dev, 0, y);
+            m_dev.waitDMA();  // faixa anterior (outro buffer) terminou de sair
+            b->pushSprite(&m_dev, 0, y);
+            cur ^= 1;
         }
+        m_dev.waitDMA();
         m_dev.endWrite();
     }
     m_target = &m_dev;
@@ -187,11 +217,12 @@ void Canvas::drawAppTile(const char* appName, int x, int y) {
 }
 
 void Canvas::dim() {
-    if (m_target == s_buf && s_buf != nullptr) {
+    if (m_mode != Direct && m_target != &m_dev) {
         // Buffer 16-bit guarda o 565 com bytes trocados: desfaz, escurece
         // para ~37% (1/4 + 1/8 por canal) e troca de volta.
-        uint16_t* p = (uint16_t*)s_buf->getBuffer();
-        size_t n = (size_t)s_buf->width() * s_buf->height();
+        auto* spr = static_cast<CelerSprite*>(m_target);
+        uint16_t* p = (uint16_t*)spr->getBuffer();
+        size_t n = (size_t)spr->width() * spr->height();
         for (size_t i = 0; i < n; i++) {
             uint16_t c = (uint16_t)((p[i] >> 8) | (p[i] << 8));
             c = (uint16_t)(((c >> 2) & 0x39E7) + ((c >> 3) & 0x18E3));
@@ -358,6 +389,7 @@ void List::draw(Canvas& c) {
         int y = rect.y + idx * rh - scroll;
         if (y >= rect.y + rect.h) break;
         Rect row{rect.x, y, rect.w, rh};
+        if (!c.visible(row)) continue;  // faixa atual nao cruza a linha
         const Item& it = items[idx];
 
         if (idx == selected) {
@@ -560,7 +592,7 @@ void TouchPump::quarantine(uint32_t ms) { s_quarantineUntilMs = millis() + ms; }
 
 void TouchPump::reset() {
     m_down = false;
-    m_releaseDebounce = 0;
+    m_releaseSinceMs = 0;
 }
 
 bool readTouch(uint16_t* x, uint16_t* y) {
@@ -601,12 +633,19 @@ void TouchPump::poll(const Handler& onEvent) {
     // Debounce do release (touch resistivo XPT2046: a pressao oscila no
     // fim/lateral do dedo e, principalmente, ao DESLIZAR — o getTouch pisca
     // solto/pressionado e cada re-deteccao disparava um redraw completo).
-    // So considera solto apos 6 leituras vazias seguidas (~120ms).
+    // So considera solto apos ~60ms de leituras vazias seguidas. Por TEMPO,
+    // nao por contagem: com o loop lento (um redraw por poll) 6 leituras
+    // viravam 600ms+ e todo tap disparava o toque longo do launcher.
     if (!down && m_down) {
-        if (++m_releaseDebounce < 6) return;
-        m_releaseDebounce = 0;
+        uint32_t now = millis();
+        if (m_releaseSinceMs == 0) {
+            m_releaseSinceMs = now ? now : 1;
+            return;
+        }
+        if (now - m_releaseSinceMs < 60) return;
+        m_releaseSinceMs = 0;
     } else if (down) {
-        m_releaseDebounce = 0;
+        m_releaseSinceMs = 0;
     }
 
     TouchEvent ev;

@@ -95,11 +95,6 @@ static void celerSetup() {
     // Initialize Time Manager
     TimeManager::init();
     
-    // WiFi 100% assincrono: prepara credenciais/eventos e a task de
-    // reconexao do NetworkManager conecta sozinha (sem race de scan —
-    // o boot antigo concorria com a task e caia na tela "WiFi Setup").
-    // Sem rede, o launcher mostra o banner "WiFi offline".
-    WebManager::startAsync();
     celer_log_printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
@@ -118,6 +113,14 @@ static void celerSetup() {
     LauncherUI::scanLocalApps();
     LauncherUI::needsRescan = false;
     celer_log_println("DEBUG: Local Apps Scanned.");
+
+    // WiFi 100% assincrono: prepara credenciais/eventos e a task de
+    // reconexao do NetworkManager conecta sozinha (sem race de scan —
+    // o boot antigo concorria com a task e caia na tela "WiFi Setup").
+    // Sem rede, o launcher mostra o banner "WiFi offline". Sobe DEPOIS do
+    // scan de apps: sem PSRAM, o prewarm dos icones (decode PNG, ~44KB
+    // transitorios) precisa do heap cheio.
+    WebManager::startAsync();
 
     // Touch resistivo sem calibracao salva: roda o calibrador antes da UI.
     // Placas com touch capacitivo (GT911) pulam a calibracao.

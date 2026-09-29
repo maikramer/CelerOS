@@ -195,31 +195,6 @@ void WebManager::stopWebServer() {
 }
 
 
-// Radio suspenso p/ app sem rede (placas sem PSRAM): devolve ~35KB de heap
-static bool s_radioSuspended = false;
-
-void WebManager::suspendRadio() {
-    if (s_radioSuspended) return;
-    stopWebServer();
-    nm().setAutoReconnect(false);  // silencia a task enquanto o radio desce
-    unsigned antes = (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    esp_wifi_stop();               // libera o heap do WiFi/lwIP
-    s_radioSuspended = true;
-    char rb[80];
-    snprintf(rb, sizeof(rb), "radio suspenso: heap %u -> %u (+%u)",
-             antes, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT) - antes);
-    celer_log_println(rb);
-}
-
-void WebManager::resumeRadio() {
-    if (!s_radioSuspended) return;
-    s_radioSuspended = false;
-    esp_wifi_start();
-    nm().setAutoReconnect(true);   // a task do NetworkManager reconecta
-    celer_log_println("radio WiFi de volta — reconectando");
-}
-
 bool WebManager::isServerRunning() {
     return s_server != nullptr;
 }

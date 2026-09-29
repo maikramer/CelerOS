@@ -76,7 +76,9 @@ inline int font(int f) {
 // passa a ser (H - topbarH())/320 (jsy no JSBindings). A faixa e desenhada
 // pelo core no proprio quadro do app, atomica com o push — nao pisca e o app
 // nao consegue desenhar por cima. Toque na faixa e da UI: o app nunca ve.
-inline int topbarH() { return sy(18); }      // altura fisica da faixa
+// altura fisica da faixa: minimo de 20px — em telas baixas (CYD landscape,
+// 240px) sy(18) dava 13px, alvo pequeno demais para o X num touch resistivo
+inline int topbarH() { return sy(18) > 20 ? sy(18) : 20; }
 inline int topbarExitW() { return sx(40); }  // area de toque do X (a direita)
 inline bool inTopbar(int x, int y) { return y < topbarH(); }
 inline bool hitTopbarExit(int x, int y) { return inTopbar(x, y) && x >= W - topbarExitW(); }

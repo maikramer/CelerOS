@@ -16,6 +16,9 @@ public:
     static std::string checkSyntax(const char* jsCode);
     static duk_context *ctx;
     static CelerDisplay *tftInstance;
+    // Heap 8-bit livre no inicio do app corrente (apos liberar os caches do
+    // launcher, antes do fonte/heap JS): System.getInfo().appRAM
+    static size_t appLaunchFreeHeap;
 
 private:
     static void checkJSError(duk_context *ctx, duk_int_t result);

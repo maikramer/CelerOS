@@ -6,6 +6,7 @@
 
 #include "../../main/Utils/SemVer.h"
 #include "../../main/Utils/AppPerms.h"
+#include "../../main/Utils/JsStrip.h"
 
 #include <cstdio>
 #include <cstring>
@@ -55,9 +56,37 @@ static void testPermissions() {
     CHECK((parsePermissions("{\"permissions\":[\"fs\",\"netfs\"]}") & (PERM_NET | PERM_GPIO | PERM_SYSTEM)) == 0);
 }
 
+// Enxuga em chunks de 3 bytes (estado atravessa a fronteira dos pedacos)
+static std::string strip(const char* src) {
+    size_t n = strlen(src);
+    JsStripper count;
+    for (size_t i = 0; i < n; i += 3) count.feed(src + i, n - i < 3 ? n - i : 3);
+    std::string out(count.finish(), '\0');
+    JsStripper fill(&out[0]);
+    fill.feed(src, n);
+    fill.finish();
+    return out;
+}
+
+static void testJsStrip() {
+    CHECK(strip("var a = 1; // c\nvar b = 2;") == "var a = 1;\nvar b = 2;");
+    CHECK(strip("    if (x) {\n\t\ty();   \n    }\n") == "if (x) {\ny();\n}\n");
+    CHECK(strip("a/**/b") == "a b");
+    CHECK(strip("a /* x\n y */ b") == "a\nb");                  // linhas preservadas
+    CHECK(strip("s = \"// nao\"; t = '/* nao */';") == "s = \"// nao\"; t = '/* nao */';");
+    CHECK(strip("r = /\\/\\//g; // c") == "r = /\\/\\//g;");  // regex com barras escapadas
+    CHECK(strip("r = /[/]/.test(x)") == "r = /[/]/.test(x)");      // '/' dentro de classe
+    CHECK(strip("return /a\\/b/.test(s)") == "return /a\\/b/.test(s)");
+    CHECK(strip("x = a / b / c") == "x = a / b / c");             // divisao
+    CHECK(strip("y = (a)/2; z = arr[0]/2") == "y = (a)/2; z = arr[0]/2");
+    CHECK(strip("s = 'it\\'s // ok'") == "s = 'it\\'s // ok'");
+    CHECK(strip("a\n\n\nb") == "a\n\n\nb");                    // linhas vazias ficam
+}
+
 int main() {
     testSemVer();
     testPermissions();
+    testJsStrip();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

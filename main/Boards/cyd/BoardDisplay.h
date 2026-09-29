@@ -36,11 +36,15 @@ public:
         {
             auto cfg = _bus.config();
             cfg.spi_host = SPI2_HOST;  // HSPI (pinos nativos 13/14/12)
-            cfg.freq_write = 26000000;   // 26MHz validado nesta placa
+            cfg.freq_write = 40000000;   // 40MHz: pinos IOMUX nativos do HSPI (80/2); frame cheio ~31ms (26MHz: ~47ms)
             cfg.pin_sclk = 14;
             cfg.pin_mosi = 13;
             cfg.pin_miso = 12;
             cfg.pin_dc = 2;
+            // MISO dedicado (GPIO12): leitura 4-fios. O default do LovyanGFX
+            // (3-wire, le pelo MOSI) devolvia tudo preto no readRect —
+            // screencap vazio e blend de icone no modo direto sobre preto.
+            cfg.spi_3wire = false;
             _bus.config(cfg);
             _panel.setBus(&_bus);
         }

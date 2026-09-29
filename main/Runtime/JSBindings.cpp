@@ -280,6 +280,43 @@ lgfx::LGFXBase* JSBindings::gfx() {
     return tftInstance;
 }
 
+// Sem quadro (CYD): o app desenha DIRETO no display. Para a faixa nao ser
+// coberta (e redesenhada a cada frame — piscava na taxa do loop do app), o
+// display fica recortado abaixo dela enquanto visivel; o System.setClip do
+// app e intersectado com esse recorte.
+static int s_sysClipTop = 0;             // topo do recorte do sistema (0 = nenhum)
+static bool s_appClipOn = false;         // app pediu recorte (coords fisicas)
+static int s_appClip[4] = {0, 0, 0, 0};
+
+void JSBindings::setAppDisplayClip(bool on, int x, int y, int w, int h) {
+    s_appClipOn = on;
+    s_appClip[0] = x;
+    s_appClip[1] = y;
+    s_appClip[2] = w;
+    s_appClip[3] = h;
+    applyDisplayClip();
+}
+
+void JSBindings::applyDisplayClip() {
+    if (tftInstance == nullptr) return;
+    int x = 0, y = 0, w = tftInstance->width(), h = tftInstance->height();
+    if (s_appClipOn) {
+        x = s_appClip[0];
+        y = s_appClip[1];
+        w = s_appClip[2];
+        h = s_appClip[3];
+    }
+    if (y < s_sysClipTop) {
+        h -= s_sysClipTop - y;
+        y = s_sysClipTop;
+    }
+    if (!s_appClipOn && s_sysClipTop == 0) {
+        tftInstance->clearClipRect();
+    } else {
+        tftInstance->setClipRect(x, y, w, h < 0 ? 0 : h);
+    }
+}
+
 void JSBindings::present() {
     if (tftInstance == nullptr) return;
     retractTick();
@@ -300,11 +337,21 @@ void JSBindings::present() {
         s_barHotOnGlass = wantBar && s_exitArmed;
         s_tbHotOnGlass = s_tbHotBtn;
     } else {
-        // Sem quadro (CYD): o app desenha direto no display, entao a barra so
-        // pode ir no vidro apos cada present (reaparece a cada cedida). Ao
-        // esconder a retratil, a faixa permanece ate o app repintar a regiao
-        // (os jogos a cobrem no frame seguinte).
-        if (wantBar) drawAppTopbar(*tftInstance, s_exitArmed);
+        // Sem quadro (CYD): o app desenha direto no display. A faixa so vai
+        // ao vidro quando MUDA (entrou, hot, texto/chips) — o recorte abaixo
+        // dela impede o app de cobri-la. Ao esconder a retratil, o recorte
+        // sai e a faixa permanece ate o app repintar a regiao.
+        const bool needDraw = wantBar && (!s_barOnGlass || s_tbDirty || s_exitArmed != s_barHotOnGlass ||
+                                          s_tbHotBtn != s_tbHotOnGlass);
+        const int top = wantBar ? UI::topbarH() : 0;
+        if (needDraw) {
+            tftInstance->clearClipRect();
+            drawAppTopbar(*tftInstance, s_exitArmed);
+        }
+        if (needDraw || top != s_sysClipTop) {
+            s_sysClipTop = top;
+            applyDisplayClip();
+        }
         s_tbDirty = false;
         s_barOnGlass = wantBar;
         s_barHotOnGlass = wantBar && s_exitArmed;
@@ -506,10 +553,13 @@ struct JsFn {
     duk_idx_t nargs;
 };
 
+// Lightfunc: o binding vira um valor tagged (ponteiro C + nargs) em vez de um
+// objeto funcao no heap — ~130 bindings deixam de custar ~10KB de RAM por
+// app (decisivo na CYD sem PSRAM). Unica diferenca visivel: sem .name.
 template <size_t N>
 static void putFns(duk_context* ctx, const JsFn (&fns)[N]) {
     for (const JsFn& f : fns) {
-        duk_push_c_function(ctx, f.fn, f.nargs);
+        duk_push_c_lightfunc(ctx, f.fn, f.nargs, f.nargs, 0);
         duk_put_prop_string(ctx, -2, f.name);
     }
 }
@@ -570,6 +620,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         s_frame->clearClipRect();
     }
     tft->clearClipRect();
+    s_sysClipTop = 0;
+    s_appClipOn = false;
     s_frameDirty = false;
     tft->setTextSize(1);
 

@@ -61,6 +61,15 @@ struct HttpConfig {
 using ProgressCallback = std::function<void(int64_t bytesTransferred, int64_t totalBytes)>;
 
 /**
+ * @typedef BodySink
+ * @brief Consumer of the response body, chunk by chunk (replaces the
+ *        in-memory HttpResponse::body for that request).
+ * @return false to give up (e.g. out of memory): the request then fails
+ *         with ESP_ERR_NO_MEM instead of aborting on a std::string growth.
+ */
+using BodySink = std::function<bool(const char* data, size_t len)>;
+
+/**
  * @class HttpClient
  * @brief HTTP client for making web requests.
  * 
@@ -181,6 +190,16 @@ public:
      * @return Reference to this for chaining.
      */
     HttpClient& setProgressCallback(ProgressCallback callback);
+
+    /**
+     * @brief Stream the response body to a sink instead of HttpResponse::body.
+     *
+     * Without exceptions, a std::string that cannot grow aborts the device;
+     * a sink backed by malloc/realloc can fail cleanly (low-RAM boards).
+     * @param sink Body consumer (empty = back to HttpResponse::body).
+     * @return Reference to this for chaining.
+     */
+    HttpClient& setBodySink(BodySink sink);
 
     /**
      * @brief Get current configuration.
@@ -316,10 +335,13 @@ private:
     std::string _username;
     std::string _password;
     ProgressCallback _progressCallback;
+    BodySink _bodySink;
 
     // For event handler
     std::string* _responseBody;
     int64_t _contentLength;
+    bool _bodyOom = false;          // corpo nao coube na RAM: resposta vira erro
+    size_t _sinkBytes = 0;          // bytes entregues ao BodySink (log)
 
     // For downloadToFile
     void* _dlFile = nullptr;        // FILE* em curso

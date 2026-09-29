@@ -15,6 +15,7 @@
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
@@ -156,6 +157,12 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
 
     duk_push_uint(ctx, mem.freePsram);
     duk_put_prop_string(ctx, -2, "freePSRAM");
+
+    // Heap livre no INICIO deste app (antes do fonte/heap JS): quanto um app
+    // pode ocupar nesta placa. freeRAM e medido agora, com o app atual ja
+    // carregado — a loja usa appRAM para o teto de tamanho sem PSRAM.
+    duk_push_uint(ctx, (duk_uint_t)CelerKernel::appLaunchFreeHeap);
+    duk_put_prop_string(ctx, -2, "appRAM");
 
     // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
     duk_push_uint(ctx, ESP.getCpuFreqMHz());

@@ -25,11 +25,19 @@
 // draw/blend nao conhece PNG. Em ambos os casos o nome comum resolve para
 // /local/icons/<nome>.png e, se nao existir, <nome>.bin (data antiga segue
 // funcionando).
+//
+// Tela pequena (SIZE 48): o icone e reduzido no load e o resultado vai para
+// /local/.icache/<hash>.bin (RGB565 [+A4] ja em 48px) — os loads seguintes
+// pulam o decode PNG (~44KB de heap transitorio).
 // ============================================================================
 
 class Icon {
 public:
-    static constexpr int SIZE = 64;
+    // Assets em disco sao sempre 64x64 (SRC). Na tela pequena (CYD 320x240,
+    // sem PSRAM) o icone e reduzido para 48 no load (media por area): cabem
+    // 4x2 na grade e cada um custa 5,8KB de RAM em vez de 10KB.
+    static constexpr int SRC = 64;
+    static constexpr int SIZE = BoardTraits::largeUi ? 64 : 48;
 
     // Blit 64x64 do icone nomeado em (x, y), compondo o alpha sobre o fundo
     // atual (v2). Icone ausente desenha tile neutro.
@@ -46,6 +54,16 @@ public:
     static void drawFile(lgfx::LGFXBase* tft, const char* path, int x, int y);
     static bool availableFile(const char* path);
     static void invalidateFileIcons();
+
+    // Libera TODOS os caches (sistema + pacote; ~10KB por icone 64x64 com
+    // alpha). Chamado antes de um app JS rodar em placa sem PSRAM: o heap
+    // do Duktape precisa dessa RAM; o launcher recarrega ao voltar.
+    static void releaseAll();
+
+    // Garante o icone ja reduzido no cache em flash (so tela pequena), sem
+    // mante-lo em RAM. O boot chama para todos os apps com o heap ainda
+    // cheio: depois o launcher nunca precisa do decode PNG.
+    static void prewarm(const char* name);
 
     // Tile de app do usuario: quadrado arredondado na cor derivada do nome +
     // letra inicial. Desenhado em runtime (nao usa asset).
@@ -70,6 +88,9 @@ private:
     static uint16_t* load(const char* name, uint8_t** alphaOut);
     static uint16_t* loadBin(FILE* f, uint8_t** alphaOut);
     static uint16_t* loadPng(FILE* f, uint8_t** alphaOut);
+    static uint16_t* downscale(uint16_t* px, uint8_t* a4, uint8_t** alphaOut);
+    static uint16_t* loadCached(const char* cachePath, uint8_t** alphaOut);
+    static void saveCached(const char* cachePath, const uint16_t* px, const uint8_t* a4);
     static void drawAlpha(lgfx::LGFXBase* tft, const uint16_t* px, const uint8_t* a4, int x, int y);
     static void drawFallback(lgfx::LGFXBase* tft, int x, int y);
 };

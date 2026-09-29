@@ -1,5 +1,6 @@
 #include "FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../USBDevice/LogSink.h"
 #include "../Boards/Board.h"
 
 #include <sys/stat.h>
@@ -185,6 +186,18 @@ std::string FileSystem::readTextFile(const char* path) {
     struct stat st;
     if (fstat(fileno(f), &st) != 0 || st.st_size <= 0 || S_ISDIR(st.st_mode)) {
         fclose(f);
+        return "";
+    }
+
+    // Sem excecoes, o new do std::string ABORTA quando nao ha bloco contiguo
+    // (sem PSRAM + heap fragmentado: FS.readTextFile de arquivo grande
+    // derrubava o aparelho). Sonda com alocacao real (o TLSF pode recusar
+    // mesmo com o "maior bloco livre" acima); sem bloco: "" como ilegivel.
+    void* probe = malloc((size_t)st.st_size + 1);
+    free(probe);
+    if (probe == nullptr) {
+        fclose(f);
+        celer_log_printf("readTextFile: sem bloco p/ %u B (%s)\n", (unsigned)st.st_size, path);
         return "";
     }
 

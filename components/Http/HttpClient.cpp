@@ -79,6 +79,11 @@ HttpClient& HttpClient::setProgressCallback(ProgressCallback callback) {
     return *this;
 }
 
+HttpClient& HttpClient::setBodySink(BodySink sink) {
+    _bodySink = std::move(sink);
+    return *this;
+}
+
 // ========== HTTP Methods ==========
 
 HttpResponse HttpClient::get(const std::string& url) {
@@ -144,11 +149,50 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
 
         case HTTP_EVENT_ON_HEADER:
             ESP_LOGD(TAG, "Header: %s = %s", event->header_key, event->header_value);
+            // tamanho conhecido: o corpo cresce uma vez so (sem dobrar)
+            if (self != nullptr && strcasecmp(event->header_key, "Content-Length") == 0) {
+                self->_contentLength = strtoll(event->header_value, nullptr, 10);
+            }
             break;
 
         case HTTP_EVENT_ON_DATA:
             ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", event->data_len);
-            if (self != nullptr && self->_responseBody != nullptr && event->data_len > 0) {
+            if (self != nullptr && self->_bodySink && event->data_len > 0 && !self->_bodyOom) {
+                if (!self->_bodySink(static_cast<const char*>(event->data), (size_t)event->data_len)) {
+                    self->_bodyOom = true;
+                }
+                self->_sinkBytes += (size_t)event->data_len;
+                break;
+            }
+            if (self != nullptr && self->_responseBody != nullptr && event->data_len > 0 && !self->_bodyOom) {
+                // Crescimento SEM abort: sem excecoes, o realloc do
+                // std::string que falha chama abort() (medido: corpo de 8KB
+                // num heap fragmentado da CYD derrubava o aparelho). Cresce
+                // para o Content-Length (ou dobra) so se o bloco existir;
+                // senao a requisicao vira erro limpo.
+                std::string* b = self->_responseBody;
+                const size_t need = b->size() + (size_t)event->data_len;
+                if (need > b->capacity()) {
+                    size_t want = b->capacity() * 2 > need ? b->capacity() * 2 : need;
+                    if (want < 1024) want = 1024;
+                    if (self->_contentLength > 0 && (size_t)self->_contentLength >= need) {
+                        want = (size_t)self->_contentLength;
+                    }
+                    // sonda real: o TLSF pode recusar um bloco pouco maior que
+                    // o pedido mesmo com o "maior bloco livre" acima dele
+                    auto fits = [](size_t n) {
+                        void* p = malloc(n + 1);
+                        free(p);
+                        return p != nullptr;
+                    };
+                    if (!fits(want)) want = need;
+                    if (!fits(want)) {
+                        self->_bodyOom = true;
+                        ESP_LOGW(TAG, "corpo nao cabe: %u B", (unsigned)need);
+                        break;
+                    }
+                    b->reserve(want);
+                }
                 // Append data to response body
                 self->_responseBody->append(
                     static_cast<const char*>(event->data), 
@@ -210,6 +254,8 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     std::string responseBody;
     _responseBody = &responseBody;
     _contentLength = -1;
+    _bodyOom = false;
+    _sinkBytes = 0;
 
     uint64_t startTime = esp_timer_get_time();
 
@@ -278,14 +324,15 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     // Get results
     response.statusCode = esp_http_client_get_status_code(client);
     response.contentLength = esp_http_client_get_content_length(client);
-    response.body = responseBody;
+    if (err == ESP_OK && _bodyOom) err = ESP_ERR_NO_MEM;
+    response.body = std::move(responseBody);
     response.durationMs = static_cast<uint32_t>((esp_timer_get_time() - startTime) / 1000);
 
     if (err == ESP_OK) {
         response.success = true;
         ESP_LOGI(TAG, "Request to %s completed: %d (%d bytes in %lu ms)",
                  url.c_str(), response.statusCode, 
-                 static_cast<int>(response.body.length()),
+                 static_cast<int>(response.body.length() + _sinkBytes),
                  (unsigned long)response.durationMs);
     } else {
         response.success = false;

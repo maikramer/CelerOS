@@ -6,6 +6,8 @@
 #include "../../Utils/StrUtils.h"
 #include "../../Display/Theme.h"
 #include "../../UI/Kui.h"
+#include "../../Display/Icon.h"
+#include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
 #include <vector>
 #include "esp_heap_caps.h"
@@ -14,6 +16,7 @@
 
 duk_context *CelerKernel::ctx = nullptr;
 CelerDisplay *CelerKernel::tftInstance = nullptr;
+size_t CelerKernel::appLaunchFreeHeap = 0;
 
 // ---------------------------------------------------------------------------
 // Tela de erro do runtime (tema do OS): titulo, texto quebrado em linhas e
@@ -57,6 +60,7 @@ static void wrapInto(CelerDisplay* tft, const std::string& text, const lgfx::IFo
 static void showRuntimeError(const char* title, const std::string& detail) {
     CelerDisplay* tft = CelerKernel::tftInstance;
     if (!tft) return;
+    tft->clearClipRect();  // recorte do app (faixa/System.setClip) nao vale aqui
     const lgfx::IFont* body = kui::type::body();
     const lgfx::IFont* cap = kui::type::caption();
 
@@ -124,22 +128,88 @@ static constexpr size_t kInternalReserve = 72 * 1024;
 // memoria"), nao um abort no meio da tela de erro.
 static constexpr size_t kNoPsramFloor = 20 * 1024;
 
-static uint32_t duk_caps() {
-    if (!Board::profile().hasPsram) return MALLOC_CAP_8BIT;
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > kInternalReserve) return MALLOC_CAP_8BIT;
-    return MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+// Sem PSRAM (CYD): a DRAM 8-bit e do Duktape so enquanto sobrarem ~24KB
+// para o sistema — o handshake TLS de um app com rede (verificacao do
+// certificado, ~20KB de blocos pequenos) e o WiFi precisam dela. Passou
+// disso, o Duktape TRANSBORDA para a IRAM acessivel a byte (unicore +
+// CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY): mais lenta (acesso de 8/16
+// bits vira excecao), mas o app segue em vez de OOM ou de sufocar o TLS.
+static constexpr size_t kDramReserve = 24 * 1024;
+
+// Destino preferido de um bloco e o alternativo (tentado se o primeiro falhar)
+static void duk_caps(size_t size, uint32_t* first, uint32_t* second) {
+    if (!Board::profile().hasPsram) {
+        const bool dram = heap_caps_get_free_size(MALLOC_CAP_8BIT) > kDramReserve + size;
+        *first = dram ? MALLOC_CAP_8BIT : MALLOC_CAP_IRAM_8BIT;
+        *second = dram ? MALLOC_CAP_IRAM_8BIT : MALLOC_CAP_8BIT;
+        return;
+    }
+    *second = MALLOC_CAP_8BIT;
+    *first = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > kInternalReserve ? MALLOC_CAP_8BIT
+                                                                             : MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 }
 
 // Orçamento para ABRIR um app (piso só no create, nunca no run): sem PSRAM,
 // exigir folga generosa — app que estourar vai de OOM fatal ao my_fatal, e
 // o sistema recupera com a tela de erro.
-static bool dukHeapBudgetOk() {
+// Heap base do Duktape + API inteira com builtins em ROM e bindings
+// lightfunc (medido na CYD: ~7,6KB; eram ~50KB com builtins na RAM)
+static constexpr size_t kDukBase = 8 * 1024;
+
+// Heap que ainda falta com o fonte JA carregado: base + temporarios do
+// compile (~0.75x o fonte enxuto) + folga do sistema
+static size_t dukHeapNeed(size_t srcLen) {
+    return kNoPsramFloor + kDukBase + srcLen * 3 / 4;
+}
+
+static bool dukHeapBudgetOk(size_t srcLen) {
     if (Board::profile().hasPsram) return true;
-    // O heap base do Duktape (builtins) neste build pede ~50KB: com menos que
-    // isso na RAM interna, o create OOMa no meio e o fatal anterior abortava.
-    // Recusa ANTES (mensagem limpa) — CYD classica fica ~51KB livre: apps JS
-    // grandes nao abrem por ora (ver Documentation/ENGINE_NOTES.md).
-    return heap_caps_get_free_size(MALLOC_CAP_8BIT) > kNoPsramFloor + 40 * 1024;
+    // Recusa ANTES (mensagem limpa) quando claramente nao cabe — OOM no
+    // meio do compile/run leva ao my_fatal (reinicio). Conta a IRAM de
+    // transbordo (duk_caps) junto da DRAM.
+    return heap_caps_get_free_size(MALLOC_CAP_8BIT) + heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT) >
+           dukHeapNeed(srcLen);
+}
+
+// Le o main.js ENXUTO (sem comentarios/indentacao, linhas preservadas — ver
+// Utils/JsStrip.h) num bloco exato: passada 1 conta, passada 2 preenche.
+// Sem PSRAM o fonte inteiro precisa de um bloco contiguo durante o compile
+// (App Store: 44KB -> ~31KB); o std::string de antes abortava (new sem
+// excecao) quando o heap fragmentado nao tinha o bloco. nullptr = sem
+// arquivo; *oom = true quando faltou memoria.
+static char* loadAppSource(const char* path, size_t* lenOut, bool* oom) {
+    *oom = false;
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) return nullptr;
+    char chunk[512];
+    size_t n;
+    celer::JsStripper count;
+    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) count.feed(chunk, n);
+    const size_t len = count.finish();
+    if (len == 0) {
+        fclose(f);
+        return nullptr;
+    }
+    // PSRAM quando ha; sem PSRAM, a IRAM livre acessivel a byte (CYD:
+    // CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY, ~40KB que o heap 8-bit
+    // nao usa) — o fonte sai do heap durante o pico do compile. Cada acesso
+    // a byte la custa uma excecao (~167 ciclos): ~30ms num app de 30KB.
+    char* buf = (char*)heap_caps_malloc(len + 1, Board::profile().hasPsram ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+                                                                            : MALLOC_CAP_IRAM_8BIT);
+    if (buf == nullptr) buf = (char*)heap_caps_malloc(len + 1, MALLOC_CAP_8BIT);
+    if (buf == nullptr) {
+        fclose(f);
+        *oom = true;
+        return nullptr;
+    }
+    rewind(f);
+    celer::JsStripper fill(buf);
+    while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) fill.feed(chunk, n);
+    fill.finish();
+    fclose(f);
+    buf[len] = 0;
+    *lenOut = len;
+    return buf;
 }
 
 static void *my_alloc(void *udata, duk_size_t size) {
@@ -149,9 +219,10 @@ static void *my_alloc(void *udata, duk_size_t size) {
     // derruba o Duktape no caminho de erro (intern -> throw error object ->
     // malloc -> spinlock corrupto, LoadStoreError medido no device). O piso
     // age so no duk_create_heap (dukHeapBudgetOk no runFile).
-    uint32_t caps = duk_caps();
-    void *p = heap_caps_malloc(size, caps);
-    if (!p && caps != MALLOC_CAP_8BIT) p = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    uint32_t first, second;
+    duk_caps(size, &first, &second);
+    void *p = heap_caps_malloc(size, first);
+    if (!p && second != first) p = heap_caps_malloc(size, second);
     if (!p) {
         static int oomLogs = 0;
         if (oomLogs++ < 1) {
@@ -170,9 +241,10 @@ static void *my_realloc(void *udata, void *ptr, duk_size_t size) {
         free(ptr);
         return nullptr;
     }
-    uint32_t caps = duk_caps();
-    void *p = heap_caps_realloc(ptr, size, caps);
-    if (!p && caps != MALLOC_CAP_8BIT) p = heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT);
+    uint32_t first, second;
+    duk_caps(size, &first, &second);
+    void *p = heap_caps_realloc(ptr, size, first);
+    if (!p && second != first) p = heap_caps_realloc(ptr, size, second);
     if (!p) celer_log_println("out of memory");
     return p;
 }
@@ -191,6 +263,7 @@ static void my_fatal(void *udata, const char *msg) {
     // dentro do proprio handler (o device rebootava sem mostrar nada).
     CelerDisplay* tft = CelerKernel::tftInstance;
     if (tft) {
+        tft->clearClipRect();
         tft->startWrite();
         tft->fillScreen(THEME_BG);
         int hdr = UI::sy(52);
@@ -319,7 +392,7 @@ std::string CelerKernel::checkSyntax(const char* jsCode) {
         &params,
         1,            // Low priority
         NULL,
-        1             // Run on Core 1
+        portNUM_PROCESSORS - 1  // core 1 (APP) no dual-core; 0 na CYD unicore
     );
     
     if (created != pdPASS) {
@@ -341,46 +414,72 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         ctx = nullptr;
     }
 
-    if (!dukHeapBudgetOk()) {
-        char db[80];
-        snprintf(db, sizeof(db), "heap baixo p/ app JS: livre=%u piso=%d",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                 (int)(kNoPsramFloor + 40 * 1024));
-        celer_log_println(db);
+    // Sem PSRAM: o app e dono do vidro — buffer do Canvas (16KB) e caches
+    // de icone (~10KB cada) voltam ao heap para o Duktape; o launcher
+    // realoca/recarrega sozinho ao voltar
+    if (!Board::profile().hasPsram) {
+        kui::releaseCanvasBuffer();
+        Icon::releaseAll();
+    }
+    appLaunchFreeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+
+    const uint32_t t0 = millis();
+    // Fonte PRIMEIRO: o bloco contiguo sai do heap ainda pouco fragmentado
+    // (antes do heap Duktape espalhar alocacoes pequenas)
+    size_t srcLen = 0;
+    bool srcOom = false;
+    char* src = loadAppSource(filePath, &srcLen, &srcOom);
+    if (src == nullptr) {
+        celer_log_printf(srcOom ? "sem bloco para o fonte: %s (maior bloco %u)\n" : "Failed to read JS file: %s\n",
+                         filePath, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        if (srcOom) showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
+        return;
+    }
+
+    if (!dukHeapBudgetOk(srcLen)) {
+        celer_log_printf("heap baixo p/ app JS: livre=%u precisa=%u (fonte %u)\n",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)dukHeapNeed(srcLen),
+                         (unsigned)srcLen);
+        free(src);
         showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
 
+    celer_log_printf("[duk] fonte lido: %u ms\n", (unsigned)(millis() - t0));
+    const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     ctx = duk_create_heap(my_alloc, my_realloc, my_free, nullptr, my_fatal);
     if (!ctx) {
+        free(src);
         celer_log_println("Failed to create Duktape heap for app.");
         showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
 
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
+    celer_log_printf("[duk] heap base+API: %u B (livre %u, iram %u)\n",
+                     (unsigned)(freeBefore - heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT));
     
     {
-        std::string content = FileSystem::readTextFile(filePath);
-        if (content.length() == 0) {
-            celer_log_print("Failed to read JS file: ");
-            celer_log_println(filePath);
-            duk_destroy_heap(ctx);
-            ctx = nullptr;
-            return;
-        }
-
         duk_push_string(ctx, filePath);
-        duk_int_t rc = duk_pcompile_string_filename(ctx, 0, content.c_str());
+        duk_int_t rc = duk_pcompile_lstring_filename(ctx, 0, src, srcLen);
+        free(src);  // o bytecode ja esta no heap: o fonte volta antes do app rodar
+        celer_log_printf("[duk] compilado: livre %u (fonte %u B, %u ms)\n",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)srcLen,
+                         (unsigned)(millis() - t0));
         if (rc != 0) {
             checkJSError(ctx, rc);
             duk_destroy_heap(ctx);
             ctx = nullptr;
             return;
         }
-    } // `content` String is destroyed here, freeing 50KB+ of RAM before the app runs
+    }
 
     duk_int_t rc = duk_pcall(ctx, 0);
+    // o recorte do display e do app (faixa/System.setClip): o launcher e as
+    // telas de erro desenham na tela inteira
+    if (tftInstance) tftInstance->clearClipRect();
     checkJSError(ctx, rc);
     
     // Destroy heap after app exits to free RAM
