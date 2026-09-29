@@ -50,6 +50,7 @@ void pinMode(int pin, uint8_t mode);
 void digitalWrite(int pin, uint8_t val);
 int digitalRead(int pin);
 int analogRead(int pin);          // adc_oneshot, 12 bits
+int analogReadAtten(int pin, int atten);  // atenuacao adc_atten_t (0 = 0dB, sinais fracos)
 void analogWrite(int pin, int val); // LEDC 8 bits (0-255)
 unsigned long pulseIn(int pin, uint8_t state, unsigned long timeout_us);
 

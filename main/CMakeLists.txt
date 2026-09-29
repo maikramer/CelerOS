@@ -9,6 +9,7 @@
 # GPIO19 e o SDA do touch GT911: o celerctl roda na UART via SerialLink.
 set(CELEROS_SRCS
     "Assets/Fonts/CelerFonts.cpp"
+    "Hardware/BoardIO.cpp"
     "main.cpp"
     "Compat/CelerCompat.cpp"
     "FileSystem/FileSystem.cpp"

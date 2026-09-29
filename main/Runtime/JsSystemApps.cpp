@@ -34,6 +34,21 @@ duk_ret_t JSBindings::js_getBrightness(duk_context *ctx) {
     return 1;
 }
 
+// System.setAutoBrightness(bool) -> bool (false sem sensor de luz)
+duk_ret_t JSBindings::js_setAutoBrightness(duk_context *ctx) {
+    bool on = duk_to_boolean(ctx, 0);
+    Backlight::setAuto(on);
+    duk_push_boolean(ctx, Backlight::isAuto() == on ? 1 : 0);
+    return 1;
+}
+
+// System.getAutoBrightness() -> true | false | null (null = placa sem sensor)
+duk_ret_t JSBindings::js_getAutoBrightness(duk_context *ctx) {
+    if (!Backlight::autoSupported()) { duk_push_null(ctx); return 1; }
+    duk_push_boolean(ctx, Backlight::isAuto() ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_backlightSupported(duk_context *ctx) {
     duk_push_boolean(ctx, Backlight::isSupported() ? 1 : 0);
     return 1;

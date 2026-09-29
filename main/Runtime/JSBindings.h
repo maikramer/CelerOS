@@ -175,6 +175,10 @@ private:
     static duk_ret_t js_setting(duk_context *ctx);
     static duk_ret_t js_toast(duk_context *ctx);
     static duk_ret_t js_beep(duk_context *ctx);
+    static duk_ret_t js_led(duk_context *ctx);
+    static duk_ret_t js_setAutoBrightness(duk_context *ctx);
+    static duk_ret_t js_getAutoBrightness(duk_context *ctx);
+    static duk_ret_t js_lightLevel(duk_context *ctx);
     static duk_ret_t js_appData(duk_context *ctx);
     static duk_ret_t js_rescanApps(duk_context *ctx);
     static duk_ret_t js_factoryReset(duk_context *ctx);

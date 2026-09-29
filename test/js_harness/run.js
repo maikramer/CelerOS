@@ -204,7 +204,7 @@ function makeEnv() {
         getAPILevel: function() { return 6; },
         getInfo: function() {
             return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000,
+                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true,
                 totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
                 chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
@@ -223,6 +223,11 @@ function makeEnv() {
         rescanApps: function() {},
         setBrightness: function() {}, getBrightness: function() { return 200; },
         backlightSupported: function() { return true; },
+        led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
+        lightLevel: function() { return 80; },
+        beep: function() { return true; },
+        getAutoBrightness: function() { return env.__autoBri; },
+        setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
         present: function() {}, isBuffered: function() { return false; }
     };
 

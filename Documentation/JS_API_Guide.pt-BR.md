@@ -661,6 +661,13 @@ Controle do backlight (5–100). `setBrightness` persiste em
 `/local/brightness.txt`. Em placas sem backlight PWM,
 `backlightSupported()` devolve `false` e os setters são no-op.
 
+#### `System.setAutoBrightness(on)` / `System.getAutoBrightness()` (API 7)
+Brilho automático pelo sensor de luz da placa: o nível escolhido pelo usuário
+vira o máximo e a tela escurece até 30% dele no escuro (suavizado, checado 1x
+por segundo, inclusive com app aberto). `getAutoBrightness()` devolve
+`true`/`false`, ou `null` em placas sem sensor de luz. Persistido na
+configuração `auto_brightness`.
+
 #### `System.wifiStatus()`
 - **Retorna:** `{connected, ip, webServer, savedNetworks}` (Booleans/String).
 
@@ -677,7 +684,21 @@ reboot.
 `"permissions": ["fs","net","gpio","system"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio` e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) ficam ausentes. **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
 
 #### `System.toast(mensagem)` / `System.beep(freq, ms)`
-`toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` aciona buzzer passivo via LEDC no `speakerPin` da placa (devolve `false` quando a placa não tem — as duas atuais saem com `-1` até haver buzzer ligado).
+`toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` toca um tom (onda quadrada) na saída de alto-falante da placa (bloqueante; 20–20000 Hz, até 5000 ms). A CYD aciona o conector de alto-falante (GPIO26, amplificador na placa); devolve `false` em placa sem alto-falante (SmartDisplay).
+
+#### `System.led(r, g, b)` (API 7)
+Acende o LED RGB de status da placa, 0–255 por canal (PWM). `System.led()`
+ou `System.led(0, 0, 0)` apaga; o LED também apaga quando o app sai. Devolve
+`false` em placa sem LED. A CYD tem um no verso (R=GPIO4, G=GPIO16,
+B=GPIO17).
+
+#### `System.lightLevel()` (API 7)
+Luz ambiente pelo sensor da placa: `0` (escuro) a `100` (sala iluminada);
+`-1` sem sensor. Na CYD o sensor (LDR ao lado da tela) só separa "iluminado"
+de "escurecendo": qualquer sala normalmente iluminada lê perto de 100.
+
+`System.getInfo()` também informa `hasLed`, `hasLightSensor` e `hasSpeaker`
+para detecção de recursos.
 
 #### `System.setting(key)` / `System.setting(key, value)`
 Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura devolve a string ou `null`; escrita devolve `true`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).

@@ -89,7 +89,11 @@ static bool adc_io_to_unit_channel(int pin, adc_unit_t* unit, adc_channel_t* cha
     return adc_oneshot_io_to_channel(pin, unit, chan) == ESP_OK;
 }
 
-int analogRead(int pin) {
+int analogRead(int pin) { return analogReadAtten(pin, ADC_ATTEN_DB_12); }
+
+// Leitura com atenuacao escolhida: 0dB (~0..0,95V) da resolucao a sinais
+// fracos, como o LDR da CYD, que fica abaixo do piso do ADC a 12dB
+int analogReadAtten(int pin, int atten) {
     adc_unit_t unit;
     adc_channel_t chan;
     if (!adc_io_to_unit_channel(pin, &unit, &chan)) return 0;
@@ -102,7 +106,7 @@ int analogRead(int pin) {
     }
     adc_oneshot_chan_cfg_t cfg = {};
     cfg.bitwidth = ADC_BITWIDTH_12;
-    cfg.atten = ADC_ATTEN_DB_12;
+    cfg.atten = (adc_atten_t)atten;
     adc_oneshot_config_channel(s_adc_unit[idx], chan, &cfg);
 
     int raw = 0;
@@ -112,8 +116,11 @@ int analogRead(int pin) {
 
 // --- analogWrite: LEDC com alocacao simples de canal -------------------------
 
-#define CELER_LEDC_MAX_CH 8
-static int s_ledc_pin[CELER_LEDC_MAX_CH] = {-1,-1,-1,-1,-1,-1,-1,-1};
+// So os canais LEDC 0..2 (timers 0/1): 3..5 sao do LED RGB, 6 do tom e 7 do
+// backlight (mapa em Hardware/BoardIO.h). Antes eram os 8 — um app com
+// PWM podia roubar o canal do beep ou reconfigurar o timer do backlight.
+#define CELER_LEDC_MAX_CH 3
+static int s_ledc_pin[CELER_LEDC_MAX_CH] = {-1, -1, -1};
 
 void analogWrite(int pin, int val) {
     int ch = -1;

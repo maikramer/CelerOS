@@ -19,6 +19,12 @@ struct SdConfig {
     int freqKhz;
 };
 
+// LED RGB de status (PWM). r < 0 = placa sem LED.
+struct RgbLedPins {
+    int r, g, b;
+    bool activeLow;  // catodo no GPIO (acende em nivel baixo)
+};
+
 struct BoardProfile {
     const char* id;          // "smartdisplay_4in" / "cyd"
     const char* otaChannel;  // canal de updates (updates/<canal>/)
@@ -29,6 +35,8 @@ struct BoardProfile {
     bool capacitiveTouch;    // sem calibracao interativa
     int speakerPin;          // buzzer passivo p/ System.beep (LEDC); -1 = nao ha
     int rotation;            // rotação fixa do painel no boot (0-3; CYD clássica = 3, landscape)
+    RgbLedPins led;          // LED RGB (System.led); r < 0 = nao ha
+    int lightSensorPin;      // LDR no ADC (System.lightLevel, brilho automatico); -1 = nao ha
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).

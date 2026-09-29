@@ -54,7 +54,11 @@ public:
         {
             auto cfg = _panel.config();
             cfg.pin_cs = 15;
-            cfg.pin_rst = 4;
+            // Reset do TFT vem do EN nesta placa: GPIO4 e o LED VERMELHO do
+            // RGB (Board.cpp) — usado como RST ele piscava o LED no boot e
+            // impedia o System.led. Sem pino, o LovyanGFX faz reset por
+            // comando (SWRESET).
+            cfg.pin_rst = -1;
             // Vidro real desta placa: 320x240 LANDSCAPE (RAM inteira do
             // controlador 240x320, girada). Varredura da sonda v5 confirmou:
             // rotacao 3 + offsets 0 + painel cheio = tela toda. O CelerOS

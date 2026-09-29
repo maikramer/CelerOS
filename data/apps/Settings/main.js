@@ -359,7 +359,9 @@ function buildMenu() {
     a.push({ l: "Segurança", v: System.pinState() > 0 ? "PIN" : "--", a: "sec" });
     a.push({
         l: "Tela",
-        v: System.backlightSupported() ? System.getBrightness() + "%" : "--",
+        v: System.backlightSupported()
+            ? System.getBrightness() + "%" + (autoBriSupported() && System.getAutoBrightness() ? " auto" : "")
+            : "--",
         a: "display"
     });
     a.push({ l: "Atualização", a: "ota" });
@@ -598,6 +600,12 @@ function buildSec() {
 
 // ---- Tela (brilho) ---------------------------------------------------------
 
+// Brilho automatico (API 7): so em placa com sensor de luz (getAutoBrightness
+// devolve null sem sensor; firmware antigo nem tem a funcao)
+function autoBriSupported() {
+    return typeof System.getAutoBrightness === "function" && System.getAutoBrightness() !== null;
+}
+
 function drawDisplay() {
     if (!System.backlightSupported()) {
         ctext("Backlight fixo", 120, 120, 2, T.warn, T.bg);
@@ -615,6 +623,15 @@ function drawDisplay() {
     var fw = Math.round(192 * blLvl / 100);
     if (fw > 4) System.fillRoundRect(24, 160, fw, 12, 6, T.accent);
     System.fillCircle(24 + fw, 166, 7, T.text);
+
+    if (autoBriSupported()) {
+        var on = System.getAutoBrightness();
+        var bg = on ? T.accent : T.card;
+        System.fillRoundRect(24, 212, 192, 30, 8, bg);
+        System.drawRoundRect(24, 212, 192, 30, 8, T.stroke);
+        ctext("Brilho automático: " + (on ? "ligado" : "desligado"), 120, 227, 1,
+              on ? T.onAccent : T.text, bg);
+    }
 }
 
 // ---- Atualizacao (OTA) -----------------------------------------------------
@@ -815,6 +832,12 @@ function onTap() {
     if (tela === "update" && (otaState === "nowifi" || otaState === "failed" ||
         otaState === "uptodate" || otaState === "avail")) {
         if (hit(t, 140, 282, 92, 30)) { doCheck(); return; }
+    }
+
+    if (tela === "display" && autoBriSupported() && hit(t, 24, 212, 192, 30)) {
+        System.setAutoBrightness(!System.getAutoBrightness());
+        drawAll();
+        return;
     }
 
     if (tela === "menu") {

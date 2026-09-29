@@ -20,8 +20,10 @@ static const BoardProfile s_profile = {
     .hasPsram = false,
     .backlightPwm = true,   // GPIO22 via Light_PWM (antes era fixo 100%)
     .capacitiveTouch = false,
-    .speakerPin = -1,  // sem buzzer na placa; setar o GPIO quando houver
+    .speakerPin = 26,  // saida de audio (amplificador SC8002B -> conector do alto-falante)
     .rotation = 3,     // vidro landscape 320x240 (varredura de sonda confirmou R3)
+    .led = {4, 16, 17, true},  // LED RGB no verso: R=4, G=16, B=17, acende em nivel baixo
+    .lightSensorPin = 34,      // LDR ao lado da tela (ADC1_CH6)
 };
 
 void init() {

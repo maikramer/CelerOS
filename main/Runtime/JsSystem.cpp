@@ -16,6 +16,7 @@
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
 #include "../Kernel/Core/CelerKernel.h"
+#include "../Hardware/BoardIO.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
@@ -164,6 +165,14 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     duk_push_uint(ctx, (duk_uint_t)CelerKernel::appLaunchFreeHeap);
     duk_put_prop_string(ctx, -2, "appRAM");
 
+    // perifericos da placa (API 7): feature detection sem tentativa e erro
+    duk_push_boolean(ctx, BoardIO::hasLed() ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "hasLed");
+    duk_push_boolean(ctx, BoardIO::hasLightSensor() ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "hasLightSensor");
+    duk_push_boolean(ctx, BoardIO::hasSpeaker() ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "hasSpeaker");
+
     // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
     duk_push_uint(ctx, ESP.getCpuFreqMHz());
     duk_put_prop_string(ctx, -2, "cpuFreqMHz");
@@ -290,25 +299,26 @@ duk_ret_t JSBindings::js_beep(duk_context *ctx) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
-    int pin = Board::profile().speakerPin;
-    if (pin < 0) { duk_push_boolean(ctx, 0); return 1; }
-    ledc_timer_config_t timer = {};
-    timer.speed_mode = LEDC_LOW_SPEED_MODE;
-    timer.duty_resolution = LEDC_TIMER_10_BIT;
-    timer.freq_hz = (uint32_t)freq;
-    timer.clk_cfg = LEDC_AUTO_CLK;
-    ledc_timer_config(&timer);
-    ledc_channel_config_t ch = {};
-    ch.speed_mode = LEDC_LOW_SPEED_MODE;
-    ch.channel = LEDC_CHANNEL_0;
-    ch.timer_sel = LEDC_TIMER_0;
-    ch.intr_type = LEDC_INTR_DISABLE;
-    ch.gpio_num = (gpio_num_t)pin;
-    ch.duty = 512;  // 50%
-    if (ledc_channel_config(&ch) != ESP_OK) { duk_push_boolean(ctx, 0); return 1; }
-    uint32_t t0 = millis();
-    while ((int)(millis() - t0) < ms) { esp_task_wdt_reset(); delay(10); }
-    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    duk_push_boolean(ctx, BoardIO::tone(freq, ms) ? 1 : 0);
+    return 1;
+}
+
+// System.led(r, g, b) -> bool (0..255 por canal; sem argumentos apaga).
+// false em placa sem LED RGB.
+duk_ret_t JSBindings::js_led(duk_context *ctx) {
+    if (!BoardIO::hasLed()) { duk_push_boolean(ctx, 0); return 1; }
+    auto ch = [ctx](duk_idx_t i) {
+        int v = duk_is_number(ctx, i) ? duk_get_int(ctx, i) : 0;
+        return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+    };
+    BoardIO::setLed(ch(0), ch(1), ch(2));
     duk_push_boolean(ctx, 1);
+    return 1;
+}
+
+// System.lightLevel() -> 0 (escuro) .. 100 (claro); -1 sem sensor de luz
+duk_ret_t JSBindings::js_lightLevel(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::lightLevel());
     return 1;
 }

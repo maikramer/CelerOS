@@ -319,6 +319,7 @@ void JSBindings::applyDisplayClip() {
 
 void JSBindings::present() {
     if (tftInstance == nullptr) return;
+    Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
     retractTick();
     bool wantBar = s_topbarFixed || s_barShown;
     if (s_frame != nullptr) {
@@ -780,6 +781,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setBrightness", js_setBrightness, 1},
         {"getBrightness", js_getBrightness, 0},
         {"backlightSupported", js_backlightSupported, 0},
+        {"setAutoBrightness", js_setAutoBrightness, 1},
+        {"getAutoBrightness", js_getAutoBrightness, 0},
         {"exitApp", js_exitApp, 0},
         {"setClip", js_setClip, 4},
         {"clearClip", js_clearClip, 0},
@@ -795,6 +798,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setting", js_setting, 2},
         {"toast", js_toast, 1},
         {"beep", js_beep, 2},
+        {"led", js_led, 3},
+        {"lightLevel", js_lightLevel, 0},
         {"setTimezone", js_setTimezone, 1},
         {"setManualTime", js_setManualTime, 5},
         {"set24hFormat", js_set24hFormat, 1},

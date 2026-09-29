@@ -487,6 +487,9 @@ Returns `true` when the board has the automatic frame buffer (PSRAM boards).
 #### `System.setBrightness(level)` / `System.getBrightness()` / `System.backlightSupported()`
 Backlight control (5–100). `setBrightness` persists to `/local/brightness.txt`. On boards without PWM backlight `backlightSupported()` returns `false` and the setters are no-ops.
 
+#### `System.setAutoBrightness(on)` / `System.getAutoBrightness()` (API 7)
+Automatic brightness from the board's light sensor: the user's level becomes the maximum and the screen dims down to 30% of it in the dark (smoothed, checked once per second, also while apps run). `getAutoBrightness()` returns `true`/`false`, or `null` on boards without a light sensor. Persisted as the `auto_brightness` setting.
+
 #### `System.wifiStatus()`
 - **Returns:** `{connected, ip, webServer, savedNetworks}` (Booleans/String).
 
@@ -500,7 +503,15 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 `"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) are absent. **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
 
 #### `System.toast(message)` / `System.beep(freq, ms)`
-`toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` drives a passive buzzer via LEDC on the board's `speakerPin` (returns `false` when the board has none — both current boards ship with `-1` until a buzzer is wired).
+`toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a square-wave tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); returns `false` on boards without a speaker (SmartDisplay).
+
+#### `System.led(r, g, b)` (API 7)
+Sets the board's RGB status LED, 0–255 per channel (PWM). `System.led()` or `System.led(0, 0, 0)` turns it off; the LED is also switched off when the app exits. Returns `false` on boards without an LED. The CYD has one on the back (R=GPIO4, G=GPIO16, B=GPIO17).
+
+#### `System.lightLevel()` (API 7)
+Ambient light from the board's light sensor: `0` (dark) to `100` (lit room); `-1` without a sensor. On the CYD the sensor (LDR next to the screen) only separates "lit" from "getting dark": any normally lit room reads close to 100.
+
+`System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection.
 
 #### `System.setting(key)` / `System.setting(key, value)`
 System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read returns the string or `null`; write returns `true`. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).

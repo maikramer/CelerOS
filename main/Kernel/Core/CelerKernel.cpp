@@ -7,6 +7,7 @@
 #include "../../Display/Theme.h"
 #include "../../UI/Kui.h"
 #include "../../Display/Icon.h"
+#include "../../Hardware/BoardIO.h"
 #include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
 #include <vector>
@@ -500,6 +501,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     // o recorte do display e do app (faixa/System.setClip): o launcher e as
     // telas de erro desenham na tela inteira
     if (tftInstance) tftInstance->clearClipRect();
+    BoardIO::ledOff();  // LED e estado do app: nao fica aceso depois que ele sai
     checkJSError(ctx, rc);
     
     // Destroy heap after app exits to free RAM

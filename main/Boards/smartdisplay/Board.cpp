@@ -18,6 +18,8 @@ static const BoardProfile s_profile = {
     .capacitiveTouch = true,
     .speakerPin = -1,  // sem buzzer na placa; setar o GPIO quando houver
     .rotation = 0,     // painel quadrado 480x480, sem rotação
+    .led = {-1, -1, -1, false},
+    .lightSensorPin = -1,
 };
 
 void init() {

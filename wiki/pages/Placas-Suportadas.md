@@ -73,6 +73,11 @@ toque resistivo), então a experiência é visivelmente mais simples:
   boot; os alvos são pequenos (ícones de 48 px, barra superior de 20 px).
 * **Sem cartão SD** por enquanto (o slot divide o barramento do display).
 
+**Periféricos da placa usados pelo sistema:** LED RGB no verso
+(`System.led`), sensor de luz ao lado da tela (`System.lightLevel` e brilho
+automático em Configurações → Tela) e saída de alto-falante no GPIO26
+(`System.beep`).
+
 **Por dentro (para quem mexe no firmware):**
 
 * 4 MB de flash: a imagem é mais apertada, os apps de sistema em JS na

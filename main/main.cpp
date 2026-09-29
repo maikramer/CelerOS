@@ -196,6 +196,7 @@ static void celerLoop() {
     // Reboot diferido do upload web de firmware (/update)
     WebManager::tick();
     TimeManager::tick(WebManager::isActive());
+    Backlight::tick();  // brilho automatico (so com sensor de luz e a opcao ligada)
     confirmPendingOta();
 
     delay(5);

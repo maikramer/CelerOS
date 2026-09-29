@@ -26,7 +26,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 
 ## API LEVEL HISTORY
-1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page and Latin-1 text in every font (apps with accented strings declare `api: 7`).
+1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page, Latin-1 text in every font (apps with accented strings declare `api: 7`), `System.led`/`lightLevel`/auto-brightness and working `beep` on the CYD (`Hardware/BoardIO`).
 
 ## CONVENTIONS
 - JS works in virtual 240x320 coordinates. Every draw and touch conversion goes through `UI::sx/sy` (in) and the inverse (touch out). Don't expose physical pixels to JS.

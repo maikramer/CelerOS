@@ -18,6 +18,7 @@ main/
 ├── OTA/              # OtaManager: update.json v2 check + direct esp_https_ota flash (the only OTA path)
 ├── USBDevice/        # CelerShell, CelerLink (celerctl protocol), SerialLink (UART), LogSink
 ├── Compat/           # Arduino.h shim (millis/delay/pinMode...) over IDF - include path root
+├── Hardware/         # BoardIO: LED RGB, sensor de luz, tom no alto-falante (pinos no BoardProfile; mapa de canais LEDC)
 ├── Settings/         # TouchCalibrator
 └── Assets/           # SplashLogo.h (GENERATED: 64-color PNG drawn with drawPng)
 ```
