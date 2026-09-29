@@ -68,4 +68,5 @@ CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # para o transbordo do heap JS, o fonte do compile e o TLS.
 # CONFIG_ESP_WIFI_IRAM_OPT is not set
 # CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
-CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+# malloc/free ficam na IRAM: com o heap em flash o compile do Duktape
+# (milhares de alocacoes) ficou 2x mais lento (Settings 1,6s -> 3,1s)
