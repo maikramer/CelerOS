@@ -25,3 +25,7 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # dedicado conflitaria com o display. Sem SD até o mount suportar bus
 # compartilhado — e o FAT/SDSPI saem do binário (bônus de tamanho).
 # CONFIG_CELEROS_SD_CARD is not set
+
+# Heap para apps JS: a main task usa ~4KB de stack (watermark medido) — os
+# 32KB padrao roubam 12KB da RAM interna que o runtime Duktape precisa.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480

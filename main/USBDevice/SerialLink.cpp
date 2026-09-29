@@ -32,7 +32,7 @@ vprintf_like_t s_defaultVprintf = nullptr;
 LineEditor* s_editor = nullptr;
 
 // ---- ring de logs + logcat ------------------------------------------------
-constexpr size_t K_LOG_RING = 8192;
+constexpr size_t K_LOG_RING = 2048;  // era 8K: 6KB fazem falta no heap da CYD (sem PSRAM); logcat segue funcional (janela menor)
 char s_logRing[K_LOG_RING];
 volatile size_t s_logHead = 0;  // posicao de escrita
 volatile size_t s_logTail = 0;  // posicao de leitura

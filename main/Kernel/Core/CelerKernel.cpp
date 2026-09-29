@@ -342,7 +342,11 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     }
 
     if (!dukHeapBudgetOk()) {
-        celer_log_println("heap do sistema baixo p/ app JS (piso sem PSRAM)");
+        char db[80];
+        snprintf(db, sizeof(db), "heap baixo p/ app JS: livre=%u piso=%d",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (int)(kNoPsramFloor + 40 * 1024));
+        celer_log_println(db);
         showRuntimeError(i18n::TR("Sem memoria", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }

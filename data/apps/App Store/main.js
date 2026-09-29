@@ -25,7 +25,11 @@ var INDEX_URL = "https://os.celer.tec.br/store/index.json";
 // caber na RAM interna; apps com radio ligado ficam p/ hardware com PSRAM).
 var HWINFO = System.getInfo ? System.getInfo() : null;
 var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
-var PSRAM_MAX_JS = 20 * 1024;
+// Limiar DINAMICO pela RAM livre do aparelho: heap base do runtime (~52KB)
+// + script em compilacao (~1.7x) tem que caber. Placa com folga sobe o teto.
+var PSRAM_MAX_JS = NO_PSRAM
+    ? Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7))
+    : Infinity;
 function needsPsram(it) { return (it.size || 0) > PSRAM_MAX_JS; }
 
 // Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo

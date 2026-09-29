@@ -11,6 +11,7 @@
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_wifi.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "ArduinoJson.h"
 
@@ -201,9 +202,14 @@ void WebManager::suspendRadio() {
     if (s_radioSuspended) return;
     stopWebServer();
     nm().setAutoReconnect(false);  // silencia a task enquanto o radio desce
+    unsigned antes = (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT);
     esp_wifi_stop();               // libera o heap do WiFi/lwIP
     s_radioSuspended = true;
-    celer_log_println("radio WiFi suspenso (app sem rede / sem PSRAM)");
+    char rb[80];
+    snprintf(rb, sizeof(rb), "radio suspenso: heap %u -> %u (+%u)",
+             antes, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT) - antes);
+    celer_log_println(rb);
 }
 
 void WebManager::resumeRadio() {
