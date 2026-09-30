@@ -15,3 +15,6 @@ managed_components/
 tools/bin/
 __pycache__/
 .playwright-mcp/
+
+# estado local de ferramentas de agente (logs de sessao, baseline do size_report)
+.omo/
