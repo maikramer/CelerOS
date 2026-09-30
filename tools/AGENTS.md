@@ -6,7 +6,7 @@ Host utilities: device control over serial (`celerctl`), the LAN OTA test server
 ## WHERE TO LOOK
 | Tool | Role | Key usage |
 |------|------|-----------|
-| `celerctl.py` (822) | CelerLink client (device side: `main/USBDevice/`) | `devices [-l]`, `info`, `shell [cmd]`, `ls/cat/rm/mkdir/mv`, `push LOCAL REMOTE`, `pull`, `reboot`, `logcat [--dump]`, `ota push FW.bin [--no-reboot]`, `screencap out.png`, `tap X Y [ms]`, `swipe X0 Y0 X1 Y1 [ms]`, `apps list/install <dir>/rm` |
+| `celerctl.py` (822) | HostLink client (device side: `main/USBDevice/`) | `devices [-l]`, `info`, `shell [cmd]`, `ls/cat/rm/mkdir/mv`, `push LOCAL REMOTE`, `pull`, `reboot`, `logcat [--dump]`, `ota push FW.bin [--no-reboot]`, `screencap out.png`, `tap X Y [ms]`, `swipe X0 Y0 X1 Y1 [ms]`, `apps list/install <dir>/rm` |
 | `flash_data.sh` | build the LittleFS image of `data/` and write the `littlefs` partition | `tools/flash_data.sh [smartdisplay\|cyd] [PORT]` (needs `IDF_PATH` exported; uses `bin/mklittlefs.bin` + IDF `parttool.py`) |
 | `ota_server.py` | local update.json + firmware server | `--board smartdisplay\|cyd`, `--bin`, `--port` (default 10234), `--version`; the device picks it up through `/local/ota_url.txt` |
 | `celerhub.py` | publish/list/delete apps on the hub | validates app folders; token via args/env; hub via `--hub` or `CELER_HUB` (default `https://os.celer.tec.br`) |

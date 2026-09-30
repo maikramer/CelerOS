@@ -1,11 +1,11 @@
-#ifndef CELER_LINK_H
-#define CELER_LINK_H
+#ifndef HOST_LINK_H
+#define HOST_LINK_H
 
 #include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 
-// Protocolo CelerLink: canal binario da ferramenta celerctl sobre a CDC1.
+// Protocolo HostLink: canal binario da ferramenta celerctl sobre a CDC1.
 //
 // Frame (little-endian):
 //   [0x43 'C'][cmd u8][len u16][payload de len bytes]
@@ -16,7 +16,7 @@
 // ESTE ARQUIVO E A FONTE UNICA DOS OPCODES: tools/celerctl.py extrai os
 // valores por regex para manter os dois lados em sincronia.
 
-class CelerLink {
+class HostLink {
 public:
     // Funcao de escrita no canal (CDC nativo, UART do CH340, ...)
     typedef bool (*WriteFn)(const uint8_t* data, size_t len);
@@ -68,4 +68,4 @@ constexpr uint8_t KL_LOG_DATA = 0x12;     // linha de log (texto, com \n)
 constexpr uint8_t KL_SCR_DATA = 0x18;     // continuacao do screenshot (RGB565 cru)
 constexpr uint8_t KL_COREDUMP_DATA = 0x1B; // continuacao do coredump (binario ELF)
 
-#endif // CELER_LINK_H
+#endif // HOST_LINK_H

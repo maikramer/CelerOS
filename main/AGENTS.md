@@ -16,7 +16,7 @@ main/
 ├── FileSystem/       # static FileSystem:: LittleFS(/local) + SD(/sd), atomic writes, MD5
 ├── WebManager/       # WiFi boot/reconnect, httpd file manager + /update OTA upload (gzip pages), captive portal host
 ├── OTA/              # OtaManager: update.json v2 check + direct esp_https_ota flash (the only OTA path)
-├── USBDevice/        # CelerShell, CelerLink (celerctl protocol), SerialLink (UART), LogSink
+├── USBDevice/        # CelerShell, HostLink (celerctl protocol), SerialLink (UART), LogSink
 ├── Compat/           # Arduino.h shim (millis/delay/pinMode...) over IDF - include path root
 ├── Hardware/         # BoardIO: LED RGB, sensor de luz, tom no alto-falante (pinos no BoardProfile; mapa de canais LEDC)
 ├── Settings/         # TouchCalibrator
@@ -34,7 +34,7 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 | Bump firmware version / API level | `main/CMakeLists.txt` `CELEROS_VERSION`, `CELEROS_API_LEVEL`, plus root `project(VERSION)` |
 | New board | `Boards/<b>/` (3 files) + `elseif` in `main/CMakeLists.txt` + `boards/<b>/sdkconfig.defaults` + `updates/<channel>/update.json` |
 | Touch gestures / tap vs swipe | `UI/Kui.cpp` TouchPump; injected touches (celerctl tap) go through TouchInjector |
-| celerctl device side | `USBDevice/CelerLink.cpp` (opcodes), `SerialLink.cpp` (UART transport) |
+| celerctl device side | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART transport) |
 | App discovery / launch | `Launcher/LauncherUI.cpp` (appDirs, `main.js`) |
 | Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
 | Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |

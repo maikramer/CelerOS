@@ -6,7 +6,7 @@
 
 // Subsistema USB device do CelerOS (exclusivo do ESP32-S3, que tem USB-OTG):
 //   CDC0 -> shell interativo (terminal humano: minicom/idf.py monitor)
-//   CDC1 -> protocolo binario CelerLink (ferramenta celerctl)
+//   CDC1 -> protocolo binario HostLink (ferramenta celerctl)
 // No CYD (ESP32 classico, sem periferico USB device) tudo vira no-op.
 
 class USBDevice {

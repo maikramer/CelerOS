@@ -1,4 +1,4 @@
-#include "CelerLink.h"
+#include "HostLink.h"
 #include "CelerShell.h"
 #include "LogSink.h"
 #include "FileSystem/FileSystem.h"
@@ -35,8 +35,8 @@
 namespace {
 
 // transporte injetado (default: CDC nativo do USBDevice)
-CelerLink::WriteFn s_writer = nullptr;
-CelerLink::BaudFn s_baudHook = nullptr;
+HostLink::WriteFn s_writer = nullptr;
+HostLink::BaudFn s_baudHook = nullptr;
 
 // ---------------------------------------------------------------- utilidades
 
@@ -44,7 +44,7 @@ CelerLink::BaudFn s_baudHook = nullptr;
 // (logcat) nunca intercalam bytes no meio de uma resposta. Quem produz dados
 // grandes (READ) escreve direto em txPayload() e chama sendFrame: sem um
 // segundo buffer de 4KB estatico (RAM interna e o que sobra para apps JS).
-uint8_t s_txFrame[4 + 1 + CelerLink::MAX_PAYLOAD];
+uint8_t s_txFrame[4 + 1 + HostLink::MAX_PAYLOAD];
 
 uint8_t* txPayload() { return s_txFrame + 5; }
 
@@ -286,7 +286,7 @@ void handleRead(const uint8_t* payload, uint16_t len) {
         respondError(KL_READ, "pedido malformado");
         return;
     }
-    if (want > CelerLink::MAX_PAYLOAD) want = CelerLink::MAX_PAYLOAD;
+    if (want > HostLink::MAX_PAYLOAD) want = HostLink::MAX_PAYLOAD;
 
     FILE* f = fopen(path, "rb");
     if (f == nullptr) {
@@ -398,7 +398,7 @@ void handleExec(const uint8_t* payload, uint16_t len) {
         size_t off = 0;
         while (off < ctx.out.size()) {
             size_t n = ctx.out.size() - off;
-            if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
+            if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
             respond(KL_EXEC_CONT, 0, ctx.out.data() + off, (uint16_t)n);
             off += n;
         }
@@ -525,7 +525,7 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     const uint16_t w = (uint16_t)tft.width();
     const uint16_t h = (uint16_t)tft.height();
     uint16_t* row = (uint16_t*)malloc((size_t)w * 2);
-    const size_t cap = (CelerLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
+    const size_t cap = (HostLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
     if (row == nullptr) {
         respondError(KL_SCREENSHOT, "sem memoria para captura");
         return;
@@ -644,7 +644,7 @@ void handleCoredump() {
     size_t off = 0;
     while (off < size && s_writer != nullptr) {
         size_t rest = size - off;
-        uint16_t chunk = (uint16_t)((rest > CelerLink::MAX_PAYLOAD) ? CelerLink::MAX_PAYLOAD : rest);
+        uint16_t chunk = (uint16_t)((rest > HostLink::MAX_PAYLOAD) ? HostLink::MAX_PAYLOAD : rest);
         respond(KL_COREDUMP_DATA, 0, p + off, chunk);
         off += chunk;
     }
@@ -682,16 +682,16 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 
 }  // namespace
 
-void CelerLink::setWriter(WriteFn fn) {
+void HostLink::setWriter(WriteFn fn) {
     s_writer = fn;
 }
 
-void CelerLink::setBaudHook(BaudFn fn) {
+void HostLink::setBaudHook(BaudFn fn) {
     s_baudHook = fn;
 }
 
 // Maquina de estados de frames alimentada byte a byte.
-void CelerLink::feed(uint8_t byte) {
+void HostLink::feed(uint8_t byte) {
     static uint8_t payload[MAX_PAYLOAD];
     static enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } state = WANT_MAGIC;
     static uint8_t cmd = 0;
@@ -746,7 +746,7 @@ void CelerLink::feed(uint8_t byte) {
     }
 }
 
-void CelerLink::run(StreamBufferHandle_t rx) {
+void HostLink::run(StreamBufferHandle_t rx) {
     for (;;) {
         uint8_t byte;
         if (xStreamBufferReceive(rx, &byte, 1, portMAX_DELAY) == 0) continue;

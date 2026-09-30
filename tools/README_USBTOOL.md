@@ -2,12 +2,12 @@
 
 **English** | [Português (BR)](README_USBTOOL.pt-BR.md)
 
-`celerctl.py` talks to the firmware over the **CelerLink** channel: a light
+`celerctl.py` talks to the firmware over the **HostLink** channel: a light
 binary protocol (`[0x43 'C'][cmd][len u16 LE][payload]`) that runs on the
 console UART — in practice, the CH340 that the PC sees as `/dev/ttyUSB*`
 (or CDC1 of native USB, on boards with `CONFIG_CELEROS_USB_NATIVE`).
 
-The opcodes live in `main/USBDevice/CelerLink.h` and the tool parses that
+The opcodes live in `main/USBDevice/HostLink.h` and the tool parses that
 file with a regex: there is a single source of truth for both sides.
 
 ## Install
@@ -82,10 +82,10 @@ flowing as live frames inside the tool itself.
 
 The ESP32-S3 has USB-OTG (GPIO19/20), but **on the SmartDisplay 4848S040
 those pins are used by the board** (GPIO19 = GT911 touch SDA, GPIO20 = RGB
-display G1 line) and the USB connector is CH340 only. That is why CelerLink
+display G1 line) and the USB connector is CH340 only. That is why HostLink
 runs on the UART and USB Mass Storage is not possible on these boards.
 
 The native USB code (dual CDC via TinyUSB, `main/USBDevice/USBDevice.cpp`)
 stays in the repository, dormant behind `CONFIG_CELEROS_USB_NATIVE`
 (CelerOS menu), ready for boards whose GPIO19/20 are free — in that
-scenario CelerLink migrates to CDC1 with no protocol changes.
+scenario HostLink migrates to CDC1 with no protocol changes.

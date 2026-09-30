@@ -2,9 +2,9 @@
 r"""
 celerctl - ferramenta de depuracao/manutencao do CelerOS via USB (estilo adb).
 
-Conversa com o firmware pelo canal CelerLink: na pratica a UART do CH340
+Conversa com o firmware pelo canal HostLink: na pratica a UART do CH340
 (USB do PC -> /dev/ttyUSB*) ou, em placas com USB nativo, a CDC1. Os opcodes
-sao lidos diretamente de main/USBDevice/CelerLink.h para manter os dois
+sao lidos diretamente de main/USBDevice/HostLink.h para manter os dois
 lados em sincronia.
 
 Comandos:
@@ -50,7 +50,7 @@ except ImportError:
 # VIDs que podem hospedar o canal: CDC nativa do ESP32-S3 ou bridges USB-UART
 # comuns (CH340 do SmartDisplay/CYD). A identificacao real e por probing HELLO.
 USB_VIDS = (0x303A, 0x1A86, 0x10C4)
-CHUNK = 4096  # tamanho maximo de payload CelerLink
+CHUNK = 4096  # tamanho maximo de payload HostLink
 DEFAULT_BAUD = 115200
 
 
@@ -60,7 +60,7 @@ class CelerError(Exception):
 
 def load_opcodes():
     """Extrai os opcodes KL_* do header do firmware (fonte unica)."""
-    header = Path(__file__).resolve().parent.parent / "main" / "USBDevice" / "CelerLink.h"
+    header = Path(__file__).resolve().parent.parent / "main" / "USBDevice" / "HostLink.h"
     ops = {}
     for name, value in re.findall(r"KL_(\w+)\s*=\s*(0x[0-9A-Fa-f]+)", header.read_text()):
         ops[name] = int(value, 16)
@@ -90,8 +90,8 @@ def read_exact(ser, n, timeout):
     return buf
 
 
-class CelerLink:
-    """Cliente do protocolo CelerLink sobre a CDC1."""
+class HostLink:
+    """Cliente do protocolo HostLink sobre a CDC1."""
 
     def __init__(self, port, timeout=3.0):
         self.ser = serial.Serial(port, 115200, timeout=timeout, write_timeout=timeout)
@@ -353,9 +353,9 @@ def human_size(n):
 
 
 def probe(port, fast=False):
-    """Abre a porta e verifica se e o canal CelerLink (CDC1)."""
+    """Abre a porta e verifica se e o canal HostLink (CDC1)."""
     try:
-        link = CelerLink(port.device, timeout=0.6 if fast else 1.5)
+        link = HostLink(port.device, timeout=0.6 if fast else 1.5)
         try:
             return link.hello()
         finally:
@@ -382,17 +382,17 @@ def find_devices(verbose=False):
 
 def open_link(args):
     if args.port:
-        link = CelerLink(args.port, timeout=3.0)
+        link = HostLink(args.port, timeout=3.0)
         try:
             link.hello()
         except CelerError:
             link.close()
-            die(f"{args.port} nao responde ao protocolo CelerLink")
+            die(f"{args.port} nao responde ao protocolo HostLink")
     else:
         devices = find_devices()
         if not devices:
             die("nenhum CelerOS encontrado (usar -p PORTA para especificar)")
-        link = CelerLink(devices[0][0].device, timeout=3.0)
+        link = HostLink(devices[0][0].device, timeout=3.0)
     if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD:
         link.set_baud(args.baud)
     return link

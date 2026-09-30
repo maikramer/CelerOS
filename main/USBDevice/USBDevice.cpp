@@ -19,7 +19,7 @@
 #include "tusb.h"
 
 #include "CelerShell.h"
-#include "CelerLink.h"
+#include "HostLink.h"
 
 // Descritores de string do esp_tinyusb (usb_descriptors.c). Trocamos a string
 // de serial (indice 3) pela MAC do chip antes de instalar o driver, para o
@@ -99,7 +99,7 @@ void usbShellTask(void*) {
 }
 
 void usbLinkTask(void*) {
-    CelerLink::run(s_linkRx);
+    HostLink::run(s_linkRx);
 }
 
 }  // namespace
@@ -141,14 +141,14 @@ bool USBDevice::init() {
     }
 
     s_shellRx = xStreamBufferCreate(2048, 1);
-    s_linkRx = xStreamBufferCreate(CelerLink::MAX_PAYLOAD * 2, 1);
+    s_linkRx = xStreamBufferCreate(HostLink::MAX_PAYLOAD * 2, 1);
     s_writeMutex = xSemaphoreCreateMutex();
     if (s_shellRx == nullptr || s_linkRx == nullptr || s_writeMutex == nullptr) {
         ESP_LOGE(TAG, "sem memoria para buffers USB");
         return false;
     }
 
-    CelerLink::setWriter(&USBDevice::linkWrite);
+    HostLink::setWriter(&USBDevice::linkWrite);
 
     if (xTaskCreate(usbShellTask, "usb_shell", 8192, nullptr, 3, nullptr) != pdPASS ||
         xTaskCreate(usbLinkTask, "usb_link", 12288, nullptr, 4, nullptr) != pdPASS) {

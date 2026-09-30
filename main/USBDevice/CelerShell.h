@@ -6,7 +6,7 @@
 // Dispatcher de comandos de texto do CelerOS, estilo "adb shell". A mesma
 // tabela serve aos dois consumidores:
 //   - CDC0: task do shell com eco, digitando num terminal serial
-//   - CelerLink EXEC: saida capturada em buffer e devolvida ao celerctl
+//   - HostLink EXEC: saida capturada em buffer e devolvida ao celerctl
 // Saidas sempre via callback printf-like, para nao amarrar o destino.
 
 class CelerShell {

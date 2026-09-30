@@ -346,7 +346,7 @@ private:
 // Fila de amostras de touch sinteticas (celerctl tap/swipe). Os TouchPump
 // consomem a fila durante o poll; enquanto houver amostras pendentes (ou
 // espera de timing), o touch fisico e ignorado — o gesto injetado e dono do
-// pump. Preenchida pela task do CelerLink, drenada pelo loop da UI.
+// pump. Preenchida pela task do HostLink, drenada pelo loop da UI.
 class TouchInjector {
 public:
     struct Sample {

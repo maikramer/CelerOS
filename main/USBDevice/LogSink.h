@@ -18,7 +18,7 @@ bool celer_log_silent(void);
 void celer_log_println(const char* s);
 void celer_log_print(const char* s);
 
-// Logcat (uso do CelerLink)
+// Logcat (uso do HostLink)
 void celer_logcat_set(bool on);
 bool celer_logcat_active(void);
 

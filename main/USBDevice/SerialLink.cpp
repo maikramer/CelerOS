@@ -1,5 +1,5 @@
 #include "SerialLink.h"
-#include "CelerLink.h"
+#include "HostLink.h"
 #include "CelerShell.h"
 #include "LogSink.h"
 
@@ -129,8 +129,8 @@ void linkTask(void*) {
                         // no modo link e entrega os dois bytes ao parser
                         enterLinkMode();
                         s_lastFrame = xTaskGetTickCount();
-                        CelerLink::feed(hold);
-                        CelerLink::feed(b);
+                        HostLink::feed(hold);
+                        HostLink::feed(b);
                         continue;
                     }
                     // nao era frame: o byte retido vira caractere normal
@@ -144,7 +144,7 @@ void linkTask(void*) {
                 feedConsole(b);
             } else {
                 s_lastFrame = xTaskGetTickCount();
-                CelerLink::feed(b);
+                HostLink::feed(b);
             }
         }
     }
@@ -176,8 +176,8 @@ bool SerialLink::init() {
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
 
-    CelerLink::setWriter(&SerialLink::writeFrame);
-    CelerLink::setBaudHook(&SerialLink::setBaud);
+    HostLink::setWriter(&SerialLink::writeFrame);
+    HostLink::setBaudHook(&SerialLink::setBaud);
 
     if (xTaskCreate(linkTask, "dbg_link", 8192, nullptr, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task do console/link");
@@ -226,8 +226,8 @@ void ringPush(const char* s, size_t n) {
 
 void logFrameSend(const char* line, size_t n) {
     // frame KL_LOG_DATA montado e escrito de uma vez (mutex do writeFrame)
-    if (n > CelerLink::MAX_PAYLOAD - 1) n = CelerLink::MAX_PAYLOAD - 1;
-    uint8_t frame[4 + 1 + CelerLink::MAX_PAYLOAD];
+    if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
+    uint8_t frame[4 + 1 + HostLink::MAX_PAYLOAD];
     uint16_t total = (uint16_t)(1 + n);
     frame[0] = 0x43;
     frame[1] = KL_LOG_DATA;

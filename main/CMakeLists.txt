@@ -35,7 +35,7 @@ set(CELEROS_SRCS
     "Utils/CelerSettings.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
-    "USBDevice/CelerLink.cpp"
+    "USBDevice/HostLink.cpp"
     "USBDevice/SerialLink.cpp"
     "UI/Kui.cpp"
     "UI/Keyboard.cpp"
