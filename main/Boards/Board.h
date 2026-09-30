@@ -25,6 +25,44 @@ struct RgbLedPins {
     bool activeLow;  // catodo no GPIO (acende em nivel baixo)
 };
 
+// Saida de audio digital I2S para amplificador na placa (NS4168 na
+// SmartDisplay 4848S040: 16-bit stereo, sem MCLK). dout < 0 = sem I2S.
+struct AudioI2sPins {
+    int dout = -1;
+    int bclk = -1;
+    int lrc = -1;
+};
+
+// Rele(s) da placa (linhas L1..L3 da SmartDisplay 4848S040 variante Y,
+// que substituem o I2S: mesmos pinos). relayCount = 0 = sem reles.
+struct RelayConfig {
+    int count = 0;
+    int pins[3] = {-1, -1, -1};  // L1, L2, L3 (ativa em nivel alto)
+};
+
+// Servos PWM 50 Hz (System.servo mapeia pin->canal LEDC). count = 0 = nenhum;
+// pins < 0 = canal do perfil nao soldado (ex.: cauda opcional do cao robotico).
+struct ServoPins {
+    int count = 0;
+    int pins[5] = {-1, -1, -1, -1, -1};
+};
+
+// Microfone digital I2S (RX, slot esquerdo). ws < 0 = sem microfone.
+// ATENCAO (cao ZZPET): o pino do clock NUNCA pode ser usado como ADC —
+// reconfigura-lo como canal analogico desconecta a matriz GPIO e mata o mic.
+struct MicI2sPins {
+    int ws = -1;
+    int bck = -1;
+    int din = -1;
+};
+
+// Fitas WS2812 (RMT, sem DMA). count = 0 = sem fitas.
+struct LedStrips {
+    int count = 0;
+    int pins[2] = {-1, -1};
+    int ledsPerStrip = 0;  // max 8 (RMT sem DMA: 24 simbolos por LED)
+};
+
 struct BoardProfile {
     const char* id;          // "smartdisplay_4in" / "cyd"
     const char* otaChannel;  // canal de updates (updates/<canal>/)
@@ -37,6 +75,17 @@ struct BoardProfile {
     int rotation;            // rotação fixa do painel no boot (0-3; CYD clássica = 3, landscape)
     RgbLedPins led;          // LED RGB (System.led); r < 0 = nao ha
     int lightSensorPin;      // LDR no ADC (System.lightLevel, brilho automatico); -1 = nao ha
+    AudioI2sPins i2s;        // amplificador I2S (System.beep); dout < 0 = nao ha
+    RelayConfig relay;       // reles da placa (System.relay); count = 0 = nao ha
+    ServoPins servo;         // servos da placa (perfil p/ apps de robo); count = 0 = nao ha
+    MicI2sPins mic;          // microfone I2S (System.micLevel); ws < 0 = nao ha
+    LedStrips strips;        // fitas WS2812 (System.neopixel); count = 0 = nao ha
+    int batteryPin = -1;     // divisor de bateria no ADC (System.battery); -1 = nao ha
+    int batteryScalePct = 100;  // mV da bateria = mV no pino * scale / 100 (divisor 2:1 = 200)
+    int touchPad = -1;       // pad capacitivo avulso (System.touchPad); -1 = nao ha
+    // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
+    // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
+    const char* homeApp = nullptr;
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).

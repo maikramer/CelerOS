@@ -1,0 +1,9 @@
+{
+  "version": "1.2.0",
+  "api_version": 10,
+  "major_update": false,
+  "minor_update": false,
+  "security_update": false,
+  "changelog": "Primeira build do CelerOS para o cao robotico SpotBear/ZZPET (board spotpear-dog): OLED SH1106, servos das pernas, microfone, alto-falante I2S, fitas WS2812 e bateria.",
+  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update."
+}

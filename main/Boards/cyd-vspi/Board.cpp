@@ -20,6 +20,11 @@ static const BoardProfile s_profile = {
     .rotation = 0,     // portrait 240x320 (como o env original)
     .led = {-1, -1, -1, false},
     .lightSensorPin = -1,
+    .i2s = {-1, -1, -1},
+    .relay = {},
+    .servo = {},
+    .mic = {},
+    .strips = {},  // sem reles
 };
 
 void init() {

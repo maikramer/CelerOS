@@ -10,6 +10,7 @@
 set(CELEROS_SRCS
     "Assets/Fonts/CelerFonts.cpp"
     "Hardware/BoardIO.cpp"
+    "Display/ScreenCapture.cpp"
     "main.cpp"
     "Compat/CelerCompat.cpp"
     "FileSystem/FileSystem.cpp"
@@ -74,8 +75,10 @@ elseif(CELEROS_BOARD STREQUAL "cyd")
     set(CELEROS_BOARD_DIR Boards/cyd)
 elseif(CELEROS_BOARD STREQUAL "cyd-vspi")
     set(CELEROS_BOARD_DIR Boards/cyd-vspi)
+elseif(CELEROS_BOARD STREQUAL "spotpear-dog")
+    set(CELEROS_BOARD_DIR Boards/spotpear-dog)
 else()
-    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi)")
+    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog)")
 endif()
 list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Board.cpp")
 
@@ -89,6 +92,8 @@ idf_component_register(
         LovyanGFX
         driver
         esp_adc
+        esp_driver_rmt
+        esp_driver_touch_sens
         esp_driver_tsens
         esp_timer
         spi_flash
