@@ -16,6 +16,10 @@ public:
     static bool takeLaunchRequest(std::string& out);
     static int findEntry(const std::string& pathOrName);  // -1 se nao achar
     static void scanLocalApps();
+    // Abre sozinho apos o boot o app cujo pacote/caminho esta em
+    // /local/autostart.txt (ex.: a cara do cao robotico). Sem o arquivo,
+    // nada acontece. O launcher continua acessivel pelo voltar do topbar.
+    static void applyAutostart();
     static bool needsRescan;
 
     // Acesso para o LauncherScreen (Kui) e telas novas. Telas de sistema

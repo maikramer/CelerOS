@@ -101,6 +101,22 @@ int LauncherUI::totalPages() {
 // Scan de apps (LittleFS + SD)
 // ---------------------------------------------------------------------------
 
+void LauncherUI::applyAutostart() {
+    // Precedencia: /local/autostart.txt (qualquer placa) > profile.homeApp
+    // (a casa nativa da placa — ex.: a cara do cao robotico).
+    std::string who;
+    if (FileSystem::exists("/local/autostart.txt")) {
+        who = FileSystem::readTextFile("/local/autostart.txt");
+        while (!who.empty() && (who.back() == '\n' || who.back() == '\r' || who.back() == ' '))
+            who.pop_back();
+    } else if (Board::profile().homeApp) {
+        who = Board::profile().homeApp;
+    }
+    if (who.empty()) return;
+    if (findEntry(who) < 0) return;  // app sumiu: fica no launcher
+    requestLaunch(who);
+}
+
 void LauncherUI::scanLocalApps() {
     appCount = 0;
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
@@ -200,6 +216,7 @@ void LauncherUI::scanLocalApps() {
         bool sFolder = appIsFolder[best], sSystem = appIsSystem[best];
         bool sTopbar = appTopbar[best];
         int sOrder = appOrder[best];
+        uint32_t sPerms = appPerms[best];
         for (int k = best; k > i; k--) {
             appPaths[k]    = appPaths[k - 1];
             appNames[k]    = appNames[k - 1];
@@ -209,6 +226,7 @@ void LauncherUI::scanLocalApps() {
             appIsSystem[k] = appIsSystem[k - 1];
             appTopbar[k]   = appTopbar[k - 1];
             appOrder[k]    = appOrder[k - 1];
+            appPerms[k]    = appPerms[k - 1];
         }
         appPaths[i]    = sPath;
         appNames[i]    = sName;
@@ -218,6 +236,7 @@ void LauncherUI::scanLocalApps() {
         appIsSystem[i] = sSystem;
         appTopbar[i]   = sTopbar;
         appOrder[i]    = sOrder;
+        appPerms[i]    = sPerms;
     }
 }
 

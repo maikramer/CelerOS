@@ -12,6 +12,7 @@
 #include "Display/Layout.h"
 #include "Display/Theme.h"
 #include "Display/Backlight.h"
+#include "Display/ScreenCapture.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
 #include "Settings/TouchCalibrator.h"
@@ -66,6 +67,7 @@ static void celerSetup() {
 
     // Init TFT (HAL da placa)
     Board::init();
+    ScreenCapture::init();  // esta task e a dona do display (capturas passam por ela)
     tft.setRotation(Board::profile().rotation);
     UI::init(tft.width(), tft.height());
     ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
@@ -111,6 +113,7 @@ static void celerSetup() {
     celer_log_println("DEBUG: Scanning Local Apps...");
     bootSplash(i18n::TR("Carregando apps...", "Loading apps..."));
     LauncherUI::scanLocalApps();
+    LauncherUI::applyAutostart();  // /local/autostart.txt (ex.: cara do cao)
     LauncherUI::needsRescan = false;
     celer_log_println("DEBUG: Local Apps Scanned.");
 
@@ -197,6 +200,7 @@ static void celerLoop() {
     WebManager::tick();
     TimeManager::tick(WebManager::isActive());
     Backlight::tick();  // brilho automatico (so com sensor de luz e a opcao ligada)
+    ScreenCapture::service();  // tela no navegador / celerctl screencap (le aqui, na task da UI)
     confirmPendingOta();
 
     delay(5);
