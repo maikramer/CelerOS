@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 9
+### API Level: 10
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -306,6 +306,17 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Parameters:** `pin` (Integer), `state` (HIGH or LOW), `timeout` (Optional Integer in microseconds, defaults to 1,000,000)
 - **Returns:** `Integer` (Length of the pulse in microseconds, or 0 if timeout occurred)
 - **Description:** **Native Hardware Pulse Measurement.** Suspends the JS engine and delegates to the C++ Kernel to accurately measure the duration of an incoming hardware pulse. This bypasses the JavaScript execution overhead entirely, giving you absolute microsecond precision (crucial for reading HC-SR04 ultrasonic sensors).
+
+#### `System.gpio.servo(pin, angle)` (API 10)
+- **Parameters:** `pin` (Integer), `angle` (Integer, 0 to 180; values outside are clamped)
+- **Returns:** `Boolean` (`false` with no free channel — up to **4 servos at once**)
+- **Description:** drives a standard hobby servo (SG90 class) with a 50 Hz PWM (500–2500 µs pulse). The LEDC channel is allocated on the first write to a pin. Robots: pair it with the Celer Link — a remote app sends commands, the robot's app maps them to legs (`System.gpio.servo(13, 90)`).
+- **Note:** the channels come from the board's free LEDC pool; `System.beep`/`System.led` keep theirs.
+
+#### `System.gpio.servoOff(pin)` (API 10)
+- **Parameters:** `pin` (Integer)
+- **Returns:** `Boolean**
+- **Description:** stops the PWM on the pin and frees the channel — the servo goes limp (no holding torque). Call it when a movement ends to save power.
 
 ---
 

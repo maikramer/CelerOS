@@ -201,7 +201,7 @@ function makeEnv() {
         exitApp: function() { throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
         getOSVersion: function() { return '1.2.0'; },
-        getAPILevel: function() { return 9; },
+        getAPILevel: function() { return 10; },
         getInfo: function() {
             return {
                 totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true,
@@ -224,8 +224,15 @@ function makeEnv() {
         setBrightness: function() {}, getBrightness: function() { return 200; },
         backlightSupported: function() { return true; },
         led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
+        gpio: {
+            servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
+            servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; }
+        },
         lightLevel: function() { return 80; },
         beep: function() { return true; },
+        relay: function() { return true; },
+        relayState: function() { return 0; },
+        relayCount: function() { return 0; },
         getAutoBrightness: function() { return env.__autoBri; },
         setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
         present: function() {}, isBuffered: function() { return false; }
@@ -697,7 +704,31 @@ function joinLog(log) { return log.join('\n'); }
     check('send objeto vira JSON', j.indexOf('[link] tx {"cmd":"frente","v":80}') >= 0);
     check('send string vai crua', j.indexOf('[link] tx ping') >= 0);
     check('poll recebe mensagem', j.indexOf('rx {"ack":1}') >= 0);
-    check('getAPILevel 9', env.System.getAPILevel() === 9);
+    check('getAPILevel 10', env.System.getAPILevel() === 10);
+})();
+
+// --- Celer Remote (hub_apps) --------------------------------------------------
+(function() {
+    console.log('Celer Remote:');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        // scan acha o dog; connect verdadeiro; toca no item (y 60..100)
+        env.CelerLink.scan = function() {
+            return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }];
+        };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        env.__harness.tap(120, 80);    // item 0 da lista -> conecta -> D-pad
+        for (var i = 0; i < 3; i++) { env.__harness.System.delay(30); env.__harness.tap(120, 110); }  // seta ^
+        for (var k = 0; k < 3; k++) { env.__harness.System.delay(30); env.__harness.tap(120, 170); }  // stop
+        env.__harness.pushLink(['{"type":"tel","batt":2340,"state":"parado"}']);
+        for (var j = 0; j < 3; j++) env.__harness.System.delay(30);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('conecta no dog', j.indexOf('conectado') >= 0);
+    check('D-pad envia move up', j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
+    check('botao o envia stop', j.indexOf('[link] tx {"type":"stop"}') >= 0);
+    check('telemetria exibida', j.indexOf('batt 2340') >= 0);
 })();
 
 // resumo

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 9
+### Nível de API: 10
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -436,6 +436,17 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
   hardware de entrada. Isso contorna totalmente a sobrecarga de execução do
   JavaScript, dando precisão absoluta de microssegundos (crucial para ler
   sensores ultrassônicos HC-SR04).
+
+#### `System.gpio.servo(pin, angulo)` (API 10)
+- **Parâmetros:** `pin` (Integer), `angulo` (Integer, 0 a 180; fora da faixa é travado)
+- **Retorna:** `Boolean` (`false` sem canal livre — no máximo **4 servos ao mesmo tempo**)
+- **Descrição:** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: combine com o Celer Link — o app do controle envia comandos e o app do robô mapeia para as perninhas (`System.gpio.servo(13, 90)`).
+- **Nota:** os canais vêm do pool LEDC livre da placa; `System.beep`/`System.led` seguem com os deles.
+
+#### `System.gpio.servoOff(pin)` (API 10)
+- **Parâmetros:** `pin` (Integer)
+- **Retorna:** `Boolean**
+- **Descrição:** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia.
 
 ---
 

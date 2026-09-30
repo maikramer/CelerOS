@@ -649,6 +649,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"analogRead", js_analogRead, 1},
         {"analogWrite", js_analogWrite, 2},
         {"pulseIn", js_pulseIn, 3},
+        {"servo", js_servo, 2},
+        {"servoOff", js_servoOff, 1},
     };
     putFns(ctx, kFns1);
     

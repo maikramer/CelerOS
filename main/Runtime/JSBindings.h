@@ -47,6 +47,8 @@ private:
     static duk_ret_t js_analogRead(duk_context *ctx);
     static duk_ret_t js_analogWrite(duk_context *ctx);
     static duk_ret_t js_pulseIn(duk_context *ctx);
+    static duk_ret_t js_servo(duk_context *ctx);    // 50 Hz via LEDC (API 10)
+    static duk_ret_t js_servoOff(duk_context *ctx);
 
     // Display Bindings - Drawing
     static duk_ret_t js_fillScreen(duk_context *ctx);
