@@ -8,9 +8,14 @@
 //
 // Um lado vira "controlavel" com start(): servidor GATT proprio +
 // advertising com o nome "Celer-XXXX". O outro lado scan()-neia, connect()
-// e troca mensagens de ate MAX_MSG bytes com send()/poll(). Simples e sem
-// seguranca na v1: sem pareamento nem criptografia — qualquer device
-// proximo pode conectar e escrever (documentado como tal nos guias).
+// e troca mensagens de ate MAX_MSG bytes com send()/poll().
+//
+// Pareamento por codigo (API 11): start(nome, true) exige que o central
+// digite um codigo de 6 digitos gerado por conexao (exposto so ao app
+// LOCAL via status().code) antes de liberar o canal de dados. Acertos
+// ficam memorizados no NVS (bond por MAC, ate 4 controles) e as proximas
+// conexoes do mesmo controle entram direto. Nao ha criptografia no ar:
+// o codigo protege contra o vizinho casual, nao contra sniffer.
 //
 // O nome CelerLink e deste link; o protocola do celerctl e o HostLink
 // (main/USBDevice/HostLink.h).
@@ -32,8 +37,11 @@ public:
         bool connected;     // pronto para send() (central: ja inscrito)
         bool listening;     // advertising pedido via start()
         bool central;       // nos conectamos no peer (vs peer conectou em nos)
+        bool pairing;       // conexao ativa aguardando o codigo (API 11)
+        bool verified;      // canal de dados autorizado (sem pareamento = true)
         char peer[18];      // "" sem conexao
         char name[MAX_NAME + 1];  // nosso nome de advertising
+        char code[7];       // codigo do pareamento (so no peripheral pendente)
         uint16_t mtu;       // MTU ATT negociado (0 sem conexao)
         int8_t rssi;        // RSSI da conexao (0 sem conexao/leitura)
         uint16_t pending;   // mensagens na fila RX
@@ -44,8 +52,9 @@ public:
     static bool ensureStarted();
 
     // Papel peripheral: advertising + servidor GATT. name nullptr mantem o
-    // atual (default "Celer-XXXX", XXXX = fim da MAC BT).
-    static bool start(const char* name);
+    // atual (default "Celer-XXXX", XXXX = fim da MAC BT). requirePairing
+    // liga o gate de codigo (API 11); vale para as conexoes seguintes.
+    static bool start(const char* name, bool requirePairing = false);
     static bool stop();
     static bool listening();
 
@@ -58,6 +67,13 @@ public:
     static bool connect(const char* idOrName, uint32_t ms);
     static bool disconnect();
     static bool connected();
+
+    // Pareamento (API 11). verify: lado central, envia o codigo de 6
+    // digitos ao peer conectado (bloqueante ~3 s; true = canal liberado,
+    // idempotente se ja verificado). unpair: lado peripheral, esquece os
+    // bonds gravados no NVS (id "AA:BB:..." apaga um; nullptr apaga todos).
+    static bool verify(const char* code);
+    static bool unpair(const char* id);
 
     // Mensagens (single peer, fila RX de RX_DEPTH; cheia descarta a MAIS
     // ANTIGA — num controle remoto o comando novo vale mais).

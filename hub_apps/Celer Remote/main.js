@@ -1,7 +1,12 @@
-// Celer Remote (API 10): controle remoto via Celer Link (Bluetooth).
+// Celer Remote (API 11): controle remoto via Celer Link (Bluetooth).
 // Escaneia CelerOS proximos, conecta e pilota com um D-pad na tela.
 // Mensagens JSON: {type:"move",dir} / {type:"stop"}; o lado do robo
 // responde com {type:"tel",...}.
+//
+// Pareamento (API 11): robo com {pairing:true} mostra um codigo de 6
+// digitos na tela dele — status().pairing acende aqui e o usuario digita
+// (verify no firmware). Robo memoriza controles pareados: reconexao cai
+// direto no D-pad sem pedir nada.
 //
 // Seguranca do robo: segurar uma seta repete o move a cada 250 ms (o robo
 // para sozinho se a repeticao some) e soltar manda stop. Se o link cai, o
@@ -129,17 +134,19 @@ function sendDir(i) {
     lastSend = System.millis();
 }
 
-function enterCtrl(p) {
+function enterCtrl(p, note) {
     target = p;
     mode = MODE_CTRL;
     tel = null;
     held = -1;
-    drawCtrl(null);
+    drawCtrl(note || null);
 }
 
 function backToScan(msg) {
-    if (CelerLink.status().connected) {
-        CelerLink.send({type: "stop"});
+    var st = CelerLink.status();
+    if (st.connected || st.pairing) {
+        // pendente (pairing) nao tem canal de dados: so desconecta
+        if (st.connected) CelerLink.send({type: "stop"});
         CelerLink.disconnect();
     }
     mode = MODE_SCAN;
@@ -148,14 +155,47 @@ function backToScan(msg) {
     drawScan(msg || null);
 }
 
+// Robo com pareamento (status().pairing): pede o codigo ao usuario e
+// verifica no firmware. "ok"/"cancel"/"fail" — em cancel/fail a sessao ja
+// voltou pro scan (o robo derruba sozinho em 3 erros ou 60 s sem digitar).
+function ensurePairing(name) {
+    var note = null;
+    for (var wrong = 0; wrong < 3; ) {
+        System.fillScreen(TH.bg);
+        center("pareamento", 54, 2, TH.text);
+        center(name || "robo", 54 + fh(2) + 6, 1, TH.textDim);
+        center("codigo na tela do robo", 54 + fh(2) + 6 + fh(1) + 10, 1, TH.accent);
+        if (note) center(note, 200, 1, TH.err);
+        var c = System.prompt("codigo do robo (6 digitos)", "");
+        if (!c) {
+            backToScan("pareamento cancelado");
+            return "cancel";
+        }
+        if (!/^[0-9]{6}$/.test(c)) { note = "so numeros, 6 digitos"; continue; }
+        if (CelerLink.verify(c)) return "ok";
+        wrong++;
+        note = "codigo errado (" + wrong + "/3)";
+    }
+    backToScan("codigo errado 3x");
+    return "fail";
+}
+
+// Pos-conexao (novo ou reconexao): peer com pareamento pede codigo antes
+// do D-pad. true = link pronto para controlar.
+function afterConnect(p) {
+    if (!CelerLink.status().pairing) return true;
+    return ensurePairing(p && (p.name || p.id)) === "ok";
+}
+
 // Link caiu: tenta o mesmo par algumas vezes (o robo segue anunciando).
 function reconnect() {
     for (var k = 1; k <= RECONNECT_TRIES; k++) {
         drawCtrl("reconectando (" + k + "/" + RECONNECT_TRIES + ")...");
-        if (CelerLink.connect(target.id, 4000)) {
+        if (CelerLink.connect(target.id, 4000) && afterConnect(target)) {
             drawCtrl(null);
             return true;
         }
+        if (mode !== MODE_CTRL) return false;  // pareamento cancelado: ja foi pro scan
         System.delay(300);
     }
     return false;
@@ -188,7 +228,7 @@ while (true) {
                     selPeer = i;
                     drawScan(null);
                     if (CelerLink.connect(peers[i].id, 5000)) {
-                        enterCtrl(peers[i]);
+                        if (afterConnect(peers[i])) enterCtrl(peers[i], "pareado!");
                     } else {
                         drawScan("falha ao conectar: " + (peers[i].name || peers[i].id));
                     }
@@ -201,7 +241,9 @@ while (true) {
         if (!st.connected) {
             held = -1;
             if (!reconnect()) {
-                backToScan("conexao perdida: " + (target.name || target.id));
+                if (mode === MODE_CTRL) {  // pareamento cancelado ja foi pro scan
+                    backToScan("conexao perdida: " + (target.name || target.id));
+                }
                 System.delay(30);
                 continue;
             }

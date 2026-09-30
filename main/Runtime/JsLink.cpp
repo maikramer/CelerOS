@@ -9,6 +9,8 @@
 // scan/connect/disconnect (papel central), send/poll
 // (mensagens de ate 240 bytes) e status. Chamadas bloqueantes
 // seguem o padrao wifiScan: present() antes, timeout com clamp.
+// Pareamento por codigo de 6 digitos: API 11 (start {pairing},
+// verify, unpair e os campos pairing/verified/code do status).
 // =====================================================
 
 duk_ret_t JSBindings::js_linkStart(duk_context *ctx) {
@@ -16,8 +18,14 @@ duk_ret_t JSBindings::js_linkStart(duk_context *ctx) {
     if (duk_get_top(ctx) >= 1 && !duk_is_null_or_undefined(ctx, 0)) {
         name = duk_require_string(ctx, 0);
     }
+    bool pairing = false;
+    if (duk_get_top(ctx) >= 2 && duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
+        duk_get_prop_string(ctx, 1, "pairing");
+        pairing = duk_get_boolean_default(ctx, -1, 0) != 0;
+        duk_pop(ctx);
+    }
     present();  // a 1a chamada inicializa o NimBLE (~300ms)
-    duk_push_boolean(ctx, CelerLink::start(name) ? 1 : 0);
+    duk_push_boolean(ctx, CelerLink::start(name, pairing) ? 1 : 0);
     return 1;
 }
 
@@ -64,6 +72,22 @@ duk_ret_t JSBindings::js_linkConnect(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_linkDisconnect(duk_context *ctx) {
     duk_push_boolean(ctx, CelerLink::disconnect() ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_linkVerify(duk_context *ctx) {
+    const char* code = duk_require_string(ctx, 0);
+    present();  // write + read ATT podem esperar segundos
+    duk_push_boolean(ctx, CelerLink::verify(code) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_linkUnpair(duk_context *ctx) {
+    const char* id = nullptr;
+    if (duk_get_top(ctx) >= 1 && !duk_is_null_or_undefined(ctx, 0)) {
+        id = duk_require_string(ctx, 0);
+    }
+    duk_push_boolean(ctx, CelerLink::unpair(id) ? 1 : 0);
     return 1;
 }
 
@@ -125,6 +149,14 @@ duk_ret_t JSBindings::js_linkStatus(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "role");
     duk_push_string(ctx, st.name);
     duk_put_prop_string(ctx, -2, "name");
+    duk_push_boolean(ctx, st.pairing ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "pairing");
+    duk_push_boolean(ctx, st.verified ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "verified");
+    // so faz sentido no peripheral em handshake pendente ("" nos demais):
+    // e o codigo pra MOSTRAR NA TELA, nunca vai parar no peer
+    duk_push_string(ctx, st.code);
+    duk_put_prop_string(ctx, -2, "code");
     duk_push_int(ctx, st.mtu);
     duk_put_prop_string(ctx, -2, "mtu");
     duk_push_int(ctx, st.rssi);

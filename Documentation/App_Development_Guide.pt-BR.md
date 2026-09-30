@@ -194,7 +194,7 @@ são o contrato — nunca assuma que um periférico existe.
 * Embarcados (`data/apps/`): **Snake** (loop de jogo, recorde persistido),
   **Terminal** (teclado acoplado `System.keypad*`), **Touch Test**,
   **HTTP Demo** (rede).
-* Hub (`hub_apps/`): **Celer Remote** (API 10) — exemplo completo de
+* Hub (`hub_apps/`): **Celer Remote** (API 11) — exemplo completo de
   robótica: escaneia e conecta via Celer Link, pilota um D-pad que repete
   mensagens `{type:"move",dir}` e mostra a telemetria do robô.
 

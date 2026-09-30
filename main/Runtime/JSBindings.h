@@ -213,7 +213,8 @@ private:
     static duk_ret_t js_wifiDisconnect(duk_context *ctx);
 
     // Celer Link Bluetooth (objeto global CelerLink, API 9 — requer
-    // CONFIG_CELEROS_BLUETOOTH; desligado, o objeto nao existe)
+    // CONFIG_CELEROS_BLUETOOTH; desligado, o objeto nao existe).
+    // Pareamento por codigo: API 11 (verify/unpair, start com opts).
     static duk_ret_t js_linkStart(duk_context *ctx);
     static duk_ret_t js_linkStop(duk_context *ctx);
     static duk_ret_t js_linkScan(duk_context *ctx);
@@ -222,6 +223,8 @@ private:
     static duk_ret_t js_linkSend(duk_context *ctx);
     static duk_ret_t js_linkPoll(duk_context *ctx);
     static duk_ret_t js_linkStatus(duk_context *ctx);
+    static duk_ret_t js_linkVerify(duk_context *ctx);
+    static duk_ret_t js_linkUnpair(duk_context *ctx);
 
     // Helper
     static void fatalErrorHandler(void *udata, const char *msg);

@@ -23,7 +23,7 @@ data/
 - Required: `name`, `packageName` (unique install key, `celeros.<x>` for system apps; the first hub publisher owns it), `version` (semver; the hub rejects a republish of the same version unless `--force` is given), `api` (the minimum `CELEROS_API_LEVEL`).
 - Optional: `author`, `description`, `type` (System|App|Game), `category`, `system`, `order` (launcher sort), `icon` (id in `data/icons/`), `topbar`, `changelog`.
 - Never set `size`/`md5` by hand; the hub computes them on publish.
-- Most apps declare `api: 3`. Declare the lowest level whose calls you actually use.
+- Most apps declare `api: 3`. Declare the lowest level whose calls you actually use. CelerLink needs `api >= 9`; the pairing gate (`start` options, `verify`, `unpair`, `status().code`) needs `api >= 11`.
 
 ## CONVENTIONS
 - **ES5 only**: no arrow functions, `let`/`const`, `class`, template literals or `Promise`. Use `var` + `function` + string concatenation. Duktape rejects the modern syntax at load.

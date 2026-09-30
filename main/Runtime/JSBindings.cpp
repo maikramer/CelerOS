@@ -905,11 +905,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     }
 
 #if CONFIG_CELEROS_BLUETOOTH
-    // --- CelerLink Object (Bluetooth entre CelerOS, API 9) — sem
-    // capability propria na v1 (link aberto, sem seguranca) ---
+    // --- CelerLink Object (Bluetooth entre CelerOS, API 9; pareamento
+    // por codigo na API 11) — sem capability propria (as mensagens sao
+    // do app; o gate de pareamento e do link, ver CelerLink.h) ---
     duk_push_object(ctx); // CelerLink
     static const JsFn kFns19[] = {
-        {"start", js_linkStart, 1},
+        {"start", js_linkStart, 2},
         {"stop", js_linkStop, 0},
         {"scan", js_linkScan, 1},
         {"connect", js_linkConnect, 2},
@@ -917,6 +918,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"send", js_linkSend, 1},
         {"poll", js_linkPoll, 0},
         {"status", js_linkStatus, 0},
+        {"verify", js_linkVerify, 1},
+        {"unpair", js_linkUnpair, 1},
     };
     putFns(ctx, kFns19);
     duk_put_prop_string(ctx, -2, "CelerLink");

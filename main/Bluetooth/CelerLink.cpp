@@ -6,11 +6,13 @@
 
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_random.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "nvs.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -30,7 +32,14 @@
 // (CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1).
 //
 //   servico: b3a667a2-fdac-5298-8c13-89c980f2d1f1
-//   char:    b3a667a2-fdac-5298-8c13-89c980f2d1f2
+//   char:    b3a667a2-fdac-5298-8c13-89c980f2d1f2  (mensagens)
+//   pair:    b3a667a2-fdac-5298-8c13-89c980f2d1f3  (pareamento, API 11)
+//
+// A char "pair" e opcional e fica DEPOIS da de mensagens (os handles das
+// antigas nao mudam): READ devolve 1 byte (0x00 link aberto, 0x01
+// aguardando codigo, 0x02 verificado) e WRITE recebe os 6 digitos. Central
+// antigo nao a descobre e funciona como antes; peripheral antigo nao a tem
+// e o central novo conecta verificado.
 //
 // Concorrencia: os callbacks rodam na task do host NimBLE; a API roda na
 // task do app. Os procedimentos longos (connect/scan) sao dirigidos pela
@@ -65,6 +74,20 @@ const ble_uuid128_t kSvcUuid = BLE_UUID128_INIT(0xf1, 0xd1, 0xf2, 0x80, 0xc9, 0x
                                                 0x98, 0x52, 0xac, 0xfd, 0xa2, 0x67, 0xa6, 0xb3);
 const ble_uuid128_t kChrUuid = BLE_UUID128_INIT(0xf2, 0xd1, 0xf2, 0x80, 0xc9, 0x89, 0x13, 0x8c,
                                                 0x98, 0x52, 0xac, 0xfd, 0xa2, 0x67, 0xa6, 0xb3);
+const ble_uuid128_t kPairUuid = BLE_UUID128_INIT(0xf3, 0xd1, 0xf2, 0x80, 0xc9, 0x89, 0x13, 0x8c,
+                                                 0x98, 0x52, 0xac, 0xfd, 0xa2, 0x67, 0xa6, 0xb3);
+
+// Pareamento (API 11): estado da char "pair" e regras da porta.
+constexpr uint8_t K_PAIR_OFF = 0x00;   // link aberto (sem pareamento)
+constexpr uint8_t K_PAIR_WAIT = 0x01;  // aguardando o codigo
+constexpr uint8_t K_PAIR_OK = 0x02;    // verificado
+constexpr int K_PAIR_MAX_FAILS = 3;            // erros antes de derrubar
+constexpr uint32_t K_PAIR_TIMEOUT_MS = 60000;  // sem digitar = derruba
+constexpr uint32_t K_VERIFY_MS = 3000;         // orcamento do verify()
+// Bonds no NVS: ate K_BOND_MAX MACs, mais recente primeiro (LRU).
+constexpr int K_BOND_MAX = 4;
+const char* K_NVS_NS = "celer";
+const char* K_NVS_BONDS = "link_bonds";
 
 struct Msg {
     uint16_t len;
@@ -87,6 +110,9 @@ constexpr EventBits_t EV_SCAN = 1 << 3;   // scan terminou
 constexpr EventBits_t EV_MTU = 1 << 4;    // troca de MTU terminou (ok ou nao)
 constexpr EventBits_t EV_SUB = 1 << 5;    // escrita do CCCD confirmada
 constexpr EventBits_t EV_DISC = 1 << 6;   // conexao caiu/encerrada
+constexpr EventBits_t EV_PCHR = 1 << 7;   // descoberta da char de pareamento
+constexpr EventBits_t EV_PAIRW = 1 << 8;  // escrita do codigo confirmada
+constexpr EventBits_t EV_PAIRR = 1 << 9;  // leitura do estado confirmada
 
 bool s_started = false;
 bool s_initFail = false;
@@ -96,6 +122,7 @@ QueueHandle_t s_rxQueue = nullptr;
 Msg s_rxScratch;  // so a task do host usa (pushRx)
 
 uint16_t s_chrValHandle = 0;  // handle da nossa caracteristica (GATT preenche)
+uint16_t s_pairValHandle = 0;  // handle da nossa char de pareamento
 
 volatile uint16_t s_conn = 0;         // handle da conexao (valido com s_connActive)
 volatile bool s_connActive = false;   // enlace de pe
@@ -106,9 +133,22 @@ volatile bool s_peerSubscribed = false;  // central inscrito no nosso notify
 volatile uint16_t s_mtu = 0;
 volatile uint32_t s_rxDropped = 0;
 uint16_t s_peerChrVal = 0;
+uint16_t s_peerPairVal = 0;            // char "pair" do peer (0 = peer v1)
+volatile uint8_t s_peerPairState = K_PAIR_OFF;  // ultimo estado lido (central)
 uint8_t s_peerAddr[6] = {0};
 volatile bool s_wantAdvertise = false;
 char s_advName[CelerLink::MAX_NAME + 1] = {0};
+
+// Pareamento: s_pairVerified fecha/abre o canal de dados (default true —
+// so fica false durante o handshake). O codigo nasce no evento CONNECT do
+// periférico e e regerado a cada conexao; quem o ve e so o app LOCAL
+// (status().code) — ele nunca e anunciado nem notificado.
+volatile bool s_pairRequired = false;  // app pediu pareamento via start()
+volatile bool s_pairPending = false;   // conexao ativa aguardando codigo
+volatile bool s_pairVerified = true;   // canal autorizado
+char s_pairCode[7] = {0};
+uint8_t s_pairFails = 0;
+TickType_t s_pairDeadline = 0;
 
 ScanEntry s_scanCache[K_SCAN_CACHE];
 volatile int s_scanCount = 0;
@@ -144,6 +184,7 @@ TickType_t deadlineIn(uint32_t ms) {
 // comando mais novo e o que importa. Roda so na task do host.
 void pushRx(const struct os_mbuf* om) {
     if (s_rxQueue == nullptr) return;
+    if (!s_pairVerified) return;  // pareamento pendente: canal de dados fechado
     uint16_t len = OS_MBUF_PKTLEN(om);
     if (len == 0 || len > CelerLink::MAX_MSG) return;
     if (ble_hs_mbuf_to_flat(om, s_rxScratch.data, sizeof(s_rxScratch.data), &len) != 0) return;
@@ -162,7 +203,95 @@ void clearConnState() {
     s_conn = 0;
     s_mtu = 0;
     s_peerChrVal = 0;
+    s_peerPairVal = 0;
+    s_peerPairState = K_PAIR_OFF;
     s_peerSubscribed = false;
+    s_pairPending = false;
+    s_pairVerified = true;
+    s_pairFails = 0;
+    s_pairCode[0] = '\0';
+}
+
+// ---------------------------------------------------- pareamento / bonds ----
+// 6 digitos sem zero a esquerda (100000..999999): mais facil de ler na
+// tela do robo e de digitar no controle.
+void genPairCode() {
+    snprintf(s_pairCode, sizeof(s_pairCode), "%u", (unsigned)(100000 + esp_random() % 900000));
+}
+
+// Bonds: blob "link_bonds" no NVS, K_BOND_MAX MACs de 6 bytes, mais
+// recente primeiro. Chamado da task do host (CONNECT, write do codigo) e
+// da task do app (unpair); o NVS e thread-safe.
+int bondLoad(uint8_t out[][6]) {
+    nvs_handle_t h;
+    if (nvs_open(K_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+    int n = 0;
+    size_t len = 0;
+    if (nvs_get_blob(h, K_NVS_BONDS, nullptr, &len) == ESP_OK && len >= 6) {
+        n = (int)(len / 6);
+        if (n > K_BOND_MAX) n = K_BOND_MAX;
+        size_t cap = (size_t)n * 6;
+        if (nvs_get_blob(h, K_NVS_BONDS, out[0], &cap) != ESP_OK) n = 0;
+    }
+    nvs_close(h);
+    return n;
+}
+
+bool bondSave(uint8_t list[][6], int n) {
+    nvs_handle_t h;
+    if (nvs_open(K_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok;
+    if (n <= 0) {
+        esp_err_t rc = nvs_erase_key(h, K_NVS_BONDS);
+        ok = rc == ESP_OK || rc == ESP_ERR_NVS_NOT_FOUND;  // ausente = limpo
+    } else {
+        ok = nvs_set_blob(h, K_NVS_BONDS, list[0], (size_t)n * 6) == ESP_OK;
+    }
+    if (ok) ok = nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
+bool bondHas(const uint8_t mac[6]) {
+    uint8_t list[K_BOND_MAX][6];
+    int n = bondLoad(list);
+    for (int i = 0; i < n; i++) {
+        if (memcmp(list[i], mac, 6) == 0) return true;
+    }
+    return false;
+}
+
+void bondAdd(const uint8_t mac[6]) {
+    uint8_t list[K_BOND_MAX][6];
+    int n = bondLoad(list);
+    // tira o mac da posicao atual (vai pro topo; LRU no fim)
+    int keep = 0;
+    for (int i = 0; i < n; i++) {
+        if (memcmp(list[i], mac, 6) == 0) continue;
+        if (keep != i) memcpy(list[keep], list[i], 6);
+        keep++;
+    }
+    int total = keep < K_BOND_MAX ? keep + 1 : K_BOND_MAX;
+    for (int i = total - 1; i > 0; i--) memcpy(list[i], list[i - 1], 6);
+    memcpy(list[0], mac, 6);
+    if (bondSave(list, total)) {
+        char id[18];
+        formatAddr(mac, id);
+        ESP_LOGI(TAG, "controle pareado e memorizado (%s)", id);
+    }
+}
+
+bool bondRemove(const uint8_t mac[6]) {
+    uint8_t list[K_BOND_MAX][6];
+    int n = bondLoad(list);
+    int out = 0;
+    bool found = false;
+    for (int i = 0; i < n; i++) {
+        if (memcmp(list[i], mac, 6) == 0) { found = true; continue; }
+        memcpy(list[out++], list[i], 6);
+    }
+    if (!found) return false;
+    return bondSave(list, out);
 }
 
 int onGapEvent(ble_gap_event* event, void* arg);  // usado pelo advRestart
@@ -213,17 +342,55 @@ int onChrAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void* 
     (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
     if (OS_MBUF_PKTLEN(ctxt->om) > CelerLink::MAX_MSG) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    pushRx(ctxt->om);
+    pushRx(ctxt->om);  // descarta enquanto o pareamento nao fecha
+    return 0;
+}
+
+// Char "pair" (API 11). READ = estado (K_PAIR_*); WRITE = candidato a
+// codigo. O write com resposta volta ATT-ok mesmo errado: o veredito e o
+// estado (o central re-le) — sem erro customizado no ATT.
+int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void* arg) {
+    (void)conn;
+    (void)attr;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t st = !s_pairRequired ? K_PAIR_OFF : (s_pairVerified ? K_PAIR_OK : K_PAIR_WAIT);
+        return os_mbuf_append(ctxt->om, &st, 1) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
+    if (OS_MBUF_PKTLEN(ctxt->om) != 6) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    char code[7] = {0};
+    uint16_t got = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, code, 6, &got) != 0 || got != 6) return BLE_ATT_ERR_UNLIKELY;
+    if (!s_pairRequired || s_pairVerified) return 0;  // nada a fazer
+    if (strcmp(code, s_pairCode) == 0) {
+        s_pairVerified = true;
+        s_pairPending = false;
+        s_ready = true;  // o gate segurava o ready do peripheral
+        bondAdd(s_peerAddr);
+        ESP_LOGI(TAG, "pareamento aceito");
+        return 0;
+    }
+    s_pairFails = s_pairFails + 1;
+    ESP_LOGW(TAG, "codigo de pareamento errado (%d/%d)", s_pairFails, K_PAIR_MAX_FAILS);
+    if (s_pairFails >= K_PAIR_MAX_FAILS && s_connActive) {
+        ble_gap_terminate(s_conn, K_CONN_TERM);  // async: o DISCONNECT limpa
+    }
     return 0;
 }
 
 // Inicializacao posicional (sem designadores): o -Werror de campos faltando
 // nao perdoa designadores parciais. Ordem de ble_gatt_chr_def:
 // uuid, access_cb, arg, descriptors, flags, min_key_size, val_handle, cpfd.
+// A char de pareamento fica DEPOIS da de mensagens: os handles atribuidos
+// a esta nao mudam (central antigo presume CCCD em val+1).
 const struct ble_gatt_chr_def kChrDefs[] = {
     {&kChrUuid.u, onChrAccess, nullptr, nullptr,
      BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_NOTIFY,
      0, &s_chrValHandle, nullptr},
+    {&kPairUuid.u, onPairAccess, nullptr, nullptr,
+     BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+     0, &s_pairValHandle, nullptr},
     {},  // terminador (uuid NULL)
 };
 
@@ -242,13 +409,28 @@ int onMtu(uint16_t conn, const struct ble_gatt_error* err, uint16_t mtu, void* a
     return 0;
 }
 
+// Descoberta por UUID: o alvo (handle de saida + bit + se a ausencia e
+// erro) vem no arg — mesma callback para a char de mensagens e a de
+// pareamento.
+struct DiscTarget {
+    uint16_t* out;
+    EventBits_t bit;
+    bool optional;  // nao achou = peer antigo, nao e falha
+};
+DiscTarget s_tgtMsg = {&s_peerChrVal, EV_CHR, false};
+DiscTarget s_tgtPair = {&s_peerPairVal, EV_PCHR, true};
+
 int onDiscChr(uint16_t conn, const struct ble_gatt_error* err, const struct ble_gatt_chr* chr, void* arg) {
     (void)conn;
-    (void)arg;
+    DiscTarget* t = (DiscTarget*)arg;
     if (err->status == 0 && chr != nullptr) {
-        if (s_peerChrVal == 0) s_peerChrVal = chr->val_handle;
+        if (*t->out == 0) *t->out = chr->val_handle;
     } else if (err->status == BLE_HS_EDONE) {
-        xEventGroupSetBits(s_evt, s_peerChrVal ? EV_CHR : EV_FAIL);
+        if (*t->out == 0 && !t->optional) {
+            xEventGroupSetBits(s_evt, t->bit | EV_FAIL);
+        } else {
+            xEventGroupSetBits(s_evt, t->bit);
+        }
     } else {
         xEventGroupSetBits(s_evt, EV_FAIL);
     }
@@ -260,6 +442,31 @@ int onCccdWrite(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt
     (void)attr;
     (void)arg;
     xEventGroupSetBits(s_evt, err->status == 0 ? EV_SUB : EV_FAIL);
+    return 0;
+}
+
+// Escrita do codigo na char "pair" do peer (verify()).
+int onPairWrite(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt_attr* attr, void* arg) {
+    (void)conn;
+    (void)attr;
+    (void)arg;
+    xEventGroupSetBits(s_evt, err->status == 0 ? EV_PAIRW : EV_FAIL);
+    return 0;
+}
+
+// Leitura do estado "pair" do peer. Erro de leitura vira K_PAIR_WAIT:
+// falha fechada (pede verify, que por sua vez falha visivel) em vez de
+// abrir o canal por acidente.
+int onPairRead(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt_attr* attr, void* arg) {
+    (void)conn;
+    (void)arg;
+    uint8_t v = K_PAIR_WAIT;
+    if (err->status == 0 && attr != nullptr && OS_MBUF_PKTLEN(attr->om) >= 1) {
+        uint16_t got = 0;
+        if (ble_hs_mbuf_to_flat(attr->om, &v, 1, &got) != 0) v = K_PAIR_WAIT;
+    }
+    s_peerPairState = v;
+    xEventGroupSetBits(s_evt, EV_PAIRR);
     return 0;
 }
 
@@ -324,9 +531,21 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             if (ble_gap_adv_active()) ble_gap_adv_stop();  // 1 conexao por vez
             // Sessao nova: nada da conexao anterior vaza para esta.
             if (s_rxQueue != nullptr) xQueueReset(s_rxQueue);
+            s_pairFails = 0;
+            s_pairPending = false;
+            s_pairVerified = true;
             if (!s_isCentral) {
-                s_ready = true;  // peripheral: pronto assim que conectam
-                ESP_LOGI(TAG, "peer conectou (conn=%u)", s_conn);
+                if (s_pairRequired && !bondHas(s_peerAddr)) {
+                    // gate fechado: codigo novo por conexao, expira sozinho
+                    genPairCode();
+                    s_pairVerified = false;
+                    s_pairPending = true;
+                    s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
+                    ESP_LOGI(TAG, "peer conectou, aguardando codigo (conn=%u)", s_conn);
+                } else {
+                    if (s_pairRequired) ESP_LOGI(TAG, "peer pareado voltou (conn=%u)", s_conn);
+                    s_ready = true;
+                }
             }
             xEventGroupSetBits(s_evt, EV_CONN);
             return 0;
@@ -515,7 +734,7 @@ bool CelerLink::ensureStarted() {
     return true;
 }
 
-bool CelerLink::start(const char* name) {
+bool CelerLink::start(const char* name, bool requirePairing) {
     if (!ensureStarted()) return false;
     bool rename = false;
     if (name != nullptr && name[0] != '\0' && strncmp(name, s_advName, MAX_NAME) != 0) {
@@ -523,6 +742,9 @@ bool CelerLink::start(const char* name) {
         ble_svc_gap_device_name_set(s_advName);
         rename = true;
     }
+    // Vale para as conexoes seguintes (a sessao atual, se houver, segue
+    // como esta — o app chama start() uma vez, antes de conectar).
+    s_pairRequired = requirePairing;
     s_wantAdvertise = true;
     // Nome novo so entra no ar reiniciando o advertising.
     if (rename && ble_gap_adv_active()) ble_gap_adv_stop();
@@ -600,8 +822,13 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
     s_isCentral = true;
     s_ready = false;
     s_peerChrVal = 0;
+    s_peerPairVal = 0;
+    s_peerPairState = K_PAIR_OFF;
+    s_pairPending = false;
+    s_pairVerified = false;  // o passo 5 decide (peer sem gate = true)
     if (ble_gap_adv_active()) ble_gap_adv_stop();  // volta no fail/disconnect
-    xEventGroupClearBits(s_evt, EV_CONN | EV_FAIL | EV_CHR | EV_MTU | EV_SUB | EV_DISC);
+    xEventGroupClearBits(s_evt, EV_CONN | EV_FAIL | EV_CHR | EV_MTU | EV_SUB | EV_DISC |
+                                  EV_PCHR | EV_PAIRW | EV_PAIRR);
 
     struct ble_gap_conn_params cp;
     memset(&cp, 0, sizeof(cp));
@@ -642,7 +869,7 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
     // 3) caracteristica de mensagens (busca direta por UUID, sem passar
     // pela descoberta do servico: uma ida e volta a menos)
     step = "descoberta";
-    if (ble_gattc_disc_chrs_by_uuid(s_conn, 1, 0xFFFF, &kChrUuid.u, onDiscChr, nullptr) != 0) goto fail;
+    if (ble_gattc_disc_chrs_by_uuid(s_conn, 1, 0xFFFF, &kChrUuid.u, onDiscChr, &s_tgtMsg) != 0) goto fail;
     if (!(waitBits(EV_CHR | EV_FAIL, deadline) & EV_CHR)) goto fail;
 
     // 4) assina notificacoes: o CCCD fica em val_handle+1 (layout do GATT
@@ -656,9 +883,30 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
         if (!(waitBits(EV_SUB | EV_FAIL, deadline) & EV_SUB)) goto fail;
     }
 
+    // 5) estado de pareamento do peer: char "pair" opcional — ausente =
+    // peer v1, canal aberto como sempre. WAIT = o peer exige codigo antes
+    // do send()/poll() valerem (status().pairing fica true ate o verify()).
+    step = "pareamento";
+    {
+        if (ble_gattc_disc_chrs_by_uuid(s_conn, 1, 0xFFFF, &kPairUuid.u, onDiscChr, &s_tgtPair) != 0) goto fail;
+        if (!(waitBits(EV_PCHR | EV_FAIL, deadline) & EV_PCHR)) goto fail;
+        if (s_peerPairVal != 0) {
+            if (ble_gattc_read(s_conn, s_peerPairVal, onPairRead, nullptr) != 0) goto fail;
+            if (!(waitBits(EV_PAIRR | EV_FAIL, deadline) & EV_PAIRR)) goto fail;
+        }
+        if (s_peerPairState == K_PAIR_WAIT && s_peerPairVal != 0) {
+            s_pairVerified = false;
+            s_pairPending = true;
+            ESP_LOGI(TAG, "peer exige codigo de pareamento");
+        } else {
+            s_pairVerified = true;
+        }
+    }
+
     s_ready = true;
     s_connecting = false;
-    ESP_LOGI(TAG, "conectado em \"%s\" (mtu=%u)", idOrName, s_mtu);
+    ESP_LOGI(TAG, "conectado em \"%s\" (mtu=%u%s)", idOrName, s_mtu,
+             s_pairPending ? ", aguardando codigo" : "");
     return true;
 
 fail:
@@ -678,12 +926,59 @@ bool CelerLink::disconnect() {
     return ok;
 }
 
+bool CelerLink::verify(const char* code) {
+    if (code == nullptr) return false;
+    if (!s_started || !s_connActive || !s_isCentral) return false;
+    if (s_pairVerified) return true;   // idempotente
+    if (s_peerPairVal == 0) return false;  // peer sem a char: nada a verificar
+
+    size_t len = strlen(code);
+    if (len != 6) return false;
+    for (size_t i = 0; i < 6; i++) {
+        if (code[i] < '0' || code[i] > '9') return false;
+    }
+
+    // write COM resposta (o callback do peer roda antes do ack) e re-le o
+    // estado: o write errado tambem volta ATT-ok — o veredito e o estado.
+    const TickType_t deadline = deadlineIn(K_VERIFY_MS);
+    xEventGroupClearBits(s_evt, EV_PAIRW | EV_PAIRR | EV_FAIL);
+    int rc = ble_gattc_write_flat(s_conn, s_peerPairVal, code, 6, onPairWrite, nullptr);
+    if (rc != 0 && retryable(rc)) {
+        for (int i = 0; i < 24 && rc != 0; i++) {  // ~120 ms de reenvio
+            vTaskDelay(pdMS_TO_TICKS(5));
+            rc = ble_gattc_write_flat(s_conn, s_peerPairVal, code, 6, onPairWrite, nullptr);
+        }
+    }
+    if (rc != 0) return false;
+    // EV_FAIL cobre erro do write e queda do link (DISC seta EV_FAIL)
+    if (!(waitBits(EV_PAIRW | EV_FAIL, deadline) & EV_PAIRW)) return false;
+    if (ble_gattc_read(s_conn, s_peerPairVal, onPairRead, nullptr) != 0) return false;
+    if (!(waitBits(EV_PAIRR | EV_FAIL, deadline) & EV_PAIRR)) return false;
+    if (s_peerPairState != K_PAIR_OK) return false;
+
+    s_pairVerified = true;
+    s_pairPending = false;
+    return true;
+}
+
+bool CelerLink::unpair(const char* id) {
+    if (!s_started && s_initFail) return false;
+    if (id == nullptr || id[0] == '\0') {
+        bool ok = bondSave(nullptr, 0);
+        if (ok) ESP_LOGI(TAG, "bonds de pareamento apagados");
+        return ok;
+    }
+    uint8_t mac[6];
+    if (!parseMac(id, mac)) return false;
+    return bondRemove(mac);
+}
+
 bool CelerLink::connected() {
-    return s_ready;
+    return s_ready && s_pairVerified;
 }
 
 bool CelerLink::send(const void* data, size_t len) {
-    if (!s_started || !s_ready || len == 0 || len > MAX_MSG) return false;
+    if (!s_started || !s_ready || !s_pairVerified || len == 0 || len > MAX_MSG) return false;
     // O ATT trunca em silencio o que passa do MTU: recusa em vez de
     // entregar JSON cortado.
     uint16_t mtu = s_mtu ? s_mtu : K_MTU_DEFAULT;
@@ -732,11 +1027,25 @@ void CelerLink::peerId(char* out, size_t cap) {
 
 void CelerLink::info(Info* out) {
     memset(out, 0, sizeof(*out));
-    out->connected = s_ready;
+    // Timeout do pareamento pendente e conferido aqui: o app periferico
+    // faz polling do status a cada volta e o canal expira sozinho mesmo
+    // sem ninguem digitando.
+    if (s_pairPending && s_connActive &&
+        (int32_t)(xTaskGetTickCount() - s_pairDeadline) >= 0) {
+        s_pairPending = false;
+        ESP_LOGW(TAG, "codigo de pareamento nao digitado em %u s", (unsigned)(K_PAIR_TIMEOUT_MS / 1000));
+        if (ble_gap_terminate(s_conn, K_CONN_TERM) != 0) clearConnState();
+    }
+    out->connected = s_ready && s_pairVerified;
     out->listening = s_wantAdvertise;
     out->central = s_ready && s_isCentral;
+    out->pairing = s_pairPending;
+    out->verified = s_pairVerified;
     peerId(out->peer, sizeof(out->peer));
     snprintf(out->name, sizeof(out->name), "%s", s_advName);
+    // O codigo so existe para o lado periferico em handshake pendente:
+    // jamais sai do device (nem advertising, nem notificacao).
+    if (s_pairPending && !s_isCentral) snprintf(out->code, sizeof(out->code), "%s", s_pairCode);
     if (s_connActive) {
         out->mtu = s_mtu;
         int8_t rssi = 0;
@@ -754,6 +1063,7 @@ void CelerLink::appReset() {
     if (s_connActive) dropConnection(K_DISC_WAIT_MS);
     s_isCentral = false;
     clearConnState();
+    s_pairRequired = false;  // o proximo app comeca de link aberto
     // O nome dado por um app (start("Celer-Dog")) nao vaza para o proximo.
     defaultName();
     ble_svc_gap_device_name_set(s_advName);

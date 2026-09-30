@@ -121,7 +121,7 @@ The main loop runs on the main task: `Navigator::tick()`,
 |---|---|---|
 | `main/Runtime/JSBindings.cpp` + `Js*.cpp` | ~2.9 K | the whole JS surface |
 | `main/WebManager/WebManager.cpp` | ~960 | httpd, file manager, OTA upload, screen mirror |
-| `main/Bluetooth/CelerLink.cpp` | ~540 | Celer Link: NimBLE GATT + advertising |
+| `main/Bluetooth/CelerLink.cpp` | ~1070 | Celer Link: NimBLE GATT + advertising + code pairing (API 11) |
 | `main/UI/Kui.cpp` | ~900 | immediate-mode UI framework |
 | `main/Launcher/Screens.cpp` | ~810 | system screens |
 | `main/FileSystem/FileSystem.cpp` | ~640 | atomic FS + MD5 |

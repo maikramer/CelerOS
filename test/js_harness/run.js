@@ -201,7 +201,7 @@ function makeEnv() {
         exitApp: function() { throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
         getOSVersion: function() { return '1.2.0'; },
-        getAPILevel: function() { return 10; },
+        getAPILevel: function() { return 11; },
         getInfo: function() {
             return {
                 totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true,
@@ -257,11 +257,17 @@ function makeEnv() {
         wifiDisconnect: function() {}
     };
 
-    // Celer Link (API 9): fila de mensagens recebidas alimentavel pelo
-    // __harness.pushLink — o mesmo contrato de poll() do firmware
+    // Celer Link (API 9; pareamento API 11): fila de mensagens recebidas
+    // alimentavel pelo __harness.pushLink — o mesmo contrato de poll() do
+    // firmware. __harness.setLink({conn,pairing,code}) simula os estados
+    // do handshake; verify() aceita so o codigo corrente.
     var linkRx = [];
+    var linkConn = false, linkPairing = false, linkPairCode = '123456';
     env.CelerLink = {
-        start: function(name) { log.push('[link] adv ' + (name || 'Celer-TEST')); return true; },
+        start: function(name, opts) {
+            log.push('[link] adv ' + (name || 'Celer-TEST') + (opts && opts.pairing ? ' +pairing' : ''));
+            return true;
+        },
         stop: function() { return true; },
         scan: function() {
             return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55 }];
@@ -273,14 +279,24 @@ function makeEnv() {
             return true;
         },
         poll: function() { return linkRx.length ? linkRx.shift() : null; },
+        verify: function(code) { log.push('[link] verify ' + code); return linkPairing && code === linkPairCode; },
+        unpair: function() { log.push('[link] unpair'); return true; },
         status: function() {
-            return { connected: false, peer: '', listening: false, role: '', name: 'Celer-TEST',
+            return { connected: linkConn && !linkPairing, peer: linkConn ? 'AA:BB:CC:DD:EE:FF' : '',
+                     listening: false, role: linkConn ? 'central' : '', name: 'Celer-TEST',
+                     pairing: linkPairing, verified: !linkPairing,
+                     code: linkPairing ? linkPairCode : '',
                      mtu: 0, rssi: 0, pending: linkRx.length, dropped: 0 };
         }
     };
 
     env.__harness = {
         log: log,
+        setLink: function(st) {
+            if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
+            if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
+            if (st.hasOwnProperty('code')) linkPairCode = String(st.code);
+        },
         pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
         pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
         pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
@@ -489,7 +505,7 @@ function joinLog(log) { return log.join('\n'); }
         { pkg: 'celeros.mesmo', metaUrl: 'h/m/app.json', appUrl: 'h/m/main.js',
           name: 'Mesmo', ver: '1.0.0', api: 3 },
         { pkg: 'celeros.futuro', metaUrl: 'h/f/app.json', appUrl: 'h/f/main.js',
-          name: 'Futuro', ver: '1.0.0', api: 11 },
+          name: 'Futuro', ver: '1.0.0', api: 12 },
         { pkg: 'celeros.dev', metaUrl: 'h/d/app.json', appUrl: 'h/d/main.js',
           name: 'Dev', ver: '2.0.1', api: 3 }
     ]);
@@ -718,7 +734,7 @@ function joinLog(log) { return log.join('\n'); }
     check('send objeto vira JSON', j.indexOf('[link] tx {"cmd":"frente","v":80}') >= 0);
     check('send string vai crua', j.indexOf('[link] tx ping') >= 0);
     check('poll recebe mensagem', j.indexOf('rx {"ack":1}') >= 0);
-    check('getAPILevel 10', env.System.getAPILevel() === 10);
+    check('getAPILevel 11', env.System.getAPILevel() === 11);
 })();
 
 // --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------
@@ -939,6 +955,35 @@ function padSchedule(env, spans) {
     check('barulho acorda e retoma a pose', off >= 0 && j2.indexOf('[servo] 14@90', off) > off);
 })();
 
+(function() {
+    console.log('Dog Face (pareamento por codigo):');
+    // handshake pendente -> virou verified na 30a leitura do status; pad
+    // segurado 5,1 s solta os bonds. O gate de mensagens e do firmware:
+    // aqui se testa o lado do app (tela de codigo, telemetria so depois
+    // de liberado, gesto de esquecer).
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        var calls = 0;
+        env.CelerLink.status = function() {
+            calls++;
+            if (calls < 30) return { connected: false, pairing: true, verified: false, code: '314159' };
+            if (calls === 30) env.__harness.log.push('[harness] verified');
+            return { connected: true, pairing: false, verified: true };
+        };
+        padSchedule(env, [[500, 5600]]);   // hold 5,1 s -> esquece pareados
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('start pede pareamento', j.indexOf('[link] adv Celer-Dog +pairing') >= 0);
+    var flip = j.indexOf('[harness] verified');
+    var firstTel = j.indexOf('[link] tx {"type":"tel"');
+    check('sem telemetria enquanto o codigo pendura', flip >= 0 && (firstTel < 0 || firstTel > flip));
+    check('telemetria volta liberado', firstTel > flip);
+    check('hold 5s esquece os pareados', j.indexOf('[link] unpair') >= 0 &&
+          j.indexOf('pareamentos esquecidos') >= 0);
+    // o hold de 5s NAO pode disparar o ciclo de gait do toque longo
+    check('hold 5s nao e carinho nem troca de gait', j.indexOf('touch gait') < 0);
+})();
+
 // --- Celer Remote (hub_apps) --------------------------------------------------
 function holdFrames(x, y, n) {
     var f = [];
@@ -1010,6 +1055,37 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     check('mostra reconectando', j.indexOf('reconectando (1/3)') >= 0);
     check('reconecta na 2a tentativa', connects === 3, connects + ' connects');
+})();
+
+(function() {
+    console.log('Celer Remote (pareamento por codigo):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        env.CelerLink.scan = function() {
+            return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }];
+        };
+        env.CelerLink.connect = function() { return true; };
+        var verified = false;
+        env.CelerLink.status = function() {
+            return { connected: verified, pairing: !verified, verified: verified,
+                     peer: 'AA:BB:CC:DD:EE:FF', listening: false };
+        };
+        env.CelerLink.verify = function(code) {
+            env.__harness.log.push('[link] verify ' + code);
+            if (code === '123456') { verified = true; return true; }
+            return false;
+        };
+        var answers = ['000000', '123456'];   // erra 1x, acerta
+        env.System.prompt = function() { return answers.length ? answers.shift() : ''; };
+        env.__harness.tap(120, 80);                            // item 0 -> connect -> pairing
+        env.__harness.pushTouch(holdFrames(120, 110, 20));     // D-pad liberado: move up
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('pede o codigo (tela de pareamento)', j.indexOf('codigo na tela do robo') >= 0);
+    check('tenta o codigo errado e o certo',
+          j.indexOf('[link] verify 000000') >= 0 && j.indexOf('[link] verify 123456') >= 0);
+    check('pareado chega ao D-pad', j.indexOf('pareado!') >= 0 &&
+          j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
 })();
 
 // resumo

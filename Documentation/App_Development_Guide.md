@@ -140,7 +140,7 @@ never assume a peripheral exists.
 
 * Bundled (`data/apps/`): **Snake** (game loop, persisted record), **Terminal**
   (docked keyboard `System.keypad*`), **Touch Test**, **HTTP Demo** (network).
-* Hub (`hub_apps/`): **Celer Remote** (API 10) — a full robotics example:
+* Hub (`hub_apps/`): **Celer Remote** (API 11) — a full robotics example:
   scans and connects over Celer Link, drives a D-pad that repeats
   `{type:"move",dir}` messages and shows the robot's telemetry.
 

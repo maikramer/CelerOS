@@ -1,4 +1,4 @@
-// CelerOS Dog Face — a cara do cao robotico (API 10)
+// CelerOS Dog Face — a cara do cao robotico (API 11)
 // ES5 puro (Duktape). Desenhada para o OLED 128x64 do spotpear-dog: o canvas
 // virtual 240x320 escala x0.53/y0.20, entao TEXTO e ilegivel — a interface e
 // 100% iconografica (olhos, pupilas, barras). Coordenadas: helper P() mapeia
@@ -6,7 +6,9 @@
 //
 // Tambem e o "cerebro" do robo: gaits das 4 perninhas (maquina de estados,
 // um quadro por volta do loop) e servidor Celer Link (comandos JSON via BLE
-// pelo app Celer Remote no SmartDisplay).
+// pelo app Celer Remote no SmartDisplay) com pareamento por codigo (API 11):
+// quem conecta digita o codigo de 6 digitos que aparece na tela; controles
+// ja pareados entram direto (hold 5s no touch pad esquece todos).
 //
 // Tempo real: rampas e fases andam pelo millis() (dt de cada volta), nao
 // por contagem de voltas — o flush do OLED por I2C a 100 kHz (~100 ms) e o
@@ -493,7 +495,9 @@ function drawStatus() {
 function draw() {
     System.fillScreen(0);
     var now = System.millis();
-    if (now < happyUntil) {
+    if (pairShow) {
+        drawPair();      // codigo de pareamento no lugar da cara
+    } else if (now < happyUntil) {
         drawHappy();
     } else {
         drawEyes(now >= blinkUntil, 10);
@@ -505,7 +509,48 @@ function draw() {
 // ------------------------------------------------------- celer link -------
 var linkUp = false;
 var hasLink = (typeof CelerLink !== "undefined");
-if (hasLink) CelerLink.start("Celer-Dog");
+// API 11: pareamento por codigo — quem conecta digita o codigo que aparece
+// AQUI na tela antes de poder mandar qualquer coisa. Controles ja
+// pareados (memoria do firmware) entram direto.
+if (hasLink) CelerLink.start("Celer-Dog", { pairing: true });
+
+// Tela de pareamento: cadeado + codigo em sete-segmentos (texto e ilegivel
+// no vidro). pairShow fica aceso enquanto o handshake pendura.
+var pairShow = false, pairWas = false, pairCode = "";
+
+// Segmentos de cada digito (a=topo, b/c=dir, d=base, e/f=esq, g=meio)
+var SEG = {
+    0: "abcdef", 1: "bc", 2: "abdeg", 3: "abcdg", 4: "bcfg",
+    5: "acdfg", 6: "acdefg", 7: "abc", 8: "abcdefg", 9: "abcdfg"
+};
+function drawSegDigit(x, y, ch) {
+    var on = SEG[ch - "0"] || SEG[8];
+    // celula 12x22 fisica, trilho 2px; horizontal no meio da largura
+    if (on.indexOf("a") >= 0) System.fillRect(PX(x + 2), PY(y), PW_(8), PH_(2), 0xFFFF);
+    if (on.indexOf("g") >= 0) System.fillRect(PX(x + 2), PY(y + 10), PW_(8), PH_(2), 0xFFFF);
+    if (on.indexOf("d") >= 0) System.fillRect(PX(x + 2), PY(y + 20), PW_(8), PH_(2), 0xFFFF);
+    if (on.indexOf("f") >= 0) System.fillRect(PX(x), PY(y + 2), PW_(2), PH_(8), 0xFFFF);
+    if (on.indexOf("b") >= 0) System.fillRect(PX(x + 10), PY(y + 2), PW_(2), PH_(8), 0xFFFF);
+    if (on.indexOf("e") >= 0) System.fillRect(PX(x), PY(y + 12), PW_(2), PH_(8), 0xFFFF);
+    if (on.indexOf("c") >= 0) System.fillRect(PX(x + 10), PY(y + 12), PW_(2), PH_(8), 0xFFFF);
+}
+
+// Cadeado pulsando (o codigo expira em 60 s: chama atencao) + 6 digitos em
+// 2 grupos de 3: 2*(3*12+2*2) + 8 de respiro = 88px, centrado no vidro.
+function drawPair() {
+    var now = System.millis();
+    if (((now / 500) | 0) % 2 === 0) {  // corpo do cadeado pisca
+        System.fillRect(PX(56), PY(11), PW_(16), PH_(9), 0xFFFF);
+        System.fillRect(PX(59), PY(14), PW_(10), PH_(3), 0);      // buraco da fechadura
+        System.fillRect(PX(59), PY(5), PW_(3), PH_(6), 0xFFFF);   // arco
+        System.fillRect(PX(68), PY(5), PW_(3), PH_(6), 0xFFFF);
+        System.fillRect(PX(59), PY(5), PW_(12), PH_(3), 0xFFFF);
+    }
+    for (var i = 0; i < 6; i++) {
+        if (i >= pairCode.length) break;
+        drawSegDigit(20 + i * 14 + (i >= 3 ? 8 : 0), 28, pairCode.charAt(i));
+    }
+}
 
 function reply(obj) {
     if (hasLink && linkUp) CelerLink.send(obj);
@@ -596,6 +641,15 @@ function linkTick(now) {
     if (!hasLink) return;
     var st = CelerLink.status();
     linkUp = !!(st && st.connected);
+    // Handshake pendente: status.code so existe no periferico (API 11);
+    // firmware derruba sozinho em 60 s ou 3 codigos errados
+    pairShow = !!(st && st.pairing && st.code);
+    if (pairShow) pairCode = String(st.code);
+    if (pairWas && !pairShow && linkUp) {
+        happyUntil = System.millis() + 1400;  // codigo aceito: festa
+    }
+    pairWas = pairShow;
+    if (pairShow) lastActivity = now;  // alguem vai digitar: sem dormir
     // esvazia a fila: o loop e lento (~60 ms + desenho) e o Remote manda
     // em rajadas; so um por volta acumularia comandos velhos
     for (var k = 0; k < 8; k++) {
@@ -654,11 +708,11 @@ while (true) {
 
     // sono: sem comando/toque e sem link = olhos fechados, servos soltos
     // (parado em pe o servo gasta corrente segurando), mic mais espacado
-    if (!sleeping && now - lastActivity > SLEEP_MS && !linkUp && !gait) {
+    if (!sleeping && now - lastActivity > SLEEP_MS && !linkUp && !pairShow && !gait) {
         sleeping = true;
         legsRelease();
     }
-    if (sleeping && (linkUp || happyUntil > now)) {
+    if (sleeping && (linkUp || pairShow || happyUntil > now)) {
         sleeping = false;
         lastActivity = now;
         if (legsLimp) { legsLimp = false; legsHold(); }
@@ -685,9 +739,14 @@ while (true) {
         if (!padDownAt) padDownAt = now;
         padHeld = true;
     } else if (padHeld && ++padZeros >= 2) {
-        // soltou: longo (>600ms) = ciclo de gait; curto = carinho
+        // soltou: >5s = esquece os controles pareados; longo (>600ms) =
+        // ciclo de gait; curto = carinho
         lastActivity = now;
-        if (padDownAt && now - padDownAt > 600) cycleGait();
+        if (padDownAt && now - padDownAt > 5000) {
+            if (hasLink && CelerLink.unpair) CelerLink.unpair();
+            System.print('[dog] pareamentos esquecidos (hold 5s)');
+            happyUntil = now + 2000;
+        } else if (padDownAt && now - padDownAt > 600) cycleGait();
         else happyUntil = now + 1600;
         padHeld = false;
         padDownAt = 0;

@@ -1,12 +1,12 @@
 {
   "name": "Celer Remote",
   "packageName": "celeros.remote",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "CelerOS",
   "description": "Controle remoto de CelerOS proximos pelo Celer Link (Bluetooth): escaneie, conecte e pilote robots e gadgets com D-pad na tela.",
   "type": "App",
   "category": "Utilidades",
-  "api": 10,
+  "api": 11,
   "permissions": [],
-  "changelog": "1.2.0 - botao para trocar a marcha do robo (aparece com o Dog Face). 1.1.0 - soltar a seta manda stop, reconexao automatica, botao sair, RSSI na tela e toque da lista corrigido. 1.0.0 - primeiro lancamento (API 10: Celer Link 9 + servos)"
+  "changelog": "1.3.0 - pareamento por codigo (API 11): robo com {pairing:true} mostra o codigo na tela dele e o Remote pede para digitar antes de liberar o D-pad; robos ja pareados conectam direto. 1.2.0 - botao para trocar a marcha do robo (aparece com o Dog Face). 1.1.0 - soltar a seta manda stop, reconexao automatica, botao sair, RSSI na tela e toque da lista corrigido. 1.0.0 - primeiro lancamento (API 10: Celer Link 9 + servos)"
 }

@@ -10,6 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
+### API Level: 11
 ### Nível de API: 10
 ---
 
@@ -992,20 +993,31 @@ CelerOS (por exemplo o 4848 SmartDisplay) com `scan()`, `connect()` e
 Detecte com `typeof CelerLink !== "undefined"` para continuar instalável em
 qualquer firmware.
 
-**Segurança — leia isto:** na v1 **não há nenhuma**. Sem pareamento, sem
-criptografia, sem autenticação: qualquer device próximo pode conectar e trocar
-mensagens. Ótimo para brinquedos e protótipos; não use para nada sensível.
+**Segurança:** o link em si segue sem criptografia no ar, mas desde a
+**API 11** há **pareamento por código** opcional: o lado do `start()` liga
+`{pairing: true}`, cada conexão nova gera um código de 6 dígitos que só o
+app **local** vê (`status().code` — desenhe na tela do robô) e o controle
+digita via `verify()`. Sem o código certo, `send()`/`poll()` ficam fechados.
+Controles aprovados são memorizados no firmware (até 4) e reconectam sem
+código. O código viaja em claro: isso trava o vizinho casual que conecta e
+controla, não quem grampeia o rádio. Para Robôs de brinquedo e protótipos;
+não use para nada sensível.
 
 Modelo: uma conexão por vez, mensagens de até **240 bytes**, melhor esforço.
 Quem quer ser controlado chama `start()` (advertising BLE + servidor GATT,
 visível como `Celer-XXXX`). O controle escaneia, conecta e troca mensagens.
 Os dois sentidos funcionam; o link é simétrico depois de conectado.
 
-#### `CelerLink.start([nome])` → Boolean
+#### `CelerLink.start([nome], [opcoes])` → Boolean
 Vira controlável: liga o advertising e o servidor GATT. `nome` é o nome BLE
 do device (até 29 bytes; default `Celer-XXXX`, XXXX do fim da MAC do rádio).
 A primeira chamada de qualquer função inicializa o Bluetooth (~300 ms). O nome
 volta ao default quando o app sai.
+
+`opcoes` (objeto, **API 11**): `{pairing: true}` liga o gate de pareamento —
+cada conexão nova exige o código de 6 dígitos (veja `verify()` e
+`status().code`). Sem a opção (ou em firmware anterior), o link fica aberto
+como sempre. Vale para as conexões seguintes à chamada.
 
 #### `CelerLink.stop()` → Boolean
 Para o advertising (o device deixa de ser descobrível).
@@ -1018,11 +1030,30 @@ forte primeiro (até 16 devices).
 #### `CelerLink.connect(idOuNome, [timeoutMs])` → Boolean
 Conecta num device do último `scan()`, pelo `id` (MAC) ou pelo `nome`.
 Bloqueante (default 4000 ms, máx. 8000): o prazo cobre a conexão inteira —
-enlace, negociação do MTU, descoberta e inscrição. Só retorna `true` com o
-link pronto para `send()` nos dois sentidos. Substitui a conexão atual.
+enlace, negociação do MTU, descoberta, inscrição e leitura do estado de
+pareamento do peer. Só retorna `true` com o link estabelecido; se o peer
+exige código, `status().pairing` vem `true` e o canal de dados só abre após
+`verify()` (nesse estado `connected`/`send()` seguem `false`). Substitui a
+conexão atual.
 
 #### `CelerLink.disconnect()` → Boolean
-Derruba a conexão atual.
+Derruba a conexão atual (inclusive uma pendente de pareamento).
+
+#### `CelerLink.verify(codigo)` → Boolean (API 11)
+Lado do controle: envia o `codigo` (6 dígitos) ao peer conectado que exige
+pareamento. Bloqueante (~3 s). `true` = aceito, canal liberado
+(`status().verified` e `connected` viram `true`); `false` = recusado, link
+caído ou código inválido. Idempotente: num link já verificado (ou sem
+pareamento) retorna `true` sem tocar no rádio. Regras do lado que exige:
+**3 códigos errados** derrubam a conexão; **60 s** sem digitar derrubam e o
+código é regerado na próxima conexão.
+
+#### `CelerLink.unpair([id])` → Boolean (API 11)
+Lado do robô: esquece os controles pareados memorizados no firmware. Sem
+argumento apaga **todos**; com `"AA:BB:CC:DD:EE:FF"` apaga só aquele. A
+memória sobrevive a reboot e troca de app (NVS) — é isso que faz a
+reconexão dos pareados entrar sem código. Devolve `false` se o `id` não
+estava pareado ou é inválido.
 
 #### `CelerLink.send(mensagem)` → Boolean
 Envia uma mensagem ao peer conectado (até 240 bytes). **String** vai como
@@ -1041,15 +1072,18 @@ Chame no loop do app, como o `keypadPoll` — de preferência num laço até
 `null`, para não acumular comandos velhos.
 
 #### `CelerLink.status()` → Object
-`{connected, peer, listening, role, name, mtu, rssi, pending, dropped}`:
+`{connected, peer, listening, role, name, pairing, verified, code, mtu, rssi, pending, dropped}`:
 
 | Campo | Significado |
 |-------|-------------|
-| `connected` | Boolean — link pronto para `send()` |
+| `connected` | Boolean — link **autorizado** para `send()` (false durante o pareamento pendente) |
 | `peer` | `"AA:BB:CC:DD:EE:FF"` ou `""` |
 | `listening` | Boolean — advertising pedido via `start()` |
 | `role` | `"central"` (nós conectamos), `"peripheral"` (conectaram em nós) ou `""` |
 | `name` | nosso nome de advertising |
+| `pairing` | Boolean (API 11) — handshake pendente: mostrar o código (periférico) ou pedir ao usuário (central) |
+| `verified` | Boolean (API 11) — canal de dados liberado (`true` em link sem pareamento) |
+| `code` | código de 6 dígitos do pareamento — **só** no periférico durante `pairing`; nunca sai do device |
 | `mtu` | MTU ATT negociado (0 sem conexão); payload máx. = `mtu - 3` |
 | `rssi` | sinal da conexão em dBm (0 sem leitura) |
 | `pending` | mensagens esperando `poll()` |
@@ -1062,6 +1096,38 @@ Dog Face para após 900 ms sem `move` ou quando o link cai.
 
 Sair do app reseta a sessão sozinho (desconecta e para o advertising);
 chame `stop()`/`disconnect()` só para controlar no meio do app.
+
+### Exemplo — pareamento por código (API 11)
+
+```javascript
+// lado do ROBO (periferico): codigo na tela enquanto o handshake pendura
+CelerLink.start("Celer-Dog", {pairing: true});
+while (true) {
+    var st = CelerLink.status();
+    if (st.pairing) {
+        // desenhe st.code GRANDE na tela (o Dog Face usa sete-segmentos);
+        // expira sozinho em 60 s e nasce novo na proxima conexao
+        System.fillScreen(0);
+        System.setTextColor(0xFFFF);
+        System.drawString(st.code, 40, 140, 4);
+    }
+    var msg = CelerLink.poll();
+    if (msg !== null && st.verified) { /* comandos: so chegam liberados */ }
+    System.delay(30);
+}
+
+// lado do CONTROLE: apos connect() true
+if (CelerLink.status().pairing) {
+    var cod = System.prompt("codigo na tela do robo", "");
+    if (!cod || !CelerLink.verify(cod)) { System.exitApp(); }  // recusado
+}
+```
+
+Compatibilidade: peers de firmware anterior à API 11 seguem funcionando —
+central antigo conecta num robô com pareamento mas não controla nada (o
+canal fica fechado); central novo num peer antigo não vê `pairing` e cai
+direto no controle. Pareados são memorizados no NVS (até 4, mais recente
+primeiro): a reconexão entra sem código; `unpair()` esquece.
 
 ### Exemplo — lado do robô (controlável)
 
