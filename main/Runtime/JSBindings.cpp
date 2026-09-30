@@ -12,6 +12,7 @@
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
 #include "../Display/Backlight.h"
+#include "../Display/ScreenCapture.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
@@ -323,6 +324,7 @@ void JSBindings::applyDisplayClip() {
 void JSBindings::present() {
     if (tftInstance == nullptr) return;
     Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
+    ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
     bool wantBar = s_topbarFixed || s_barShown;
     if (s_frame != nullptr) {
@@ -809,6 +811,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"toast", js_toast, 1},
         {"beep", js_beep, 2},
         {"led", js_led, 3},
+        {"relay", js_relay, 2},
+        {"relayState", js_relayState, 1},
+        {"relayCount", js_relayCount, 0},
+        {"battery", js_battery, 0},
+        {"micLevel", js_micLevel, 0},
+        {"touchPad", js_touchPad, 0},
+        {"neopixel", js_neopixel, 2},
         {"lightLevel", js_lightLevel, 0},
         {"setTimezone", js_setTimezone, 1},
         {"setManualTime", js_setManualTime, 5},

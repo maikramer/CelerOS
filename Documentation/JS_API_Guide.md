@@ -308,10 +308,27 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Description:** **Native Hardware Pulse Measurement.** Suspends the JS engine and delegates to the C++ Kernel to accurately measure the duration of an incoming hardware pulse. This bypasses the JavaScript execution overhead entirely, giving you absolute microsecond precision (crucial for reading HC-SR04 ultrasonic sensors).
 
 #### `System.gpio.servo(pin, angle)` (API 10)
-- **Parameters:** `pin` (Integer), `angle` (Integer, 0 to 180; values outside are clamped)
-- **Returns:** `Boolean` (`false` with no free channel — up to **4 servos at once**)
+- **Parameters:** `pin` (Integer), `angle` (Number, 0 to 180; fractions allowed for smooth ramps; values outside are clamped)
+- **Returns:** `Boolean` (`false` for an invalid output pin or no free channel — up to **5 servos at once**)
 - **Description:** drives a standard hobby servo (SG90 class) with a 50 Hz PWM (500–2500 µs pulse). The LEDC channel is allocated on the first write to a pin. Robots: pair it with the Celer Link — a remote app sends commands, the robot's app maps them to legs (`System.gpio.servo(13, 90)`).
-- **Note:** the channels come from the board's free LEDC pool; `System.beep`/`System.led` keep theirs.
+- **Note:** the channels come from the LEDC channels the board leaves free (never the backlight, `System.beep` or `System.led` ones); `analogWrite` channels 0..2 are only used as a last resort, on its own timer. Leaving the app releases every servo (no holding torque).
+
+#### `System.battery()` (API 10)
+- **Returns:** `Number` — **cell** voltage in mV (the pin reading already scaled by the board's divider), or `-1` if the board has none.
+- **Description:** averaged ADC reading with ~2 s cache. On the SpotPear robot dog it reads the 2:1 Li-ion divider on GPIO2 (~4100 mV on USB, ~3300 mV = empty).
+
+#### `System.micLevel()` (API 10)
+- **Returns:** `Number` — sound level `0..100` (short RMS capture on the left I²S slot), or `-1` if the board has no microphone.
+- **Description:** briefly blocking (~100 ms); pending drawings are flushed first. The first call initializes the I²S RX channel (~300 ms).
+
+#### `System.touchPad()` (API 10)
+- **Returns:** `Number` — `1` touched, `0` released, `-1` if the board has no capacitive pad.
+- **Description:** standalone capacitive pad (the robot dog's "head"). The reference level is calibrated on the first call — keep the pad untouched at that moment.
+
+#### `System.neopixel(strip, colors)` (API 10)
+- **Parameters:** `strip` — 0-based WS2812 strip index; `colors` — array of `0x00RRGGBB` values (1..8 LEDs).
+- **Returns:** `Boolean` — `false` if the board has no strips or arguments are invalid.
+- **Description:** updates a whole strip via RMT (non-DMA). Example: `System.neopixel(0, [0xFF0000, 0, 0x00FF00])`. Strips are turned off when the app exits.
 
 #### `System.gpio.servoOff(pin)` (API 10)
 - **Parameters:** `pin` (Integer)
@@ -514,13 +531,16 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 `"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) are absent. **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
 
 #### `System.toast(message)` / `System.beep(freq, ms)`
-`toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a square-wave tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); returns `false` on boards without a speaker (SmartDisplay).
+`toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); the SmartDisplay feeds the on-board Nsiway NS4168 digital amplifier over I2S (a sine wave, softer than the CYD's square wave). Returns `false` on boards without a speaker.
 
 #### `System.led(r, g, b)` (API 7)
 Sets the board's RGB status LED, 0–255 per channel (PWM). `System.led()` or `System.led(0, 0, 0)` turns it off; the LED is also switched off when the app exits. Returns `false` on boards without an LED. The CYD has one on the back (R=GPIO4, G=GPIO16, B=GPIO17).
 
 #### `System.lightLevel()` (API 7)
 Ambient light from the board's light sensor: `0` (dark) to `100` (lit room); `-1` without a sensor. On the CYD the sensor (LDR next to the screen) only separates "lit" from "getting dark": any normally lit room reads close to 100.
+
+#### `System.relay(n, on)` / `System.relayState(n)` / `System.relayCount()` (API 8)
+Relay lines of the board. `n` is 1-based (`1` = hardware line L1); `relay(n, true/false)` switches it and returns `false` without relays or with an out-of-range index, `relayState(n)` returns `1`/`0` (or `-1`), and `relayCount()` returns how many lines exist (`0`..`3`). Relays start **off** at boot. Available on the SmartDisplay 4848S040 "Y" wall-switch SKUs (L1=GPIO40, L2=GPIO2, L3=GPIO1) when the firmware is built with `CONFIG_CELEROS_SMARTDISPLAY_RELAYS` — the same pins drive the I2S speaker on the standard SKU, so a board has one or the other.
 
 `System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection.
 
@@ -747,8 +767,9 @@ messages. Both directions work; the link is symmetric after connecting.
 
 #### `CelerLink.start([name])` → Boolean
 Becomes controllable: starts advertising and the GATT server. `name` is the
-BLE device name (default `Celer-XXXX`, XXXX from the radio MAC). The first
-call anywhere initializes the Bluetooth stack (~300 ms).
+BLE device name (up to 29 bytes; default `Celer-XXXX`, XXXX from the radio
+MAC). The first call anywhere initializes the Bluetooth stack (~300 ms). The
+name reverts to the default when the app exits.
 
 #### `CelerLink.stop()` → Boolean
 Stops advertising (the device is no longer discoverable).
@@ -756,11 +777,13 @@ Stops advertising (the device is no longer discoverable).
 #### `CelerLink.scan([timeoutMs])` → Array
 Blocking scan (default 2500 ms) for nearby CelerOS devices. Returns
 `[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]`, strongest
-signal first is not guaranteed — sort by `rssi` if it matters.
+signal first (up to 16 devices).
 
 #### `CelerLink.connect(idOrName, [timeoutMs])` → Boolean
 Connects to a device from the last `scan()`, by `id` (MAC) or `name`.
-Blocking (default 4000 ms). Replaces any current connection.
+Blocking (default 4000 ms, max 8000): the timeout covers the whole setup —
+link, MTU exchange, discovery and subscription. Returns `true` only when the
+link is ready for `send()` in both directions. Replaces any current connection.
 
 #### `CelerLink.disconnect()` → Boolean
 Drops the current connection.
@@ -769,14 +792,38 @@ Drops the current connection.
 Sends a message to the connected peer (up to 240 bytes). A **string** goes as
 raw bytes; an **object** is serialized as JSON — structured messaging without
 any parser on the firmware side (the receiver decides how to read it).
+Returns `false` when not connected, when the message does not fit the
+negotiated MTU (between CelerOS devices: 253 bytes, so 240 always fits; a
+phone without an MTU exchange takes only 20) or, on the `start()` side, when
+the peer has not subscribed to notifications yet. A message is never
+delivered truncated.
 
 #### `CelerLink.poll()` → String|null
-Pops the oldest received message (FIFO of 8; overflow discards). `null` when
-empty. Call it from your loop, like `keypadPoll`.
+Pops the oldest received message (FIFO of 8). A full queue drops the
+**oldest** message (in a remote control the newest command matters; see
+`status().dropped`). The queue is cleared on every new connection. `null` when
+empty. Call it from your loop, like `keypadPoll` — ideally draining it until
+`null` so stale commands do not pile up.
 
 #### `CelerLink.status()` → Object
-`{connected: Boolean, peer: "AA:BB:CC:DD:EE:FF"|"", listening: Boolean}`
-(`listening` = advertising via `start()`).
+`{connected, peer, listening, role, name, mtu, rssi, pending, dropped}`:
+
+| Field | Meaning |
+|-------|---------|
+| `connected` | Boolean — link ready for `send()` |
+| `peer` | `"AA:BB:CC:DD:EE:FF"` or `""` |
+| `listening` | Boolean — advertising requested via `start()` |
+| `role` | `"central"` (we connected), `"peripheral"` (they connected to us) or `""` |
+| `name` | our advertising name |
+| `mtu` | negotiated ATT MTU (0 when disconnected); max payload = `mtu - 3` |
+| `rssi` | connection signal in dBm (0 when unavailable) |
+| `pending` | messages waiting for `poll()` |
+| `dropped` | messages dropped on a full queue since the app started |
+
+Link loss: the supervision timeout is ~2 s. Robots should stop on their own
+when commands stop arriving (keepalive) — Celer Remote repeats `move` every
+250 ms while an arrow is held and sends `stop` on release; Dog Face stops
+after 900 ms without a `move` or when the link drops.
 
 Leaving the app resets the session automatically (disconnects and stops
 advertising); call `stop()`/`disconnect()` only for mid-app control.
@@ -819,7 +866,7 @@ while (true) {
     }
     if (dir !== last) {
         last = dir;
-        if (dir) CelerLink.send({type: "move", dir: dir, speed: 200});
+        CelerLink.send(dir ? {type: "move", dir: dir, speed: 200} : {type: "stop"});
     }
     System.delay(20);
 }

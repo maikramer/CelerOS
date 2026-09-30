@@ -17,6 +17,7 @@
 #include "../OTA/OtaManager.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Hardware/BoardIO.h"
+#include "../Display/ScreenCapture.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
@@ -94,11 +95,14 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
         // fatias de 4s com reset do watchdog (F2): um System.delay(30000)
         // nao pode derrubar o WDT de 15s da main task (app rodando = sem
         // celerLoop; os pontos de espera alimentam o WDT)
-        uint32_t remain = (uint32_t)ms - (millis() - t0);
+        // O GC acima pode ja ter comido o prazo inteiro: sem este teste a
+        // subtracao sem sinal dava a volta e um delay(6) virava ~49 dias.
+        const uint32_t spent = millis() - t0;
+        uint32_t remain = spent < (uint32_t)ms ? (uint32_t)ms - spent : 0;
         while (remain > 0) {
             esp_task_wdt_reset();
             uint32_t slice = remain > 4000 ? 4000 : remain;
-            delay(slice);
+            ScreenCapture::serviceDelay(slice);  // espera atendendo a tela no navegador
             remain -= slice;
         }
     }
@@ -320,5 +324,64 @@ duk_ret_t JSBindings::js_led(duk_context *ctx) {
 // System.lightLevel() -> 0 (escuro) .. 100 (claro); -1 sem sensor de luz
 duk_ret_t JSBindings::js_lightLevel(duk_context *ctx) {
     duk_push_int(ctx, BoardIO::lightLevel());
+    return 1;
+}
+
+// System.relay(n, on) -> bool. n e 1-based (1 = L1 da placa); false sem
+// reles ou indice invalido.
+duk_ret_t JSBindings::js_relay(duk_context *ctx) {
+    int n = duk_require_int(ctx, 0);
+    bool on = duk_require_boolean(ctx, 1) ? true : false;
+    duk_push_boolean(ctx, BoardIO::setRelay(n, on) ? 1 : 0);
+    return 1;
+}
+
+// System.relayState(n) -> 1 ligado, 0 desligado, -1 sem rele/indice invalido
+duk_ret_t JSBindings::js_relayState(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::relayState(duk_require_int(ctx, 0)));
+    return 1;
+}
+
+// System.relayCount() -> quantas linhas de rele a placa tem (0..3)
+duk_ret_t JSBindings::js_relayCount(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::relayCount());
+    return 1;
+}
+
+// System.battery() -> tensao em mV; -1 sem divisor de bateria na placa
+duk_ret_t JSBindings::js_battery(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::batteryMv());
+    return 1;
+}
+
+// System.micLevel() -> 0..100 (RMS curto); -1 sem microfone. Bloqueante
+// curto (~100 ms de audio) — o desenho pendente aparece antes.
+duk_ret_t JSBindings::js_micLevel(duk_context *ctx) {
+    present();
+    duk_push_int(ctx, BoardIO::micLevel());
+    return 1;
+}
+
+// System.touchPad() -> 1 tocado, 0 solto; -1 sem pad capacitivo
+duk_ret_t JSBindings::js_touchPad(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::touchPad());
+    return 1;
+}
+
+// System.neopixel(strip, cores) -> bool. cores: array de 0x00RRGGBB
+// (ate 8 leds). false sem fitas WS2812 na placa.
+duk_ret_t JSBindings::js_neopixel(duk_context *ctx) {
+    int strip = duk_require_int(ctx, 0);
+    if (!duk_is_array(ctx, 1)) return duk_error(ctx, DUK_ERR_TYPE_ERROR, "cores deve ser array");
+    const duk_uarridx_t n = duk_get_length(ctx, 1);
+    if (n < 1 || n > 8) return duk_error(ctx, DUK_ERR_RANGE_ERROR, "1..8 cores");
+    uint32_t colors[8];
+    for (duk_uarridx_t i = 0; i < n && i < 8; i++) {
+        duk_get_prop_index(ctx, 1, i);
+        colors[i] = (uint32_t)duk_get_uint(ctx, -1);
+        duk_pop(ctx);
+    }
+    present();
+    duk_push_boolean(ctx, BoardIO::neopixelSet(strip, colors, (int)n) ? 1 : 0);
     return 1;
 }

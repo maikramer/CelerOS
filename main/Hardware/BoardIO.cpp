@@ -1,9 +1,17 @@
 #include "BoardIO.h"
 
 #include <Arduino.h>
+#include <math.h>
 #include "../Boards/Board.h"
+#include "driver/i2s_std.h"
+#include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/rmt_tx.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "driver/touch_sens.h"
 #include "esp_task_wdt.h"
+#include "soc/soc_caps.h"
 
 namespace BoardIO {
 
@@ -33,7 +41,6 @@ bool ledInit() {
         ch.speed_mode = kMode;
         ch.channel = kLedCh[i];
         ch.timer_sel = kLedTimer;
-        ch.intr_type = LEDC_INTR_DISABLE;
         ch.gpio_num = pins[i];
         ch.duty = p.activeLow ? 255 : 0;  // apagado
         if (ledc_channel_config(&ch) != ESP_OK) return false;
@@ -81,11 +88,83 @@ int lightLevel() {
     return 100 - v * 100 / kDark;
 }
 
-bool hasSpeaker() { return Board::profile().speakerPin >= 0; }
+bool hasSpeaker() {
+    return Board::profile().speakerPin >= 0 || Board::profile().i2s.dout >= 0;
+}
+
+namespace {
+// Senoide para o tom I2S: 256 amostras de 16 bits, amplitude ~0.6 (alto e
+// nitido sem estourar). Gerada na primeira chamada.
+int16_t s_sine[256];
+bool s_sineReady = false;
+
+void sineInit() {
+    if (s_sineReady) return;
+    for (int i = 0; i < 256; i++) {
+        s_sine[i] = (int16_t)(sinf(i * 6.2831853f / 256.0f) * 20000.0f);
+    }
+    s_sineReady = true;
+}
+
+// Tom via amplificador digital I2S (NS4168 da SmartDisplay): aloca o canal,
+// transmite a senoide pelo tempo pedido e devolve os pinos ao GPIO matrix.
+bool toneI2s(int freqHz, int ms) {
+    constexpr uint32_t kSampleRate = 44100;  // cobre a faixa 20..20000 Hz
+    const AudioI2sPins& p = Board::profile().i2s;
+    if (freqHz >= (int)kSampleRate / 2) return false;
+
+    i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (BoardIO::micLevel
+    // mantem um canal RX persistente la — NUM_AUTO podia rouba-lo).
+    chanCfg.auto_clear = true;  // DMA manda silencio apos o ultimo bloco
+    i2s_chan_handle_t tx = nullptr;
+    if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) return false;
+
+    i2s_std_config_t stdCfg = {};
+    stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
+    stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    stdCfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;  // NS4168 nao usa MCLK
+    stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
+    stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
+    stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
+    stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
+    if (i2s_channel_init_std_mode(tx, &stdCfg) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
+        i2s_del_channel(tx);
+        return false;
+    }
+
+    sineInit();
+    // Fase em Q16.16 sobre a tabela de 256 amostras.
+    const uint32_t step = (uint32_t)(((uint64_t)freqHz << 24) / kSampleRate);
+    uint32_t phase = 0;
+    static int16_t frames[512][2];  // estereo L/R duplicado (amp mono)
+    const uint32_t framesNeeded = (uint32_t)(((uint64_t)ms * kSampleRate) / 1000);
+    uint32_t sent = 0;
+    while (sent < framesNeeded) {
+        uint32_t n = framesNeeded - sent;
+        if (n > 512) n = 512;
+        for (uint32_t i = 0; i < n; i++) {
+            phase += step;
+            const int16_t s = s_sine[(phase >> 16) & 0xFF];
+            frames[i][0] = s;
+            frames[i][1] = s;
+        }
+        size_t written = 0;
+        i2s_channel_write(tx, frames, n * sizeof(frames[0]), &written, portMAX_DELAY);
+        esp_task_wdt_reset();
+        sent += n;
+    }
+    i2s_channel_disable(tx);
+    i2s_del_channel(tx);
+    return true;
+}
+}  // namespace
 
 bool tone(int freqHz, int ms) {
     const int pin = Board::profile().speakerPin;
-    if (pin < 0 || freqHz < 20 || freqHz > 20000 || ms <= 0 || ms > 5000) return false;
+    if (pin < 0 && Board::profile().i2s.dout < 0) return false;
+    if (freqHz < 20 || freqHz > 20000 || ms <= 0 || ms > 5000) return false;
+    if (pin < 0) return toneI2s(freqHz, ms);
     ledc_timer_config_t tim = {};
     tim.speed_mode = kMode;
     tim.timer_num = kToneTimer;
@@ -97,7 +176,6 @@ bool tone(int freqHz, int ms) {
     ch.speed_mode = kMode;
     ch.channel = kToneCh;
     ch.timer_sel = kToneTimer;
-    ch.intr_type = LEDC_INTR_DISABLE;
     ch.gpio_num = pin;
     ch.duty = 512;  // onda quadrada 50%
     if (ledc_channel_config(&ch) != ESP_OK) return false;
@@ -109,5 +187,419 @@ bool tone(int freqHz, int ms) {
     ledc_stop(kMode, kToneCh, 0);
     return true;
 }
+
+// ---- reles ----
+
+namespace {
+bool s_relayInit = false;
+bool s_relayState[3] = {false, false, false};
+}  // namespace
+
+void initRelays() {
+    const RelayConfig& r = Board::profile().relay;
+    if (s_relayInit || r.count <= 0) return;
+    for (int i = 0; i < r.count && i < 3; i++) {
+        pinMode(r.pins[i], OUTPUT);
+        digitalWrite(r.pins[i], LOW);  // desligado no boot, como no demo do fab.
+        s_relayState[i] = false;
+    }
+    s_relayInit = true;
+}
+
+int relayCount() {
+    return Board::profile().relay.count;
+}
+
+bool setRelay(int n, bool on) {
+    const RelayConfig& r = Board::profile().relay;
+    if (n < 1 || n > r.count || n > 3) return false;
+    initRelays();
+    digitalWrite(r.pins[n - 1], on ? HIGH : LOW);
+    s_relayState[n - 1] = on;
+    return true;
+}
+
+int relayState(int n) {
+    const RelayConfig& r = Board::profile().relay;
+    if (n < 1 || n > r.count || n > 3) return -1;
+    return s_relayState[n - 1] ? 1 : 0;
+}
+
+// ---- bateria ----
+
+namespace {
+// Calibracao raw->mV do ADC (curve fitting no S3; line fitting no ESP32
+// classico). O raw vem do analogRead do Compat (adc_oneshot a 12 dB), que
+// ja cria/unifica a unidade ADC.
+adc_cali_handle_t s_battCali = nullptr;
+int64_t s_battAt = 0;
+int s_battMv = -1;
+bool s_battFail = false;  // sem esquema de calibracao: nao tenta de novo
+
+bool battCaliInit() {
+    if (s_battCali) return true;
+    if (s_battFail) return false;
+    // A unidade ADC1 e criada pelo Compat sob demanda; a cali e independente.
+    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t c = {};
+    c.unit_id = ADC_UNIT_1;
+    c.atten = ADC_ATTEN_DB_12;
+    c.bitwidth = ADC_BITWIDTH_12;
+    err = adc_cali_create_scheme_curve_fitting(&c, &s_battCali);
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    adc_cali_line_fitting_config_t c = {};
+    c.unit_id = ADC_UNIT_1;
+    c.atten = ADC_ATTEN_DB_12;
+    c.bitwidth = ADC_BITWIDTH_12;
+    err = adc_cali_create_scheme_line_fitting(&c, &s_battCali);
+#endif
+    if (err != ESP_OK) {
+        s_battCali = nullptr;
+        s_battFail = true;
+    }
+    return err == ESP_OK;
+}
+}  // namespace
+
+int batteryMv() {
+    const BoardProfile& bp = Board::profile();
+    if (bp.batteryPin < 0) return -1;
+    const int64_t now = (int64_t)millis();
+    if (s_battMv >= 0 && now - s_battAt < 2000) return s_battMv;  // cache 2 s
+    if (!battCaliInit()) return -1;
+    // ADC ruidoso (servos puxando corrente): media de 16 leituras
+    int sum = 0;
+    for (int i = 0; i < 16; i++) sum += analogRead(bp.batteryPin);  // 12 dB (Compat)
+    int mv = 0;
+    if (adc_cali_raw_to_voltage(s_battCali, sum / 16, &mv) != ESP_OK) return -1;
+    // mV no pino -> mV da bateria (divisor resistivo da placa)
+    mv = mv * bp.batteryScalePct / 100;
+    s_battMv = mv;
+    s_battAt = now;
+    return mv;
+}
+
+// ---- servos (PWM 50 Hz por LEDC) ----
+//
+// Canais escolhidos para NAO colidir com o resto do mapa LEDC (topo do
+// BoardIO.h): primeiro os que a placa deixa livres (7 sem backlight PWM,
+// 6 sem buzzer LEDC, 3..5 sem LED RGB), por ultimo 0..2 (os do analogWrite
+// — so quando nao ha outro). Timer 2 dedicado (o do tom LEDC); placa com
+// buzzer LEDC usa o timer 0 como antes. No cao: 5 servos nos canais 3..7,
+// timer 2 — isolados do analogWrite e das fitas (RMT).
+
+namespace {
+constexpr int kServoMax = 5;
+constexpr int kServoPeriodUs = 20000;       // 50 Hz
+constexpr uint32_t kServoDutyMax = 16383;   // 14 bits
+ledc_channel_t s_servoCh[kServoMax];
+int s_servoChCount = -1;                    // -1 = lista ainda nao montada
+int8_t s_servoPin[kServoMax] = {-1, -1, -1, -1, -1};  // -1 = canal livre
+bool s_servoTimerOk = false;
+
+ledc_timer_t servoTimer() {
+    return Board::profile().speakerPin < 0 ? LEDC_TIMER_2 : LEDC_TIMER_0;
+}
+
+void servoChannels() {
+    if (s_servoChCount >= 0) return;
+    const BoardProfile& bp = Board::profile();
+    int n = 0;
+    auto add = [&](int ch) { if (n < kServoMax) s_servoCh[n++] = (ledc_channel_t)ch; };
+    if (!bp.backlightPwm) add(7);
+    if (bp.speakerPin < 0) add(6);
+    if (bp.led.r < 0) { add(5); add(4); add(3); }
+    add(0); add(1); add(2);  // compartilhados com o analogWrite (ultimo recurso)
+    s_servoChCount = n;
+}
+}  // namespace
+
+bool servoWrite(int pin, int us) {
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) return false;
+    servoChannels();
+    int slot = -1;
+    for (int i = 0; i < s_servoChCount; i++) {
+        if (s_servoPin[i] == pin) { slot = i; break; }  // ja esta neste pino
+        if (slot < 0 && s_servoPin[i] < 0) slot = i;    // primeiro livre
+    }
+    if (slot < 0) return false;  // canais esgotados: servoOff libera um
+    if (us < 400) us = 400;
+    if (us > 2600) us = 2600;
+    const uint32_t duty = (uint32_t)(((int64_t)us * (kServoDutyMax + 1)) / kServoPeriodUs);
+    if (s_servoPin[slot] != pin) {
+        if (!s_servoTimerOk) {
+            ledc_timer_config_t tim = {};
+            tim.speed_mode = kMode;
+            tim.timer_num = servoTimer();
+            tim.duty_resolution = LEDC_TIMER_14_BIT;
+            tim.freq_hz = 50;
+            tim.clk_cfg = LEDC_AUTO_CLK;
+            if (ledc_timer_config(&tim) != ESP_OK) return false;
+            s_servoTimerOk = true;  // reconfigurar a cada pino glitchava os outros
+        }
+        ledc_channel_config_t ch = {};
+        ch.speed_mode = kMode;
+        ch.channel = s_servoCh[slot];
+        ch.timer_sel = servoTimer();
+        ch.gpio_num = pin;
+        ch.duty = duty;  // ja nasce no angulo pedido (sem pulso 0 no meio)
+        if (ledc_channel_config(&ch) != ESP_OK) return false;
+        s_servoPin[slot] = (int8_t)pin;
+        return true;
+    }
+    ledc_set_duty(kMode, s_servoCh[slot], duty);
+    ledc_update_duty(kMode, s_servoCh[slot]);
+    return true;
+}
+
+bool servoOff(int pin) {
+    for (int i = 0; i < s_servoChCount; i++) {
+        if (s_servoPin[i] == pin) {
+            ledc_stop(kMode, s_servoCh[i], 0);
+            s_servoPin[i] = -1;
+            return true;
+        }
+    }
+    return false;
+}
+
+void servosOff() {
+    for (int i = 0; i < s_servoChCount; i++) {
+        if (s_servoPin[i] >= 0) {
+            ledc_stop(kMode, s_servoCh[i], 0);
+            s_servoPin[i] = -1;
+        }
+    }
+}
+
+// ---- fitas WS2812 (RMT sem DMA) ----
+//
+// Validado no cao ZZPET: 2 canais TX sem DMA, 96 simbolos cada (exato para
+// 4 LEDs; 8 e o teto com o bloco de memoria do S3). Com with_dma=true o
+// segundo allocate falha ("no free tx channels").
+
+namespace {
+rmt_channel_handle_t s_stripCh[2] = {nullptr, nullptr};
+rmt_encoder_handle_t s_stripEnc = nullptr;
+bool s_stripReady = false;
+bool s_stripFail = false;  // init falhou: nao re-tenta (e nao vaza canais)
+bool s_stripLit = false;   // algum app acendeu (stripsOff so age entao)
+
+void stripFree() {
+    for (int i = 0; i < 2; i++) {
+        if (s_stripCh[i]) {
+            rmt_disable(s_stripCh[i]);
+            rmt_del_channel(s_stripCh[i]);
+            s_stripCh[i] = nullptr;
+        }
+    }
+    if (s_stripEnc) {
+        rmt_del_encoder(s_stripEnc);
+        s_stripEnc = nullptr;
+    }
+}
+
+bool stripInit() {
+    const LedStrips& s = Board::profile().strips;
+    if (s.count <= 0 || s_stripFail) return false;
+    if (s_stripReady) return true;
+    rmt_copy_encoder_config_t ec;  // struct vazia no IDF 6
+    bool ok = rmt_new_copy_encoder(&ec, &s_stripEnc) == ESP_OK;
+    for (int i = 0; ok && i < s.count && i < 2; i++) {
+        rmt_tx_channel_config_t cfg = {};
+        cfg.gpio_num = (gpio_num_t)s.pins[i];
+        cfg.clk_src = RMT_CLK_SRC_DEFAULT;
+        cfg.resolution_hz = 10 * 1000 * 1000;  // 100 ns por tick
+        cfg.mem_block_symbols = 96;            // 4 LEDs x 24 bits (sem DMA)
+        cfg.trans_queue_depth = 4;
+        ok = rmt_new_tx_channel(&cfg, &s_stripCh[i]) == ESP_OK && rmt_enable(s_stripCh[i]) == ESP_OK;
+    }
+    if (!ok) {
+        stripFree();
+        s_stripFail = true;
+        return false;
+    }
+    s_stripReady = true;
+    return true;
+}
+}  // namespace
+
+bool hasStrips() { return Board::profile().strips.count > 0; }
+
+bool neopixelSet(int strip, const uint32_t* colors, int n) {
+    const LedStrips& s = Board::profile().strips;
+    if (!colors || strip < 0 || strip >= s.count || strip >= 2) return false;
+    if (n <= 0 || n > 8) return false;
+    if (!stripInit()) return false;
+    // WS2812: bit 1 = 800/500 ns, bit 0 = 400/900 ns (ticks de 100 ns), GRB.
+    rmt_symbol_word_t syms[8 * 24];
+    rmt_symbol_word_t one = {.duration0 = 8, .level0 = 1, .duration1 = 5, .level1 = 0};
+    rmt_symbol_word_t zero = {.duration0 = 4, .level0 = 1, .duration1 = 9, .level1 = 0};
+    for (int led = 0; led < n; led++) {
+        const uint32_t c = colors[led];
+        uint32_t grb = ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
+        for (int b = 0; b < 24; b++) syms[led * 24 + b] = ((grb >> (23 - b)) & 1) ? one : zero;
+    }
+    rmt_transmit_config_t tx = {};
+    tx.loop_count = 0;
+    if (rmt_transmit(s_stripCh[strip], s_stripEnc, syms, (size_t)n * 24 * sizeof(syms[0]), &tx) != ESP_OK)
+        return false;
+    // O encoder de copia le syms (pilha) durante a transmissao: nao sair
+    // antes do fim. 8 LEDs = ~250 us; 50 ms e so a rede de seguranca.
+    if (rmt_tx_wait_all_done(s_stripCh[strip], 50) != ESP_OK) return false;
+    s_stripLit = true;
+    return true;
+}
+
+void stripsOff() {
+    if (!s_stripLit || !s_stripReady) return;
+    const LedStrips& s = Board::profile().strips;
+    const uint32_t black[8] = {0};
+    int n = s.ledsPerStrip > 0 && s.ledsPerStrip <= 8 ? s.ledsPerStrip : 8;
+    for (int i = 0; i < s.count && i < 2; i++) neopixelSet(i, black, n);
+    s_stripLit = false;
+}
+
+// ---- microfone I2S (RX persistente na I2S1) ----
+//
+// Cao ZZPET: mic MEMS I2S padrao (WS+BCK+DATA — NAO e PDM puro: o S3 nao tem
+// conversor PDM->PCM na porta 1) com o audio no slot esquerdo. O canal fica
+// aberto: DMA descarta o que nao e lido entre chamadas.
+// ATENCAO: o pino do clock (ws) jamais pode virar canal ADC — a reconfiguracao
+// desconecta a matriz GPIO e mata o microfone ate reiniciar o canal.
+
+namespace {
+i2s_chan_handle_t s_mic = nullptr;
+bool s_micFail = false;  // init falhou: -1 direto (sem re-tentar a cada chamada)
+
+bool micInit() {
+    const MicI2sPins& m = Board::profile().mic;
+    if (m.ws < 0 || s_micFail) return false;
+    if (s_mic) return true;
+    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    cc.dma_desc_num = 6;
+    cc.dma_frame_num = 256;
+    if (i2s_new_channel(&cc, nullptr, &s_mic) != ESP_OK) {
+        s_mic = nullptr;
+        s_micFail = true;
+        return false;
+    }
+    i2s_std_config_t cfg = {};
+    cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000);
+    cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    cfg.gpio_cfg.bclk = (gpio_num_t)m.bck;
+    cfg.gpio_cfg.ws = (gpio_num_t)m.ws;
+    cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
+    cfg.gpio_cfg.din = (gpio_num_t)m.din;
+    if (i2s_channel_init_std_mode(s_mic, &cfg) != ESP_OK || i2s_channel_enable(s_mic) != ESP_OK) {
+        i2s_del_channel(s_mic);
+        s_mic = nullptr;
+        s_micFail = true;
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
+int micLevel() {
+    if (!micInit()) return -1;
+    int16_t buf[512];  // 256 frames stereo
+    size_t r = 0;
+    if (i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150)) != ESP_OK || r < 64)
+        return -1;
+    const int frames = (int)(r / 4);
+    if (frames <= 0) return 0;
+    // Mic MEMS tem offset DC: RMS da componente AC (variancia), senao o
+    // "silencio" mede o offset e o nivel nunca chega perto de 0.
+    int64_t sum = 0, acc = 0;
+    for (int i = 0; i < frames; i++) {
+        const int32_t v = buf[2 * i];  // slot L
+        sum += v;
+        acc += (int64_t)v * v;
+    }
+    const int64_t mean = sum / frames;
+    int64_t var = acc / frames - mean * mean;
+    if (var < 0) var = 0;
+    const int rms = (int)sqrtf((float)var);
+    int lvl = rms / 60;  // fundo ~0-3, voz/media sala 15-40, grito >60
+    return lvl > 100 ? 100 : lvl;
+}
+
+// ---- pad capacitivo avulso (touch driver novo do IDF, hw v2 do S3) ----
+
+#if SOC_TOUCH_SENSOR_SUPPORTED && SOC_TOUCH_SENSOR_VERSION == 2
+namespace {
+touch_sensor_handle_t s_ts = nullptr;
+touch_channel_handle_t s_tsCh = nullptr;
+bool s_tsFail = false;
+uint32_t s_tsBase = 0;
+bool s_tsBaseOk = false;
+bool s_tsDown = false;
+
+bool tsInit() {
+    const int gpio = Board::profile().touchPad;
+    if (gpio < 0 || s_tsFail) return false;
+    if (s_ts) return true;
+    // No S3 o canal touch n equivale ao GPIO n (1..14).
+    touch_sensor_sample_config_t sample = TOUCH_SENSOR_V2_DEFAULT_SAMPLE_CONFIG(
+        500, TOUCH_VOLT_LIM_L_0V8, TOUCH_VOLT_LIM_H_2V4);
+    touch_sensor_config_t sens = TOUCH_SENSOR_DEFAULT_BASIC_CONFIG(1, &sample);
+    if (touch_sensor_new_controller(&sens, &s_ts) != ESP_OK) {
+        s_ts = nullptr;
+        s_tsFail = true;
+        return false;
+    }
+    touch_channel_config_t chan = {};
+    chan.active_thresh[0] = 2000;  // exigido pelo driver; a decisao e nossa (abaixo)
+    if (touch_sensor_new_channel(s_ts, gpio, &chan, &s_tsCh) != ESP_OK ||
+        touch_sensor_enable(s_ts) != ESP_OK) {
+        if (s_tsCh) touch_sensor_del_channel(s_tsCh);
+        touch_sensor_del_controller(s_ts);
+        s_tsCh = nullptr;
+        s_ts = nullptr;
+        s_tsFail = true;
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
+int touchPad() {
+    if (!tsInit()) return -1;
+    uint32_t val = 0;
+    if (touch_channel_read_data(s_tsCh, TOUCH_CHAN_DATA_TYPE_SMOOTH, &val) != ESP_OK) return -1;
+    if (!s_tsBaseOk) {
+        // Referencia na primeira leitura (pad solto): media rapida.
+        uint32_t sum = val;
+        for (int i = 0; i < 7; i++) {
+            delay(4);
+            if (touch_channel_read_data(s_tsCh, TOUCH_CHAN_DATA_TYPE_SMOOTH, &val) == ESP_OK) sum += val;
+        }
+        s_tsBase = sum / 8;
+        s_tsBaseOk = true;
+        return 0;
+    }
+    // No S3 o valor sobe com o toque (mais carga). Histerese: entra acima
+    // de base + margem, sai abaixo de base + margem/2 (sem pisca-pisca na
+    // borda do limiar).
+    const uint32_t margin = s_tsBase / 8 + 1000;
+    const uint32_t on = s_tsBase + margin, off = s_tsBase + margin / 2;
+    s_tsDown = s_tsDown ? (val > off) : (val > on);
+    // A referencia deriva com temperatura/umidade (e se o pad estava tocado
+    // no boot, nasce alta): segue devagar enquanto solto e desce na hora
+    // se a leitura ficar abaixo dela.
+    if (!s_tsDown) {
+        if (val < s_tsBase) s_tsBase = val;
+        else s_tsBase = s_tsBase + (val - s_tsBase) / 64;
+    }
+    return s_tsDown ? 1 : 0;
+}
+#else
+int touchPad() {
+    return -1;  // SoC sem touch v2 (driver novo): nenhuma placa com pad aqui
+}
+#endif
 
 }  // namespace BoardIO

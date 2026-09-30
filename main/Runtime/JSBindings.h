@@ -178,6 +178,13 @@ private:
     static duk_ret_t js_toast(duk_context *ctx);
     static duk_ret_t js_beep(duk_context *ctx);
     static duk_ret_t js_led(duk_context *ctx);
+    static duk_ret_t js_relay(duk_context *ctx);
+    static duk_ret_t js_relayState(duk_context *ctx);
+    static duk_ret_t js_relayCount(duk_context *ctx);
+    static duk_ret_t js_battery(duk_context *ctx);
+    static duk_ret_t js_micLevel(duk_context *ctx);
+    static duk_ret_t js_touchPad(duk_context *ctx);
+    static duk_ret_t js_neopixel(duk_context *ctx);
     static duk_ret_t js_setAutoBrightness(duk_context *ctx);
     static duk_ret_t js_getAutoBrightness(duk_context *ctx);
     static duk_ret_t js_lightLevel(duk_context *ctx);

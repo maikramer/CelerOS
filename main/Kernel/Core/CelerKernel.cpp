@@ -502,6 +502,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     // telas de erro desenham na tela inteira
     if (tftInstance) tftInstance->clearClipRect();
     BoardIO::ledOff();  // LED e estado do app: nao fica aceso depois que ele sai
+    BoardIO::stripsOff();  // idem fitas WS2812
+    BoardIO::servosOff();  // servo sem dono nao segura forca (esquenta/gasta bateria)
     checkJSError(ctx, rc);
     
     // Destroy heap after app exits to free RAM

@@ -438,10 +438,27 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
   sensores ultrassônicos HC-SR04).
 
 #### `System.gpio.servo(pin, angulo)` (API 10)
-- **Parâmetros:** `pin` (Integer), `angulo` (Integer, 0 a 180; fora da faixa é travado)
-- **Retorna:** `Boolean` (`false` sem canal livre — no máximo **4 servos ao mesmo tempo**)
+- **Parâmetros:** `pin` (Integer), `angulo` (Number, 0 a 180; aceita fração para rampas suaves; fora da faixa é travado)
+- **Retorna:** `Boolean` (`false` com pino de saída inválido ou sem canal livre — no máximo **5 servos ao mesmo tempo**)
 - **Descrição:** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: combine com o Celer Link — o app do controle envia comandos e o app do robô mapeia para as perninhas (`System.gpio.servo(13, 90)`).
-- **Nota:** os canais vêm do pool LEDC livre da placa; `System.beep`/`System.led` seguem com os deles.
+- **Nota:** os canais vêm dos canais LEDC que a placa deixa livres (nunca os do backlight, `System.beep` ou `System.led`); os canais 0..2 do `analogWrite` só entram como último recurso, com timer próprio. Sair do app solta todos os servos (sem torque de sustentação).
+
+#### `System.battery()` (API 10)
+- **Retorna:** `Number` — tensão da **célula** em mV (leitura do pino já escalada pelo divisor da placa), ou `-1` se a placa não tem.
+- **Descricao:** leitura media de ADC com cache de ~2 s. No cão robótico SpotPear lê o divisor 2:1 da Li-ion no GPIO2 (~4100 mV na USB, ~3300 mV = vazia).
+
+#### `System.micLevel()` (API 10)
+- **Retorna:** `Number` — nivel de som `0..100` (RMS de captura curta no slot esquerdo do I²S), ou `-1` sem microfone.
+- **Descricao:** bloqueante curto (~100 ms); o desenho pendente aparece antes. A primeira chamada inicializa o canal RX (~300 ms).
+
+#### `System.touchPad()` (API 10)
+- **Retorna:** `Number` — `1` tocado, `0` solto, `-1` se a placa nao tem pad capacitivo.
+- **Descricao:** pad capacitivo avulso (a "cabeca" do cao robotico). A referencia e calibrada na primeira chamada — mantenha o pad solto nesse instante.
+
+#### `System.neopixel(strip, cores)` (API 10)
+- **Parametros:** `strip` — indice 0-based da fita WS2812; `cores` — array de `0x00RRGGBB` (1..8 LEDs).
+- **Retorna:** `Boolean` — `false` sem fitas na placa ou parametros invalidos.
+- **Descricao:** atualiza a fita inteira via RMT (sem DMA). Exemplo: `System.neopixel(0, [0xFF0000, 0, 0x00FF00])`. As fitas apagam quando o app sai.
 
 #### `System.gpio.servoOff(pin)` (API 10)
 - **Parâmetros:** `pin` (Integer)
@@ -695,7 +712,7 @@ reboot.
 `"permissions": ["fs","net","gpio","system"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio` e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) ficam ausentes. **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
 
 #### `System.toast(mensagem)` / `System.beep(freq, ms)`
-`toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` toca um tom (onda quadrada) na saída de alto-falante da placa (bloqueante; 20–20000 Hz, até 5000 ms). A CYD aciona o conector de alto-falante (GPIO26, amplificador na placa); devolve `false` em placa sem alto-falante (SmartDisplay).
+`toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` toca um tom na saída de alto-falante da placa (bloqueante; 20–20000 Hz, até 5000 ms). A CYD aciona o conector de alto-falante (GPIO26, amplificador na placa, onda quadrada); a SmartDisplay alimenta o amplificador digital Nsiway NS4168 da placa via I2S (senoide, som mais suave). Devolve `false` em placa sem alto-falante.
 
 #### `System.led(r, g, b)` (API 7)
 Acende o LED RGB de status da placa, 0–255 por canal (PWM). `System.led()`
@@ -707,6 +724,16 @@ B=GPIO17).
 Luz ambiente pelo sensor da placa: `0` (escuro) a `100` (sala iluminada);
 `-1` sem sensor. Na CYD o sensor (LDR ao lado da tela) só separa "iluminado"
 de "escurecendo": qualquer sala normalmente iluminada lê perto de 100.
+
+#### `System.relay(n, on)` / `System.relayState(n)` / `System.relayCount()` (API 8)
+Linhas de rele da placa. `n` é 1-based (`1` = linha L1 do hardware);
+`relay(n, true/false)` comuta e devolve `false` sem reles ou com índice
+inválido, `relayState(n)` devolve `1`/`0` (ou `-1`) e `relayCount()` diz
+quantas linhas existem (`0`..`3`). Os reles partem **desligados** no boot.
+Disponível nas SKUs "Y" (caixa de parede 86 switch) da SmartDisplay
+4848S040 — L1=GPIO40, L2=GPIO2, L3=GPIO1 — quando o firmware é compilado
+com `CONFIG_CELEROS_SMARTDISPLAY_RELAYS`; são os mesmos pinos do
+alto-falante I2S da SKU padrão, então a placa tem um ou outro.
 
 `System.getInfo()` também informa `hasLed`, `hasLightSensor` e `hasSpeaker`
 para detecção de recursos.
@@ -976,20 +1003,23 @@ Os dois sentidos funcionam; o link é simétrico depois de conectado.
 
 #### `CelerLink.start([nome])` → Boolean
 Vira controlável: liga o advertising e o servidor GATT. `nome` é o nome BLE
-do device (default `Celer-XXXX`, XXXX do fim da MAC do rádio). A primeira
-chamada de qualquer função inicializa o Bluetooth (~300 ms).
+do device (até 29 bytes; default `Celer-XXXX`, XXXX do fim da MAC do rádio).
+A primeira chamada de qualquer função inicializa o Bluetooth (~300 ms). O nome
+volta ao default quando o app sai.
 
 #### `CelerLink.stop()` → Boolean
 Para o advertising (o device deixa de ser descobrível).
 
 #### `CelerLink.scan([timeoutMs])` → Array
 Escaneamento bloqueante (default 2500 ms) por CelerOS próximos. Retorna
-`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]` — sem ordem
-garantida, ordene por `rssi` se importar.
+`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]`, sinal mais
+forte primeiro (até 16 devices).
 
 #### `CelerLink.connect(idOuNome, [timeoutMs])` → Boolean
 Conecta num device do último `scan()`, pelo `id` (MAC) ou pelo `nome`.
-Bloqueante (default 4000 ms). Substitui a conexão atual.
+Bloqueante (default 4000 ms, máx. 8000): o prazo cobre a conexão inteira —
+enlace, negociação do MTU, descoberta e inscrição. Só retorna `true` com o
+link pronto para `send()` nos dois sentidos. Substitui a conexão atual.
 
 #### `CelerLink.disconnect()` → Boolean
 Derruba a conexão atual.
@@ -997,15 +1027,38 @@ Derruba a conexão atual.
 #### `CelerLink.send(mensagem)` → Boolean
 Envia uma mensagem ao peer conectado (até 240 bytes). **String** vai como
 bytes crus; **objeto** é serializado como JSON — comunicação estruturada sem
-parser no firmware (quem recebe decide como ler).
+parser no firmware (quem recebe decide como ler). Retorna `false` sem
+conexão, se a mensagem não cabe no MTU negociado (entre CelerOS: 253 bytes,
+então 240 sempre cabe; um celular sem troca de MTU aceita só 20) ou, no lado
+`start()`, se o peer ainda não assinou as notificações. Nunca entrega
+mensagem cortada.
 
 #### `CelerLink.poll()` → String|null
-Consome a mensagem recebida mais antiga (FIFO de 8; overflow descarta).
-`null` quando vazia. Chame no loop do app, como o `keypadPoll`.
+Consome a mensagem recebida mais antiga (FIFO de 8). Fila cheia descarta a
+**mais antiga** (num controle remoto o comando novo vale mais; veja
+`status().dropped`). A fila é limpa a cada conexão nova. `null` quando vazia.
+Chame no loop do app, como o `keypadPoll` — de preferência num laço até
+`null`, para não acumular comandos velhos.
 
 #### `CelerLink.status()` → Object
-`{connected: Boolean, peer: "AA:BB:CC:DD:EE:FF"|"", listening: Boolean}`
-(`listening` = advertising ligado via `start()`).
+`{connected, peer, listening, role, name, mtu, rssi, pending, dropped}`:
+
+| Campo | Significado |
+|-------|-------------|
+| `connected` | Boolean — link pronto para `send()` |
+| `peer` | `"AA:BB:CC:DD:EE:FF"` ou `""` |
+| `listening` | Boolean — advertising pedido via `start()` |
+| `role` | `"central"` (nós conectamos), `"peripheral"` (conectaram em nós) ou `""` |
+| `name` | nosso nome de advertising |
+| `mtu` | MTU ATT negociado (0 sem conexão); payload máx. = `mtu - 3` |
+| `rssi` | sinal da conexão em dBm (0 sem leitura) |
+| `pending` | mensagens esperando `poll()` |
+| `dropped` | mensagens descartadas por fila cheia desde o início do app |
+
+Queda de link: o supervision timeout é de ~2 s. Robôs devem parar sozinhos
+se os comandos pararem de chegar (keepalive) — o Celer Remote repete o `move`
+a cada 250 ms enquanto a seta está pressionada e manda `stop` ao soltar; o
+Dog Face para após 900 ms sem `move` ou quando o link cai.
 
 Sair do app reseta a sessão sozinho (desconecta e para o advertising);
 chame `stop()`/`disconnect()` só para controlar no meio do app.
@@ -1048,7 +1101,7 @@ while (true) {
     }
     if (dir !== last) {
         last = dir;
-        if (dir) CelerLink.send({type: "move", dir: dir, speed: 200});
+        CelerLink.send(dir ? {type: "move", dir: dir, speed: 200} : {type: "stop"});
     }
     System.delay(20);
 }

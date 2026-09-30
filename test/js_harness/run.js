@@ -233,6 +233,11 @@ function makeEnv() {
         relay: function() { return true; },
         relayState: function() { return 0; },
         relayCount: function() { return 0; },
+        battery: function() { return 4100; },
+        micLevel: function() { return 12; },
+        touchPad: function() { return 0; },
+        print: function(s) { log.push('[print] ' + s); },
+        neopixel: function() { return true; },
         getAutoBrightness: function() { return env.__autoBri; },
         setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
         present: function() {}, isBuffered: function() { return false; }
@@ -268,7 +273,10 @@ function makeEnv() {
             return true;
         },
         poll: function() { return linkRx.length ? linkRx.shift() : null; },
-        status: function() { return { connected: false, peer: '', listening: false }; }
+        status: function() {
+            return { connected: false, peer: '', listening: false, role: '', name: 'Celer-TEST',
+                     mtu: 0, rssi: 0, pending: linkRx.length, dropped: 0 };
+        }
     };
 
     env.__harness = {
@@ -713,28 +721,215 @@ function joinLog(log) { return log.join('\n'); }
     check('getAPILevel 10', env.System.getAPILevel() === 10);
 })();
 
+// --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------
+// Agenda de mensagens por relogio: poll() entrega cada item quando o
+// millis() do harness passa do seu instante (relativo ao 1o poll).
+function linkSchedule(env, items) {
+    var t0 = -1;
+    env.CelerLink.poll = function() {
+        var now = env.System.millis();
+        if (t0 < 0) t0 = now;
+        if (items.length && now - t0 >= items[0][0]) return items.shift()[1];
+        return null;
+    };
+}
+
+// Sequencia de angulos escritos num pino, na ordem ('[servo] pin@ang').
+function servoSeq(log, pin) {
+    var out = [], pre = '[servo] ' + pin + '@';
+    for (var i = 0; i < log.length; i++) {
+        var l = String(log[i]);
+        if (l.indexOf(pre) === 0) out.push(parseInt(l.substring(pre.length), 10));
+    }
+    return out;
+}
+function seqHas(seq, sub) {
+    outer: for (var i = 0; i + sub.length <= seq.length; i++) {
+        for (var k = 0; k < sub.length; k++) if (seq[i + k] !== sub[k]) continue outer;
+        return true;
+    }
+    return false;
+}
+function range(a, b) {  // inclusivo, crescente ou decrescente
+    var r = [], d = a <= b ? 1 : -1;
+    for (var v = a; v !== b + d; v += d) r.push(v);
+    return r;
+}
+function count(seq, v) { var n = 0; for (var i = 0; i < seq.length; i++) if (seq[i] === v) n++; return n; }
+
+(function() {
+    console.log('Dog Face (marcha ESP-Hi):');
+    var MOVE = '{"type":"move","dir":"up"}';
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        // seta segurada 2 s (move a cada 250 ms), depois SOME sem stop
+        // (stop perdido): o keepalive tem que parar o robo sozinho
+        var items = [];
+        for (var t = 0; t <= 2000; t += 250) items.push([t, MOVE]);
+        items.push([6000, '{"cmd":"pet"}']);
+        linkSchedule(env, items);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var FL = servoSeq(r.log, 17), FR = servoSeq(r.log, 13), BL = servoSeq(r.log, 18), BR = servoSeq(r.log, 14);
+    check('boot em pe (90 nas 4)', FL[0] === 90 && FR[0] === 90 && BL[0] === 90 && BR[0] === 90);
+    // servo_dog_forward, fase A: FL = FL_BACKWARD - i, FR = FR_FORWARD - i - 5,
+    // BL = BL_BACKWARD + i - 5, BR = BR_FORWARD + i (neutro 90, passo 20)
+    check('fase A identica ao ESP-Hi (FL 110..71)', seqHas(FL, range(110, 71)));
+    check('fase A FR 105..66 / BL 65..104 / BR 70..109',
+          seqHas(FR, range(105, 66)) && seqHas(BL, range(65, 104)) && seqHas(BR, range(70, 109)));
+    // fase B: FL = FL_FORWARD + i, FR = FR_BACKWARD + i + 5, BL = BL_FORWARD - i + 5,
+    // BR = BR_BACKWARD - i
+    check('fase B identica ao ESP-Hi (FL 70..109, BR 110..71)', seqHas(FL, range(70, 109)) && seqHas(BR, range(110, 71)));
+    check('assimetria do STEP_OFFSET (FR 66->75, BL 104->115)', seqHas(FR, [66, 75]) && seqHas(BL, [104, 115]));
+    check('move repetido nao reinicia o passo (A nunca emenda em A)', !seqHas(FL, [71, 110]));
+    check('varios ciclos enquanto segura', count(FL, 110) >= 3, count(FL, 110) + ' ciclos');
+    check('keepalive expira e volta ao neutro',
+          FL[FL.length - 1] === 90 && FR[FR.length - 1] === 90 && BL[BL.length - 1] === 90 && BR[BR.length - 1] === 90);
+    check('telemetria tel enviada', joinLog(r.log).indexOf('[link] tx {"type":"tel"') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (outras marchas + calibracao):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        linkSchedule(env, [
+            [0, '{"type":"gait","name":"back"}'],
+            [3000, '{"type":"gait","name":"left"}'],
+            [6000, '{"type":"gait","name":"right"}'],
+            [9000, '{"type":"calib"}']
+        ]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var FL = servoSeq(r.log, 17), FR = servoSeq(r.log, 13), BL = servoSeq(r.log, 18), BR = servoSeq(r.log, 14);
+    // backward A: FL = FL_FORWARD + i - 5 (65..104), BR = BR_BACKWARD - i - 5 (105..66)
+    check('back = servo_dog_backward', seqHas(FL, range(65, 104)) && seqHas(BR, range(105, 66)));
+    // turn_left A: FL = FL_BACKWARD - i + 5 (115..76), FR = FR_BACKWARD + i (70..109)
+    check('left = servo_dog_turn_left', seqHas(FL, range(115, 76)) && seqHas(FR, range(70, 109)));
+    // turn_right A: FL = FL_FORWARD + i (70..109), FR = FR_FORWARD - i + 5 (115..76)
+    check('right = servo_dog_turn_right', seqHas(FL, range(70, 109)) && seqHas(FR, range(115, 76)));
+    check('gait sem repeat para sozinha (2 ciclos) em 90', FL[FL.length - 1] === 90);
+    // calib: cada perna 25 graus "pra frente" na convencao ESP-Hi, em ordem
+    var j = joinLog(r.log);
+    var iFL = j.indexOf('[servo] 17@65'), iFR = j.indexOf('[servo] 13@115', iFL),
+        iBL = j.indexOf('[servo] 18@115', iFR), iBR = j.indexOf('[servo] 14@65', iBL);
+    check('calib FL,FR,BL,BR pra frente em ordem', iFL >= 0 && iFR > iFL && iBL > iFR && iBR > iBL);
+})();
+
+(function() {
+    console.log('Dog Face (link cai andando):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        var polls = 0;
+        env.CelerLink.status = function() { return { connected: polls < 12 }; };
+        var inner = null;
+        linkSchedule(env, [[0, '{"type":"move","dir":"up"}']]);
+        inner = env.CelerLink.poll;
+        env.CelerLink.poll = function() { polls++; return inner(); };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var FL = servoSeq(r.log, 17);
+    check('andou antes da queda', seqHas(FL, range(110, 71)));
+    check('queda do link para o robo (neutro)', FL[FL.length - 1] === 90);
+})();
+
+// Pad capacitivo roteirizado por relogio: [[t0, t1], ...] = tocado entre
+// t0 e t1 (ms relativos a 1a leitura).
+function padSchedule(env, spans) {
+    var t0 = -1;
+    env.System.touchPad = function() {
+        var now = env.System.millis();
+        if (t0 < 0) t0 = now;
+        var t = now - t0;
+        for (var i = 0; i < spans.length; i++) if (t >= spans[i][0] && t < spans[i][1]) return 1;
+        return 0;
+    };
+}
+
+(function() {
+    console.log('Dog Face (sem link, pad e sono):');
+    // sem nenhuma mensagem: variaveis do link declaradas (ReferenceError
+    // antigo so aparecia quando nada chegava)
+    var quiet = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function() {});
+    check('roda sem mensagem alguma', quiet.err === null, quiet.err || '');
+
+    // toque longo (1 s) -> cycleGait (stand -> walk) SEM link: nao pode parar
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        padSchedule(env, [[500, 1500]]);
+    });
+    check('roda sem erro (pad)', r.err === null, r.err || '');
+    var FLp = servoSeq(r.log, 17);
+    check('toque longo inicia walk', seqHas(FLp, range(110, 71)));
+    check('walk do pad segue sem link (sem keepalive)', count(FLp, 110) >= 3, count(FLp, 110) + ' ciclos');
+
+    // parado e sem link: dorme apos 2 min e solta os servos; barulho acorda
+    var r2 = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        var t0 = -1;
+        env.System.micLevel = function() {
+            var now = env.System.millis();
+            if (t0 < 0) t0 = now;
+            return now - t0 > 200000 && now - t0 < 202000 ? 80 : 5;
+        };
+    });
+    check('roda sem erro (sono)', r2.err === null, r2.err || '');
+    var j2 = joinLog(r2.log);
+    var off = j2.indexOf('[servo-off] 14');
+    check('sono solta os servos', off >= 0);
+    check('barulho acorda e retoma a pose', off >= 0 && j2.indexOf('[servo] 14@90', off) > off);
+})();
+
 // --- Celer Remote (hub_apps) --------------------------------------------------
+function holdFrames(x, y, n) {
+    var f = [];
+    for (var i = 0; i < n; i++) f.push({ x: x, y: y, touched: 1 });
+    f.push({ x: 0, y: 0, touched: 0 });
+    return f;
+}
+
 (function() {
     console.log('Celer Remote:');
     var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
-        // scan acha o dog; connect verdadeiro; toca no item (y 60..100)
+        // scan acha o dog; connect verdadeiro; toca no item (y 66..108)
         env.CelerLink.scan = function() {
             return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }];
         };
         env.CelerLink.connect = function() { return true; };
-        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
-        env.__harness.tap(120, 80);    // item 0 da lista -> conecta -> D-pad
-        for (var i = 0; i < 3; i++) { env.__harness.System.delay(30); env.__harness.tap(120, 110); }  // seta ^
-        for (var k = 0; k < 3; k++) { env.__harness.System.delay(30); env.__harness.tap(120, 170); }  // stop
+        env.CelerLink.status = function() {
+            return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false, rssi: -50 };
+        };
+        env.__harness.tap(120, 80);                             // item 0 -> conecta -> D-pad
+        env.__harness.pushTouch(holdFrames(120, 110, 20));      // segura ^ ~600 ms e solta
+        env.__harness.tap(120, 170);                            // botao o
         env.__harness.pushLink(['{"type":"tel","batt":2340,"state":"parado"}']);
-        for (var j = 0; j < 3; j++) env.__harness.System.delay(30);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('conecta no dog', j.indexOf('conectado') >= 0);
+    check('conecta no dog', j.indexOf('< sair') >= 0 && j.indexOf('Celer-Dog') >= 0);
     check('D-pad envia move up', j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
-    check('botao o envia stop', j.indexOf('[link] tx {"type":"stop"}') >= 0);
+    var moves = j.split('[link] tx {"type":"move","dir":"up"}').length - 1;
+    check('segurar repete o move (keepalive)', moves >= 2, moves + ' moves');
+    check('soltar a seta envia stop',
+          j.indexOf('[link] tx {"type":"stop"}') > j.lastIndexOf('[link] tx {"type":"move"'));
     check('telemetria exibida', j.indexOf('batt 2340') >= 0);
+})();
+
+(function() {
+    console.log('Celer Remote (queda e reconexao):');
+    var connects = 0;
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        env.CelerLink.scan = function() {
+            return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }];
+        };
+        env.CelerLink.connect = function() { connects++; return connects !== 2; };  // 1a reconexao falha
+        var calls = 0;
+        env.CelerLink.status = function() {
+            calls++;
+            return { connected: !(calls >= 6 && calls < 8), peer: 'AA:BB:CC:DD:EE:FF', listening: false };
+        };
+        env.__harness.tap(120, 80);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('mostra reconectando', j.indexOf('reconectando (1/3)') >= 0);
+    check('reconecta na 2a tentativa', connects === 3, connects + ' connects');
 })();
 
 // resumo
