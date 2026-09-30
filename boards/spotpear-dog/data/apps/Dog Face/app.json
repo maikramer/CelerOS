@@ -1,7 +1,7 @@
 {
   "name": "Dog Face",
   "packageName": "celeros.dogface",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "A cara do cao robotico: olhos que piscam e seguem, reagem ao toque e ao som, medem bateria e microfone. Pensada para o OLED 128x64 do spotpear-dog (sem texto: so formas).",
   "type": "Utility",
@@ -10,5 +10,5 @@
   "system": true,
   "topbar": false,
   "order": -5,
-  "changelog": "1.1.0 - tempo real nas gaits, failsafe do link (keepalive e queda), walk pelo pad sem link, toque longo confiavel, sono solta os servos e barulho acorda. 1.0.0 - primeira versao: olhos vivos, toque, microfone e bateria"
+  "changelog": "1.2.0 - marcha portada do ESP-Hi (Espressif): frente, tras e giro que saem do lugar; posturas do ESP-Hi; comando calib. 1.1.0 - tempo real nas gaits, failsafe do link (keepalive e queda), walk pelo pad sem link, toque longo confiavel, sono solta os servos e barulho acorda. 1.0.0 - primeira versao: olhos vivos, toque, microfone e bateria"
 }
