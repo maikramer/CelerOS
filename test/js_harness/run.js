@@ -201,7 +201,7 @@ function makeEnv() {
         exitApp: function() { throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
         getOSVersion: function() { return '1.2.0'; },
-        getAPILevel: function() { return 6; },
+        getAPILevel: function() { return 9; },
         getInfo: function() {
             return {
                 totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true,
@@ -245,10 +245,30 @@ function makeEnv() {
         wifiDisconnect: function() {}
     };
 
+    // Celer Link (API 9): fila de mensagens recebidas alimentavel pelo
+    // __harness.pushLink — o mesmo contrato de poll() do firmware
+    var linkRx = [];
+    env.CelerLink = {
+        start: function(name) { log.push('[link] adv ' + (name || 'Celer-TEST')); return true; },
+        stop: function() { return true; },
+        scan: function() {
+            return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55 }];
+        },
+        connect: function(id) { return String(id).indexOf('AA:BB') >= 0; },
+        disconnect: function() { return true; },
+        send: function(m) {
+            log.push('[link] tx ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+            return true;
+        },
+        poll: function() { return linkRx.length ? linkRx.shift() : null; },
+        status: function() { return { connected: false, peer: '', listening: false }; }
+    };
+
     env.__harness = {
         log: log,
         pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
         pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
+        pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
         typeLine: function(text) {
             // simula digitacao: 1 change por char + enter com o texto completo
             kbBuffer = '';
@@ -280,8 +300,8 @@ function runApp(relPath, wire) {
     var env = makeEnv();
     wire && wire(env);
     try {
-        var fn = new Function('System', 'FS', 'Net', '__harness', src);
-        fn(env.System, env.FS, env.Net, env.__harness);
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness', src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
@@ -448,7 +468,7 @@ function joinLog(log) { return log.join('\n'); }
         { pkg: 'celeros.mesmo', metaUrl: 'h/m/app.json', appUrl: 'h/m/main.js',
           name: 'Mesmo', ver: '1.0.0', api: 3 },
         { pkg: 'celeros.futuro', metaUrl: 'h/f/app.json', appUrl: 'h/f/main.js',
-          name: 'Futuro', ver: '1.0.0', api: 7 },
+          name: 'Futuro', ver: '1.0.0', api: 11 },
         { pkg: 'celeros.dev', metaUrl: 'h/d/app.json', appUrl: 'h/d/main.js',
           name: 'Dev', ver: '2.0.1', api: 3 }
     ]);
@@ -460,7 +480,7 @@ function joinLog(log) { return log.join('\n'); }
     check('estado upd (remota maior)', st('celeros.beta') === 'upd');
     check('estado new (nao instalado)', st('celeros.novo') === 'new');
     check('estado inst (mesma versao)', st('celeros.mesmo') === 'inst');
-    check('estado api (exige API 7)', st('celeros.futuro') === 'api');
+    check('estado api (exige API futura)', st('celeros.futuro') === 'api');
     check('estado inst (local mais nova que o hub: sem downgrade)', st('celeros.dev') === 'inst');
     check('contador de atualizacoes = 1', api.updCount() === 1);
 
@@ -644,6 +664,40 @@ function joinLog(log) { return log.join('\n'); }
           env.FS.readTextFile('/local/apps/App Store/main.js') === 'NOVO-CODIGO');
     check('updCount = 0 apos lote', api.updCount() === 0);
     check('meus apps lista instalados', api.installed().length === 2);
+})();
+
+// --- Celer Link (API 9) ------------------------------------------------------
+(function() {
+    console.log('CelerLink:');
+    var src = [
+        'CelerLink.start();',
+        'var peers = CelerLink.scan();',
+        'System.drawString(peers.length + " pares", 10, 10);',
+        'if (peers.length && CelerLink.connect(peers[0].id)) {',
+        '  CelerLink.send({cmd:"frente", v:80});',
+        '  CelerLink.send("ping");',
+        '}',
+        'var msg = CelerLink.poll();',
+        'System.drawString("rx " + (msg === null ? "-" : msg), 10, 30);',
+        'System.delay(10);',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    env.__harness.pushLink(['{"ack":1}']);
+    var err = null;
+    try {
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness', src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness);
+    } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    var j = joinLog(env.__harness.log);
+    check('scan acha o par stub', j.indexOf('1 pares') >= 0);
+    check('send objeto vira JSON', j.indexOf('[link] tx {"cmd":"frente","v":80}') >= 0);
+    check('send string vai crua', j.indexOf('[link] tx ping') >= 0);
+    check('poll recebe mensagem', j.indexOf('rx {"ack":1}') >= 0);
+    check('getAPILevel 9', env.System.getAPILevel() === 9);
 })();
 
 // resumo

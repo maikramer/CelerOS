@@ -22,6 +22,9 @@
 #include "../Utils/CelerSettings.h"
 #include "../Boards/Board.h"
 #include "driver/ledc.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Bluetooth/CelerLink.h"
+#endif
 
 // ---------------------------------------------------------------------------
 // Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
@@ -587,6 +590,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
 
+    // Sessao Celer Link de um app anterior (saiu sem stop/disconnect)
+#if CONFIG_CELEROS_BLUETOOTH
+    CelerLink::appReset();
+#endif
+
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
     s_barOnGlass = false;
@@ -884,6 +892,24 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Assign to global variable 'FS'
     duk_put_prop_string(ctx, -2, "FS");
     }
+
+#if CONFIG_CELEROS_BLUETOOTH
+    // --- CelerLink Object (Bluetooth entre CelerOS, API 9) — sem
+    // capability propria na v1 (link aberto, sem seguranca) ---
+    duk_push_object(ctx); // CelerLink
+    static const JsFn kFns19[] = {
+        {"start", js_linkStart, 1},
+        {"stop", js_linkStop, 0},
+        {"scan", js_linkScan, 1},
+        {"connect", js_linkConnect, 2},
+        {"disconnect", js_linkDisconnect, 0},
+        {"send", js_linkSend, 1},
+        {"poll", js_linkPoll, 0},
+        {"status", js_linkStatus, 0},
+    };
+    putFns(ctx, kFns19);
+    duk_put_prop_string(ctx, -2, "CelerLink");
+#endif
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex

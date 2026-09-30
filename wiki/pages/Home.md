@@ -1,72 +1,84 @@
 # CelerOS
 
+**English** | [Português (BR)](/maikramer/CelerOS/wiki/Home-(Português))
+
 <p align="center">
   <img src="Documentation/assets/celeros_logo.png" alt="CelerOS" width="420"/>
 </p>
 
-O CelerOS é um sistema operacional com GUI, leve e de código aberto, com
-runtime de apps JavaScript, para microcontroladores ESP32. Ele transforma
-placas de display baratas em um pequeno dispositivo "tipo smartwatch": UI
-immediate-mode sobre LovyanGFX, engine JS (Duktape) rodando apps de forma
-isolada a partir da flash ou do SD, App Store com atualização over-the-air e
-uma ferramenta companheira via USB (`celerctl`) para o dia a dia de
-desenvolvimento.
+CelerOS is a lightweight, open-source GUI operating system with a JavaScript
+app runtime for ESP32 microcontrollers. It turns cheap display boards into a
+small "smartwatch-grade" device: an immediate-mode UI on top of LovyanGFX, a
+Duktape JS engine running sandboxed apps from flash or SD, an App Store with
+over-the-air updates, and a USB companion tool (`celerctl`) for day-to-day
+development.
 
-| Splash de boot | Launcher | Terminal (teclado acoplado) |
+| Boot splash | Launcher | Terminal (docked keyboard) |
 | :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-splash.png" width="240" alt="Splash de boot"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="240" alt="Terminal"/> |
+| <img src="Documentation/assets/imgs/celeros-splash.png" width="240" alt="Boot splash"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="240" alt="Terminal"/> |
 
-*Capturas do framebuffer real de uma SmartDisplay 4" via `celerctl screencap`.*
+*Captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
 
-| Launcher na CYD | App Store na CYD | Terminal na CYD |
+| Launcher on the CYD | App Store on the CYD | Settings on the CYD |
 | :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher na CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store na CYD"/> | <img src="Documentation/assets/imgs/cyd-terminal.png" width="240" alt="Terminal na CYD"/> |
+| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher on the CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store on the CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="240" alt="Settings on the CYD"/> |
 
-*CYD (320x240, sem PSRAM): mesma base, experiência mais simples — veja
-[Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas#cyd-esp32-clássico).*
+*CYD (320x240, no PSRAM): same core, simpler experience — see
+[Supported boards](/maikramer/CelerOS/wiki/Supported-Boards#cyd-classic-esp32).*
 
-## Mapa da wiki
+## Wiki map
 
-| Página | O que cobre |
+| Page | What it covers |
 |---|---|
-| [Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas) | SmartDisplay 4" e CYD, e como adicionar uma placa nova |
-| [Compilando e gravando](/maikramer/CelerOS/wiki/Compilando-e-Gravando) | ESP-IDF 6.1, build por placa, partição LittleFS e o harness de testes |
-| [Arquitetura](/maikramer/CelerOS/wiki/Arquitetura) | Boot flow, camadas do firmware, runtime JS e convenções do código |
-| [Apps de sistema](/maikramer/CelerOS/wiki/Apps-de-Sistema) | O que mora em `data/`, regras do `app.json` e como apps chegam ao dispositivo |
-| [Ferramentas](/maikramer/CelerOS/wiki/Ferramentas) | `celerctl`, `celerhub`, servidor OTA local e geradores de assets |
-| [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) | Referência de comandos e protocolo CelerLink |
-| [Atualização OTA](/maikramer/CelerOS/wiki/Atualizacao-OTA) | Manifest `update.json`, canais e upload web |
-| [Guia de apps](/maikramer/CelerOS/wiki/Guia-de-Apps) | Como empacotar um app JS: `app.json`, pastas, ícones |
-| [API JS](/maikramer/CelerOS/wiki/API-JS) | Referência completa do runtime (globals `System`, `Net`, `FS`) |
+| [Supported boards](/maikramer/CelerOS/wiki/Supported-Boards) | SmartDisplay 4" and the CYD family, and how to add a new board |
+| [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing) | ESP-IDF 6.1, per-board builds, the LittleFS data partition and the test harness |
+| [Troubleshooting](/maikramer/CelerOS/wiki/Troubleshooting) | Common build, flash, touch, Wi-Fi and web problems — and their fixes |
+| [Architecture](/maikramer/CelerOS/wiki/Architecture) | Boot flow, firmware layers, the JS runtime and code conventions |
+| [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) | The SpotPear/ZZPET robot dog: full reverse-engineered pinout, bring-up firmware and the planned CelerOS board + BLE "Celer Link" |
+| [System apps](/maikramer/CelerOS/wiki/System-Apps) | What lives in `data/`, the `app.json` rules and how apps reach the device |
+| [Web interface](/maikramer/CelerOS/wiki/Web-Interface) | File manager, firmware upload and the live screen mirror in the browser |
+| [Tools](/maikramer/CelerOS/wiki/Tools) | `celerctl`, `celerhub`, the local OTA server and asset generators |
+| [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) | Command reference and the HostLink wire protocol |
+| [OTA updates](/maikramer/CelerOS/wiki/OTA-Updates) | The `update.json` manifest, channels and web upload |
+| [App development guide](/maikramer/CelerOS/wiki/App-Development-Guide) | How to package a JS app: `app.json`, folders, icons |
+| [JS API](/maikramer/CelerOS/wiki/JS-API) | Full reference of the runtime (`System`, `Net`, `FS` globals) |
+| [Contributing](/maikramer/CelerOS/wiki/Contributing) | Conventions, tests, CI and how to send a PR |
 
-## Funcionalidades em resumo
+The pages above are the English originals; the **Português (BR)** section in
+the sidebar has the Portuguese translations.
 
-* **Runtime de apps JavaScript** — apps interativos em ES5 rodam nativamente
-  via Duktape: desenho estilo canvas, toque e teclado na tela acoplado,
-  sistema de arquivos e rede HTTP/JSON.
-* **UI immediate-mode** — os mesmos apps escalam de 240x320 até 480x480.
-* **Apps de sistema em JS** — Settings, App Store, Installer, Help, Web
-  Server, Terminal, Calculator e Snake moram na partição LittleFS.
-* **App Store e Installer** — instale apps do
-  [CelerOS Hub](https://os.celer.tec.br) via Wi-Fi ou a partir do SD.
-* **Atualização over-the-air** — do próprio aparelho, pelo navegador ou via
+## Feature summary
+
+* **JavaScript app runtime** — interactive ES5 apps run natively on Duktape:
+  canvas-style drawing, touch and the coupled on-screen keyboard, file
+  system, HTTP/JSON networking.
+* **Immediate-mode UI** — the same apps scale from 240x320 up to 480x480.
+* **System apps in JS** — Settings, App Store, Installer, Help, Web Server,
+  Terminal, Snake and the demos live in the LittleFS partition.
+* **App Store & Installer** — install apps from the
+  [CelerOS Hub](https://os.celer.tec.br) over Wi-Fi or from the SD card.
+* **Over-the-air updates** — from the device itself, from the browser or via
   `celerctl ota push`.
-* **Wi-Fi por portal cativo** — access point `CelerOS-Setup-XXXX` para
-  configurar pelo celular.
-* **`celerctl`** — companheiro USB estilo adb: shell, push/pull, logcat,
-  screencap e atualização de firmware in-place.
+* **Live screen from the browser** — `/screen` mirrors the display over
+  Wi-Fi and forwards your clicks as touches.
+* **Board hardware in JS** — RGB LED, light sensor with auto-brightness,
+  speaker (`System.beep`) and relay lines on supported boards.
+* **Wi-Fi via captive portal** — a `CelerOS-Setup-XXXX` access point to
+  configure it from your phone.
+* **`celerctl`** — an adb-style USB companion: shell, push/pull, logcat,
+  screencap and in-place firmware updates.
 
 ## Links
 
-* [Repositório](https://github.com/maikramer/CelerOS) ·
-  [README em português](https://github.com/maikramer/CelerOS/blob/main/README.pt-BR.md) ·
-  [README in English](https://github.com/maikramer/CelerOS/blob/main/README.md)
-* [Issues](https://github.com/maikramer/CelerOS/issues) — bugs e ideias
-* História: o CelerOS começou como fork do
-  [KryonOS](https://github.com/Haris16-code/KryonOS), do Haris.
+* [Repository](https://github.com/maikramer/CelerOS) ·
+  [README in English](https://github.com/maikramer/CelerOS/blob/main/README.md) ·
+  [README em português](https://github.com/maikramer/CelerOS/blob/main/README.pt-BR.md)
+* [Issues](https://github.com/maikramer/CelerOS/issues) — bugs and ideas
+* History: CelerOS started as a fork of
+  [KryonOS](https://github.com/Haris16-code/KryonOS), by Haris.
 
 ---
 
-Esta wiki é gerada automaticamente por CI a partir de
-[`wiki/`](https://github.com/maikramer/CelerOS/tree/main/wiki) no
-repositório — edite lá, não pela web.
+This wiki is generated automatically by CI from
+[`wiki/`](https://github.com/maikramer/CelerOS/tree/main/wiki) in the
+repository — edit there, not on the web.

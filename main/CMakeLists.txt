@@ -51,6 +51,17 @@ else()
     list(REMOVE_ITEM CELEROS_SRCS "USBDevice/USBDevice.cpp")
 endif()
 
+# Celer Link (Bluetooth BLE entre CelerOS): NimBLE C API do IDF, sem
+# wrapper. As fontes somem do build quando o board nao liga o BT —
+# o objeto JS CelerLink simplesmente nao existe. O bt vai no REQUIRES
+# publico (padrao dos exemplos NimBLE do IDF): os headers do host entram
+# no include path do main.
+set(CELEROS_BT_REQUIRES)
+if(CONFIG_CELEROS_BLUETOOTH)
+    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Runtime/JsLink.cpp")
+    list(APPEND CELEROS_BT_REQUIRES bt)
+endif()
+
 # ---- HAL de placas: exatamente um Boards/<placa>/Board.cpp entra no build,
 # e o diretorio da placa entra no include path (BoardDisplay.h resolve para
 # a placa certa). Nenhum outro arquivo pode conter #ifdef de placa.
@@ -98,18 +109,39 @@ idf_component_register(
         lwip
         esp_netif
         duktape
+        ${CELEROS_BT_REQUIRES}
     PRIV_REQUIRES
         ${CELEROS_PRIV_REQUIRES}
 )
 
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/${CELEROS_BOARD_DIR}")
 
+# IDF 6.1: os includes do host NimBLE nao chegam ao main via REQUIRES bt
+# (o alvo do bt registra a lista depois do main). Caminhos explicitos —
+# o mesmo conjunto que bt/host/nimble/CMakeLists.txt exporta como publico.
+if(CONFIG_CELEROS_BLUETOOTH)
+    set(CELEROS_NIMBLE $ENV{IDF_PATH}/components/bt/host/nimble)
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "${CELEROS_NIMBLE}/nimble/porting/nimble/include"
+        "${CELEROS_NIMBLE}/nimble/porting/npl/esp-idf/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/host/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/host/services/gap/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/host/services/gatt/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/host/util/include"
+        "${CELEROS_NIMBLE}/nimble/nimble/transport/include"
+        "${CELEROS_NIMBLE}/port/include"
+        "$ENV{IDF_PATH}/components/bt/porting/include"
+        "$ENV{IDF_PATH}/components/bt/porting_btdm/controller/btdm_common/include"
+    )
+endif()
+
 # ---- Paginas web: o .html e a fonte; o build gera o .gz (servido com
 # Content-Encoding: gzip) e embute so ele — ~4x menos flash que o texto cru.
 idf_build_get_property(python PYTHON)
 set(CELEROS_WEB_PAGES)
 if(CONFIG_CELEROS_WEB_SERVER)
-    set(CELEROS_WEB_PAGES WebManager/filemanager.html WebManager/ota_upload.html)
+    set(CELEROS_WEB_PAGES WebManager/filemanager.html WebManager/ota_upload.html WebManager/screen.html)
 endif()
 foreach(page ${CELEROS_WEB_PAGES})
     get_filename_component(page_name ${page} NAME)
@@ -127,7 +159,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.2.0"
-    CELEROS_API_LEVEL=7
+    CELEROS_API_LEVEL=9
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

@@ -1,0 +1,21 @@
+# Overlay experimental: liga o Celer Link (BLE) na CYD fora dos builds
+# padrao. Nao entra em boards/cyd/sdkconfig.defaults — flash e DRAM sao
+# limtrofes (slot OTA ~297 KB livres; NimBLE ~250-300 KB de flash e
+# ~50 KB de heap). Medir com tools/size_report.py e conferir a abertura
+# de apps antes de promover:
+#
+#   idf.py -B build-cyd-bt -DSDKCONFIG=build-cyd-bt/sdkconfig \
+#     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/cyd/sdkconfig.defaults;boards/cyd/sdkconfig.bluetooth" \
+#     -DCELEROS_BOARD=cyd set-target esp32 build
+#   python3 tools/size_report.py --board cyd --build build-cyd-bt
+#
+CONFIG_BT_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+# CONFIG_BT_NIMBLE_NVS_PERSIST is not set

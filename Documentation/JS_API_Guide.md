@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 6
+### API Level: 9
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -711,3 +711,108 @@ should feature-detect (`typeof System.topbarText === "function"`) to stay
 installable on older firmware.
 
 Reference implementation: `data/apps/Touch Test/main.js`.
+
+---
+
+## 15. Celer Link (API 9)
+
+Bluetooth LE link between nearby CelerOS devices. The classic use case: put a
+CelerOS board on a robot, `CelerLink.start()` there, and drive it from another
+CelerOS (e.g. the 4848 SmartDisplay) with `scan()`, `connect()` and `send()`
+inside a JS app.
+
+**Availability:** only on boards built with Bluetooth (`CONFIG_CELEROS_BLUETOOTH`;
+the SmartDisplay has it, the CYD is experimental). Feature-detect with
+`typeof CelerLink !== "undefined"` to stay installable everywhere.
+
+**Security — read this:** v1 has **none**. No pairing, no encryption, no
+authentication: any nearby device can connect and exchange messages. Fine for
+toys and prototypes; do not use it for anything sensitive.
+
+Model: one connection at a time, messages up to **240 bytes**, best effort.
+Who wants to be controlled calls `start()` (BLE advertising + GATT server,
+visible as `Celer-XXXX`). The controller scans, connects and exchanges
+messages. Both directions work; the link is symmetric after connecting.
+
+#### `CelerLink.start([name])` → Boolean
+Becomes controllable: starts advertising and the GATT server. `name` is the
+BLE device name (default `Celer-XXXX`, XXXX from the radio MAC). The first
+call anywhere initializes the Bluetooth stack (~300 ms).
+
+#### `CelerLink.stop()` → Boolean
+Stops advertising (the device is no longer discoverable).
+
+#### `CelerLink.scan([timeoutMs])` → Array
+Blocking scan (default 2500 ms) for nearby CelerOS devices. Returns
+`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]`, strongest
+signal first is not guaranteed — sort by `rssi` if it matters.
+
+#### `CelerLink.connect(idOrName, [timeoutMs])` → Boolean
+Connects to a device from the last `scan()`, by `id` (MAC) or `name`.
+Blocking (default 4000 ms). Replaces any current connection.
+
+#### `CelerLink.disconnect()` → Boolean
+Drops the current connection.
+
+#### `CelerLink.send(message)` → Boolean
+Sends a message to the connected peer (up to 240 bytes). A **string** goes as
+raw bytes; an **object** is serialized as JSON — structured messaging without
+any parser on the firmware side (the receiver decides how to read it).
+
+#### `CelerLink.poll()` → String|null
+Pops the oldest received message (FIFO of 8; overflow discards). `null` when
+empty. Call it from your loop, like `keypadPoll`.
+
+#### `CelerLink.status()` → Object
+`{connected: Boolean, peer: "AA:BB:CC:DD:EE:FF"|"", listening: Boolean}`
+(`listening` = advertising via `start()`).
+
+Leaving the app resets the session automatically (disconnects and stops
+advertising); call `stop()`/`disconnect()` only for mid-app control.
+
+### Example — robot side (controllable)
+
+```javascript
+// "bot": receives commands and acts (beep/LED here; servos on a robot)
+CelerLink.start();  // "Celer-XXXX" on the air
+System.drawString("esperando controle...", 10, 10);
+while (true) {
+    var msg = CelerLink.poll();
+    if (msg !== null) {
+        var cmd = null;
+        try { cmd = JSON.parse(msg); } catch (e) {}
+        if (cmd && cmd.type === "move") {
+            System.beep(50, 10);
+            System.led(0, (cmd.speed || 0) > 128 ? 255 : 0, 0);
+        }
+    }
+    System.delay(20);
+}
+```
+
+### Example — controller side (the 4848)
+
+```javascript
+// "remote": scans, connects and sends D-pad taps as JSON
+var peers = CelerLink.scan(3000);
+if (!peers.length) { System.drawString("nenhum CelerOS por perto", 10, 10); System.delay(2000); System.exitApp(); }
+if (!CelerLink.connect(peers[0].id)) { System.drawString("conectou nao", 10, 10); System.delay(2000); System.exitApp(); }
+
+var last = "";
+while (true) {
+    var t = System.getTouch();
+    var dir = "";
+    if (t.touched) {
+        if (t.y < 100) dir = "up"; else if (t.y > 220) dir = "down";
+        else if (t.x < 100) dir = "left"; else if (t.x > 140) dir = "right";
+    }
+    if (dir !== last) {
+        last = dir;
+        if (dir) CelerLink.send({type: "move", dir: dir, speed: 200});
+    }
+    System.delay(20);
+}
+```
+
+The two examples also work as a pair with the nRF Connect app on a phone
+(connect to `Celer-XXXX`, write to the characteristic, enable notifications).
