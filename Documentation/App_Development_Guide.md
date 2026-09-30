@@ -42,12 +42,12 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
 - **`version`**: Semantic versioning (e.g. `1.0.0`, `1.2.1`). If a user installs an app with the same `packageName` but a higher version number, the OS will smartly prompt them to "Update" rather than "Install".
 - **`metaUrl`** *(optional)*: The raw URL to the `app.json` on the internet (e.g. your GitHub repository). Apps published on the **CelerOS Hub don't need it** — the store catalog itself carries name, version, changelog, size and the MD5 checksum of your `main.js`; `metaUrl` is only for self-hosted update checks outside the hub.
 - **`author`**: Your name or studio. If someone else tries to install an app with your `packageName` but a different `author` name, the OS will throw a conflict warning to protect your app from being overwritten by malicious developers.
-- **`description`**: A short summary of your app, displayed to the user when they install your app for the first time. Note: system apps avoid accented characters — stick to plain ASCII for maximum compatibility with the built-in font.
+- **`description`**: A short summary of your app, displayed to the user when they install your app for the first time. Accented Latin-1 characters (ç, ã, é...) render fine since API 7; avoid em dashes, curly quotes and emoji (outside the font).
 - **`type`**: The broad classification (e.g., `App` or `Game`). You can type any value here without restriction.
 - **`category`**: The specific category (e.g., `Utilities`, `Games`, `Tools`). You can type any value here without restriction.
 - **Boards without PSRAM** (e.g. the classic CYD): apps run in internal RAM with WiFi on, network apps included. The practical ceiling is a `main.js` of ~60KB (comments and indentation are stripped before compiling, so they cost nothing); the store computes the limit from `System.getInfo().appRAM` and marks bigger apps "Requer PSRAM".
 - **`permissions`** (optional, F4): array of capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Without the field the app keeps everything (compat with the existing store); with it, only what is declared is registered (`FS` / `Net` / `System.gpio` and the device-affecting calls such as `restart`/`otaStart` are filtered at runtime). System apps (`"system": true`) always get everything.
-- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `6`). This is verified by the system at install time.
+- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `10`). This is verified by the system at install time.
 - **`changelog`**: A brief string detailing what changed (one line per version works well, e.g. `"1.1.0 - fixed crash\n1.0.0 - first release"`). The hub publishes it with the catalog and the device store shows it under a **"Novidades" / What's New** header on the update screen.
 
 ### Fields managed by the CelerOS Hub
@@ -83,23 +83,66 @@ The `main.js` file is the entry point of your application. When a user taps your
 
 Because CelerOS handles the underlying C++ translation, you can write simple, high-level JavaScript to draw graphics, read files, and trigger UI components.
 
+### The app model
+
+* **ES5 only**: no arrow functions, `let`/`const`, `class` or template literals — the engine is Duktape. Use `var` + `function`.
+* Your app is a **blocking `while` loop** with `System.delay()` — there are no events or callbacks. Everything is polling: `System.getTouch()`, `System.keypadPoll()`, `CelerLink.poll()`.
+* All coordinates live in the **virtual 240x320 canvas** (`System.screenWidth()` is 240 everywhere); the OS scales to the physical glass. Pick colors from `System.theme()` instead of hardcoding.
+* Exit with `System.exitApp()`. State you want to keep goes in `FS.appData()` (a private folder per app).
+
 ### Your First App (`main.js`)
-Here is a simple example that turns the screen blue, prints "Hello CelerOS!", waits 3 seconds, and then gracefully exits back to the Launcher:
+
+Paints the background, writes a centered message, waits for a touch and
+exits — with the real API (`System.*`, theme colors):
 
 ```javascript
-// Clear the screen
-Graphics.fillScreen(Graphics.COLOR_BLUE);
+var T = System.theme();
 
-// Draw some text in the center
-Graphics.setTextColor(Graphics.COLOR_WHITE);
-Graphics.drawString("Hello CelerOS!", 120, 160, 2);
+System.fillScreen(T.bg);
+System.setTextColor(T.text);
+var msg = "Hello CelerOS!";
+System.drawString(msg, 120 - (System.textWidth(msg) >> 1), 150, 2);
 
-// Wait for 3 seconds
-System.delay(3000);
+// Wait for a touch (yielding shows the frame on the glass)
+var t;
+do {
+    t = System.getTouch();
+    System.delay(20);
+} while (!t.touched);
 
-// Close the app and return to the OS Launcher
-System.exit();
+System.exitApp();   // back to the Launcher
 ```
 
+### Feature detection across boards
+
+The same app runs on very different boards (a 4" PSRAM SmartDisplay, a
+128 KB-RAM CYD, a robot dog). Feature-detect instead of assuming:
+
+```javascript
+if (System.getAPILevel() >= 9 && typeof CelerLink !== "undefined") {
+    // Bluetooth LE link between CelerOS devices (API 9)
+    var peers = CelerLink.scan();
+    if (peers.length) CelerLink.connect(peers[0].id);
+}
+
+if (System.relayCount() > 0) System.relay(1, true);  // "Y" SKUs (API 8)
+if (typeof System.gpio.servo === "function") System.gpio.servo(13, 90);  // API 10
+
+var battery = System.battery();   // -1 on boards without a divider
+var level = System.micLevel();    // -1 without a microphone
+```
+
+Board flags in `System.getInfo()` (`hasLed`, `hasLightSensor`, `hasSpeaker`)
+and the `-1`/`false`/count returns of the hardware calls are the contract —
+never assume a peripheral exists.
+
+### Reference apps to read
+
+* Bundled (`data/apps/`): **Snake** (game loop, persisted record), **Terminal**
+  (docked keyboard `System.keypad*`), **Touch Test**, **HTTP Demo** (network).
+* Hub (`hub_apps/`): **Celer Remote** (API 10) — a full robotics example:
+  scans and connects over Celer Link, drives a D-pad that repeats
+  `{type:"move",dir}` messages and shows the robot's telemetry.
+
 > [!IMPORTANT]
-> To see everything you can do in `main.js`, please check out the full **[JS API Guide](JS_API_Guide.md)**! It contains all the documentation you need for Graphics, GPIO pins, File Systems, UI Components, and more.
+> To see everything you can do in `main.js`, please check out the full **[JS API Guide](JS_API_Guide.md)**! It contains all the documentation you need for drawing, GPIO pins, file systems, UI components, and more.

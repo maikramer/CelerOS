@@ -61,8 +61,8 @@ segurança.
   com o seu `packageName` mas um `author` diferente, o SO emite um aviso de
   conflito para proteger o app contra sobrescrita maliciosa.
 - **`description`**: resumo curto do app, exibido ao usuário na primeira
-  instalação. Obs.: os apps de sistema evitam caracteres acentuados — fique
-  no ASCII simples para máxima compatibilidade com a fonte embutida.
+  instalação. Acentos Latin-1 (ç, ã, é...) renderizam bem desde a API 7;
+  evite travessão, aspas curvas e emoji (fora da fonte).
 - **`type`**: classificação ampla (ex.: `App` ou `Game`). Pode digitar
   qualquer valor, sem restrição.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
@@ -70,7 +70,7 @@ segurança.
 - **Placas sem PSRAM** (ex.: a CYD clássica): apps rodam na RAM interna com o WiFi ligado, inclusive os de rede. O teto prático é um `main.js` de ~60KB (comentários e indentação são removidos antes do compile, não custam nada); a loja calcula o limite por `System.getInfo().appRAM` e marca apps maiores como "Requer PSRAM".
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado (`FS` / `Net` / `System.gpio` e as chamadas que afetam o aparelho, como `restart`/`otaStart`, são filtradas no runtime). Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `6`). Verificado pelo sistema na
+  JS](JS_API_Guide.pt-BR.md) — atualmente `10`). Verificado pelo sistema na
   instalação.
 - **`changelog`**: string curta descrevendo o que mudou (uma linha por versão
   funciona bem, ex. `"1.1.0 - conserto de crash\n1.0.0 - primeiro
@@ -130,26 +130,75 @@ Como o CelerOS cuida da tradução para C++ por baixo, você escreve JavaScript
 de alto nível e simples para desenhar gráficos, ler arquivos e acionar
 componentes de UI.
 
+### O modelo do app
+
+* **Só ES5**: sem arrow functions, `let`/`const`, `class` ou template
+  literals — a engine é Duktape. Use `var` + `function`.
+* O app é um **loop `while` bloqueante** com `System.delay()` — não existem
+  eventos nem callbacks. Tudo é polling: `System.getTouch()`,
+  `System.keypadPoll()`, `CelerLink.poll()`.
+* Todas as coordenadas vivem no **canvas virtual 240x320**
+  (`System.screenWidth()` é 240 em qualquer placa); o OS escala para o vidro
+  físico. Pegue cores no `System.theme()` em vez de fixar valores.
+* Saia com `System.exitApp()`. Estado que precisa sobreviver vai em
+  `FS.appData()` (pasta privada por app).
+
 ### Seu Primeiro App (`main.js`)
-Um exemplo simples que pinta a tela de azul, escreve "Hello CelerOS!",
-espera 3 segundos e sai de volta ao Launcher:
+
+Pinta o fundo, escreve uma mensagem centralizada, espera um toque e sai —
+com a API de verdade (`System.*`, cores do tema):
 
 ```javascript
-// Limpa a tela
-Graphics.fillScreen(Graphics.COLOR_BLUE);
+var T = System.theme();
 
-// Escreve um texto no centro
-Graphics.setTextColor(Graphics.COLOR_WHITE);
-Graphics.drawString("Hello CelerOS!", 120, 160, 2);
+System.fillScreen(T.bg);
+System.setTextColor(T.text);
+var msg = "Olá CelerOS!";
+System.drawString(msg, 120 - (System.textWidth(msg) >> 1), 150, 2);
 
-// Espera 3 segundos
-System.delay(3000);
+// Espera um toque (ceder mostra o quadro no vidro)
+var t;
+do {
+    t = System.getTouch();
+    System.delay(20);
+} while (!t.touched);
 
-// Fecha o app e volta ao Launcher do SO
-System.exit();
+System.exitApp();   // volta ao Launcher
 ```
+
+### Detecção de recursos entre placas
+
+O mesmo app roda em placas muito diferentes (SmartDisplay 4" com PSRAM, CYD
+de 128 KB, cachorro robô). Detecte em vez de assumir:
+
+```javascript
+if (System.getAPILevel() >= 9 && typeof CelerLink !== "undefined") {
+    // Link Bluetooth LE entre CelerOS (API 9)
+    var perto = CelerLink.scan();
+    if (perto.length) CelerLink.connect(perto[0].id);
+}
+
+if (System.relayCount() > 0) System.relay(1, true);  // SKUs "Y" (API 8)
+if (typeof System.gpio.servo === "function") System.gpio.servo(13, 90);  // API 10
+
+var bateria = System.battery();   // -1 em placa sem divisor
+var nivel = System.micLevel();    // -1 sem microfone
+```
+
+As flags de placa em `System.getInfo()` (`hasLed`, `hasLightSensor`,
+`hasSpeaker`) e os retornos `-1`/`false`/contagem das chamadas de hardware
+são o contrato — nunca assuma que um periférico existe.
+
+### Apps de referência para ler
+
+* Embarcados (`data/apps/`): **Snake** (loop de jogo, recorde persistido),
+  **Terminal** (teclado acoplado `System.keypad*`), **Touch Test**,
+  **HTTP Demo** (rede).
+* Hub (`hub_apps/`): **Celer Remote** (API 10) — exemplo completo de
+  robótica: escaneia e conecta via Celer Link, pilota um D-pad que repete
+  mensagens `{type:"move",dir}` e mostra a telemetria do robô.
 
 > [!IMPORTANT]
 > Para ver tudo o que dá para fazer no `main.js`, consulte o **[Guia da API
 > JS](JS_API_Guide.pt-BR.md)** completo! Lá está toda a documentação de
-> Graphics, pinos GPIO, sistema de arquivos, componentes de UI e mais.
+> desenho, pinos GPIO, sistema de arquivos, componentes de UI e mais.

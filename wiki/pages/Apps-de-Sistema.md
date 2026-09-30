@@ -1,9 +1,11 @@
 # Apps de sistema
 
+[English](/maikramer/CelerOS/wiki/System-Apps) | **Português (BR)**
+
 Os apps de sistema do CelerOS são **JavaScript** (ES5, Duktape) e moram na
 partição LittleFS, montada em `/local` — o firmware carrega só o core. Isso
 cortou ~330 KB da imagem da CYD e virou o padrão da casa: Settings, App
-Store, Installer, Help, Web Server, Terminal, Calculator, Snake e as demos
+Store, Installer, Help, Web Server, Terminal, Snake e as demos
 (HTTP Demo, Touch Test) são todos JS.
 
 ## Layout
@@ -14,8 +16,12 @@ data/
 └── icons/<id>.png # GERADO por tools/make_icons.py (RGBA quantizado p/ RGB565)
 ```
 
-[`hub_apps/`](hub_apps) (2048, Breakout, Cronômetro) segue o mesmo layout,
-mas é publicado no hub em vez de virar imagem de fábrica.
+[`hub_apps/`](hub_apps) (2048, Breakout, Cronômetro e **Celer Remote**)
+segue o mesmo layout, mas é publicado no hub em vez de virar imagem de
+fábrica. O Celer Remote (API 10) é a vitrine de robótica: escaneia CelerOS
+próximos pelo Celer Link (BLE), conecta e pilota um robô com D-pad mostrando
+a telemetria dele — referência completa de `CelerLink` +
+`System.gpio.servo`.
 
 ## app.json
 

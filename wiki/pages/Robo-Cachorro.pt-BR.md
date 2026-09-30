@@ -60,12 +60,14 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
 * **[feito]** Dossiê de hardware completo (pinout, orientação da tela, loopback
   de áudio, mapeamento servo↔perna, canal da bateria) — veja o
   [repo zzpet-s3-dog](https://github.com/maikramer/zzpet-s3-dog).
-* **[planejado]** Porte do board `main/Boards/spotpear-dog/`: S3R8 + cara
-  SH1106 + API JS de servos com gaits pré-definidas (nível de API 8, junto com
-  I2S/rélés).
-* **[planejado]** **Celer Link via BLE**: o SmartDisplay 4848 vira controle
-  remoto do cachorro — D-pad e gaits num app CelerOS, telemetria (bateria,
-  estado) de volta pelo link.
+* **[feito]** **Celer Link via BLE** (API 9) + **servos no JS**
+  (`System.gpio.servo`, API 10): a SmartDisplay 4848 dirige o cachorro com o
+  app **Celer Remote** do hub — comandos do D-pad e telemetria (bateria,
+  estado) pelo link. O hardware de placa de robô (bateria, microfone, pad de
+  toque, NeoPixel) também entrou na API JS no nível 10.
+* **[em andamento]** Porte do board `main/Boards/spotpear-dog/`: S3R8 + cara
+  SH1106 + os apps Dog Face / Dog Remote (bring-up rodando, embarcam junto
+  dos arquivos do board).
 
 Restaurar o firmware original a qualquer momento é um comando único a partir
 do dump completo (`tools/flash_backup_restore.sh` no repo do cachorro) — o

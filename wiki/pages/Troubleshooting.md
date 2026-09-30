@@ -1,0 +1,93 @@
+# Troubleshooting
+
+**English** | [Português (BR)](/maikramer/CelerOS/wiki/Solução-de-Problemas)
+
+Common problems, in rough order of "you will hit this".
+
+## Build and flash
+
+* **A `sdkconfig.defaults` change had no effect.** An existing build dir
+  keeps its cached `sdkconfig`; delete `build*/sdkconfig` (or the whole
+  dir) and reconfigure with the full `-DSDKCONFIG_DEFAULTS=...` +
+  `-DCELEROS_BOARD=...` line from
+  [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing).
+* **LovyanGFX missing / weird include errors.** It is a git submodule:
+  `git submodule update --init`.
+* **`flash_data.sh` fails.** It needs the IDF environment exported
+  (`IDF_PATH`) because it uses `mklittlefs` and `parttool` from the IDF.
+* **Port busy (`could not open port`).** Only one program per port: close
+  `idf.py monitor` (and any serial console) before running `celerctl` or
+  flashing. On this desk the SmartDisplay is usually `/dev/ttyUSB0` and
+  the CYD `/dev/ttyUSB1`, but check with `python3 tools/celerctl.py
+  devices`.
+
+## First boot and touch
+
+* **The device asks to touch crosshair targets.** That is the resistive
+  touch calibration (CYD family) — it runs when there is no saved
+  calibration and stores it in `/local/touch_cal_p.bin`.
+* **Touch is off target / I want to recalibrate.** Delete the calibration
+  and reboot:
+
+  ```bash
+  python3 tools/celerctl.py rm /local/touch_cal_p.bin
+  python3 tools/celerctl.py reboot
+  ```
+* **Touch needs a firm press.** Resistive panels work that way; press a
+  little harder than on a phone, or operate the device from the browser
+  ([live screen](/maikramer/CelerOS/wiki/Web-Interface)).
+
+## Wi-Fi and clock
+
+* **No credentials stored.** The device opens the `CelerOS-Setup-XXXX`
+  access point with a captive portal — configure it from your phone. Wi-Fi
+  auto-reconnects if the router drops.
+* **Clock shows the wrong time.** Time comes from NTP (`pool.ntp.org`) and
+  needs internet access; the timezone is set in Settings → Hora e fuso
+  (the launcher clock defaults to UTC on a fresh flash). The setting is
+  stored in `/local/config_time.txt` in the form `UTC3|1|1` (POSIX sign
+  inverted: `UTC3` = UTC-3).
+* **Hub/OTA fails with a TLS error.** Hub and Google sit behind Cloudflare
+  and need `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`
+  (already in the defaults — check if your `sdkconfig` is stale, see above).
+
+## Apps
+
+* **An app from the store won't install/open on the CYD.** Bigger apps are
+  marked "Requer PSRAM": the CYD has no PSRAM and ~220 KB for the JS heap,
+  with a practical ceiling of a ~60 KB `main.js`.
+* **App crashes or exits to the launcher.** Watch it live with
+  `python3 tools/celerctl.py logcat` and, after a crash, pull the coredump
+  with `celerctl coredump` (ELF for GDB/xtensa tools).
+* **`SyntaxError` on device but works in Node.** The engine is Duktape:
+  **ES5 only** — no arrow functions, `let`/`const`, `class` or template
+  literals. Test the bundled apps on the host with
+  `node test/js_harness/run.js`.
+* **`CelerLink is not defined`.** The board was built without Bluetooth
+  (`CONFIG_CELEROS_BLUETOOTH`; solid on the SmartDisplay, experimental on
+  the CYD). Apps feature-detect with `typeof CelerLink !== "undefined"`.
+* **Celer Link doesn't find/connect to the peer.** `scan()` blocks ~2.5 s
+  and only sees devices running `CelerLink.start()` (they advertise as
+  `Celer-XXXX`); one connection at a time, messages up to 240 bytes.
+
+## Web interface
+
+* **`401 Unauthorized`.** Basic Auth: user `admin`, password shown in the
+  Web Server app or `celerctl info` (field `web_pass`).
+* **`429 Too Many Requests`.** Several failed logins lock the server for
+  30 s — wait and retry with the right password.
+* **Mirror is slow.** ~1–2 fps is normal on the CYD (RLE frames over HTTP
+  on a 40 MHz SPI panel); the SmartDisplay is faster. Reading the screen
+  never freezes the device — frames are grabbed row-block by row-block.
+* **The IP changed.** It is shown on the device (Web Server app) and in
+  `celerctl info`; prefer a DHCP reservation on your router.
+
+## celerctl
+
+* **`devices` lists nothing.** Check the cable and the port
+  (`/dev/ttyUSB*`); make sure no monitor holds it. The tool only speaks
+  HostLink — a board running raw ESP-IDF firmware won't answer.
+* **Push/pull is slow.** Negotiate a higher baud: `celerctl -b 921600
+  push ...`.
+* **Weird/garbled frames after a disconnect.** The parser resynchronizes
+  after a cut frame; if it persists, unplug/replug and retry.

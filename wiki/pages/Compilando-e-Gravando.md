@@ -1,5 +1,7 @@
 # Compilando e gravando
 
+[English](/maikramer/CelerOS/wiki/Building-and-Flashing) | **Português (BR)**
+
 O CelerOS 1.2+ usa **ESP-IDF 6.1 puro** (sem camada Arduino/PlatformIO).
 
 ## Pré-requisitos

@@ -1,12 +1,14 @@
 # Ferramentas
 
+[English](/maikramer/CelerOS/wiki/Tools) | **Português (BR)**
+
 Utilitários do lado do host (Python/shell) em [tools/](tools/). Instalação:
 `pip install -r tools/requirements.txt` (pyserial; `make_icons` também
 precisa de Pillow, fora da lista).
 
 | Ferramenta | Papel |
 |---|---|
-| [celerctl.py](tools/celerctl.py) | Cliente CelerLink: controle do dispositivo pela serial — referência completa em [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) |
+| [celerctl.py](tools/celerctl.py) | Cliente HostLink: controle do dispositivo pela serial — referência completa em [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) |
 | [flash_data.sh](tools/flash_data.sh) | Constrói a imagem LittleFS de `data/` e grava a partição `littlefs` |
 | [ota_server.py](tools/ota_server.py) | Servidor local de `update.json` + firmware para testes de OTA |
 | [celerhub.py](tools/celerhub.py) | Publica/lista/remove apps no hub (valida as pastas de app; token por args/env; `--hub` ou `CELER_HUB`, default `https://os.celer.tec.br`) |
@@ -27,7 +29,7 @@ python3 tools/celerctl.py tap 120 160        # injeta um toque
 
 Ele conversa pela UART do console (CH340, `/dev/ttyUSB0`; `-b` muda o
 baud) — ou pela CDC1 em placas com `CELEROS_USB_NATIVE`. Os opcodes vivem
-em `main/USBDevice/CelerLink.h` e a ferramenta lê esse arquivo por regex:
+em `main/USBDevice/HostLink.h` e a ferramenta lê esse arquivo por regex:
 uma fonte da verdade para os dois lados. Não rode `celerctl` com o
 `idf.py monitor` segurando a mesma porta.
 

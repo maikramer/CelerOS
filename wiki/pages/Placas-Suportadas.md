@@ -1,13 +1,16 @@
 # Placas suportadas
 
+[English](/maikramer/CelerOS/wiki/Supported-Boards) | **Português (BR)**
+
 | SmartDisplay 4" | CYD |
 | :---: | :---: |
 | <img src="Documentation/assets/imgs/celeros-home.jpg" width="300" alt="SmartDisplay rodando o CelerOS"/> | <img src="Documentation/assets/imgs/CYD2432S028R.jpg" width="300" alt="CYD"/> |
 
 | Placa | SoC | Display | Toque | Observações |
 |---|---|---|---|---|
-| **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | IPS 4" 480x480 RGB (ST7701) | Capacitivo GT911 | 16 MB flash / 8 MB PSRAM, opção de USB nativo |
+| **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | IPS 4" 480x480 RGB (ST7701) | Capacitivo GT911 | 16 MB flash / 8 MB PSRAM, microSD, alto-falante I2S (NS4168); SKUs "Y" com relés |
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | ILI9341 2.8" 320x240 SPI | Resistivo XPT2046 | Sem PSRAM; serial CH340; pede calibração de toque no primeiro boot; UI mais simples ([veja abaixo](#cyd-esp32-clássico)) |
+| **CYD-VSPI** (variante não testada) | ESP32 | ILI9341 2.8" 320x240 SPI | Resistivo XPT2046 | Pinout legado (TFT no VSPI 18/23/19, barramento de toque compartilhado, backlight GPIO22) mantido para placas cabladas assim — **nunca testada no hardware**; build com `-DCELEROS_BOARD=cyd-vspi` |
 
 ## Onde a placa é definida
 
@@ -37,8 +40,22 @@ perfil de placa novo.
 
 * Não ligue `CONFIG_CELEROS_USB_NATIVE` nesta placa: GPIO19/20 são o I2C do
   GT911 e uma linha de dados RGB — habilitar o USB nativo conflita com o
-  toque e o vídeo. O `celerctl` fala com ela pela UART.
+  toque e o vídeo. O `celerctl` fala com ela pela UART (conector USB é o
+  CH340 em cima da UART0, pinos 43/44).
 * RGB + PSRAM permitem sprite de frame inteiro; a CYD não tem esse luxo.
+
+**Periféricos da placa usados pelo sistema** (mapa do material do fabricante
+"4.0inch_ESP32-4848S040"): microSD em SPI compartilhado com o init do painel
+(CS=42, SCK=48, MISO=41, MOSI=47, montado em `/sd`), alto-falante via
+amplificador digital Nsiway NS4168 em I2S (DOUT=GPIO40, BCLK=GPIO1,
+LRC=GPIO2, sem MCLK — `System.beep` toca uma senoide) e as SKUs "Y" (caixa
+de parede 86 switch com 1 ou 3 relés): L1=GPIO40, L2=GPIO2, L3=GPIO1, os
+mesmos pinos do alto-falante. Firmware compilado com
+`CONFIG_CELEROS_SMARTDISPLAY_RELAYS=N` troca o alto-falante por N relés
+controláveis com `System.relay` (partem desligados no boot).
+
+**GPIOs livres para apps** (`System.gpio`): IO35, IO36 e IO37 do header
+(o IO0 é o BOOT e linha R4 do display; IO43/44 são a serial do console).
 
 ### CYD (ESP32 clássico)
 
@@ -71,6 +88,8 @@ toque resistivo), então a experiência é visivelmente mais simples:
   loja.
 * **Toque resistivo.** Pede um toque mais firme e calibração no primeiro
   boot; os alvos são pequenos (ícones de 48 px, barra superior de 20 px).
+  Também dá para operar a tela pelo navegador com o
+  [espelho de tela ao vivo](/maikramer/CelerOS/wiki/Interface-Web).
 * **Sem cartão SD** por enquanto (o slot divide o barramento do display).
 
 **Periféricos da placa usados pelo sistema:** LED RGB no verso

@@ -1,0 +1,131 @@
+# Architecture
+
+**English** | [Português (BR)](/maikramer/CelerOS/wiki/Arquitetura)
+
+How the firmware is organized, what runs on top of what, and where to touch
+for each kind of change.
+
+## Layered overview
+
+```
++--------------------------------------------------------------+
+| data/  (LittleFS partition at /local)                        |
+|   System apps in JavaScript: Settings, App Store,             |
+|   Installer, Terminal, Help, Web Server, Snake, demos        |
++------------------------------^-------------------------------+
+                               | Duktape (ES5)
++------------------------------|-------------------------------+
+| main/  (ESP-IDF app component, C++)                          |
+|   Kernel/Core  CelerKernel: Duktape heap, runs main.js       |
+|   Runtime      JSBindings + Js*.cpp: System / Net / FS       |
+|   UI           Kui (canvas/screen/widget), docked keyboard   |
+|   Launcher     discovers apps in /local/apps and /sd/apps    |
+|   Display      virtual 240x320 -> physical, theme, icons     |
+|   FileSystem   LittleFS (/local) + SD (/sd), atomic writes  |
+|   WebManager   httpd + file manager + OTA upload + portal    |
+|   OTA          OtaManager: update.json v2 + esp_https_ota    |
+|   USBDevice    CelerShell, HostLink (celerctl), SerialLink  |
+|   Bluetooth    CelerLink: BLE between devices (Celer Link)  |
+|   Boards/<b>/  per-board HAL (pins, display, traits)         |
++------------------------------^-------------------------------+
+                               | includes/REQUIRES
++------------------------------|-------------------------------+
+| components/  (vendored from esp_components + third parties)  |
+|   Wifi, Connection (NetworkManager: sole radio owner),       |
+|   Http, System (SystemInfo), Utility (Event/Singleton),      |
+|   ErrorCodes, JsonModels, config, LovyanGFX, duktape         |
++--------------------------------------------------------------+
+```
+
+The `BluetoothServer`, `Drivers`, `IoUtility`, `SafeContainers`,
+`Supabase`, `UI` (LVGL), `UserManaging` and `Time` components are excluded
+from the build by the root `EXCLUDE_COMPONENTS` — they are dormant.
+
+Watch the names: `main/` has its own `TimeManager`, `OtaManager`, `UI/Kui`
+and `UI/Keyboard`, which are **not** the classes of the same name in
+`components/`.
+
+## Boot flow
+
+`app_main` calls `celerSetup()` once and `celerLoop()` forever
+([main/main.cpp](main/main.cpp)):
+
+1. `Board::init` — HAL of the compiled board (`main/Boards/<board>/`)
+2. `UI::init(w, h)` — display and the virtual 240x320 layout
+3. `FileSystem::init` — LittleFS at `/local`, SD at `/sd`
+4. `SerialLink` → `USBDevice` — the `celerctl` channel
+5. `Backlight` → `TimeManager` (NTP/timezone) → `WebManager::startAsync`
+6. `CelerKernel::init` — the Duktape heap
+7. `LauncherUI` (or touch calibration on the CYD's first boot) and
+   `kui::Navigator::begin` + push of the launcher
+
+The main loop runs on the main task: `Navigator::tick()`,
+`WebManager::tick()` (deferred reboot after a web OTA), `TimeManager::tick()`,
+`delay(5)`.
+
+## The JavaScript runtime
+
+* Globals exposed by the bindings (`main/Runtime/JSBindings.cpp` +
+  `Js{System,Net,Fs,Gfx,Gpio,Keypad,Link,SystemApps}.cpp`): `System`, `Net`,
+  `FS` and `CelerLink` (the BLE link, on Bluetooth builds).
+* Apps are pure ES5 (no `Promise` — the builtin was compiled out of
+  Duktape), with a blocking `while` loop and `System.delay()`.
+* All geometry is drawn in virtual 240x320 coordinates and scaled by
+  `UI::sx()/sy()` — apps never see physical pixels.
+* The **API level** (`System.getAPILevel()`, currently 10) is the
+  feature-detection contract for apps. History: 1 base
+  (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps in JS · 5 docked
+  keyboard · 6 custom topbar + streaming `Net.download` · 7 RGB LED, light
+  sensor/auto-brightness, speaker, masked prompts · 8 relays · 9 Celer Link
+  (BLE) · 10 servos + robot hardware (battery, mic, touch pad, NeoPixel).
+* When adding/calling a new API: bump `CELEROS_API_LEVEL`, document it in
+  both languages of `JS_API_Guide` and add a stub to the
+  `test/js_harness/run.js` harness.
+
+## Where to touch
+
+| Task | Where |
+|---|---|
+| Add a source file | `CELEROS_SRCS` in [main/CMakeLists.txt](main/CMakeLists.txt) (it is not a glob) |
+| Version / API level bump | `main/CMakeLists.txt` (`CELEROS_VERSION`, `CELEROS_API_LEVEL`) **and** the root `project(VERSION)` — keep both in sync |
+| New board | `main/Boards/<b>/` + `elseif` in CMake + `boards/<b>/sdkconfig.defaults` + `updates/<channel>/update.json` |
+| Gestures/touch | `UI/Kui.cpp` (TouchPump; touches injected by celerctl go through the TouchInjector) |
+| Device side of celerctl | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART) |
+| Celer Link (BLE between devices) | `Bluetooth/CelerLink.cpp` + `Runtime/JsLink.cpp` (`CelerLink` global) |
+| Web pages | `WebManager/*.html` (re-embedded as gzipped headers at build time) |
+| Wi-Fi radio / credentials | `components/Connection` (`NetworkManager` singleton) |
+
+## Conventions worth knowing
+
+* **Never** board `#ifdef`s outside `main/Boards/<board>/` — compile-time
+  differences live in the board's `BoardTraits.h`.
+* Logging via `celer_log_printf/println` (goes to UART/CDC **and** the
+  `logcat` buffer), never raw `printf`.
+* Persistent state via `FileSystem::writeTextFile` (tmp + rename,
+  power-loss resistant).
+* Fallible operations return `ErrorCode` (registry in
+  `components/ErrorCodes`), not `esp_err_t`.
+* Singletons: `class X : public Singleton<X>` with a token-taking ctor.
+* `Event<...>` handlers only set flags — `trigger()` holds the mutex for
+  the whole dispatch.
+* Never call `Storage::initialize()` from components: it would mount
+  SPIFFS over the partition CelerOS formats as LittleFS. The OS filesystem
+  is `main/FileSystem`.
+* Comments, logs and CLI strings are written in Portuguese, without
+  accents. Text shown on screen (UI, toasts, app strings) may use accents:
+  the fonts cover Latin-1.
+
+## Code hotspots
+
+| File | ~LOC | Role |
+|---|---|---|
+| `main/Runtime/JSBindings.cpp` + `Js*.cpp` | ~2.9 K | the whole JS surface |
+| `main/WebManager/WebManager.cpp` | ~960 | httpd, file manager, OTA upload, screen mirror |
+| `main/Bluetooth/CelerLink.cpp` | ~540 | Celer Link: NimBLE GATT + advertising |
+| `main/UI/Kui.cpp` | ~900 | immediate-mode UI framework |
+| `main/Launcher/Screens.cpp` | ~810 | system screens |
+| `main/FileSystem/FileSystem.cpp` | ~640 | atomic FS + MD5 |
+
+More detail per directory: the `AGENTS.md` files of [main/](main/AGENTS.md),
+[components/](components/AGENTS.md), [main/Runtime/](main/Runtime/AGENTS.md)
+and [Network/](components/Network/AGENTS.md) in the repository.

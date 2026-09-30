@@ -35,7 +35,7 @@ desenvolvimento.
 | [Compilando e gravando](/maikramer/CelerOS/wiki/Compilando-e-Gravando) | ESP-IDF 6.1, build por placa, partição LittleFS e o harness de testes |
 | [Solução de problemas](/maikramer/CelerOS/wiki/Solução-de-Problemas) | Problemas comuns de build, flash, toque, Wi-Fi e web — e os consertos |
 | [Arquitetura](/maikramer/CelerOS/wiki/Arquitetura) | Boot flow, camadas do firmware, runtime JS e convenções do código |
-| [Robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) | O cachorro robô SpotPear/ZZPET: pinout completo de engenharia reversa, firmware de bring-up e o board CelerOS planejado + "Celer Link" BLE |
+| [Robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) | O cachorro robô SpotPear/ZZPET: pinout completo de engenharia reversa, firmware de bring-up e o board CelerOS + controle "Celer Link" BLE |
 | [Apps de sistema](/maikramer/CelerOS/wiki/Apps-de-Sistema) | O que mora em `data/`, regras do `app.json` e como apps chegam ao dispositivo |
 | [Interface web](/maikramer/CelerOS/wiki/Interface-Web) | File manager, upload de firmware e o espelho de tela ao vivo no navegador |
 | [Ferramentas](/maikramer/CelerOS/wiki/Ferramentas) | `celerctl`, `celerhub`, servidor OTA local e geradores de assets |
@@ -63,8 +63,16 @@ traduções ficam na seção **Português (BR)**.
 * **Tela ao vivo no navegador** — `/screen` espelha o display via Wi-Fi e
   repassa seus cliques como toques.
 * **Hardware da placa em JS** — LED RGB, sensor de luz com brilho
-  automático, alto-falante (`System.beep`) e linhas de relé nas placas
-  que têm.
+  automático, alto-falante (`System.beep`), linhas de relé e servos
+  (`System.gpio.servo`) nas placas que têm; placas de robô acrescentam
+  bateria, microfone, pad capacitivo e NeoPixel
+  (`System.battery`/`micLevel`/`touchPad`/`neopixel`).
+* **Celer Link (BLE)** — link Bluetooth LE entre CelerOS próximos (API 9):
+  a placa do robô roda `CelerLink.start()`, a outra dirige com
+  `scan()`/`connect()`/`send()` — veja a página do
+  [robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) e o app Celer
+  Remote no hub. Sem pareamento na v1: brinquedos e protótipos, nada
+  sensível.
 * **Wi-Fi por portal cativo** — access point `CelerOS-Setup-XXXX` para
   configurar pelo celular.
 * **`celerctl`** — companheiro USB estilo adb: shell, push/pull, logcat,

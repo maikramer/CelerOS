@@ -34,7 +34,7 @@ development.
 | [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing) | ESP-IDF 6.1, per-board builds, the LittleFS data partition and the test harness |
 | [Troubleshooting](/maikramer/CelerOS/wiki/Troubleshooting) | Common build, flash, touch, Wi-Fi and web problems — and their fixes |
 | [Architecture](/maikramer/CelerOS/wiki/Architecture) | Boot flow, firmware layers, the JS runtime and code conventions |
-| [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) | The SpotPear/ZZPET robot dog: full reverse-engineered pinout, bring-up firmware and the planned CelerOS board + BLE "Celer Link" |
+| [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) | The SpotPear/ZZPET robot dog: full reverse-engineered pinout, bring-up firmware and the CelerOS board + BLE "Celer Link" remote |
 | [System apps](/maikramer/CelerOS/wiki/System-Apps) | What lives in `data/`, the `app.json` rules and how apps reach the device |
 | [Web interface](/maikramer/CelerOS/wiki/Web-Interface) | File manager, firmware upload and the live screen mirror in the browser |
 | [Tools](/maikramer/CelerOS/wiki/Tools) | `celerctl`, `celerhub`, the local OTA server and asset generators |
@@ -62,7 +62,14 @@ the sidebar has the Portuguese translations.
 * **Live screen from the browser** — `/screen` mirrors the display over
   Wi-Fi and forwards your clicks as touches.
 * **Board hardware in JS** — RGB LED, light sensor with auto-brightness,
-  speaker (`System.beep`) and relay lines on supported boards.
+  speaker (`System.beep`), relay lines and servos (`System.gpio.servo`) on
+  supported boards; robot boards add battery, microphone, capacitive touch
+  pad and NeoPixel (`System.battery`/`micLevel`/`touchPad`/`neopixel`).
+* **Celer Link (BLE)** — a Bluetooth LE link between nearby CelerOS devices
+  (API 9): a board on a robot runs `CelerLink.start()`, another one drives it
+  with `scan()`/`connect()`/`send()` — see the
+  [robot dog](/maikramer/CelerOS/wiki/Robot-Dog) page and the Celer Remote
+  app in the hub. No pairing in v1: toys and prototypes, nothing sensitive.
 * **Wi-Fi via captive portal** — a `CelerOS-Setup-XXXX` access point to
   configure it from your phone.
 * **`celerctl`** — an adb-style USB companion: shell, push/pull, logcat,

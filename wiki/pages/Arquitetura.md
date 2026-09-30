@@ -1,5 +1,7 @@
 # Arquitetura
 
+[English](/maikramer/CelerOS/wiki/Architecture) | **Português (BR)**
+
 Como o firmware está organizado, o que roda a partir de quê e onde mexer em
 cada tipo de mudança.
 
@@ -22,7 +24,8 @@ cada tipo de mudança.
 |   FileSystem   LittleFS (/local) + SD (/sd), escrita atomica |
 |   WebManager   httpd + file manager + upload OTA + portal    |
 |   OTA          OtaManager: update.json v2 + esp_https_ota    |
-|   USBDevice    CelerShell, CelerLink (celerctl), SerialLink  |
+|   USBDevice    CelerShell, HostLink (celerctl), SerialLink  |
+|   Bluetooth    CelerLink: BLE entre aparelhos (Celer Link) |
 |   Boards/<b>/  HAL por placa (pinos, display, traits)        |
 +------------------------------^-------------------------------+
                                | inclui/REQUIRES
@@ -62,16 +65,20 @@ O loop principal roda na task main: `Navigator::tick()`,
 
 ## O runtime JavaScript
 
-* Globals expostas pelos bindings ([main/Runtime/JSBindings.cpp](main/Runtime/JSBindings.cpp),
-  ~2.200 linhas): `System`, `Net` e `FS`.
+* Globals expostas pelos bindings (`main/Runtime/JSBindings.cpp` +
+  `Js{System,Net,Fs,Gfx,Gpio,Keypad,Link,SystemApps}.cpp`): `System`, `Net`,
+  `FS` e `CelerLink` (o link BLE, em builds com Bluetooth).
 * Apps são ES5 puro (sem `Promise` — o builtin foi compilado fora do
   Duktape), com loop `while` bloqueante e `System.delay()`.
 * Toda geometria é desenhada em coordenadas virtuais 240x320 e escalada por
   `UI::sx()/sy()` — apps nunca veem pixels físicos.
-* O **nível de API** (`System.getAPILevel()`, hoje 6) é o contrato de
+* O **nível de API** (`System.getAPILevel()`, hoje 10) é o contrato de
   feature-detection dos apps. Histórico: 1 base (draw/touch/GPIO/FS/time) ·
   2 `Net` · 3 apps de sistema em JS · 5 teclado acoplado · 6 topbar
-  customizada + `Net.download` em streaming.
+  customizada + `Net.download` em streaming · 7 LED RGB, sensor de luz com
+  brilho automático, alto-falante e prompts mascarados · 8 relés ·
+  9 Celer Link (BLE) · 10 servos + hardware de robô (bateria, microfone,
+  pad de toque, NeoPixel).
 * Ao adicionar/chamar uma API nova: bump de `CELEROS_API_LEVEL`, doc nos
   dois idiomas do `JS_API_Guide` e stub no harness `test/js_harness/run.js`.
 
@@ -83,8 +90,9 @@ O loop principal roda na task main: `Navigator::tick()`,
 | Bump de versão / nível de API | `main/CMakeLists.txt` (`CELEROS_VERSION`, `CELEROS_API_LEVEL`) **e** `project(VERSION)` da raiz — manter os dois em sincronia |
 | Nova placa | `main/Boards/<b>/` + `elseif` no CMake + `boards/<b>/sdkconfig.defaults` + `updates/<canal>/update.json` |
 | Gestos/toque | `UI/Kui.cpp` (TouchPump; toques injetados pelo celerctl passam pelo TouchInjector) |
-| Lado dispositivo do celerctl | `USBDevice/CelerLink.cpp` (opcodes), `SerialLink.cpp` (UART) |
-| Página web do file manager | `WebManager/filemanager.html` (re-embutir em `filemanager_html.h`) |
+| Lado dispositivo do celerctl | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART) |
+| Celer Link (BLE entre aparelhos) | `Bluetooth/CelerLink.cpp` + `Runtime/JsLink.cpp` (global `CelerLink`) |
+| Página web do file manager e do espelho de tela | `WebManager/*.html` (re-embutidas como headers gzipped na build) |
 | Radio Wi-Fi / credenciais | `components/Connection` (`NetworkManager` singleton) |
 
 ## Convenções que valem a pena conhecer
@@ -109,13 +117,14 @@ O loop principal roda na task main: `Navigator::tick()`,
 
 | Arquivo | ~LOC | Papel |
 |---|---|---|
-| `main/Runtime/JSBindings.cpp` | 2.182 | toda a superfície JS |
-| `main/WebManager/WebManager.cpp` | 841 | httpd, file manager, upload OTA |
-| `main/UI/Kui.cpp` | 820 | framework de UI immediate-mode |
-| `main/Launcher/Screens.cpp` | 745 | telas de sistema |
-| `main/FileSystem/FileSystem.cpp` | 578 | FS atômico + MD5 |
+| `main/Runtime/JSBindings.cpp` + `Js*.cpp` | ~2,9 K | toda a superfície JS |
+| `main/WebManager/WebManager.cpp` | ~960 | httpd, file manager, upload OTA, espelho de tela |
+| `main/Bluetooth/CelerLink.cpp` | ~540 | Celer Link: GATT NimBLE + advertising |
+| `main/UI/Kui.cpp` | ~900 | framework de UI immediate-mode |
+| `main/Launcher/Screens.cpp` | ~810 | telas de sistema |
+| `main/FileSystem/FileSystem.cpp` | ~640 | FS atômico + MD5 |
 
 Mais detalhe por diretório: os `AGENTS.md` de [main/](main/AGENTS.md),
 [components/](components/AGENTS.md),
 [main/Runtime/](main/Runtime/AGENTS.md) e
-[Wifi/](components/Wifi/AGENTS.md) no repositório.
+[Network/](components/Network/AGENTS.md) no repositório.

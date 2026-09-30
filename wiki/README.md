@@ -19,6 +19,15 @@ As demais páginas são reaproveitadas de arquivos que já existem no repo
 (`Documentation/JS_API_Guide*.md`, `tools/README_OTA*.md`, ...) por caminho,
 via manifesto.
 
+## Convenção bilíngue
+
+A wiki é **bilíngue, inglês primeiro**: a página em inglês é a canônica e
+fica com o nome simples (`Supported-Boards`, `Architecture`); a tradução
+portuguesa mantém título em português (`Placas-Suportadas`, `Arquitetura`,
+`Home-(Português)`) e aparece na seção "Português (BR)" da sidebar. Cada
+página escrita a mão cruza o par de idiomas com um seletor no topo
+(`English | Português (BR)`).
+
 ## Gerando localmente
 
 ```bash
@@ -38,8 +47,9 @@ wiki) passam intactos. Links quebrados viram aviso no console.
 
 ## Como adicionar uma página
 
-1. Escreva `wiki/pages/Nome-Da-Pagina.md` (ou aponte o `src` para um
-   arquivo existente do repo no `wiki.json`).
+1. Escreva `wiki/pages/Nome-Da-Pagina.md` em **inglês** e a tradução
+   (ex.: `Placas-...`, `Home.pt-BR.md`) — ou aponte o `src` para um
+   arquivo existente do repo no `wiki.json`.
 2. Acrescente a entrada em `pages` e a seção certa em `sidebar` no
-   `wiki.json`.
+   `wiki.json` (traduções vão na seção "Português (BR)").
 3. Rode o gerador para conferir e commit — o CI publica no merge.
