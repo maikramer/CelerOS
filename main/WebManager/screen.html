@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CelerOS Screen</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: #1e293b; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; box-shadow: 0 2px 4px rgba(0,0,0,.3); }
+  header h1 { font-size: 1.15rem; font-weight: 600; }
+  header a { color: #93c5fd; text-decoration: none; font-size: .9rem; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { padding: 7px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: .85rem; background: #334155; color: #e2e8f0; }
+  .btn:hover { background: #475569; }
+  .btn.on { background: #0ea5e9; color: #03121c; }
+  main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; gap: 12px; }
+  .frame { background: #020617; padding: 14px; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.5); border: 1px solid #1e293b; }
+  canvas { display: block; image-rendering: pixelated; cursor: crosshair; touch-action: none; border-radius: 4px; }
+  #status { font-size: .8rem; color: #94a3b8; min-height: 1em; }
+  .hint { font-size: .8rem; color: #64748b; max-width: 520px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live screen</h1>
+  <div class="bar">
+    <button class="btn on" id="play">Pause</button>
+    <button class="btn" id="zoom">Zoom 2x</button>
+    <a href="/">File manager</a>
+  </div>
+</header>
+<main>
+  <div class="frame"><canvas id="c" width="320" height="240"></canvas></div>
+  <div id="status">connecting...</div>
+  <div class="hint">Click and drag on the screen to touch the device. Each frame is read from the display a few rows at a time, so the device keeps running smoothly while you watch.</div>
+</main>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const st = document.getElementById('status');
+let img = null, running = true, zoom = 1, frames = 0, bytes = 0, t0 = performance.now();
+
+function fit() {
+  const s = zoom === 2 ? 2 : Math.max(1, Math.min(2, Math.floor((innerWidth - 80) / cv.width)));
+  cv.style.width = cv.width * s + 'px';
+  cv.style.height = cv.height * s + 'px';
+}
+
+// Quadro: u16 w, u16 h, u8 fmt (1 = RLE {u16 count, u16 rgb565}), dados LE
+function draw(buf) {
+  const dv = new DataView(buf);
+  const w = dv.getUint16(0, true), h = dv.getUint16(2, true), rle = dv.getUint8(4) === 1;
+  if (cv.width !== w || cv.height !== h || !img) {
+    cv.width = w; cv.height = h; img = ctx.createImageData(w, h); fit();
+  }
+  const px = img.data, total = w * h;
+  let o = 0, p = 5;
+  const put = (c) => {
+    px[o] = ((c >> 11) & 31) * 255 / 31; px[o + 1] = ((c >> 5) & 63) * 255 / 63;
+    px[o + 2] = (c & 31) * 255 / 31; px[o + 3] = 255; o += 4;
+  };
+  if (rle) {
+    while (p + 4 <= buf.byteLength && o < total * 4) {
+      let n = dv.getUint16(p, true); const c = dv.getUint16(p + 2, true); p += 4;
+      while (n-- > 0 && o < total * 4) put(c);
+    }
+  } else {
+    for (; p + 2 <= buf.byteLength && o < total * 4; p += 2) put(dv.getUint16(p, true));
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function loop() {
+  while (true) {
+    if (!running) { await new Promise(r => setTimeout(r, 200)); continue; }
+    try {
+      const r = await fetch('/api/screen', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const b = await r.arrayBuffer();
+      if (b.byteLength > 5) { draw(b); frames++; bytes += b.byteLength; }
+      const dt = (performance.now() - t0) / 1000;
+      if (dt > 2) {
+        st.textContent = `${cv.width}x${cv.height} · ${(frames / dt).toFixed(1)} fps · ${(bytes / dt / 1024).toFixed(0)} KB/s`;
+        frames = 0; bytes = 0; t0 = performance.now();
+      }
+    } catch (e) {
+      st.textContent = 'reconnecting... (' + e.message + ')';
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+// Toque: fila em ordem (press/move/release), move limitado a ~15/s
+let chain = Promise.resolve(), down = false, lastMove = 0;
+function send(d, ev) {
+  const r = cv.getBoundingClientRect();
+  const x = Math.round((ev.clientX - r.left) * cv.width / r.width);
+  const y = Math.round((ev.clientY - r.top) * cv.height / r.height);
+  const cx = Math.max(0, Math.min(cv.width - 1, x)), cy = Math.max(0, Math.min(cv.height - 1, y));
+  chain = chain.then(() => fetch(`/api/touch?d=${d}&x=${cx}&y=${cy}`,
+    { method: 'POST', headers: { 'X-Celer-Request': '1' } })).catch(() => {});
+}
+cv.addEventListener('pointerdown', e => { down = true; cv.setPointerCapture(e.pointerId); send(1, e); });
+cv.addEventListener('pointermove', e => {
+  if (!down) return;
+  const now = performance.now();
+  if (now - lastMove < 66) return;
+  lastMove = now; send(1, e);
+});
+const up = e => { if (!down) return; down = false; send(0, e); };
+cv.addEventListener('pointerup', up);
+cv.addEventListener('pointercancel', up);
+
+document.getElementById('play').onclick = (e) => {
+  running = !running; e.target.textContent = running ? 'Pause' : 'Resume'; e.target.classList.toggle('on', running);
+};
+document.getElementById('zoom').onclick = (e) => {
+  zoom = zoom === 2 ? 1 : 2; e.target.classList.toggle('on', zoom === 2); fit();
+};
+addEventListener('resize', fit);
+fit();
+loop();
+</script>
+</body>
+</html>
