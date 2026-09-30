@@ -897,6 +897,9 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
         if (s_peerPairState == K_PAIR_WAIT && s_peerPairVal != 0) {
             s_pairVerified = false;
             s_pairPending = true;
+            // o timeout do info() compara com o deadline: sem armar aqui, um
+            // deadline 0 (passado) derrubava o handshake central na 1a leitura
+            s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
             ESP_LOGI(TAG, "peer exige codigo de pareamento");
         } else {
             s_pairVerified = true;
