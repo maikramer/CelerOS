@@ -39,7 +39,7 @@ firmware analysis, dump/restore tools and the bring-up firmware.
 | WS2812 strips | **8** and **48** | 4 LEDs each, RMT |
 | Touch pad | **10** | tap = chat, double = action, long = lamp |
 | BOOT button | **0** | |
-| Battery divider | **2** | ADC1_CH1 (≈2066 mV under USB) |
+| Battery divider | **2** | ADC1_CH1, 2:1 divider (≈2066 mV at the pin under USB; `System.battery()` returns the cell, ≈4130 mV) |
 
 The OLED is mounted rotated in the head: driving it natively requires
 **rotating each glyph 90° CW in place plus mirroring the whole frame in X and

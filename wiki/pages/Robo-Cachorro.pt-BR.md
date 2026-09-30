@@ -40,7 +40,7 @@ análise do firmware, ferramentas de dump/restauração e o firmware de bring-up
 | Fitas WS2812 | **8** e **48** | 4 LEDs cada, RMT |
 | Touch | **10** | toque = conversa, duplo = ação, longo = lâmpada |
 | Botão BOOT | **0** | |
-| Divisor da bateria | **2** | ADC1_CH1 (≈2066 mV sob USB) |
+| Divisor da bateria | **2** | ADC1_CH1, divisor 2:1 (≈2066 mV no pino sob USB; `System.battery()` já devolve a célula, ≈4130 mV) |
 
 O OLED é montado girado na cabeça: para dirigi-lo nativamente é preciso
 **rotacionar cada glifo 90° horário no lugar e espelhar o frame inteiro em X e
@@ -65,9 +65,12 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   app **Celer Remote** do hub — comandos do D-pad e telemetria (bateria,
   estado) pelo link. O hardware de placa de robô (bateria, microfone, pad de
   toque, NeoPixel) também entrou na API JS no nível 10.
-* **[em andamento]** Porte do board `main/Boards/spotpear-dog/`: S3R8 + cara
-  SH1106 + os apps Dog Face / Dog Remote (bring-up rodando, embarcam junto
-  dos arquivos do board).
+* **[feito]** Board `main/Boards/spotpear-dog/`: boota no launcher e abre
+  sozinho o app **Dog Face** (`homeApp` do perfil; app exclusivo da placa via
+  overlay `boards/<placa>/data/`). Dog Face: olhos expressivos, reações ao
+  toque e ao som, bateria, sono na inatividade e gaits com rampas
+  (andar/ré/virar/sentar/deitar/alongar) com keepalive dead-man — o cachorro
+  para sozinho se o controle soltar a seta ou o link cair.
 
 Restaurar o firmware original a qualquer momento é um comando único a partir
 do dump completo (`tools/flash_backup_restore.sh` no repo do cachorro) — o
