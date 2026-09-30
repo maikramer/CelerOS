@@ -1,0 +1,7 @@
+{
+  "name": "App Quebrado",
+  "version": "1.0",
+  "api": 99,
+  "size": 123,
+  "permissions": ["fs", "net", "telepatia"]
+}

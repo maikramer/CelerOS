@@ -316,6 +316,12 @@ function runApp(relPath, wire) {
     return { log: env.__harness.log, err: null, env: env };
 }
 
+// Exporta os stubs para outras ferramentas (ex.: tools/app_lint, modo check).
+// Os testes abaixo rodam apenas quando executado direto:
+//   node test/js_harness/run.js
+module.exports = { makeEnv: makeEnv, runApp: runApp };
+if (require.main !== module) return;
+
 // ------------------------------------------------------------- testes -----
 var failures = 0;
 function check(name, cond, extra) {

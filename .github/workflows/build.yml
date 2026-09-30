@@ -17,6 +17,10 @@ jobs:
           node-version: '20'
       - name: JS apps harness
         run: node test/js_harness/run.js
+      - name: app_lint tests (linter de apps JS)
+        run: node test/app_lint/run.js
+      - name: Lint dos apps do repo (data/apps + hub_apps)
+        run: node tools/app_lint/lint.js data/apps hub_apps
       - name: C++ host tests (lógica pura de main/Utils)
         run: |
           g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp

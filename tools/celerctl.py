@@ -679,6 +679,39 @@ def _rm_tree(link, path):
     link.simple("DELETE", path.encode() + b"\0")
 
 
+def _lint_app_folder(folder):
+    """Lint estatico (tools/app_lint) antes de empurrar o app ao dispositivo:
+    parse ES5 + checagem contra a API do firmware. Sem Node no PATH so avisa e
+    segue (celerctl roda em maquinas variadas); erros abortam o install."""
+    import subprocess
+    lint = Path(__file__).resolve().parent / "app_lint" / "lint.js"
+    if not lint.is_file():
+        print("aviso: tools/app_lint/lint.js ausente; instalando sem lint")
+        return
+    try:
+        out = subprocess.run(["node", str(lint), "--json", str(folder)],
+                             capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        print("aviso: node ausente no PATH; instalando sem lint")
+        return
+    except subprocess.TimeoutExpired:
+        die("lint do app demorou demais (120s)")
+    if out.returncode == 2:
+        die(f"lint falhou: {(out.stderr or out.stdout).strip()}")
+    try:
+        import json as _json
+        r = _json.loads(out.stdout)
+    except ValueError:
+        print("aviso: saida inesperada do lint; instalando sem lint")
+        return
+    diags = [d for a in r.get("apps", []) for d in a.get("diagnostics", [])]
+    for d in diags:
+        print(f"{d.get('severity')}: {d['file']}:{d['line']}:{d['col']} {d['message']}")
+    erros = sum(1 for d in diags if d.get("severity") == "erro")
+    if erros:
+        die(f"{erros} erro(s) no app — corrija ou force com --pula-lint")
+
+
 def cmd_apps(args):
     link = open_link(args)
     try:
@@ -708,6 +741,8 @@ def cmd_apps(args):
             src = Path(args.folder).resolve()
             if not (src / "app.json").is_file():
                 die(f"{src} nao tem app.json")
+            if not args.pula_lint:
+                _lint_app_folder(src)
             base = "/sd/apps" if args.sd else "/local/apps"
             dest = f"{base}/{src.name}"
             files = [f for f in sorted(src.rglob("*")) if f.is_file()]
@@ -834,6 +869,7 @@ def main():
     a = apps_sub.add_parser("install", help="instala uma pasta de app local")
     a.add_argument("folder", help="pasta com app.json + main.js (+ icon.bin)")
     a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
+    a.add_argument("--pula-lint", action="store_true", help="instala mesmo com erros de lint")
     a = apps_sub.add_parser("rm", help="remove um app instalado")
     a.add_argument("name", help="nome da pasta do app")
     a.add_argument("--sd", action="store_true", help="remove de /sd/apps")

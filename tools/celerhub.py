@@ -21,14 +21,24 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import zipfile
 from pathlib import Path
 from urllib import error, request
 
-# API level maximo que os devices entendem (main/CMakeLists.txt)
-MAX_API_LEVEL = 6
+
+def _read_api_level():
+    # API level maximo que os devices entendem — fonte unica: main/CMakeLists.txt
+    cmake = Path(__file__).resolve().parent.parent / "main" / "CMakeLists.txt"
+    m = re.search(r"CELEROS_API_LEVEL=(\d+)", cmake.read_text(encoding="utf-8"))
+    if not m:
+        die(f"{cmake}: CELEROS_API_LEVEL nao encontrado")
+    return int(m.group(1))
+
+
+MAX_API_LEVEL = _read_api_level()
 # Teto do hub (download streaming via Net.download, sem limite de 32KB).
 # Acima de STREAM_SAFE o app precisa declarar api >= 6: firmwares antigos
 # instalavam via Net.get, que trunca o corpo em 32KB.
@@ -37,7 +47,6 @@ STREAM_SAFE_MAIN_JS = 30 * 1024
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-ES5_BAD = re.compile(r"\blet\b|\bconst\b|=>|\bclass\s|\`")
 
 
 def vtuple(v):
@@ -87,6 +96,37 @@ def http(method, url, token=None, data=None, headers=None, timeout=30):
 
 
 # --------------------------------------------------------------- validacao -
+def run_app_lint(folder: Path):
+    """Lint estatico do app (tools/app_lint): parser ES5 de verdade + checagem
+    da API do firmware (funcoes, aridades, permissoes, niveis). Erros bloqueiam.
+    Requer Node no PATH (mesmo do harness). Devolve avisos como strings."""
+    lint = Path(__file__).resolve().parent / "app_lint" / "lint.js"
+    if not lint.is_file():
+        die("tools/app_lint/lint.js ausente")
+    try:
+        out = subprocess.run(
+            ["node", str(lint), "--json", str(folder)],
+            capture_output=True, text=True, timeout=120,
+        )
+    except FileNotFoundError:
+        die("node nao encontrado no PATH: necessario para o lint do app")
+    except subprocess.TimeoutExpired:
+        die("lint do app demorou demais (120s)")
+    if out.returncode == 2:
+        die(f"lint falhou: {(out.stderr or out.stdout).strip()}")
+    try:
+        r = json.loads(out.stdout)
+    except ValueError:
+        die(f"saida inesperada do lint: {out.stdout[:200]!r}")
+    diags = [d for a in r.get("apps", []) for d in a.get("diagnostics", [])]
+    erros = [d for d in diags if d.get("severity") == "erro"]
+    if erros:
+        for d in erros:
+            print(f"erro: {d['file']}:{d['line']}:{d['col']} {d['message']}", file=sys.stderr)
+        die(f"{folder}: {len(erros)} erro(s) no lint — node tools/app_lint/lint.js {folder}")
+    return [f"lint: {d['file']}:{d['line']} {d['message']}" for d in diags]
+
+
 def validate(folder: Path):
     """Confere o pacote localmente; devolve (meta, avisos). Devolve erros via die."""
     avisos = []
@@ -110,10 +150,9 @@ def validate(folder: Path):
     if api == 5 and "keypad" not in code_path.read_text(encoding="utf-8", errors="replace"):
         avisos.append("declara api 5 mas nao usa keypad*")
 
-    src = code_path.read_text(encoding="utf-8")
-    bad = ES5_BAD.search(src)
-    if bad:
-        avisos.append(f"sintaxe fora do ES5 perto de {bad.group(0)!r} (Duktape e ES5.1)")
+    # Lint estatico (ES5 real + API do firmware): erros bloqueiam o publish
+    avisos.extend(run_app_lint(folder))
+
     size = code_path.stat().st_size
     if size > MAX_MAIN_JS:
         die(f"{folder}: main.js tem {size}B (max {MAX_MAIN_JS}B)")
