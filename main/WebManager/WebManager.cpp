@@ -20,6 +20,9 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
 #include "../Kernel/TimeManager.h"
+#include "../Display/ScreenCapture.h"
+#include "../UI/Kui.h"
+#include "../Boards/Board.h"
 #include "WebAuth.h"
 
 static const char* WM_TAG = "celer.web";
@@ -31,6 +34,8 @@ extern const uint8_t filemanager_gz_start[] asm("_binary_filemanager_html_gz_sta
 extern const uint8_t filemanager_gz_end[] asm("_binary_filemanager_html_gz_end");
 extern const uint8_t ota_upload_gz_start[] asm("_binary_ota_upload_html_gz_start");
 extern const uint8_t ota_upload_gz_end[] asm("_binary_ota_upload_html_gz_end");
+extern const uint8_t screen_gz_start[] asm("_binary_screen_html_gz_start");
+extern const uint8_t screen_gz_end[] asm("_binary_screen_html_gz_end");
 
 static esp_err_t sendGzipHtml(httpd_req_t* req, const uint8_t* start, const uint8_t* end) {
     httpd_resp_set_type(req, "text/html");
@@ -829,6 +834,60 @@ static esp_err_t handler_upload(httpd_req_t* req) {
     return handleMultipart(req, "Upload Complete");
 }
 
+// ---------------------------------------------------------------------------
+// Tela no navegador: /screen (pagina), /api/screen (um quadro RLE), /api/touch
+// ---------------------------------------------------------------------------
+
+static esp_err_t handler_screen_page(httpd_req_t* req) {
+    return sendGzipHtml(req, screen_gz_start, screen_gz_end);
+}
+
+// Um quadro: u16 w + u16 h + u8 formato (1 = RLE) e os pares {u16 contagem,
+// u16 pixel RGB565} LE — mesmo formato do `celerctl screencap`. A leitura
+// passa pela task da UI (ScreenCapture), em blocos de linhas: o aparelho
+// segue fluido enquanto alguem assiste.
+static esp_err_t handler_screen_frame(httpd_req_t* req) {
+    constexpr size_t kCap = 2048;
+    uint8_t* buf = (uint8_t*)malloc(kCap);
+    if (buf == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sem memoria");
+        return ESP_OK;
+    }
+    CelerDisplay& tft = Board::display();
+    const uint16_t w = (uint16_t)tft.width(), h = (uint16_t)tft.height();
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    const uint8_t head[5] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8), 1};
+    bool ok = httpd_resp_send_chunk(req, (const char*)head, sizeof(head)) == ESP_OK;
+    if (ok) {
+        ok = ScreenCapture::stream(true, buf, kCap, [req](const uint8_t* d, size_t n) {
+            return httpd_resp_send_chunk(req, (const char*)d, n) == ESP_OK;
+        });
+    }
+    free(buf);
+    httpd_resp_send_chunk(req, nullptr, 0);  // fim do chunked (tambem apos falha)
+    return ESP_OK;
+}
+
+// POST /api/touch?d=1|0&x=..&y=.. (pixels fisicos): mesma fila do
+// `celerctl tap` (TouchInjector) — o toque do navegador vale como o do dedo
+static esp_err_t handler_touch(httpd_req_t* req) {
+    char q[48] = "", v[8];
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    kui::TouchInjector::Sample s;
+    s.down = httpd_query_key_value(q, "d", v, sizeof(v)) == ESP_OK && v[0] == '1';
+    s.x = httpd_query_key_value(q, "x", v, sizeof(v)) == ESP_OK ? (uint16_t)atoi(v) : 0;
+    s.y = httpd_query_key_value(q, "y", v, sizeof(v)) == ESP_OK ? (uint16_t)atoi(v) : 0;
+    s.delayMs = 0;
+    if (!kui::TouchInjector::push(&s, 1)) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "fila de toque cheia");
+        return ESP_OK;
+    }
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
 static esp_err_t handler_update_get(httpd_req_t* req) {
     addCORS(req);
     sendGzipHtml(req, ota_upload_gz_start, ota_upload_gz_end);
@@ -850,7 +909,7 @@ void WebManager::startWebServerIfNeeded() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.stack_size = 16384;       // parser multipart + JSON na pilha do httpd
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
@@ -870,6 +929,9 @@ void WebManager::startWebServerIfNeeded() {
     static const RouteCtx C_UPLOAD{handler_upload, true};
     static const RouteCtx C_UPDATE_GET{handler_update_get, false};
     static const RouteCtx C_UPDATE_POST{handler_update_post, true};
+    static const RouteCtx C_SCREEN_PAGE{handler_screen_page, false};
+    static const RouteCtx C_SCREEN_FRAME{handler_screen_frame, false};
+    static const RouteCtx C_TOUCH{handler_touch, true};  // injeta toque: exige o header anti-CSRF
 
     const httpd_uri_t routes[] = {
         {"/",             HTTP_GET,    routeGuard, (void*)&C_INDEX},
@@ -883,6 +945,9 @@ void WebManager::startWebServerIfNeeded() {
         {"/api/upload",   HTTP_POST,   routeGuard, (void*)&C_UPLOAD},
         {"/update",       HTTP_GET,    routeGuard, (void*)&C_UPDATE_GET},
         {"/update",       HTTP_POST,   routeGuard, (void*)&C_UPDATE_POST},
+        {"/screen",       HTTP_GET,    routeGuard, (void*)&C_SCREEN_PAGE},
+        {"/api/screen",   HTTP_GET,    routeGuard, (void*)&C_SCREEN_FRAME},
+        {"/api/touch",    HTTP_POST,   routeGuard, (void*)&C_TOUCH},
     };
     for (const auto& r : routes) {
         httpd_register_uri_handler(s_server, &r);

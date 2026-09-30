@@ -33,8 +33,8 @@ duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
     if (timeoutMs > 8000) timeoutMs = 8000;
 
     present();  // bloqueante por segundos
-    CelerLink::Peer peers[20];
-    int n = CelerLink::scan((uint32_t)timeoutMs, peers, 20);
+    CelerLink::Peer peers[16];  // = cache do scan; RSSI mais forte primeiro
+    int n = CelerLink::scan((uint32_t)timeoutMs, peers, 16);
 
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
@@ -111,14 +111,27 @@ duk_ret_t JSBindings::js_linkPoll(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_linkStatus(duk_context *ctx) {
+    CelerLink::Info st;
+    CelerLink::info(&st);
     duk_push_object(ctx);
-    duk_push_boolean(ctx, CelerLink::connected() ? 1 : 0);
+    duk_push_boolean(ctx, st.connected ? 1 : 0);
     duk_put_prop_string(ctx, -2, "connected");
-    char id[18];
-    CelerLink::peerId(id, sizeof(id));
-    duk_push_string(ctx, id);
+    duk_push_string(ctx, st.peer);
     duk_put_prop_string(ctx, -2, "peer");
-    duk_push_boolean(ctx, CelerLink::listening() ? 1 : 0);
+    duk_push_boolean(ctx, st.listening ? 1 : 0);
     duk_put_prop_string(ctx, -2, "listening");
+    // "central" = nos conectamos; "peripheral" = conectaram em nos
+    duk_push_string(ctx, !st.connected ? "" : (st.central ? "central" : "peripheral"));
+    duk_put_prop_string(ctx, -2, "role");
+    duk_push_string(ctx, st.name);
+    duk_put_prop_string(ctx, -2, "name");
+    duk_push_int(ctx, st.mtu);
+    duk_put_prop_string(ctx, -2, "mtu");
+    duk_push_int(ctx, st.rssi);
+    duk_put_prop_string(ctx, -2, "rssi");
+    duk_push_int(ctx, st.pending);
+    duk_put_prop_string(ctx, -2, "pending");
+    duk_push_uint(ctx, st.dropped);
+    duk_put_prop_string(ctx, -2, "dropped");
     return 1;
 }

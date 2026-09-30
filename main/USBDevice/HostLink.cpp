@@ -1,4 +1,5 @@
 #include "HostLink.h"
+#include "../Display/ScreenCapture.h"
 #include "CelerShell.h"
 #include "LogSink.h"
 #include "FileSystem/FileSystem.h"
@@ -524,61 +525,17 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     CelerDisplay& tft = Board::display();
     const uint16_t w = (uint16_t)tft.width();
     const uint16_t h = (uint16_t)tft.height();
-    uint16_t* row = (uint16_t*)malloc((size_t)w * 2);
-    const size_t cap = (HostLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
-    if (row == nullptr) {
-        respondError(KL_SCREENSHOT, "sem memoria para captura");
-        return;
-    }
     uint8_t head[5] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)h, (uint8_t)(h >> 8), (uint8_t)(rle ? 1 : 0)};
     respond(KL_SCREENSHOT, 0, head, sizeof(head));
-    // blocos montados direto no frame de resposta (sem 4KB extras de heap)
-    uint8_t* out = txPayload();
-
-    size_t used = 0;
-    auto flush = [&]() {
-        if (used > 0 && s_writer != nullptr) sendFrame(KL_SCR_DATA, 0, (uint16_t)used);
-        used = 0;
-    };
-    uint16_t runPx = 0, runLen = 0;
-    auto emitRun = [&]() {
-        if (runLen == 0) return;
-        if (used + 4 > cap) flush();
-        out[used++] = (uint8_t)runLen;
-        out[used++] = (uint8_t)(runLen >> 8);
-        out[used++] = (uint8_t)runPx;
-        out[used++] = (uint8_t)(runPx >> 8);
-        runLen = 0;
-    };
-
-    for (uint16_t y = 0; y < h && s_writer != nullptr; y++) {
-        tft.readRect(0, y, w, 1, row);  // RGB565 (swapBytes: ordem nativa LE)
-        if (!rle) {
-            const uint8_t* src = (const uint8_t*)row;
-            size_t rem = (size_t)w * 2;
-            while (rem > 0) {
-                size_t n = cap - used < rem ? cap - used : rem;
-                memcpy(out + used, src, n);
-                used += n;
-                src += n;
-                rem -= n;
-                if (used == cap) flush();
-            }
-            continue;
-        }
-        for (uint16_t x = 0; x < w; x++) {
-            if (runLen > 0 && row[x] == runPx && runLen < 0xFFFF) {
-                runLen++;
-            } else {
-                emitRun();
-                runPx = row[x];
-                runLen = 1;
-            }
-        }
-    }
-    emitRun();
-    flush();
-    free(row);
+    // Leitura pela task da UI (ScreenCapture): ler o display desta task
+    // corria com o desenho da UI — linhas deslocadas na captura. Blocos
+    // montados direto no frame de resposta (sem 4KB extras de heap).
+    const size_t cap = (HostLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
+    ScreenCapture::stream(rle, txPayload(), cap, [](const uint8_t*, size_t n) {
+        if (s_writer == nullptr) return false;
+        sendFrame(KL_SCR_DATA, 0, (uint16_t)n);
+        return true;
+    });
 }
 
 // ------------------------------------------------------------- touch inject

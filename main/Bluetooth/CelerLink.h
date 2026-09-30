@@ -16,13 +16,28 @@
 // (main/USBDevice/HostLink.h).
 class CelerLink {
 public:
-    static constexpr size_t MAX_MSG = 240;  // payload por mensagem (cabe no MTU 256 - 3)
+    static constexpr size_t MAX_MSG = 240;   // payload por mensagem (cabe no MTU 256 - 3)
+    static constexpr size_t MAX_NAME = 29;   // nome no scan response (31 - 2 de cabecalho)
+    static constexpr int RX_DEPTH = 8;       // fila de mensagens recebidas
 
     // Par visto num scan. id = "AA:BB:CC:DD:EE:FF" (17 chars), name = advertising.
     struct Peer {
         char id[18];
-        char name[24];
+        char name[MAX_NAME + 1];
         int8_t rssi;
+    };
+
+    // Estado da sessao para o status() do JS.
+    struct Info {
+        bool connected;     // pronto para send() (central: ja inscrito)
+        bool listening;     // advertising pedido via start()
+        bool central;       // nos conectamos no peer (vs peer conectou em nos)
+        char peer[18];      // "" sem conexao
+        char name[MAX_NAME + 1];  // nosso nome de advertising
+        uint16_t mtu;       // MTU ATT negociado (0 sem conexao)
+        int8_t rssi;        // RSSI da conexao (0 sem conexao/leitura)
+        uint16_t pending;   // mensagens na fila RX
+        uint32_t dropped;   // mensagens descartadas por fila cheia
     };
 
     // Inicializacao lazy do NimBLE (idempotente; ~300ms na 1a chamada).
@@ -35,24 +50,28 @@ public:
     static bool listening();
 
     // Papel central: scan bloqueante filtrando o servico Celer Link.
-    // Preenche ate max entradas de out; devolve quantas preencheu.
+    // Preenche ate max entradas de out (RSSI mais forte primeiro).
     static int scan(uint32_t ms, Peer* out, int max);
 
-    // Conecta por "AA:BB:..." ou pelo nome do ultimo scan (bloqueante).
+    // Conecta por "AA:BB:..." ou pelo nome do ultimo scan (bloqueante;
+    // ms e o prazo TOTAL: conexao + MTU + descoberta + inscricao).
     static bool connect(const char* idOrName, uint32_t ms);
     static bool disconnect();
     static bool connected();
 
-    // Mensagens (melhor esforco, single peer, fila RX de 8 entradas).
+    // Mensagens (single peer, fila RX de RX_DEPTH; cheia descarta a MAIS
+    // ANTIGA — num controle remoto o comando novo vale mais).
     static bool send(const void* data, size_t len);
     // Mensagem recebida; false = fila vazia. len recebe os bytes copiados.
     static bool poll(void* buf, size_t cap, size_t* len);
 
     // Id do peer conectado ("" sem conexao).
     static void peerId(char* out, size_t cap);
+    static void info(Info* out);
 
     // Reset de sessao entre apps (JSBindings::init): desconecta, para o
-    // advertising e limpa a fila. O NimBLE segue inicializado.
+    // advertising, volta o nome default e limpa a fila. O NimBLE segue
+    // inicializado.
     static void appReset();
 };
 
