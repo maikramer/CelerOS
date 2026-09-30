@@ -88,6 +88,7 @@ var PAD = [
 ];
 var STOP_IDX = 4;
 var BACK = [0, 0, 64, 40];   // "< sair" no canto superior esquerdo
+var MODE = [10, 254, W - 20, 30];  // troca a marcha do robo ({type:"mode"})
 var held = -1;
 var lastSend = 0;
 
@@ -107,6 +108,12 @@ function drawCtrl(note) {
         System.fillRect(p[0], p[1], p[2], p[3], on ? TH.accent : TH.raised);
         System.drawRect(p[0], p[1], p[2], p[3], TH.stroke);
         center(p[4], p[1] + (p[3] - fh(2)) / 2, 2, on ? ONACC : TH.text);
+    }
+    // so aparece com robo que reporta marcha (tel.mode, ex.: Dog Face)
+    if (tel && tel.mode) {
+        System.fillRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.card);
+        System.drawRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.stroke);
+        center("marcha: " + tel.mode + " (trocar)", MODE[1] + (MODE[3] - fh(1)) / 2, 1, TH.text);
     }
     center("soltar = parar", H - 8 - fh(1), 1, TH.textDim);
 }
@@ -199,6 +206,12 @@ while (true) {
                 continue;
             }
             st = CelerLink.status();
+        }
+
+        if (press && tel && tel.mode && hit(t, MODE)) {
+            CelerLink.send({type: "mode"});  // o robo para e responde com tel nova
+            System.delay(30);
+            continue;
         }
 
         if (press && hit(t, BACK)) {

@@ -81,7 +81,7 @@ idf.py -B build -DSDKCONFIG=build/sdkconfig \
 idf.py -B build build flash -p /dev/ttyUSB0 monitor
 # CYD (ESP32): same, using build-cyd, boards/cyd/..., -DCELEROS_BOARD=cyd set-target esp32
 
-tools/flash_data.sh [smartdisplay|cyd] [PORT]     # LittleFS data partition (needs IDF env)
+tools/flash_data.sh [smartdisplay|cyd|spotpear-dog] [PORT]  # LittleFS data partition (needs IDF env; PORT default ttyACM0 on the dog, ttyUSB0 elsewhere)
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool
 python3 tools/ota_server.py --board smartdisplay  # local OTA server, port 10234

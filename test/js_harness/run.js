@@ -757,62 +757,124 @@ function range(a, b) {  // inclusivo, crescente ou decrescente
 }
 function count(seq, v) { var n = 0; for (var i = 0; i < seq.length; i++) if (seq[i] === v) n++; return n; }
 
+// Mapa cru/fisico -> angulo de servo lido do PROPRIO app (SIGN/NEUTRAL/FWD):
+// os testes seguem a calibracao feita no cao, sem numeros magicos.
+var DOG_SRC = fs.readFileSync(path.join(ROOT, 'boards/spotpear-dog/data/apps/Dog Face/main.js'), 'utf8');
+function dogTable(name) {
+    var m = new RegExp('var ' + name + ' = \\{ FL: (-?\\d+), FR: (-?\\d+), BL: (-?\\d+), BR: (-?\\d+) \\}').exec(DOG_SRC);
+    return { FL: +m[1], FR: +m[2], BL: +m[3], BR: +m[4] };
+}
+var D_SIGN = dogTable('SIGN'), D_NEU = dogTable('NEUTRAL'), D_FWD = dogTable('FWD');
+var D_PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
+function rawAng(k, raw) { return Math.round(D_NEU[k] + D_SIGN[k] * raw); }
+function physAng(k, a) { return rawAng(k, D_FWD[k] * a); }
+function rawRange(k, a, b) { return range(a, b).map(function(v) { return rawAng(k, v); }); }
+function dogSeqs(log) {
+    return { FL: servoSeq(log, 17), FR: servoSeq(log, 13), BL: servoSeq(log, 18), BR: servoSeq(log, 14) };
+}
+function allNeutralAtEnd(q) {
+    return ['FL', 'FR', 'BL', 'BR'].every(function(k) { return q[k][q[k].length - 1] === D_NEU[k]; });
+}
+function holdMoves(ms) {
+    var items = [];
+    for (var t = 0; t <= ms; t += 250) items.push([t, '{"type":"move","dir":"up"}']);
+    return items;
+}
+
 (function() {
-    console.log('Dog Face (marcha ESP-Hi):');
-    var MOVE = '{"type":"move","dir":"up"}';
+    console.log('Dog Face (marcha ESP-Hi, modo esphi):');
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
         env.CelerLink.status = function() { return { connected: true }; };
         // seta segurada 2 s (move a cada 250 ms), depois SOME sem stop
         // (stop perdido): o keepalive tem que parar o robo sozinho
-        var items = [];
-        for (var t = 0; t <= 2000; t += 250) items.push([t, MOVE]);
+        var items = [[0, '{"type":"mode","walk":"esphi"}']];
+        holdMoves(2000).forEach(function(it) { items.push([it[0] + 100, it[1]]); });
         items.push([6000, '{"cmd":"pet"}']);
         linkSchedule(env, items);
     });
     check('roda sem erro', r.err === null, r.err || '');
-    var FL = servoSeq(r.log, 17), FR = servoSeq(r.log, 13), BL = servoSeq(r.log, 18), BR = servoSeq(r.log, 14);
-    check('boot em pe (90 nas 4)', FL[0] === 90 && FR[0] === 90 && BL[0] === 90 && BR[0] === 90);
-    // servo_dog_forward, fase A: FL = FL_BACKWARD - i, FR = FR_FORWARD - i - 5,
-    // BL = BL_BACKWARD + i - 5, BR = BR_FORWARD + i (neutro 90, passo 20)
-    check('fase A identica ao ESP-Hi (FL 110..71)', seqHas(FL, range(110, 71)));
-    check('fase A FR 105..66 / BL 65..104 / BR 70..109',
-          seqHas(FR, range(105, 66)) && seqHas(BL, range(65, 104)) && seqHas(BR, range(70, 109)));
-    // fase B: FL = FL_FORWARD + i, FR = FR_BACKWARD + i + 5, BL = BL_FORWARD - i + 5,
-    // BR = BR_BACKWARD - i
-    check('fase B identica ao ESP-Hi (FL 70..109, BR 110..71)', seqHas(FL, range(70, 109)) && seqHas(BR, range(110, 71)));
-    check('assimetria do STEP_OFFSET (FR 66->75, BL 104->115)', seqHas(FR, [66, 75]) && seqHas(BL, [104, 115]));
-    check('move repetido nao reinicia o passo (A nunca emenda em A)', !seqHas(FL, [71, 110]));
-    check('varios ciclos enquanto segura', count(FL, 110) >= 3, count(FL, 110) + ' ciclos');
-    check('keepalive expira e volta ao neutro',
-          FL[FL.length - 1] === 90 && FR[FR.length - 1] === 90 && BL[BL.length - 1] === 90 && BR[BR.length - 1] === 90);
-    check('telemetria tel enviada', joinLog(r.log).indexOf('[link] tx {"type":"tel"') >= 0);
+    var q = dogSeqs(r.log);
+    check('boot em pe (neutro nas 4)', q.FL[0] === D_NEU.FL && q.FR[0] === D_NEU.FR && q.BL[0] === D_NEU.BL && q.BR[0] === D_NEU.BR);
+    // servo_dog_forward, fase A (cru): FL = B - i, FR = F - i - 5, BL = B + i - 5, BR = F + i
+    check('fase A identica ao ESP-Hi',
+          seqHas(q.FL, rawRange('FL', 20, -19)) && seqHas(q.FR, rawRange('FR', 15, -24)) &&
+          seqHas(q.BL, rawRange('BL', -25, 14)) && seqHas(q.BR, rawRange('BR', -20, 19)));
+    // fase B: FL = F + i, FR = B + i + 5, BL = F - i + 5, BR = B - i
+    check('fase B identica ao ESP-Hi',
+          seqHas(q.FL, rawRange('FL', -20, 19)) && seqHas(q.FR, rawRange('FR', -15, 24)) &&
+          seqHas(q.BL, rawRange('BL', 25, -14)) && seqHas(q.BR, rawRange('BR', 20, -19)));
+    check('assimetria do STEP_OFFSET (FR -24->-15, BL 14->25)',
+          seqHas(q.FR, [rawAng('FR', -24), rawAng('FR', -15)]) && seqHas(q.BL, [rawAng('BL', 14), rawAng('BL', 25)]));
+    check('move repetido nao reinicia o passo (A nunca emenda em A)', !seqHas(q.FL, [rawAng('FL', -19), rawAng('FL', 20)]));
+    check('varios ciclos enquanto segura', count(q.FL, rawAng('FL', 20)) >= 3, count(q.FL, rawAng('FL', 20)) + ' ciclos');
+    check('keepalive expira e volta ao neutro', allNeutralAtEnd(q));
+    check('telemetria com o modo', joinLog(r.log).indexOf('"mode":"esphi"') >= 0);
 })();
 
 (function() {
-    console.log('Dog Face (outras marchas + calibracao):');
+    console.log('Dog Face (outras marchas ESP-Hi + calibracao):');
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
         env.CelerLink.status = function() { return { connected: true }; };
         linkSchedule(env, [
-            [0, '{"type":"gait","name":"back"}'],
+            [0, '{"type":"mode","walk":"esphi"}'],
+            [100, '{"type":"gait","name":"back"}'],
             [3000, '{"type":"gait","name":"left"}'],
             [6000, '{"type":"gait","name":"right"}'],
             [9000, '{"type":"calib"}']
         ]);
     });
     check('roda sem erro', r.err === null, r.err || '');
-    var FL = servoSeq(r.log, 17), FR = servoSeq(r.log, 13), BL = servoSeq(r.log, 18), BR = servoSeq(r.log, 14);
-    // backward A: FL = FL_FORWARD + i - 5 (65..104), BR = BR_BACKWARD - i - 5 (105..66)
-    check('back = servo_dog_backward', seqHas(FL, range(65, 104)) && seqHas(BR, range(105, 66)));
-    // turn_left A: FL = FL_BACKWARD - i + 5 (115..76), FR = FR_BACKWARD + i (70..109)
-    check('left = servo_dog_turn_left', seqHas(FL, range(115, 76)) && seqHas(FR, range(70, 109)));
-    // turn_right A: FL = FL_FORWARD + i (70..109), FR = FR_FORWARD - i + 5 (115..76)
-    check('right = servo_dog_turn_right', seqHas(FL, range(70, 109)) && seqHas(FR, range(115, 76)));
-    check('gait sem repeat para sozinha (2 ciclos) em 90', FL[FL.length - 1] === 90);
-    // calib: cada perna 25 graus "pra frente" na convencao ESP-Hi, em ordem
+    var q = dogSeqs(r.log);
+    // backward A: FL = F + i - 5, BR = B - i - 5
+    check('back = servo_dog_backward', seqHas(q.FL, rawRange('FL', -25, 14)) && seqHas(q.BR, rawRange('BR', 15, -24)));
+    // turn_left A: FL = B - i + 5, FR = B + i
+    check('left = servo_dog_turn_left', seqHas(q.FL, rawRange('FL', 25, -14)) && seqHas(q.FR, rawRange('FR', -20, 19)));
+    // turn_right A: FL = F + i, FR = F - i + 5
+    check('right = servo_dog_turn_right', seqHas(q.FL, rawRange('FL', -20, 19)) && seqHas(q.FR, rawRange('FR', 25, -14)));
+    check('gait sem repeat para sozinha (2 ciclos) no neutro', q.FL[q.FL.length - 1] === D_NEU.FL);
+    // calib: cada perna 25 graus pra FRENTE (fisico), em ordem
     var j = joinLog(r.log);
-    var iFL = j.indexOf('[servo] 17@65'), iFR = j.indexOf('[servo] 13@115', iFL),
-        iBL = j.indexOf('[servo] 18@115', iFR), iBR = j.indexOf('[servo] 14@65', iBL);
+    var iFL = j.indexOf('[servo] 17@' + physAng('FL', 25)), iFR = j.indexOf('[servo] 13@' + physAng('FR', 25), iFL),
+        iBL = j.indexOf('[servo] 18@' + physAng('BL', 25), iFR), iBR = j.indexOf('[servo] 14@' + physAng('BR', 25), iBL);
     check('calib FL,FR,BL,BR pra frente em ordem', iFL >= 0 && iFR > iFL && iBL > iFR && iBR > iBL);
+})();
+
+(function() {
+    console.log('Dog Face (centopeia, modo creep default):');
+    var P = 20, T = 25;
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        var items = holdMoves(7000);
+        items.push([12000, '{"type":"tune","P":30,"T":20,"order":["FR","BR","FL","BL"]}']);
+        holdMoves(4000).forEach(function(it) { items.push([it[0] + 12100, it[1]]); });
+        linkSchedule(env, items);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    function at(k, a, from) { return j.indexOf('[servo] ' + D_PIN[k] + '@' + physAng(k, a), from || 0); }
+    // 1. remada: as 4 chegam juntas a -P (pata pra tras, corpo pra frente)
+    var pw = Math.max(at('FL', -P), at('FR', -P), at('BL', -P), at('BR', -P));
+    check('remada leva as 4 patas a -P', at('FL', -P) >= 0 && at('FR', -P) >= 0 && at('BL', -P) >= 0 && at('BR', -P) >= 0);
+    // 2. recuperacao BL: encurta FR (-P-T), BL vai a +P no ar, FR volta a -P
+    var tFR = at('FR', -P - T, pw), sBL = at('BL', P, tFR), uFR = at('FR', -P, sBL);
+    check('BL recupera com FR encurtado (diagonal oposta)', tFR > pw && sBL > tFR && uFR > sBL);
+    // depois FL com BR encurtado, BR com FL (ja na frente: +P+T), FR com BL (+P+T)
+    var tBR = at('BR', -P - T, uFR), sFL = at('FL', P, tBR);
+    var tFL = at('FL', P + T, sFL), sBR = at('BR', P, tFL);
+    var tBL = at('BL', P + T, sBR), sFR = at('FR', P, tBL);
+    check('ordem creep BL, FL, BR, FR com o canto oposto certo',
+          tBR > uFR && sFL > tBR && tFL > sFL && sBR > tFL && tBL > sBR && sFR > tBL);
+    check('nenhuma pata recua durante a recuperacao dela (so a remada empurra)',
+          j.indexOf('[servo] ' + D_PIN.BL + '@' + physAng('BL', -P - T)) < 0);
+    var q = dogSeqs(r.log);
+    check('varios ciclos enquanto segura', count(q.FR, physAng('FR', -P - T)) >= 2, count(q.FR, physAng('FR', -P - T)) + ' ciclos');
+    // tune ao vivo: P=30/T=20, ordem FR primeiro (unload BL a -30-20)
+    check('tune responde e vale no proximo ciclo',
+          j.indexOf('[link] tx {"type":"tune","P":30,"T":20') >= 0 && at('BL', -30 - 20) >= 0 &&
+          at('FR', 30, at('BL', -30 - 20)) > 0);
+    check('tune salvo em /local/dogtune.json', r.env.FS.exists('/local/dogtune.json') &&
+          JSON.parse(r.env.FS.readTextFile('/local/dogtune.json')).P === 30);
+    check('keepalive expira e volta ao neutro', allNeutralAtEnd(q));
 })();
 
 (function() {
@@ -826,9 +888,9 @@ function count(seq, v) { var n = 0; for (var i = 0; i < seq.length; i++) if (seq
         env.CelerLink.poll = function() { polls++; return inner(); };
     });
     check('roda sem erro', r.err === null, r.err || '');
-    var FL = servoSeq(r.log, 17);
-    check('andou antes da queda', seqHas(FL, range(110, 71)));
-    check('queda do link para o robo (neutro)', FL[FL.length - 1] === 90);
+    var q = dogSeqs(r.log);
+    check('andou antes da queda', q.FR.indexOf(physAng('FR', -20)) >= 0);
+    check('queda do link para o robo (neutro)', allNeutralAtEnd(q));
 })();
 
 // Pad capacitivo roteirizado por relogio: [[t0, t1], ...] = tocado entre
@@ -856,9 +918,10 @@ function padSchedule(env, spans) {
         padSchedule(env, [[500, 1500]]);
     });
     check('roda sem erro (pad)', r.err === null, r.err || '');
-    var FLp = servoSeq(r.log, 17);
-    check('toque longo inicia walk', seqHas(FLp, range(110, 71)));
-    check('walk do pad segue sem link (sem keepalive)', count(FLp, 110) >= 3, count(FLp, 110) + ' ciclos');
+    var FRp = servoSeq(r.log, 13);
+    check('toque longo inicia walk', FRp.indexOf(physAng('FR', -45)) >= 0);
+    check('walk do pad segue sem link (sem keepalive)', count(FRp, physAng('FR', -45)) >= 3,
+          count(FRp, physAng('FR', -45)) + ' ciclos');
 
     // parado e sem link: dorme apos 2 min e solta os servos; barulho acorda
     var r2 = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
@@ -909,6 +972,23 @@ function holdFrames(x, y, n) {
     check('soltar a seta envia stop',
           j.indexOf('[link] tx {"type":"stop"}') > j.lastIndexOf('[link] tx {"type":"move"'));
     check('telemetria exibida', j.indexOf('batt 2340') >= 0);
+})();
+
+(function() {
+    console.log('Celer Remote (botao de marcha):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        env.__harness.tap(120, 80);
+        env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand","mode":"creep"}']);
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(120, 268);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('mostra a marcha do robo', j.indexOf('marcha: creep') >= 0);
+    check('toque troca a marcha ({type:"mode"})', j.indexOf('[link] tx {"type":"mode"}') >= 0);
 })();
 
 (function() {

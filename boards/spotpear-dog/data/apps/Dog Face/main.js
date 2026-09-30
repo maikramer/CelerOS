@@ -40,14 +40,24 @@ function PH_(h) { return Math.round(h * 320 / PH); }
 //
 // Offsets sao crus em relacao ao neutro, na convencao de sinais do ESP-Hi
 // (FL e BR "pra frente" = angulo menor; FR e BL = angulo maior).
-// CALIBRACAO: mande {"type":"calib"} pelo Celer Remote/nRF Connect — cada
-// perna (FL, FR, BL, BR, nessa ordem) vai 25 graus "pra frente" e volta.
-// Se alguma pata for pra TRAS, inverta o SIGN dela; ajuste NEUTRAL ate o
+//
+// SIGN espelhado: o ESP-Hi assume uma montagem "torcida" (FL/BR giram num
+// sentido, FR/BL no outro). O ZZPET NAO e assim: os servos de um lado sao
+// montados espelhados (o firmware-irmao xiaozhi-pet, mesma familia do stock,
+// aplica 180-angulo nos servos DIREITOS), e no comando o mesmo offset move
+// as 4 patas na MESMA direcao fisica. Sem inverter FR/BL aqui, o pace do
+// ESP-Hi degenera em "dianteiras juntas vs traseiras juntas": os atritos se
+// cancelam e o corpo so balanca pra frente e pra tras sem sair do lugar —
+// o sintoma da marcha 1.2.0.
+//
+// CALIBRACAO: mande {"type":"calib"} pelo Celer Remote/nRF Connect — as
+// QUATRO patas (FL, FR, BL, BR, nessa ordem) devem ir 25 graus pra FRENTE
+// e voltar. Pata indo pra tras = inverta o SIGN dela; ajuste NEUTRAL ate o
 // cao ficar reto em pe.
 var PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
 var KEYS = ["FL", "FR", "BL", "BR"];
 var NEUTRAL = { FL: 90, FR: 90, BL: 90, BR: 90 };   // trim por perna
-var SIGN = { FL: 1, FR: 1, BL: 1, BR: 1 };          // -1 = servo montado espelhado
+var SIGN = { FL: 1, FR: -1, BL: -1, BR: 1 };  // espelho dos FR/BL (ver acima)
 
 // API 10: servos moram no sub-objeto gpio (desligavel por Kconfig)
 var SERVO = (typeof System.gpio !== "undefined" && System.gpio.servo)
@@ -205,7 +215,8 @@ function startGait(name, repeat) {
             repeatGait = repeatGait || !!repeat;
             return true;  // mesma marcha em curso: nao reinicia o passo no meio
         }
-        gait = WALKS[name];
+        // modo creep: quadros gerados a cada ciclo; esphi: tabelas do C
+        gait = walkMode === "creep" ? { frames: true, d: DIRS[name], list: null } : WALKS[name];
         gaitPhase = 0;
         cyclesLeft = 2;
     } else {
@@ -239,30 +250,174 @@ function gaitTick(dt) {
         legTick(dt);
         return;
     }
-    runPhase(gait.phases[gaitPhase]);
-    if (gait.pause) System.delay(PAUSE_MS);
+    var len;
+    if (gait.frames) {
+        if (gaitPhase === 0 || !gait.list) gait.list = creepFrames(gait.d);
+        runFrame(gait.list[gaitPhase]);
+        len = gait.list.length;
+    } else {
+        runPhase(gait.phases[gaitPhase]);
+        if (gait.pause) System.delay(PAUSE_MS);
+        len = gait.phases.length;
+    }
     gaitPhase++;
-    if (gaitPhase >= gait.phases.length) {
+    if (gaitPhase >= len) {
         gaitPhase = 0;
         if (!repeatGait && --cyclesLeft <= 0) stopGait();
     }
 }
 
-// Calibracao: cada perna vai 25 graus "pra frente" (convencao ESP-Hi) e
-// volta, na ordem FL, FR, BL, BR. Pata indo pra tras = inverta o SIGN.
+// Calibracao: cada perna vai 25 graus pra FRENTE fisica (a mesma "frente"
+// da marcha centopeia, via putA) e volta, na ordem FL, FR, BL, BR. Pata
+// indo pra tras = inverta o FWD dela; todas pra tras = {"type":"tune","flip":true}.
 function calibrate() {
     if (gait !== null) stopGait();
     if (legsLimp) { legsLimp = false; legsHold(); }
     for (var i = 0; i < KEYS.length; i++) {
         var k = KEYS[i];
-        var dir = F[k] < 0 ? -1 : 1;
         System.print('[dog] calib ' + k + ' (pino ' + PIN[k] + ') pra frente');
-        for (var a = 1; a <= 25; a++) { put(k, dir * a); System.delay(20); }
+        for (var a = 1; a <= 25; a++) { putA(k, a); System.delay(20); }
         System.delay(600);
-        for (var b = 24; b >= 0; b--) { put(k, dir * b); System.delay(20); }
+        for (var b = 24; b >= 0; b--) { putA(k, b); System.delay(20); }
         System.delay(300);
     }
 }
+
+// ---------------------------------------------- marcha centopeia ------
+// Convencao FISICA: a > 0 = pata pra FRENTE (rumo ao focinho), 0 = perna
+// vertical. Cru = FWD * a (FWD = sinal de F, "frente" do ESP-Hi); o SIGN
+// la em cima cuida do espelho da montagem.
+//
+// Fisica da perna de 1 articulacao: altura do quadril = L * cos(a). Perna
+// vertical = mais comprida; inclinada = mais curta. Nao da pra "levantar"
+// uma pata, mas da pra ENCURTAR um canto: o corpo gira sobre a diagonal e
+// o canto OPOSTO sobe. Encurtar o traseiro-esq ergue o dianteiro-dir (o
+// corpo pivota na diagonal FL-BR), e vice-versa:
+//
+//   pata a mover   canto encurtado (diagonal oposta)
+//   FR             BL
+//   FL             BR
+//   BL             FR
+//   BR             FL
+//
+// Ciclo (d = +1 empurra o corpo pra frente, -1 pra tras; por perna):
+//   1. REMADA: as 4 patas no chao varrem de +P*d a -P*d juntas — o atrito
+//      de todas empurra pro mesmo lado e o corpo avanca ~2*L*sin(P).
+//   2. RECUPERACAO, uma pata por vez (ordem configuravel, default
+//      BL, FL, BR, FR = creep classico): inclina o canto oposto mais T
+//      graus (encurta, a pata alvo sai do chao), leva a pata alvo de volta
+//      a +P*d no ar, desinclina (a pata pousa na frente).
+// Movimento quase estatico, lento e robusto; nada empurra pra tras.
+//
+// FWD invertido em relacao a F do ESP-Hi: validado no cao — com o sinal do
+// ESP-Hi a pata erguida POUSAVA ATRAS (a recuperacao ia pra tras e a
+// remada empurrava ao contrario). FLIP (tune "flip") inverte ao vivo.
+var FWD = { FL: 1, FR: -1, BL: -1, BR: 1 };
+var FLIP = 1;
+function putA(k, a) { put(k, FLIP * FWD[k] * a); }
+function angA(k) { return FLIP * FWD[k] * off[k]; }
+
+var UNLOAD = { FR: "BL", FL: "BR", BL: "FR", BR: "FL" };
+var CREEP = { P: 20, T: 25, power: 600, tilt: 180, swing: 240, order: ["BL", "FL", "BR", "FR"] };
+var DIRS = {
+    walk: { FL: 1, FR: 1, BL: 1, BR: 1 },
+    back: { FL: -1, FR: -1, BL: -1, BR: -1 },
+    left: { FL: -1, FR: 1, BL: -1, BR: 1 },    // lado direito empurra, esquerdo recua
+    right: { FL: 1, FR: -1, BL: 1, BR: -1 }
+};
+var WALK_MODES = ["creep", "esphi"];
+var walkMode = "creep";
+var FRAME_STEP_MS = 10;
+
+function copyPose(p) { return { FL: p.FL, FR: p.FR, BL: p.BL, BR: p.BR }; }
+
+// Quadros de UM ciclo: [{p: pose fisica, ms}]. Refeito a cada ciclo para
+// o tune ao vivo valer ja no proximo passo.
+function creepFrames(d) {
+    var P = CREEP.P, T = CREEP.T, fr = [];
+    var a0 = {}, a1 = {};
+    for (var i = 0; i < KEYS.length; i++) {
+        a0[KEYS[i]] = P * d[KEYS[i]];
+        a1[KEYS[i]] = -P * d[KEYS[i]];
+    }
+    fr.push({ p: copyPose(a1), ms: CREEP.power });           // 1. remada
+    var cur = copyPose(a1);
+    for (var j = 0; j < CREEP.order.length; j++) {           // 2. recuperacao
+        var k = CREEP.order[j], u = UNLOAD[k];
+        var tilt = copyPose(cur);
+        tilt[u] = cur[u] + (cur[u] >= 0 ? T : -T);            // encurta o canto oposto
+        fr.push({ p: tilt, ms: CREEP.tilt });
+        var swing = copyPose(tilt);
+        swing[k] = a0[k];                                     // pata alvo vai a frente no ar
+        fr.push({ p: swing, ms: CREEP.swing });
+        cur = copyPose(swing);
+        cur[u] = tilt[u] - (cur[u] >= 0 ? T : -T);           // desinclina: pata pousa
+        fr.push({ p: copyPose(cur), ms: CREEP.tilt });
+    }
+    return fr;
+}
+
+// Interpola da pose atual ate fr.p em fr.ms (bloqueante, passo de 10 ms,
+// guiado pelo relogio como o runPhase).
+function runFrame(fr) {
+    var from = { FL: angA("FL"), FR: angA("FR"), BL: angA("BL"), BR: angA("BR") };
+    var n = Math.max(1, Math.round(fr.ms / FRAME_STEP_MS));
+    var t0 = System.millis();
+    for (var i = 1; i <= n; i++) {
+        var f = i / n;
+        for (var q = 0; q < KEYS.length; q++) {
+            var k = KEYS[q];
+            putA(k, from[k] + (fr.p[k] - from[k]) * f);
+        }
+        var wait = t0 + i * FRAME_STEP_MS - System.millis();
+        if (wait > 0) System.delay(wait);
+    }
+}
+
+// ---- ajuste ao vivo ({"type":"tune",...}) e persistencia ----
+var TUNE_FILE = "/local/dogtune.json";
+
+function clampNum(v, lo, hi, dflt) {
+    v = Number(v);
+    if (!(v >= lo)) return dflt;  // NaN/undefined tambem
+    return v > hi ? hi : v;
+}
+
+function applyTune(t) {
+    if (!t) return;
+    CREEP.P = clampNum(t.P, 5, 45, CREEP.P);
+    CREEP.T = clampNum(t.T, 0, 50, CREEP.T);
+    CREEP.power = clampNum(t.power, 60, 3000, CREEP.power);
+    CREEP.tilt = clampNum(t.tilt, 30, 3000, CREEP.tilt);
+    CREEP.swing = clampNum(t.swing, 30, 3000, CREEP.swing);
+    if (t.order && t.order.length === 4) {
+        var seen = {}, ok = true;
+        for (var i = 0; i < 4; i++) {
+            if (UNLOAD[t.order[i]] === undefined || seen[t.order[i]]) ok = false;
+            seen[t.order[i]] = true;
+        }
+        if (ok) CREEP.order = [t.order[0], t.order[1], t.order[2], t.order[3]];
+    }
+    if (t.flip === true) FLIP = -FLIP;              // alterna
+    else if (t.flip === 1 || t.flip === -1) FLIP = t.flip;
+    if (t.mode && WALK_MODES.indexOf(t.mode) >= 0) walkMode = t.mode;
+}
+
+function saveTune() {
+    if (typeof FS === "undefined" || !FS.writeTextFile) return;
+    try {
+        FS.writeTextFile(TUNE_FILE, JSON.stringify({
+            P: CREEP.P, T: CREEP.T, power: CREEP.power, tilt: CREEP.tilt,
+            swing: CREEP.swing, order: CREEP.order, mode: walkMode, flip: FLIP
+        }));
+    } catch (e) {}
+}
+
+function loadTune() {
+    if (typeof FS === "undefined" || !FS.exists || !FS.exists(TUNE_FILE)) return;
+    try { applyTune(JSON.parse(FS.readTextFile(TUNE_FILE))); } catch (e) {}
+}
+loadTune();
 
 // ------------------------------------------------------------ estado ------
 var blinkAt = System.millis() + 1800;
@@ -361,7 +516,7 @@ var MOVE2GAIT = { up: "walk", down: "back", left: "left", right: "right" };
 
 function sendTel() {
     reply({ type: "tel", batt: lastBatt, mic: lastMic, state: gaitName || "stand",
-            sleep: sleeping });
+            sleep: sleeping, mode: walkMode });
 }
 
 function handleMsg(m) {
@@ -411,6 +566,25 @@ function handleMsg(m) {
             break;
         case "calib":
             calibrate();
+            break;
+        case "mode":
+            // {"type":"mode","walk":"creep"|"esphi"} ou sem walk = proximo
+            if (gait !== null) stopGait();
+            var wm = WALK_MODES.indexOf(String(m.walk));
+            walkMode = wm >= 0 ? WALK_MODES[wm]
+                : WALK_MODES[(WALK_MODES.indexOf(walkMode) + 1) % WALK_MODES.length];
+            System.print('[dog] marcha: ' + walkMode);
+            saveTune();
+            sendTel();
+            break;
+        case "tune":
+            // {"type":"tune","P":20,"T":25,"power":600,"tilt":180,"swing":240,
+            //  "order":["BL","FL","BR","FR"]} — vale no proximo ciclo e fica salvo
+            applyTune(m);
+            saveTune();
+            reply({ type: "tune", P: CREEP.P, T: CREEP.T, power: CREEP.power,
+                    tilt: CREEP.tilt, swing: CREEP.swing, order: CREEP.order, mode: walkMode,
+                    flip: FLIP });
             break;
     }
 }
@@ -524,7 +698,7 @@ while (true) {
     gaitTick(dt);
     // andando, o flush do OLED (~100 ms no I2C) entre as fases viraria
     // pausa extra no meio do passo: desenha so uma vez por ciclo
-    if (!walking() || gaitPhase === 0) draw();
+    if (!walking() || gait.frames || gaitPhase === 0) draw();
     var spent = System.millis() - now;
     System.delay(spent < FRAME_MS - 10 ? FRAME_MS - spent : 10);
 }

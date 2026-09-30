@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 # Gera a imagem LittleFS de data/ e grava na particao "littlefs".
 # Uso: tools/flash_data.sh [smartdisplay|cyd|spotpear-dog] [PORTA]
+# (PORTA default: /dev/ttyACM0 no spotpear-dog, /dev/ttyUSB0 nas outras)
 # Requer ambiente ESP-IDF exportado (parttool via python do IDF).
 set -euo pipefail
 
 BOARD="${1:-smartdisplay}"
-PORT="${2:-/dev/ttyUSB0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Porta default por placa: o cao so tem o USB-Serial/JTAG nativo do S3
+# (/dev/ttyACM0); as outras usam conversor USB-serial (/dev/ttyUSB0). Com
+# o default unico em ttyUSB0, "flash_data.sh spotpear-dog" gravava no
+# OUTRO aparelho conectado (ex.: a SmartDisplay) sem erro nenhum.
+case "$BOARD" in
+  spotpear-dog) DEFAULT_PORT="/dev/ttyACM0" ;;
+  *)            DEFAULT_PORT="/dev/ttyUSB0" ;;
+esac
+PORT="${2:-$DEFAULT_PORT}"
+if [ ! -e "$PORT" ]; then
+    echo "porta $PORT nao existe (passe a porta: $0 $BOARD /dev/ttyXXX)"; exit 1
+fi
+echo "placa: $BOARD  porta: $PORT"
 
 case "$BOARD" in
   smartdisplay|spotpear-dog) PART_CSV="partitions_16MB.csv" ;;
