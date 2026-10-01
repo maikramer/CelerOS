@@ -1,9 +1,15 @@
 name: build
 
-# F5 do roadmap de maturidade: CI com build das duas placas + testes.
+# F5 do roadmap de maturidade: CI com build das placas + testes.
 # - harness JS (Node, sem hardware) e testes host C++ rodam primeiro
+# - app_lint cobre tambem os apps de board (Dog Face) e o modo `check`
+#   (drift codigo x docs x stubs — erros falham, avisos passam)
 # - firmware compila no container oficial do ESP-IDF 6.1 (matrix de placas)
-# - binários sobem como artifacts (flash manual/OTA de teste)
+# - size_report fecha o orcamento do slot OTA (min 64 KB livres) por placa
+# - binarios sobem como artifacts (flash manual/OTA de teste)
+#
+# Placa nova: adicione uma entrada na matrix abaixo (board/target) — o resto
+# (lint de apps, size gate) e generico.
 on: [push, pull_request]
 
 jobs:
@@ -19,8 +25,10 @@ jobs:
         run: node test/js_harness/run.js
       - name: app_lint tests (linter de apps JS)
         run: node test/app_lint/run.js
-      - name: Lint dos apps do repo (data/apps + hub_apps)
-        run: node tools/app_lint/lint.js data/apps hub_apps
+      - name: Lint dos apps do repo (data/apps + hub_apps + boards/*/data/apps)
+        run: node tools/app_lint/lint.js data/apps hub_apps boards/spotpear-dog/data/apps
+      - name: Drift check (codigo x docs x stubs do harness)
+        run: node tools/app_lint/lint.js check
       - name: C++ host tests (lógica pura de main/Utils)
         run: |
           g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp
@@ -38,6 +46,10 @@ jobs:
             target: esp32s3
           - board: cyd
             target: esp32
+          - board: cyd-vspi
+            target: esp32
+          - board: spotpear-dog
+            target: esp32s3
     container:
       image: espressif/idf:release-v6.1
     steps:
@@ -53,6 +65,11 @@ jobs:
             -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
             -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }}
           idf.py -B build-${{ matrix.board }} build
+      - name: Orcamento do slot OTA (min 64 KB livres)
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          python3 tools/size_report.py --board ${{ matrix.board }} --min-free-kb 64
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:

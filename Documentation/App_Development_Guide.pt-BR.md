@@ -68,9 +68,9 @@ segurança.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
 - **Placas sem PSRAM** (ex.: a CYD clássica): apps rodam na RAM interna com o WiFi ligado, inclusive os de rede. O teto prático é um `main.js` de ~60KB (comentários e indentação são removidos antes do compile, não custam nada); a loja calcula o limite por `System.getInfo().appRAM` e marca apps maiores como "Requer PSRAM".
-- **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado (`FS` / `Net` / `System.gpio` e as chamadas que afetam o aparelho, como `restart`/`otaStart`, são filtradas no runtime). Apps de sistema (`"system": true`) sempre recebem tudo.
+- **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `10`). Verificado pelo sistema na
+  JS](JS_API_Guide.pt-BR.md) — atualmente `11`). Verificado pelo sistema na
   instalação.
 - **`changelog`**: string curta descrevendo o que mudou (uma linha por versão
   funciona bem, ex. `"1.1.0 - conserto de crash\n1.0.0 - primeiro
@@ -79,7 +79,7 @@ segurança.
 
 ### Campos gerenciados pelo CelerOS Hub
 
-Ao publicar pelo hub (`tools/celerhub.py` / `publish_app.py`), quatro campos
+Ao publicar pelo hub (`tools/celerhub.py`), quatro campos
 do `app.json` são calculados e gravados pelo servidor — **não escreva à mão**
 (um publish manual os recalcula de qualquer forma):
 

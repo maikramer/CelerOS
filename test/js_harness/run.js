@@ -240,7 +240,32 @@ function makeEnv() {
         neopixel: function() { return true; },
         getAutoBrightness: function() { return env.__autoBri; },
         setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
-        present: function() {}, isBuffered: function() { return false; }
+        present: function() {}, isBuffered: function() { return false; },
+        // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
+        setPin: function() { return true; },
+        verifyPin: function() { return true; },
+        pinClear: function() { log.push('[pin] clear'); return true; },
+        pinState: function() { return 0; },
+        md5: function() { return 'd41d8cd98f00b204e9800998ecf8427e'; },
+        setting: function() { return ''; },
+        toast: function(s) { log.push('[toast] ' + String(s)); },
+        openWifiSetup: function() { log.push('[wifi] setup'); return true; },
+        factoryReset: function(m) { log.push('[factoryReset] ' + m); return true; },
+        otaCheck: function() {
+            return { fetchFailed: true, available: false, hasFirmware: false,
+                     version: '', url: '', changelog: '', guide: '', type: '' };
+        },
+        otaStart: function() { return false; },
+        webActive: function() { return true; },
+        webSetActive: function() {},
+        webAuthInfo: function() { return { user: 'admin', pass: 'senha-web' }; },
+        webAuthSetPass: function() { return true; },
+        setManualTime: function() { log.push('[time] manual'); return true; },
+        setTimezone: function() { return true; },
+        set24hFormat: function() {},
+        get24hFormat: function() { return 1; },
+        setNtpEnabled: function() {},
+        getNtpEnabled: function() { return 1; }
     };
 
     env.FS = FS;
@@ -1107,6 +1132,50 @@ function holdFrames(x, y, n) {
           j.indexOf('[link] verify 000000') >= 0 && j.indexOf('[link] verify 123456') >= 0);
     check('pareado chega ao D-pad', j.indexOf('pareado!') >= 0 &&
           j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
+})();
+
+// Settings: smoke do app de sistema (menu, navegacao, acoes com efeito)
+(function() {
+    console.log('Settings (menu e navegacao):');
+    var r = runApp('data/apps/Settings/main.js');
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('menu desenha as secoes', j.indexOf('Wi-Fi') >= 0 && j.indexOf('Aplicativos') >= 0);
+    check('estado do Wi-Fi e PIN no menu', j.indexOf('OFF') >= 0 && j.indexOf('--') >= 0);
+})();
+
+(function() {
+    console.log('Settings (hora: toggle NTP):');
+    var calls = [];
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        var orig = env.System.setNtpEnabled;
+        env.System.setNtpEnabled = function(v) { calls.push(v); return orig(v); };
+        // 1) abre "Hora e fuso" (linha 2 do menu), 2) toggle NTP (linha 2
+        // da tela de hora), 3) "< Voltar" (rodape) volta ao menu
+        env.__harness.tap(120, 159);
+        env.__harness.tap(120, 159);
+        env.__harness.tap(50, 297);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('tela de hora desenha NTP', j.indexOf('NTP (internet)') >= 0);
+    check('toggle NTP chama setNtpEnabled', calls.length === 1, 'calls=' + JSON.stringify(calls));
+    check('voltar redesenha o menu', j.indexOf('Wi-Fi') >= 0);
+})();
+
+(function() {
+    console.log('Settings (tela: brilho):');
+    var gets = 0;
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        var orig = env.System.getBrightness;
+        env.System.getBrightness = function() { gets++; return orig(); };
+        // abre "Tela" (linha 4 do menu)
+        env.__harness.tap(120, 247);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('tela de brilho desenha', j.indexOf('Brilho') >= 0);
+    check('le o brilho atual ao entrar', gets >= 1, 'gets=' + gets);
 })();
 
 // resumo

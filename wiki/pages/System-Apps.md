@@ -18,7 +18,7 @@ data/
 
 [`hub_apps/`](hub_apps) (2048, Breakout, Cronômetro and **Celer Remote**)
 follows the same layout, but is published to the hub instead of shipping in
-the factory image. Celer Remote (API 10) is the robotics flagship: it scans
+the factory image. Celer Remote (API 11) is the robotics flagship: it scans
 for nearby CelerOS over Celer Link (BLE), connects and drives a robot with a
 D-pad while showing its telemetry — a full `CelerLink` + `System.gpio.servo`
 reference.

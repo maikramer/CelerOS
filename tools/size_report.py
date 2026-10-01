@@ -22,6 +22,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOARDS = {
     "smartdisplay": {"build": "build", "csv": "partitions_16MB.csv"},
     "cyd": {"build": "build-cyd", "csv": "partitions_4MB.csv"},
+    "cyd-vspi": {"build": "build-cyd-vspi", "csv": "partitions_4MB.csv"},
+    "spotpear-dog": {"build": "build-dog", "csv": "partitions_16MB.csv"},
 }
 
 

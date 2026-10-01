@@ -37,6 +37,18 @@ const MAIN_CMAKE = path.join(ROOT, 'main', 'CMakeLists.txt');
 const GUIDE_PT = path.join(ROOT, 'Documentation', 'JS_API_Guide.pt-BR.md');
 const GUIDE_EN = path.join(ROOT, 'Documentation', 'JS_API_Guide.md');
 
+// Limites de main.js derivados de tools/celerhub.py (quem recusa de verdade
+// no publish). Antes eram duplicados aqui e podiam divergir em silencio.
+function _hubLimit(name, fallback) {
+  const m = fs.readFileSync(path.join(ROOT, 'tools', 'celerhub.py'), 'utf8')
+    .match(new RegExp(name + '\\s*=\\s*([0-9xX*+\\s]+)'));
+  if (!m) return fallback;
+  // so digitos e operadores aritmeticos: seguro de avaliar
+  return Function('"use strict"; return (' + m[1] + ')')() || fallback;
+}
+const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
+const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
+
 // Objetos JS da API (raizes validas de cadeia de membro).
 const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink'];
 
@@ -298,6 +310,9 @@ function buildManifest() {
         const min = Math.min(minArityFromBody(body), fn.nargs);
         if (min !== fn.min) arityInferred++;
         fn.min = min;
+        // `return N` (N>0) no corpo = a funcao JS devolve valor (usado pelo
+        // gerador de types do SDK para distinguir void de retorno)
+        fn.returns = /\breturn\s+[1-9]/.test(body);
       }
     }
   }
@@ -724,8 +739,8 @@ function lintAppJson(dir, manifest) {
   try {
     const st = fs.statSync(path.join(dir, entry));
     const kb = st.size / 1024;
-    if (kb > 48) d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de 48KB');
-    else if (kb > 30 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de 30KB o hub exige api >= 6');
+    if (kb > MAX_MAIN_JS / 1024) d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (MAX_MAIN_JS / 1024) + 'KB');
+    else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
   } catch (e) {
     d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
   }

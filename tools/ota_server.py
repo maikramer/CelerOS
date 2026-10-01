@@ -7,8 +7,8 @@ para o GitHub.
 
 Uso tipico:
 
-    pio run -e smartdisplay_4848S040
-    python3 tools/ota_server.py --env smartdisplay_4848S040
+    idf.py -B build build
+    python3 tools/ota_server.py --board smartdisplay
 
 A versao publicada e lida do platformio.ini (CELEROS_VERSION); para testar
 a atualizacao, suba a versao la, rebuild e reinicie o servidor. No
@@ -105,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", default="smartdisplay", help="board do ESP-IDF: smartdisplay|cyd (para achar o CelerOS.bin)")
-    ap.add_argument("--bin", help="caminho direto do firmware.bin (sobrepoe --env)")
+    ap.add_argument("--bin", help="caminho direto do CelerOS.bin (sobrepoe --board)")
     ap.add_argument("--port", type=int, default=10234)
     ap.add_argument("--version", help="versao a publicar (default: project(VERSION) do CMakeLists.txt)")
     args = ap.parse_args()
@@ -114,7 +114,7 @@ def main():
     build_dir = "build-cyd" if args.board == "cyd" else "build"
     bin_path = args.bin or os.path.join(repo_root, build_dir, "CelerOS.bin")
     if not os.path.isfile(bin_path):
-        raise SystemExit(f"firmware nao encontrado: {bin_path} (rode pio run antes)")
+        raise SystemExit(f"firmware nao encontrado: {bin_path} (rode idf.py -B <dir> build antes)")
 
     version = read_version(repo_root, args.version)
     Handler.bin_path = bin_path

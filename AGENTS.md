@@ -18,7 +18,7 @@ CelerOS/
 ├── hub_apps/        # App Store apps (covered by data/AGENTS.md)
 ├── boards/<b>/      # per-board sdkconfig.defaults (smartdisplay, cyd)
 ├── tools/           # celerctl, flash_data.sh, ota_server, size_report, icon/splash generators
-├── test/js_harness/ # only automated test (Node, stubbed device APIs)
+├── test/           # js_harness (Node, stubbed device APIs) + app_lint tests + host C++ tests
 ├── updates/         # OTA channel dirs: smartdisplay_4848S040/, esp32/
 ├── Documentation/   # JS_API_Guide + App_Development_Guide (EN + .pt-BR)
 ├── include/, lib/   # stale PlatformIO placeholders, unused
@@ -85,14 +85,15 @@ tools/flash_data.sh [smartdisplay|cyd|spotpear-dog] [PORT]  # LittleFS data part
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool
 python3 tools/ota_server.py --board smartdisplay  # local OTA server, port 10234
-node test/js_harness/run.js                       # only automated test
+node test/js_harness/run.js                       # harness de apps (Node)
+node tools/app_lint/lint.js check                  # drift codigo x docs x stubs
 python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-library deltas (needs IDF env)
 ```
 
 ## NOTES
-- **SECURITY:** `extras/esp_components/config/config/supabase_config.h` commits the Supabase URL, the anon key, AND the **service_role key**. Rotate the key and move it out of git (it is still in history).
+- **SECURITY:** the Supabase service_role key was removed from the tree (commit 3e9a6ca; path now in .gitignore), but it is STILL IN HISTORY (1c5c2c8) and pushed to origin. Rotating it in the dashboard and rewriting history (`git filter-repo`) are pending.
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
-- There is no firmware unit-test suite and no CI. Verify by building and running on hardware.
+- CI (`.github/workflows/build.yml`): JS harness + app_lint (incl. board apps + drift check) + host C++ tests, then firmware builds for every board in the matrix with an OTA-slot size gate. Hardware validation is still manual.
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated).
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. The web UI `/update` also accepts uploads.

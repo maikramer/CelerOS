@@ -2,7 +2,7 @@
   "name": "Breakout",
   "packageName": "celeros.breakout",
   "version": "1.1.0",
-  "author": "KryonOS",
+  "author": "CelerOS",
   "description": "Quebre os tijolos com a bola: arraste a raquete, pegue os rebotes e avance de nivel. Recorde salvo no aparelho.",
   "type": "Game",
   "category": "Arcade",

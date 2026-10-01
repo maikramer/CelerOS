@@ -1,7 +1,7 @@
 # data/ - LittleFS image: pre-installed JS apps + icons
 
 ## OVERVIEW
-This is the source tree for the `littlefs` partition (mounted at `/local`). It holds the system apps (Settings, App Store, Installer, Terminal, Help, Web Server, Snake, plus the demos HTTP Demo and Touch Test) and 64x64 launcher icons. It is a distinct domain (score ~11): ES5 JavaScript run by Duktape, not C++. `hub_apps/` (2048, Breakout, Cronometro) follows the same layout but is published to the hub rather than flashed.
+This is the source tree for the `littlefs` partition (mounted at `/local`). It holds the system apps (Settings, App Store, Installer, Terminal, Help, Web Server, Snake, plus the demos HTTP Demo and Touch Test) and 64x64 launcher icons. It is a distinct domain (score ~11): ES5 JavaScript run by Duktape, not C++. `hub_apps/` (2048, Breakout, Cronometro, Celer Remote) follows the same layout but is published to the hub rather than flashed.
 
 ## STRUCTURE
 ```

@@ -39,9 +39,16 @@ up. Wi-Fi credentials survive updates: they live in NVS
   (changelog + manual guide only). With it, the **INSTALL** button appears.
 - A relative `firmware_url` (e.g. `"firmware.bin"`) resolves against the
   directory of the `update.json` itself — handy for local servers.
-- Channel per board: `updates/esp32/update.json` (classic board) and
-  `updates/smartdisplay_4848S040/update.json` (SmartDisplay 4"). The base is
+- Channel per board: `updates/esp32/update.json` (classic board),
+  `updates/smartdisplay_4848S040/update.json` (SmartDisplay 4") and
+  `updates/spotpear_zzpet/update.json` (robot dog). The base is
   `CELEROS_UPDATE_BASE` in `main/OTA/OtaManager.cpp`.
+- **SKU "Y" (relays) caveat:** the SmartDisplay profiles with and without
+  `CONFIG_CELEROS_SMARTDISPLAY_RELAYS` share the same channel
+  (`smartdisplay_4848S040`). An OTA delivered to a relay SKU uninstalls
+  `System.relay` support (the pins go back to I2S/speaker). Until a separate
+  channel or a variant field in `update.json` exists, do NOT push
+  speaker-variant firmware to relay devices.
 
 ## Publishing a release to the CelerOS Hub (official channel)
 
@@ -128,9 +135,11 @@ LittleFS and are not touched by OTA — update them with
   against the ESP-IDF CA bundle; plain HTTP requires the
   `/local/ota_allow_http.txt` opt-in since 1.3. There is no firmware
   signature yet (secure boot / signed images are future work).
-- The ESP-IDF bootloader rollback is not enabled in the firmware, so there
-  is no automatic post-boot rollback; the protection is the checksum
-  validation before slot activation.
+- The ESP-IDF bootloader rollback IS enabled
+  (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`): a new slot boots as
+  `PENDING_VERIFY` and the main loop confirms it after 30 s of uptime
+  (`confirmPendingOta` in `main/main.cpp`) — a crash-loop inside the first
+  30 s rolls back to the previous slot automatically.
 - Since 1.3 every web route — `/update` and the whole file manager included —
   requires HTTP Basic Auth (user `admin`, password generated on first boot;
   see it in the Web Server app or `celerctl info`). 5 wrong passwords lock
