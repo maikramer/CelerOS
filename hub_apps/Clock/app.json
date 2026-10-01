@@ -1,0 +1,11 @@
+{
+  "name": "Clock",
+  "packageName": "com.kryonos.clock",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Relogio grande de tela cheia com data e segundos.",
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+}

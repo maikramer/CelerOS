@@ -1,0 +1,11 @@
+{
+  "name": "Cube 3D",
+  "packageName": "com.kryonos.cube3d",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Cubo 3D em software puro girando no toque: demo de render do canvas.",
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+}

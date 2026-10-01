@@ -1,0 +1,11 @@
+{
+  "name": "Tic Tac Toe",
+  "packageName": "com.kryonos.tictactoe",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "description": "Jogo da velha contra o CelerOS com IA invencivel (quase).",
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Physics Drop",
+  "packageName": "com.kryonos.physicsdrop",
+  "version": "1.1.0",
+  "author": "CelerOS",
+  "description": "Bolas caem e quicam com gravidade e colisao: brinque desenhando obstaculos.",
+  "type": "Demo",
+  "category": "Simulation",
+  "api": 3,
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+}

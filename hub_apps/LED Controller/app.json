@@ -1,0 +1,14 @@
+{
+  "name": "LED Controller",
+  "packageName": "com.kryonos.ledcontroller",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Acende o LED RGB da placa com sliders de cor (requer GPIO).",
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0).",
+  "permissions": [
+    "gpio"
+  ]
+}

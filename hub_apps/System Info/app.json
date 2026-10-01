@@ -1,0 +1,11 @@
+{
+  "name": "System Info",
+  "packageName": "com.kryonos.systeminfo",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Info do aparelho: versao, heap, bateria, rede e placa.",
+  "changelog": "1.1.0 - migrada para o CelerOS e CONSERTADA: usava const (ES6) e nao abria no Duktape atual; agora roda. 1.0.0 - original da era KryonOS."
+}

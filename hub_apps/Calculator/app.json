@@ -1,0 +1,11 @@
+{
+  "name": "Calculator",
+  "packageName": "com.kryonos.calculator",
+  "version": "1.1.0",
+  "api": 3,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Calculadora de toque estilo Android: expressoes com parenteses e historico visual.",
+  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API): mesmas contas, tema da loja. 1.0.0 - versao original da era KryonOS."
+}
