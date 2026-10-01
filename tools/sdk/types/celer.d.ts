@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 12 — 163 funcoes.
+// API level 12 — 177 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -154,6 +154,13 @@ declare const System: {
     theme(): CelerTheme;
     /** desenha um ícone 64x64 de /local/icons/<name>.png com mesclagem de alpha (`.bin` legado aceito). */
     drawIcon(name: string, x: number, y: number): void;
+    setScreenTimeout(arg0: number): void;
+    screenTimeout(): any;
+    setAlarm(arg0: number, arg1: number, arg2?: number): any;
+    clearAlarm(): void;
+    getAlarm(): any;
+    playTone(arg0?: number): any;
+    notify(arg0: number, arg1?: number): void;
     /** @permission "gpio" */
     led(r?: number, g?: number, b?: number): any;
     /** @permission "gpio" */
@@ -184,6 +191,12 @@ declare const System: {
     webAuthInfo(): any;
     /** @permission "system" */
     webAuthSetPass(arg0: number): any;
+    /** @permission "system" */
+    deepSleep(arg0: number, arg1?: number): void;
+    /** @permission "system" */
+    notifications(): any;
+    /** @permission "system" */
+    notificationsClear(): void;
     gpio: {
         /** define o estado elétrico físico de um pino (ex.: pino 2 como OUTPUT para acender um LED). */
         /** @permission "gpio" */
@@ -223,6 +236,10 @@ declare const System: {
 };
 
 declare const Storage: {
+    get(arg0?: number, arg1?: number): any;
+    set(arg0?: number, arg1?: number): any;
+    remove(arg0?: number): void;
+    clear(): any;
     /** @permission "system" */
     clearFor(arg0: number): any;
 };
