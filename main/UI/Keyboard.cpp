@@ -77,6 +77,13 @@ KeyboardScreen::KeyboardScreen(const std::string& prompt, const std::string& ini
     rebuild();
 }
 
+void KeyboardScreen::setHint(char h) {
+    m_hint = h;
+    // abre ja na pagina do hint (so quando ainda esta no modo inicial)
+    if (m_hint == 'n' && m_mode == Lower) m_mode = Num;
+    rebuild();
+}
+
 Rect KeyboardScreen::fieldRect() const {
     int m = UI::sx(4);
     return {m, UI::sy(26), UI::W - 2 * m, UI::sy(26)};
@@ -96,7 +103,8 @@ Rect KeyboardScreen::eyeRect() const {
 }
 
 const char* KeyboardScreen::modeLabel() const {
-    if (isLetters(m_mode)) return "?123";
+    if (m_mode == Num) return "ABC";
+    if (isLetters(m_mode)) return (m_hint == 'n') ? "123" : "?123";
     return (m_mode == Accents) ? "ABC" : "àç";
 }
 
@@ -220,6 +228,23 @@ void KeyboardScreen::rebuild() {
         Kind k3[5] = {KMode, KChar, KSpace, KChar, KOk};
         char c3[5] = {0, ',', 0, '.', 0};
         addRow(3, w3, 5, k3, c3);
+        return;
+    }
+
+    if (m_mode == Num) {
+        // Pagina numerica (hint "num"): discagem 3x3 com alvos 2.5u + linha
+        // [ABC][0][backspace][OK]. Sem espaco/pontuacao — quem pede hint num
+        // valida digitos; a tecla ABC segue ai porque hint e sugestao.
+        float d3[3] = {2.5f, 2.5f, 2.5f};
+        Kind kc[3] = {KChar, KChar, KChar};
+        const char* digRows[3] = {"123", "456", "789"};
+        addRow(0, d3, 3, kc, digRows[0]);
+        addRow(1, d3, 3, kc, digRows[1]);
+        addRow(2, d3, 3, kc, digRows[2]);
+        float w4[4] = {1.5f, 2.5f, 1.5f, 2.0f};
+        Kind k4[4] = {KMode, KChar, KBksp, KOk};
+        char c4[4] = {0, '0', 0, 0};
+        addRow(3, w4, 4, k4, c4);
         return;
     }
 
@@ -485,10 +510,17 @@ void KeyboardScreen::handleKey(int idx) {
             rebuild();
             break;
         case KMode:
-            // ciclo de paginas: ABC -> ?123 -> acentos -> ABC
-            if (isLetters(m_mode)) m_mode = Sym1;
-            else if (m_mode == Accents) m_mode = Lower;
-            else m_mode = Accents;
+            if (m_hint == 'n') {
+                // hint numerico: ciclo curto num <-> letras
+                m_mode = (m_mode == Num) ? Lower : Num;
+            } else if (isLetters(m_mode)) {
+                // ciclo de paginas: ABC -> ?123 -> acentos -> ABC
+                m_mode = Sym1;
+            } else if (m_mode == Accents) {
+                m_mode = Lower;
+            } else {
+                m_mode = Accents;
+            }
             if (m_mode == Lower && m_capsLock) m_mode = Upper;  // caps volta travado
             rebuild();
             break;
@@ -557,9 +589,11 @@ void KeyboardScreen::onTick(uint32_t dtMs) {
 
 // ============================================================ getString =====
 
-std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen, bool mask) {
+std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen, bool mask,
+                      char hint) {
     KeyboardScreen kb(promptMsg, initialText, maxLen);
     kb.setMask(mask);
+    kb.setHint(hint);
 
     std::string result;
     bool done = false;

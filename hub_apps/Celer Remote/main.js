@@ -114,8 +114,12 @@ function drawCtrl(note) {
         System.drawRect(p[0], p[1], p[2], p[3], TH.stroke);
         center(p[4], p[1] + (p[3] - fh(2)) / 2, 2, on ? ONACC : TH.text);
     }
-    // so aparece com robo que reporta marcha (tel.mode, ex.: Dog Face)
-    if (tel && tel.mode) {
+    // Troca de marcha: so com robo que lista os modos dele (tel.modes) E ha
+    // mais de um. O botao das 1.2/1.3 cicla as cegas {"type":"mode"}: um
+    // toque sem querer salvava no robo uma marcha que nao anda (o esphi do
+    // Dog Face) e o robo "nao saia do lugar" em todos os boots seguintes.
+    // Agora o destino vem por nome, escolhido da lista do proprio robo.
+    if (tel && tel.mode && tel.modes && tel.modes.length > 1) {
         System.fillRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.card);
         System.drawRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.stroke);
         center("marcha: " + tel.mode + " (trocar)", MODE[1] + (MODE[3] - fh(1)) / 2, 1, TH.text);
@@ -166,7 +170,7 @@ function ensurePairing(name) {
         center(name || "robo", 54 + fh(2) + 6, 1, TH.textDim);
         center("codigo na tela do robo", 54 + fh(2) + 6 + fh(1) + 10, 1, TH.accent);
         if (note) center(note, 200, 1, TH.err);
-        var c = System.prompt("codigo do robo (6 digitos)", "");
+        var c = System.prompt("codigo do robo (6 digitos)", "", {hint: "num"});
         if (!c) {
             backToScan("pareamento cancelado");
             return "cancel";
@@ -250,8 +254,9 @@ while (true) {
             st = CelerLink.status();
         }
 
-        if (press && tel && tel.mode && hit(t, MODE)) {
-            CelerLink.send({type: "mode"});  // o robo para e responde com tel nova
+        if (press && tel && tel.mode && tel.modes && tel.modes.length > 1 && hit(t, MODE)) {
+            var next = tel.modes[(tel.modes.indexOf(tel.mode) + 1) % tel.modes.length];
+            CelerLink.send({type: "mode", walk: next});  // nomeado: sem ciclo cego
             System.delay(30);
             continue;
         }

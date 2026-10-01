@@ -328,6 +328,12 @@ var DIRS = {
     right: { FL: 1, FR: -1, BL: 1, BR: -1 }
 };
 var WALK_MODES = ["creep", "esphi"];
+// Marchas que o botao do Remote pode alternar (tel.modes). O esphi e o porte
+// fiel do servo_dog_ctrl do ESP-Hi mas NAO sai do lugar nesta montagem (o
+// pace degenera em tesoura simetrica — ver a saga da 1.2.x): fica fora do
+// ciclo ate calibrado. {"type":"mode","walk":"esphi"} explicito continua
+// valendo (ferramenta de calibracao via bleak/tune).
+var MODES_OK = ["creep"];
 var walkMode = "creep";
 var FRAME_STEP_MS = 10;
 
@@ -561,7 +567,7 @@ var MOVE2GAIT = { up: "walk", down: "back", left: "left", right: "right" };
 
 function sendTel() {
     reply({ type: "tel", batt: lastBatt, mic: lastMic, state: gaitName || "stand",
-            sleep: sleeping, mode: walkMode });
+            sleep: sleeping, mode: walkMode, modes: MODES_OK });
 }
 
 function handleMsg(m) {
@@ -613,11 +619,14 @@ function handleMsg(m) {
             calibrate();
             break;
         case "mode":
-            // {"type":"mode","walk":"creep"|"esphi"} ou sem walk = proximo
+            // {"type":"mode","walk":"creep"|"esphi"} nomeado (calibracao) ou
+            // sem walk = proximo das marchas LIBERADAS (MODES_OK) — o ciclo
+            // cego das 1.3.x podia salvar o esphi sem ninguem ver e o robo
+            // "nao saia do lugar" em todos os boots seguintes
             if (gait !== null) stopGait();
             var wm = WALK_MODES.indexOf(String(m.walk));
             walkMode = wm >= 0 ? WALK_MODES[wm]
-                : WALK_MODES[(WALK_MODES.indexOf(walkMode) + 1) % WALK_MODES.length];
+                : MODES_OK[(MODES_OK.indexOf(walkMode) + 1) % MODES_OK.length];
             System.print('[dog] marcha: ' + walkMode);
             saveTune();
             sendTel();

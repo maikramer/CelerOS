@@ -148,7 +148,9 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Parameters:** 
   - `promptMsg` (String) - Header text displayed above the keyboard.
   - `initialText` (String) - Text pre-filled into the keyboard input box.
-  - `options` (Object, optional, API level 7) - `{mask: true}` hides the typed text behind bullets with a show/hide button next to the X (passwords, PINs).
+  - `options` (Object, optional) - `{mask, hint}`:
+    - `mask: true` (API level 7) hides the typed text behind bullets with a show/hide button next to the X (passwords, PINs).
+    - `hint: "num"` (API level 11) opens the numeric page instead of QWERTY (big 3x3 dial pad). It is a suggestion, not a lock — the mode key ("ABC"/"123") stays available. Unknown values fall back to QWERTY, so older firmware degrades gracefully.
 - **Returns:** `String`
 - **Description:** Completely suspends JavaScript execution and opens the native C++ full-screen QWERTY touch keyboard (with shift — double-tap toggles caps lock —, two symbol pages and a PT-BR accent page). Once the user taps "OK", execution resumes and the typed string is returned. Returns an empty string `""` if the user taps "X" (cancel).
 
@@ -627,12 +629,13 @@ compact block anchored to the bottom of the screen; everything above
 ### 13.1 Session API
 
 #### `System.keypadOpen(options)` → Boolean
-- **Parameters:** `options` (Object, optional): `{title, initial, maxLen, field, mask}`.
+- **Parameters:** `options` (Object, optional): `{title, initial, maxLen, field, mask, hint}`.
   - `title` (String) — header label (only shown with a field).
   - `initial` (String) — pre-filled text.
   - `maxLen` (Number, default 64, max 256) — buffer limit.
   - `field` (Boolean, default true) — draw the native input field + X button on top. `field: false` draws the bare keyboard docked at the bottom (the app echoes the line itself).
   - `mask` (Boolean, default false, API level 7) — hide the field text behind bullets with a show/hide button next to the X.
+  - `hint` (String, API level 11) — `"num"` opens the numeric page (same layout as `prompt`).
 - **Returns:** `false` if a session is already open (one at a time) or there is no display.
 - **Description:** Opens the keyboard session and draws it immediately. Enter (OK) does **not** close the session: it clears the buffer and keeps the keyboard open — ideal for line-at-a-time UIs. The session ends on `X` (only with `field: true`, reported as a `cancel` event) or `System.keypadClose()`.
 

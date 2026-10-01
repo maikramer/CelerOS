@@ -18,11 +18,27 @@
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
+#include <cstring>
 #include "JsInternal.h"
 
 // =====================================================
 // Keyboard Bindings
 // =====================================================
+
+// API 11: {hint:"num"} — teclado numerico (pagina Num do KeyboardScreen).
+// Valor desconhecido devolve 0 (QWERTY normal): firmware antigo que ignora
+// a opcao degrada igual.
+static char parseHint(duk_context *ctx, duk_idx_t idx) {
+    if (!duk_is_object(ctx, idx)) return 0;
+    duk_get_prop_string(ctx, idx, "hint");
+    char h = 0;
+    if (duk_is_string(ctx, -1)) {
+        const char *s = duk_get_string(ctx, -1);
+        if (s != nullptr && strcmp(s, "num") == 0) h = 'n';
+    }
+    duk_pop(ctx);
+    return h;
+}
 
 duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     const char *promptMsg = "";
@@ -39,9 +55,10 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
         }
         duk_pop(ctx);
     }
+    char hint = parseHint(ctx, 2);  // API 11: {hint:"num"}
 
     present();
-    std::string result = kui::getString(initialText, promptMsg, 64, mask);
+    std::string result = kui::getString(initialText, promptMsg, 64, mask, hint);
     // o teclado desenhou direto no display: o proximo present repoe o app
     s_frameDirty = true;
 
@@ -91,6 +108,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     int maxLen = 64;
     bool field = true;
     bool mask = false;
+    char hint = 0;
     if (duk_is_object(ctx, 0)) {
         if (duk_get_prop_string(ctx, 0, "title") && duk_is_string(ctx, -1)) title = duk_get_string(ctx, -1);
         duk_pop(ctx);
@@ -102,6 +120,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
         duk_pop(ctx);
         if (duk_get_prop_string(ctx, 0, "mask") && duk_is_boolean(ctx, -1)) mask = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
+        hint = parseHint(ctx, 0);  // API 11
     }
     if (maxLen < 1) maxLen = 1;
 
@@ -110,6 +129,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     s_kb->setPersistent(true);
     s_kb->setShowField(field);
     s_kb->setMask(mask);
+    s_kb->setHint(hint);
     s_kb->onChange = [] { s_kbEvent = KB_EV_CHANGE; };
     s_kb->onEnter = [](const std::string& t) {
         s_kbEnterText = t;

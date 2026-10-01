@@ -210,12 +210,12 @@ function validPin(p) {
     return /^[0-9]{4,6}$/.test(p);
 }
 function flowNewPin() {
-    var p1 = System.prompt("Novo PIN (4-6 dígitos)", "");
+    var p1 = System.prompt("Novo PIN (4-6 dígitos)", "", {hint: "num", mask: true});
     if (!validPin(p1)) {
         note("Segurança", "PIN inválido: use 4 a 6 dígitos", 1200);
         return false;
     }
-    var p2 = System.prompt("Confirmar PIN", "");
+    var p2 = System.prompt("Confirmar PIN", "", {hint: "num", mask: true});
     if (p1 !== p2) {
         note("Segurança", "PINs não conferem", 1200);
         return false;
@@ -552,7 +552,7 @@ function askNum(label, cur, lo, hi) {
     while (true) {
         var init = "" + cur;
         if (cur < 10) init = "0" + cur;
-        var s = System.prompt(label + " (" + lo + " a " + hi + ")", init);
+        var s = System.prompt(label + " (" + lo + " a " + hi + ")", init, {hint: "num"});
         if (s === null || s === "") return null;
         s = trimStr(s);
         if (/^[0-9]+$/.test(s)) {
@@ -904,12 +904,12 @@ function onTap() {
         if (a5 === "set") {
             if (flowNewPin()) { rebuildItems(); drawAll(); }
         } else if (a5 === "chg") {
-            var cur = System.prompt("PIN atual", "");
+            var cur = System.prompt("PIN atual", "", {hint: "num", mask: true});
             if (cur === null || cur === "") return;
             if (!pinOk(cur)) { note("Segurança", "PIN incorreto", 1100); return; }
             if (flowNewPin()) { rebuildItems(); drawAll(); }
         } else if (a5 === "rm") {
-            var cur2 = System.prompt("PIN atual", "");
+            var cur2 = System.prompt("PIN atual", "", {hint: "num", mask: true});
             if (cur2 === null || cur2 === "") return;
             if (!pinOk(cur2)) { note("Segurança", "PIN incorreto", 1100); return; }
             System.pinClear();
@@ -964,7 +964,7 @@ function pinGate() {
     var ok = false;
     for (var attempt = 0; attempt < 3 && !ok; attempt++) {
         drawPinGate(3 - attempt);
-        var pin = System.prompt("PIN do Settings", "");
+        var pin = System.prompt("PIN do Settings", "", {hint: "num", mask: true});
         if (pin === null || pin === "") System.exitApp();  // cancelou: volta
         if (pinOk(pin)) ok = true;
         else note("PIN", "PIN incorreto", 900);

@@ -187,8 +187,13 @@ para o SO do ESP32.
 - **Parâmetros:**
   - `promptMsg` (String) - Cabeçalho exibido acima do teclado.
   - `initialText` (String) - Texto pré-preenchido na caixa de entrada.
-  - `options` (Object, opcional, API level 7) - `{mask: true}` oculta o texto
-    digitado atrás de bullets, com botão ver/ocultar ao lado do X (senhas, PINs).
+  - `options` (Object, opcional) - `{mask, hint}`:
+    - `mask: true` (API level 7) oculta o texto digitado atrás de bullets,
+      com botão ver/ocultar ao lado do X (senhas, PINs).
+    - `hint: "num"` (API level 11) abre já na página numérica em vez do
+      QWERTY (discagem 3x3 com teclas grandes). É uma sugestão, não uma
+      trava — a tecla de modo ("ABC"/"123") continua disponível. Valores
+      desconhecidos caem no QWERTY: firmware antigo degrada de boa.
 - **Retorna:** `String`
 - **Descrição:** suspende completamente a execução do JavaScript e abre o
   teclado QWERTY nativo em C++ em tela cheia (com shift — toque duplo trava o
@@ -842,7 +847,7 @@ um bloco compacto ancorado no rodapé da tela; tudo acima de
 ### 13.1 API de Sessão
 
 #### `System.keypadOpen(options)` → Boolean
-- **Parâmetros:** `options` (Object, opcional): `{title, initial, maxLen, field, mask}`.
+- **Parâmetros:** `options` (Object, opcional): `{title, initial, maxLen, field, mask, hint}`.
   - `title` (String) — rótulo do cabeçalho (exibido só com campo).
   - `initial` (String) — texto pré-preenchido.
   - `maxLen` (Number, padrão 64, máx 256) — limite do buffer.
@@ -851,6 +856,8 @@ um bloco compacto ancorado no rodapé da tela; tudo acima de
     app ecoa a linha por conta própria).
   - `mask` (Boolean, padrão false, API level 7) — oculta o texto do campo
     atrás de bullets, com botão ver/ocultar ao lado do X.
+  - `hint` (String, API level 11) — `"num"` abre na página numérica (mesmo
+    layout do `prompt`).
 - **Retorna:** `false` se já há uma sessão aberta (uma por vez) ou não há
   display.
 - **Descrição:** abre a sessão de teclado e a desenha imediatamente. Enter

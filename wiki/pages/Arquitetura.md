@@ -72,13 +72,14 @@ O loop principal roda na task main: `Navigator::tick()`,
   Duktape), com loop `while` bloqueante e `System.delay()`.
 * Toda geometria é desenhada em coordenadas virtuais 240x320 e escalada por
   `UI::sx()/sy()` — apps nunca veem pixels físicos.
-* O **nível de API** (`System.getAPILevel()`, hoje 10) é o contrato de
+* O **nível de API** (`System.getAPILevel()`, hoje 11) é o contrato de
   feature-detection dos apps. Histórico: 1 base (draw/touch/GPIO/FS/time) ·
   2 `Net` · 3 apps de sistema em JS · 5 teclado acoplado · 6 topbar
   customizada + `Net.download` em streaming · 7 LED RGB, sensor de luz com
   brilho automático, alto-falante e prompts mascarados · 8 relés ·
   9 Celer Link (BLE) · 10 servos + hardware de robô (bateria, microfone,
-  pad de toque, NeoPixel).
+  pad de toque, NeoPixel) · 11 pareamento por código no Celer Link +
+  `{hint:"num"}` no teclado (página numérica).
 * Ao adicionar/chamar uma API nova: bump de `CELEROS_API_LEVEL`, doc nos
   dois idiomas do `JS_API_Guide` e stub no harness `test/js_harness/run.js`.
 

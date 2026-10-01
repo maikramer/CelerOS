@@ -1026,14 +1026,35 @@ function holdFrames(x, y, n) {
         env.CelerLink.connect = function() { return true; };
         env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
         env.__harness.tap(120, 80);
+        // robo 1.4.1+: tel.modes com 2 funcionais -> botao aparece
+        env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand","mode":"creep","modes":["creep","esphi"]}']);
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(120, 268);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('mostra a marcha do robo (tel.modes >= 2)', j.indexOf('marcha: creep') >= 0);
+    check('toque troca por nome ({"type":"mode","walk":...})',
+          j.indexOf('[link] tx {"type":"mode","walk":"esphi"}') >= 0);
+})();
+
+(function() {
+    console.log('Celer Remote (sem tel.modes nao ha botao):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        env.__harness.tap(120, 80);
+        // robo antigo (1.4.0) / sem modes: um toque ali nao pode trocar marcha
+        // as cegas — era assim que o esphi ficava salvo no dog
         env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand","mode":"creep"}']);
         env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
         env.__harness.tap(120, 268);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('mostra a marcha do robo', j.indexOf('marcha: creep') >= 0);
-    check('toque troca a marcha ({type:"mode"})', j.indexOf('[link] tx {"type":"mode"}') >= 0);
+    check('sem tel.modes o botao nao aparece', j.indexOf('marcha:') < 0);
+    check('nenhum mode sai do remote', j.indexOf('[link] tx {"type":"mode"') < 0);
 })();
 
 (function() {

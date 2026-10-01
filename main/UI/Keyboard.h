@@ -16,6 +16,12 @@
 // (gaps/beiradas nao sao zona morta), tap sem teto de tempo (pressionar firme
 // digita) e backspace com auto-repeat ao segurar.
 //
+// Hint de layout (API 11, System.prompt/keypadOpen {hint:"num"}): setHint('n')
+// abre na pagina numerica (discagem 3x3 de alvos grandes). E uma SUGESTAO, nao
+// uma trava — a tecla de modo continua ("ABC"/"123") e o usuario pode trocar.
+// Valores desconhecidos sao ignorados (QWERTY normal), entao firmware antigo
+// degrada gracilmente quando o app pede um hint que ele nao conhece.
+//
 // Duas formas de usar:
 //   1. Modal sincrono: kui::getString() — bloqueia com loop proprio (Canvas
 //      + TouchPump) SEM tocar na pilha do Navigator, para funcionar sobre
@@ -55,6 +61,10 @@ public:
     // X. O botao so existe quando o mask esta ligado.
     void setMask(bool m) { m_mask = m; }
 
+    // Hint de layout inicial: 'n' = pagina numerica (a tecla de modo segue
+    // disponivel para voltar as letras). 0 = QWERTY normal.
+    void setHint(char h);
+
     // Topo da area das teclas (fisico): quem acopla o teclado nao desenha
     // abaixo desta linha (System.keypadRect devolve o mesmo espaco em 240x320)
     int keysTop() const { return m_keysTop; }
@@ -67,7 +77,7 @@ public:
     bool allowsBackGesture() const override { return false; }
 
 private:
-    enum Mode { Lower, Upper, Sym1, Sym2, Accents };
+    enum Mode { Lower, Upper, Sym1, Sym2, Accents, Num };
     enum Kind { KChar, KShift, KSymPage, KBksp, KMode, KSpace, KOk };
     struct Key {
         Rect r;
@@ -92,6 +102,7 @@ private:
     std::string m_text;
     int m_maxLen;
     Mode m_mode = Lower;
+    char m_hint = 0;               // 'n' = numerico (0 = sem hint)
     std::vector<Key> m_keys;
     bool m_persistent = false;
     bool m_showField = true;
@@ -114,9 +125,9 @@ private:
 };
 
 // Ponte sincrona: exibe o teclado modal e devolve o texto digitado
-// (string vazia se cancelado ou confirmado vazio).
+// (string vazia se cancelado ou confirmado vazio). hint: 'n' = numerico.
 std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen = 64,
-                      bool mask = false);
+                      bool mask = false, char hint = 0);
 
 }  // namespace kui
 
