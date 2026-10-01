@@ -10,8 +10,8 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 11
-### Nível de API: 10
+### API Level: 12
+### Nível de API: 12
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -1182,3 +1182,104 @@ while (true) {
 
 Os dois exemplos também funcionam em par com o app nRF Connect no celular
 (conecte no `Celer-XXXX`, escreva na característica, ative notificações).
+
+## 16. Nível de API 12 — Timers, Storage, sprites múltiplos e FS binário
+
+### 16.1 Timers (`setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`)
+
+Globais no padrão do navegador. Disparam **nos pontos onde o app cede** — o
+início de `System.delay`, `System.getTouch`, `System.keypadPoll` e das
+chamadas bloqueantes (`Net.*`, `FS.getFileMD5`, ...). Um loop apertado que
+nunca cede não vê os timers dispararem (e já derruba o watchdog sozinho).
+Sem `Promise` no Duktape, esta é a fundação de "event loop" cooperativo.
+
+```js
+var iv = setInterval(function () {
+    relogio(System.getTime());
+}, 1000);            // 1x por segundo, enquanto o app ceder
+
+setTimeout(function () {
+    clearInterval(iv);
+    System.toast("pronto");
+}, 60000);
+```
+
+- **Retorno:** id `1..8` (`0` = falhou — máximo 8 timers). Piso de 10 ms.
+- **Erro no callback PROPAGA**: o app morre com a tela de erro e a stack do
+  callback (mesma política de qualquer binding). Interval atrasado dispara
+  **uma vez** na cedida seguinte (catch-up sem rajada).
+- Os timers morrem com o app — nada atravessa apps.
+
+### 16.2 `Storage` — persistência privada do app
+
+O "localStorage" do CelerOS: chave-valor em NVS com **namespace próprio por
+`packageName`** (o `System.setting` é global e apps colidiam entre si).
+Dispensa `permissions`.
+
+```js
+Storage.set("recorde", "3250");
+Storage.set("nome", "Maikeu");
+var r = Storage.get("recorde", "0");   // default quando ausente
+Storage.remove("recorde");
+Storage.clear();                       // apaga TUDO do app
+```
+
+- Chave: 1–15 caracteres (limite do NVS). Valor: string até 4 KB; números e
+  booleanos são serializados (`get` devolve **sempre string** — converta de
+  volta com `parseInt`/`parseFloat`).
+- Scripts `.js` avulso (sem app.json) compartilham o namespace `app__anon`.
+- `Storage.clearFor(packageName)` apaga o Storage de OUTRO app — exige a
+  permissao `"system"` (a App Store 2.1.3+ usa na desinstalacao; `clear()`
+  so apaga o Storage do PROPRIO app).
+
+### 16.3 Sprites múltiplos (`System.useSprite`)
+
+`System.createSprite(w, h)` agora devolve um **id** `1..4` (`0` = falhou) e o
+sprite novo vira o alvo das próximas operações (apps antigos que ignoram o
+retorno continuam funcionando). `System.useSprite(id)` troca o alvo:
+`0` = quadro/display, `1..4` = sprite existente. `System.deleteSprite(id)`
+apaga um sprite específico (sem argumento, apaga o corrente).
+
+```js
+var fundo = System.createSprite(240, 200);   // id 1
+var heroi = System.createSprite(24, 24);     // id 2 — vira o corrente
+System.fillRect(0, 0, 24, 24, System.color(255, 0, 0));
+System.useSprite(fundo);                     // desenha no fundo
+System.fillRect(0, 0, 240, 200, 0);
+System.pushSprite(0, 40);                    // fundo (corrente) vai ao vidro
+System.useSprite(heroi);
+System.pushSprite(10, 50);                   // heroi por cima
+System.useSprite(0);                         // volta a desenhar no quadro
+```
+
+Máximo de **4 sprites com PSRAM, 1 sem PSRAM** (o degradê silencioso para
+8-bit do sprite gigante continua valendo).
+
+### 16.4 FS binário (`FS.readFile` / `FS.writeFile`)
+
+Leitura e escrita de **bytes** — cada byte do arquivo vira um caractere
+(0–255) da string. O `readTextFile` truncava no primeiro `\0`; estes não.
+
+```js
+FS.writeFile("/local/dado.bin", String.fromCharCode(1, 0, 2, 255));
+var d = FS.readFile("/local/dado.bin", 512);   // maxLen opcional (default 16KB, teto 64KB)
+if (d !== null && d.charCodeAt(1) === 0) { /* ... */ }
+```
+
+- `readFile` devolve `null` quando o arquivo não existe. `writeFile` aceita
+  até 64 KB por chamada.
+- Regras do jail de segurança (arquivos do sistema exigem `"system"`)
+  valem para os dois.
+
+### 16.5 `System.setTextDatum(datum)`
+
+Âncora do `drawString` no alvo corrente: `0`=TL (default — comportamento
+anterior), `1`=TC, `2`=TR, `4`=ML, `5`=MC, `6`=MR, `8`=BL, `9`=BC, `10`=BR.
+Centralizar texto deixa de precisar do par `textWidth`/conta-na-mão. O datum
+é resetado para `0` a cada app.
+
+```js
+System.setTextDatum(5);               // meio-centro
+System.drawString("GAME OVER", 120, 160, 4);
+System.setTextDatum(0);               // bom costume: devolve ao default
+```

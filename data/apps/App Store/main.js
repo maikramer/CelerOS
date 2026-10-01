@@ -866,6 +866,9 @@ function askConfirm(title, body, yesLabel, danger) {
 function uninstallApp(pkg) {
     var dir = resolveInstalledDir(pkg);
     if (!dir) return false;
+    // Storage privado do app (API 12): apaga junto — em firmware antigo o
+    // typeof segue undefined e so os arquivos sao removidos
+    if (typeof Storage !== "undefined" && Storage.clearFor) { try { Storage.clearFor(pkg); } catch (e) {} }
     if (!FS.removeDirectory(dir)) return false;
     System.rescanApps();
     refresh();

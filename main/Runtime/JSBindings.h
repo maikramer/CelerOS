@@ -32,13 +32,24 @@ public:
 private:
     static CelerDisplay *tftInstance;
     static CelerSprite *tftSprite;
+    static duk_context *s_jsCtx;  // heap do app corrente (timers no present)
 
     // Double Buffering
     static duk_ret_t js_createSprite(duk_context *ctx);
     static duk_ret_t js_deleteSprite(duk_context *ctx);
     static duk_ret_t js_pushSprite(duk_context *ctx);
     static duk_ret_t js_bindSprite(duk_context *ctx);
+    static duk_ret_t js_useSprite(duk_context *ctx);   // troca de alvo (API 12)
+    static void deleteAllSprites();                    // reset por app
     static bool useSprite;
+
+    // Timers JS (API 12): globais setTimeout/setInterval/clear*
+    static duk_ret_t js_setTimeout(duk_context *ctx);
+    static duk_ret_t js_setInterval(duk_context *ctx);
+    static duk_ret_t js_clearTimeout(duk_context *ctx);
+    static duk_ret_t js_clearInterval(duk_context *ctx);
+    static void timersTick(duk_context *ctx);   // chamado pelo present()
+    static void timersResetAll();               // reset por app
 
     // GPIO Bindings
     static duk_ret_t js_pinMode(duk_context *ctx);
@@ -71,6 +82,14 @@ private:
     static duk_ret_t js_drawString(duk_context *ctx);
     static duk_ret_t js_setTextColor(duk_context *ctx);
     static duk_ret_t js_setTextSize(duk_context *ctx);
+    static duk_ret_t js_setTextDatum(duk_context *ctx);  // API 12
+
+    // Storage (API 12): chave-valor NVS privado por packageName
+    static duk_ret_t js_storageGet(duk_context *ctx);
+    static duk_ret_t js_storageSet(duk_context *ctx);
+    static duk_ret_t js_storageRemove(duk_context *ctx);
+    static duk_ret_t js_storageClear(duk_context *ctx);
+    static duk_ret_t js_storageClearFor(duk_context *ctx);  // system-gated
 
     // Display Bindings - Utility
     static duk_ret_t js_color(duk_context *ctx);
@@ -117,6 +136,8 @@ private:
     static duk_ret_t js_readTextFile(duk_context *ctx);
     static duk_ret_t js_writeTextFile(duk_context *ctx);
     static duk_ret_t js_appendTextFile(duk_context *ctx);
+    static duk_ret_t js_readFile(duk_context *ctx);    // binario (API 12)
+    static duk_ret_t js_writeFile(duk_context *ctx);   // binario (API 12)
     static duk_ret_t js_deleteFile(duk_context *ctx);
     static duk_ret_t js_renameFile(duk_context *ctx);
     static duk_ret_t js_fileExists(duk_context *ctx);

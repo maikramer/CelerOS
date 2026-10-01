@@ -31,6 +31,8 @@ set(CELEROS_SRCS
     "Runtime/JsFs.cpp"
     "Runtime/JsKeypad.cpp"
     "Runtime/JsSystemApps.cpp"
+    "Runtime/JsTimers.cpp"
+    "Runtime/JsStorage.cpp"
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
@@ -77,8 +79,10 @@ elseif(CELEROS_BOARD STREQUAL "cyd-vspi")
     set(CELEROS_BOARD_DIR Boards/cyd-vspi)
 elseif(CELEROS_BOARD STREQUAL "spotpear-dog")
     set(CELEROS_BOARD_DIR Boards/spotpear-dog)
+elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
+    set(CELEROS_BOARD_DIR Boards/waveshare-watch)
 else()
-    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog)")
+    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch)")
 endif()
 list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Board.cpp")
 
@@ -164,7 +168,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.3.0"
-    CELEROS_API_LEVEL=11
+    CELEROS_API_LEVEL=12
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

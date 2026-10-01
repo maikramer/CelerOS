@@ -269,6 +269,7 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
 
 CelerSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
+duk_context* JSBindings::s_jsCtx = nullptr;  // heap do app corrente (timers)
 
 int JSBindings::mapY(int v) {
     return (useSprite && tftSprite) ? appSh(v)
@@ -323,6 +324,12 @@ void JSBindings::applyDisplayClip() {
 }
 
 void JSBindings::present() {
+    // Timers (API 12) disparam aqui: present() roda no inicio de delay/
+    // getTouch/keypadPoll e das chamadas bloqueantes — os pontos onde o app
+    // cede. Callback que desenha marca o quadro sujo e o push abaixo o leva
+    // ao vidro. Erro no callback PROPAGA (present e 1a linha dos bindings
+    // chamadores — o longjmp nao atravessa recurso C aberto).
+    if (s_jsCtx != nullptr) timersTick(s_jsCtx);
     if (tftInstance == nullptr) return;
     Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
@@ -596,20 +603,17 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
                       bool topbarFixed, const char* appPkg, uint32_t perms) {
     s_jsTft = tft;
     tftInstance = tft;
+    s_jsCtx = ctx;
     s_appTitle = appTitle ? appTitle : "";
     s_topbarFixed = topbarFixed;
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
     celer_log_printf("[TB] init app='%s' fixed=%d\n", s_appTitle ? s_appTitle : "", topbarFixed);
 
-    // Estado grafico limpo por app: o sprite de um app anterior (que saiu
-    // sem deleteSprite) vazava e ainda capturava o desenho do proximo.
-    if (tftSprite) {
-        tftSprite->deleteSprite();
-        delete tftSprite;
-        tftSprite = nullptr;
-    }
-    useSprite = false;
+    // Estado grafico limpo por app: sprites de um app anterior (que saiu
+    // sem deleteSprite) vazavam e ainda capturavam o desenho do proximo.
+    deleteAllSprites();
+    timersResetAll();
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
@@ -661,6 +665,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_appClipOn = false;
     s_frameDirty = false;
     tft->setTextSize(1);
+    tft->setTextDatum(TL_DATUM);  // datum de app anterior nao atravessa
 
     // --- System Object ---
     duk_push_global_object(ctx);
@@ -699,9 +704,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     static const JsFn kFns2[] = {
         {"createSprite", js_createSprite, 2},
-        {"deleteSprite", js_deleteSprite, 0},
+        {"deleteSprite", js_deleteSprite, 1},
         {"pushSprite", js_pushSprite, 2},
         {"bindSprite", js_bindSprite, 1},
+        {"useSprite", js_useSprite, 1},
         {"drawFastVLine", js_drawFastVLine, 4},
         {"drawFastHLine", js_drawFastHLine, 4},
     };
@@ -733,6 +739,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"drawString", js_drawString, 4},
         {"setTextColor", js_setTextColor, 2},
         {"setTextSize", js_setTextSize, 1},
+        {"setTextDatum", js_setTextDatum, 1},
         {"textWidth", js_textWidth, 2},
         {"fontHeight", js_fontHeight, 1},
     };
@@ -883,6 +890,33 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Assign to global variable 'System'
     duk_put_prop_string(ctx, -2, "System");
 
+    // Globais de timer (API 12), no padrao do navegador: disparam no
+    // present() (delay/getTouch/chamadas bloqueantes). Sem Promise no
+    // Duktape, isto e a fundacao de "event loop" cooperativo dos apps.
+    static const JsFn kFnsTimers[] = {
+        {"setTimeout", js_setTimeout, 2},
+        {"setInterval", js_setInterval, 2},
+        {"clearTimeout", js_clearTimeout, 1},
+        {"clearInterval", js_clearInterval, 1},
+    };
+    putFns(ctx, kFnsTimers);
+
+    // Storage (API 12): chave-valor NVS PRIVADO do app (namespace =
+    // packageName). Sem permissao: e dado do proprio app, nao do sistema.
+    duk_push_object(ctx);  // Storage
+    static const JsFn kFnsStorage[] = {
+        {"get", js_storageGet, 2},
+        {"set", js_storageSet, 2},
+        {"remove", js_storageRemove, 1},
+        {"clear", js_storageClear, 0},
+    };
+    // clearFor apaga o Storage de OUTRO app (desinstalacao): so "system"
+    static const JsFn kFnsStorageSys[] = {
+        {"clearFor", js_storageClearFor, 1},
+    };
+    if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsStorageSys);
+    duk_put_prop_string(ctx, -2, "Storage");
+
     // --- Net Object (HTTP para apps, API level 2) — capability "net" (F4) ---
     if (perm(celer::PERM_NET)) {
     duk_push_object(ctx); // Net
@@ -912,7 +946,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_push_object(ctx); // FS
     static const JsFn kFns18[] = {
         {"readTextFile", js_readTextFile, 1},
+        {"readFile", js_readFile, 2},
         {"writeTextFile", js_writeTextFile, 2},
+        {"writeFile", js_writeFile, 2},
         {"appendTextFile", js_appendTextFile, 2},
         {"deleteFile", js_deleteFile, 1},
         {"renameFile", js_renameFile, 2},

@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 11
+### API Level: 12
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -943,3 +943,101 @@ while (true) {
 
 The two examples also work as a pair with the nRF Connect app on a phone
 (connect to `Celer-XXXX`, write to the characteristic, enable notifications).
+
+## 16. API Level 12 — Timers, Storage, multi-sprites and binary FS
+
+### 16.1 Timers (`setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`)
+
+Browser-style globals. They fire **where the app yields** — the start of
+`System.delay`, `System.getTouch`, `System.keypadPoll` and the blocking
+calls (`Net.*`, `FS.getFileMD5`, ...). A tight loop that never yields never
+sees timers fire (and trips the watchdog on its own). With no `Promise` in
+Duktape, this is the cooperative "event loop" foundation.
+
+```js
+var iv = setInterval(function () {
+    clock(System.getTime());
+}, 1000);            // once per second, as long as the app yields
+
+setTimeout(function () {
+    clearInterval(iv);
+    System.toast("done");
+}, 60000);
+```
+
+- **Returns:** id `1..8` (`0` = failed — 8 timers max). 10 ms floor.
+- **A callback error PROPAGATES**: the app dies with the error screen and
+  the callback's stack (same policy as any binding). A late interval fires
+  **once** on the next yield (catch-up, no burst).
+- Timers die with the app — nothing crosses apps.
+
+### 16.2 `Storage` — private per-app persistence
+
+CelerOS's localStorage: key-value in NVS with a **namespace of its own per
+`packageName`** (`System.setting` is global and apps collided). No
+`permissions` needed.
+
+```js
+Storage.set("hiscore", "3250");
+var r = Storage.get("hiscore", "0");   // default when absent
+Storage.remove("hiscore");
+Storage.clear();                       // wipes EVERYTHING of this app
+```
+
+- Key: 1–15 chars (NVS limit). Value: string up to 4 KB; numbers and
+  booleans are serialized (`get` **always returns a string**).
+- Loose `.js` scripts (no app.json) share the `app__anon` namespace.
+- `Storage.clearFor(packageName)` wipes ANOTHER app's Storage — requires the
+  `"system"` capability (App Store 2.1.3+ uses it on uninstall; `clear()`
+  only wipes the CALLING app's own Storage).
+
+### 16.3 Multi-sprites (`System.useSprite`)
+
+`System.createSprite(w, h)` now returns an **id** `1..4` (`0` = failed) and
+the new sprite becomes the target of subsequent operations (old apps that
+ignore the return keep working). `System.useSprite(id)` switches targets:
+`0` = frame/display, `1..4` = an existing sprite. `System.deleteSprite(id)`
+deletes a specific sprite (no argument deletes the current one).
+
+```js
+var bg = System.createSprite(240, 200);   // id 1
+var hero = System.createSprite(24, 24);   // id 2 — becomes current
+System.fillRect(0, 0, 24, 24, System.color(255, 0, 0));
+System.useSprite(bg);
+System.fillRect(0, 0, 240, 200, 0);
+System.pushSprite(0, 40);
+System.useSprite(hero);
+System.pushSprite(10, 50);
+System.useSprite(0);                      // back to the frame
+```
+
+Up to **4 sprites with PSRAM, 1 without** (the silent 8-bit fallback for
+huge sprites still applies).
+
+### 16.4 Binary FS (`FS.readFile` / `FS.writeFile`)
+
+Byte-level read and write — each file byte becomes one character (0–255) of
+the string. `readTextFile` truncated at the first `\0`; these do not.
+
+```js
+FS.writeFile("/local/data.bin", String.fromCharCode(1, 0, 2, 255));
+var d = FS.readFile("/local/data.bin", 512);  // optional maxLen (default 16KB, cap 64KB)
+if (d !== null && d.charCodeAt(1) === 0) { /* ... */ }
+```
+
+- `readFile` returns `null` when the file does not exist. `writeFile`
+  accepts up to 64 KB per call.
+- The security jail rules (system files require `"system"`) apply to both.
+
+### 16.5 `System.setTextDatum(datum)`
+
+Anchor of `drawString` on the current target: `0`=TL (default — previous
+behavior), `1`=TC, `2`=TR, `4`=ML, `5`=MC, `6`=MR, `8`=BL, `9`=BC, `10`=BR.
+Centering text no longer needs the manual `textWidth` dance. The datum is
+reset to `0` for every app.
+
+```js
+System.setTextDatum(5);               // middle-center
+System.drawString("GAME OVER", 120, 160, 4);
+System.setTextDatum(0);               // good practice: restore default
+```

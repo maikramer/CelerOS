@@ -166,6 +166,55 @@ duk_ret_t JSBindings::js_unmountSD(duk_context *ctx) {
 }
 
 
+// API 12: leitura BINARIA — cada byte do arquivo vira um char (0..255) da
+// string devolvida (duk_push_lstring preserva NUL; o readTextFile antigo
+// truncava no primeiro 0). maxLen opcional limita a leitura (default 16KB,
+// teto 64KB: o corpo e copiado para o heap do Duktape).
+duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
+    const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    size_t maxLen = 16 * 1024;
+    if (duk_is_number(ctx, 1)) {
+        maxLen = duk_require_uint(ctx, 1);
+        if (maxLen > 64 * 1024) maxLen = 64 * 1024;
+    }
+
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) { duk_push_null(ctx); return 1; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); duk_push_null(ctx); return 1; }
+    if ((size_t)sz > maxLen) sz = maxLen;
+
+    char* buf = (char*)malloc(sz > 0 ? sz : 1);
+    if (buf == nullptr) { fclose(f); duk_push_null(ctx); return 1; }
+    size_t got = fread(buf, 1, sz, f);
+    fclose(f);
+    duk_push_lstring(ctx, buf, got);
+    free(buf);
+    return 1;
+}
+
+// API 12: escrita BINARIA — os bytes da string (0..255 por char) vão
+// crús para o arquivo (duk_require_lstring preserva NUL). Append com o
+// FS.appendTextFile (que tambem é byte-safe p/ strings com NUL).
+duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
+    const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    size_t len = 0;
+    const char* data = duk_require_lstring(ctx, 1, &len);
+    if (len > 64 * 1024) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS.writeFile: maximo 64KB");
+    }
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) { duk_push_boolean(ctx, 0); return 1; }
+    bool ok = fwrite(data, 1, len, f) == len;
+    ok = fclose(f) == 0 && ok;
+    duk_push_boolean(ctx, ok ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_appData(duk_context *ctx) {
     // Pasta privada do app (F4): /local/data/<packageName>/ criada na
     // primeira chamada. Sem packageName no app.json devolve "".

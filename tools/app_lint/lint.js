@@ -50,7 +50,7 @@ const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage'];
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
 // declaracao vira diagnostico de variavel/funcao nao declarada.
@@ -61,6 +61,8 @@ const ES5_GLOBALS = [
   'parseInt', 'RangeError', 'ReferenceError', 'RegExp', 'String', 'SyntaxError',
   'TypeError', 'URIError', 'undefined', 'arguments',
   '__harness',  // injetado so no harness de teste; apps usam typeof p/ detectar
+  // Timers do firmware (API 12): globais como no navegador
+  'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
 ];
 
 // Compilado fora no Duktape lean (celeros_duk_config.yaml) ou inexistente no
@@ -182,7 +184,7 @@ function parseBindingsCpp(text) {
         continue;
       }
       const target = stack[stack.length - 1];
-      if (!target || stack.length <= 1) {
+      if (!target) {
         warnings.push('putFns sem objeto alvo na pilha: ' + m[1]);
         continue;
       }
@@ -228,6 +230,10 @@ function parseBindingsCpp(text) {
   };
   flatten(globalObj, '');
 
+  if (globalObj.fns.length) {
+    objects.global = { fns: globalObj.fns, consts: globalObj.consts,
+                       perm: globalObj.perm, kcfg: globalObj.kcfg };
+  }
   return { objects, globalConsts: globalObj.consts, warnings };
 }
 
@@ -471,6 +477,9 @@ function lintSource(manifest, src, appInfo) {
   const globalWhitelist = new Set(ES5_GLOBALS.concat(Object.keys(BANNED_GLOBALS)));
   for (const c of manifest.globalConsts) globalWhitelist.add(c.name);
   for (const n of NAMESPACE_ROOTS) globalWhitelist.add(n);
+  // fns registradas direto no global (setTimeout/setInterval/... no init)
+  for (const f of (manifest.objects.global && manifest.objects.global.fns) || [])
+    globalWhitelist.add(f.name);
 
   // Valida a cadeia contra o manifest. `report` emite o erro de existencia;
   // `record` coleta uso de permissao/nivel (uma vez por cadeia mais externa).

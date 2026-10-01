@@ -92,7 +92,7 @@ for (const c of CASES) {
 // funcoes varia com WIP do firmware — os invariantes abaixo e que importam)
 {
   const m = linter.buildManifest();
-  check('manifest: API level 11', m.apiLevel === 11, 'apiLevel=' + m.apiLevel);
+  check('manifest: API level do firmware', m.apiLevel >= 12, 'apiLevel=' + m.apiLevel);
   check('manifest: >=100 funcoes parseadas', m.counts.functions >= 100, 'functions=' + m.counts.functions);
   check('manifest: todo corpo C++ encontrado', m.counts.bodiesFound === m.counts.functions,
     'bodiesFound=' + m.counts.bodiesFound + ' functions=' + m.counts.functions);

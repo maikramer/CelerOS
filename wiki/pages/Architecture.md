@@ -72,13 +72,15 @@ The main loop runs on the main task: `Navigator::tick()`,
   Duktape), with a blocking `while` loop and `System.delay()`.
 * All geometry is drawn in virtual 240x320 coordinates and scaled by
   `UI::sx()/sy()` — apps never see physical pixels.
-* The **API level** (`System.getAPILevel()`, currently 11) is the
+* The **API level** (`System.getAPILevel()`, currently 12) is the
   feature-detection contract for apps. History: 1 base
   (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps in JS · 5 docked
   keyboard · 6 custom topbar + streaming `Net.download` · 7 RGB LED, light
   sensor/auto-brightness, speaker, masked prompts · 8 relays · 9 Celer Link
   (BLE) · 10 servos + robot hardware (battery, mic, touch pad, NeoPixel) ·
-  11 Celer Link code pairing + keyboard `{hint:"num"}` (numeric page).
+  11 Celer Link code pairing + keyboard `{hint:"num"}` (numeric page) ·
+  12 `setTimeout`/`setInterval`, `Storage` (private NVS), multi-sprites,
+  binary `FS.readFile`/`writeFile`, `setTextDatum`.
 * When adding/calling a new API: bump `CELEROS_API_LEVEL`, document it in
   both languages of `JS_API_Guide` and add a stub to the
   `test/js_harness/run.js` harness.
