@@ -161,6 +161,7 @@ var batchOk = 0, batchFails = [];
 
 var TAB_H = 26, FOOT_Y = 282, ROW_H = 44, PITCH = 50, LIST_END = 272;
 var LIST_Y = 54;      // 54 na Loja (chips acima), 32 nas outras abas
+var query = "";       // filtro de busca da Loja ("" = desligado)
 
 // ---- disco: instalados -----------------------------------------------------
 // mesma regra do launcher (LauncherUI::scanLocalApps): PRIMEIRO visto ganha —
@@ -341,10 +342,13 @@ function buildCats() {
     }
 }
 function filteredApps() {
-    if (curCat === "Todos") return apps;
     var out = [];
+    var q = query.toLowerCase();
     for (var i = 0; i < apps.length; i++) {
-        if ((apps[i].cat || "Apps") === curCat) out.push(apps[i]);
+        if (curCat !== "Todos" && (apps[i].cat || "Apps") !== curCat) continue;
+        if (q && ((apps[i].name || "").toLowerCase().indexOf(q) < 0 &&
+                  (apps[i].desc || "").toLowerCase().indexOf(q) < 0)) continue;
+        out.push(apps[i]);
     }
     return out;
 }
@@ -472,9 +476,16 @@ function drawTabs() {
     }
 }
 
-// chips de categoria da Loja (drag horizontal quando nao cabem)
+// chips de categoria da Loja (drag horizontal quando nao cabem) — o primeiro
+// chip e fixo: abre a busca (ou limpa o filtro ativo)
+function searchChipLabel() {
+    return query ? query + " x" : "Buscar";
+}
 function chipsGeom() {
     var xs = [], x = 8;
+    var qw = System.textWidth(searchChipLabel(), 1) + 16;
+    xs.push({ x: x, w: qw, search: true });
+    x += qw + 6;
     for (var i = 0; i < cats.length; i++) {
         var w = System.textWidth(cats[i], 1) + 16;
         xs.push({ x: x, w: w });
@@ -490,25 +501,34 @@ function drawChips() {
     if (typeof System.setClip === "function") {
         System.setClip(0, 30, 240, 20);
     }
-    for (var i = 0; i < cats.length; i++) {
+    for (var i = 0; i < g.xs.length; i++) {
         var cx = g.xs[i].x - catScroll;
         if (cx + g.xs[i].w < 0 || cx > 240) continue;
-        var active = cats[i] === curCat;
+        if (g.xs[i].search) {
+            var on = query !== "";
+            System.fillRoundRect(cx, 30, g.xs[i].w, 18, 9, on ? T.warn : T.card);
+            System.drawRoundRect(cx, 30, g.xs[i].w, 18, 9, on ? T.warn : T.stroke);
+            ctext(searchChipLabel(), cx + g.xs[i].w / 2, 39, 1,
+                  on ? T.bg : T.textDim, on ? T.warn : T.card);
+            continue;
+        }
+        var ci = i - 1;
+        var active = cats[ci] === curCat;
         System.fillRoundRect(cx, 30, g.xs[i].w, 18, 9,
                              active ? T.accent : T.card);
         System.drawRoundRect(cx, 30, g.xs[i].w, 18, 9,
                              active ? T.accent : T.stroke);
-        ctext(cats[i], cx + g.xs[i].w / 2, 39, 1,
-              active ? T.onAccent : (active ? T.text : T.textDim),
+        ctext(cats[ci], cx + g.xs[i].w / 2, 39, 1,
+              active ? T.onAccent : T.textDim,
               active ? T.accent : T.card);
     }
     if (typeof System.clearClip === "function") System.clearClip();
 }
 function chipAt(x) {
     var g = chipsGeom();
-    for (var i = 0; i < cats.length; i++) {
+    for (var i = 0; i < g.xs.length; i++) {
         var cx = g.xs[i].x - catScroll;
-        if (x >= cx && x <= cx + g.xs[i].w) return i;
+        if (x >= cx && x <= cx + g.xs[i].w) return i;   // 0 = chip de busca
     }
     return -1;
 }
@@ -683,10 +703,18 @@ function screenList() {
                 }
                 drawList();
             } else if (curTab === 0 && t.y >= 30 && t.y < 50) {
-                // chips: tap seleciona; drag horizontal rola
+                // chips: tap seleciona; drag horizontal rola. 0 = busca
                 var r = chipsDrag(t);
-                if (r >= 0) {
-                    curCat = cats[r];
+                if (r === 0) {
+                    if (query) {
+                        query = "";                 // x limpa o filtro
+                    } else if (typeof System.prompt === "function") {
+                        var q = System.prompt("Buscar app", "", "");
+                        query = (q && String(q).length) ? String(q) : "";
+                    }
+                    scrollYs[0] = 0;
+                } else if (r > 0) {
+                    curCat = cats[r - 1];
                     scrollYs[0] = 0;
                 }
                 drawList();

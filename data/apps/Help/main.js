@@ -92,6 +92,20 @@ var CATS = [
         { t: "Conectar WiFi", d: "Config > WiFi",
           c: "Vá em Configurações > WiFi. O aparelho escaneia as redes. Toque numa rede, digite a senha no teclado na tela e toque em Conectar. O aparelho reinicia para aplicar." }
     ]},
+    { name: "Loja e Apps", topics: [
+        { t: "App Store", d: "Instalar e atualizar",
+          c: "A App Store lista os apps do CelerOS Hub. Toque num app para ver a descrição, o changelog e o tamanho antes de instalar. Apps instalados mostram a versão local e ganham o botão Atualizar quando o hub tem versão nova." },
+        { t: "Criar seus apps", d: "SDK celer.js",
+          c: "O SDK do CelerOS (npm celer) cria o projeto, roda o lint, testa no emulador e publica na loja: celer.js new meuapp, depois dev, test e publish. Apps são JavaScript ES5 no espaço virtual 240x320." }
+    ]},
+    { name: "APIs Recentes", topics: [
+        { t: "Timers e notificações", d: "API 12",
+          c: "Apps podem usar setTimeout e setInterval, gravar dados no Storage (NVS privado do app), desenhar em sprites fora da tela e avisar o usuário com System.notify (aparece no centro de notificações e na faixa do sistema) e System.playTone (melodia [[freq,ms],...])." },
+        { t: "Sons e áudio", d: "API 12 e 13",
+          c: "System.playTone toca melodias curtas no alto-falante. System.playWav toca arquivos WAV PCM 16-bit (8 a 48 kHz) de /local ou /sd. System.setVolume e getVolume ajustam o volume geral (API 13)." },
+        { t: "Sensores e relógio", d: "API 13",
+          c: "No watch, Sensors.accel le o acelerômetro, Sensors.steps conta passos e Sensors.temp a temperatura. System.getWeekday devolve o dia da semana, System.keepAwake(segundos) segura a tela acordada e o RTC mantém a hora entre reboots." }
+    ]},
     { name: "Problemas Comuns", topics: [
         { t: "Tela preta", d: "Travamento em apps",
           c: "Se um app travar ou ficar sem memória, o sistema mostra uma tela de erro: toque para voltar ao launcher. Em placas sem PSRAM (como a CYD), apps muito grandes podem não caber; a loja marca esses apps como Requer PSRAM." }

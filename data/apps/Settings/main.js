@@ -237,6 +237,8 @@ function titleNow() {
     if (tela === "tz") return "Fuso horário";
     if (tela === "security") return "Segurança";
     if (tela === "display") return "Tela";
+    if (tela === "som") return "Som";
+    if (tela === "sensors") return "Sensores";
     if (tela === "update") return "Atualização";
     if (tela === "about") return "Sobre";
     if (tela === "wifi") return "Wi-Fi";
@@ -262,6 +264,8 @@ function go(s) {
     if (s === "display") {
         blLvl = System.getBrightness();
         if (blLvl < 5) blLvl = 5;
+    } else if (s === "som") {
+        volLvl = System.getVolume ? System.getVolume() : 50;
     } else if (s === "update") {
         otaState = "idle";
         otaInfo = null;
@@ -344,6 +348,10 @@ function drawContent() {
         drawRows();
     } else if (tela === "display") {
         drawDisplay();
+    } else if (tela === "som") {
+        drawSom();
+    } else if (tela === "sensors") {
+        drawSensors();
     } else if (tela === "update") {
         drawUpdate();
     } else if (tela === "reset") {
@@ -394,6 +402,12 @@ function buildMenu() {
             : "--",
         a: "display"
     });
+    if (typeof System.getVolume === "function") {
+        a.push({ l: "Som", v: System.getVolume() + "%", a: "som" });
+    }
+    if (typeof Sensors !== "undefined" && Sensors && Sensors.accel) {
+        a.push({ l: "Sensores", a: "sensors" });
+    }
     a.push({ l: "Atualização", a: "ota" });
     a.push({ l: "Sobre", v: "v" + System.getOSVersion(), a: "about" });
     if (notifSupported()) a.push({ l: "Notificações", v: String(notifCount()), a: "notif" });
@@ -684,6 +698,71 @@ function drawDisplay() {
     }
 }
 
+// ---- Som (API 13) ------------------------------------------------------------
+
+var volLvl = 50;
+var dragVol = false;
+
+function drawSom() {
+    ctext("Volume", 120, 84, 2, T.text, T.bg);
+    ctext("arraste o trilho", 120, 104, 1, T.textDim, T.bg);
+    ctext(volLvl + "%", 120, 134, 2, T.accent, T.bg);
+
+    System.fillRoundRect(24, 160, 192, 12, 6, T.card);
+    System.drawRoundRect(24, 160, 192, 12, 6, T.stroke);
+    var fw = Math.round(192 * volLvl / 100);
+    if (fw > 4) System.fillRoundRect(24, 160, fw, 12, 6, T.accent);
+    System.fillCircle(24 + fw, 166, 7, T.text);
+
+    System.fillRoundRect(24, 212, 192, 30, 8, T.card);
+    System.drawRoundRect(24, 212, 192, 30, 8, T.stroke);
+    ctext("Testar som", 120, 227, 1, T.text, T.card);
+}
+
+// ---- Sensores (API 13, watch) ---------------------------------------------------
+
+function drawSensors() {
+    var a = Sensors.accel();
+    System.fillRoundRect(8, 52, 224, 88, 10, T.card);
+    System.drawRoundRect(8, 52, 224, 88, 10, T.stroke);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("acelerômetro (g)", 20, 60, 1);
+    if (a) {
+        System.setTextColor(T.text, T.card);
+        System.drawString("x " + a.x.toFixed(2), 20, 78, 2);
+        System.drawString("y " + a.y.toFixed(2), 20, 98, 2);
+        System.drawString("z " + a.z.toFixed(2), 20, 118, 2);
+        // barra horizontal por eixo: -2g..+2g
+        var cols = [T.err, T.ok, T.accent];
+        var vals = [a.x, a.y, a.z];
+        for (var i = 0; i < 3; i++) {
+            var v = vals[i];
+            if (v > 2) v = 2;
+            if (v < -2) v = -2;
+            System.fillRect(150, 84 + i * 18, 64, 8, T.raised);
+            var cx = 150 + 32 + Math.round(v * 16);
+            if (cx < 151) cx = 151;
+            if (cx > 213) cx = 213;
+            System.fillRect(cx - 2, 82 + i * 18, 4, 12, cols[i]);
+        }
+    } else {
+        System.setTextColor(T.warn, T.card);
+        System.drawString("indisponível", 20, 82, 2);
+    }
+
+    System.fillRoundRect(8, 152, 224, 74, 10, T.card);
+    System.drawRoundRect(8, 152, 224, 74, 10, T.stroke);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("passos", 20, 160, 1);
+    System.setTextColor(T.text, T.card);
+    System.drawString(String(Sensors.steps ? Sensors.steps() : "-"), 20, 176, 2);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("temperatura", 20, 198, 1);
+    System.setTextColor(T.text, T.card);
+    System.drawString(Sensors.temp ? Sensors.temp().toFixed(1) + " °C" : "-", 20, 210, 2);
+    ctext("atualiza ao vivo", 120, 246, 1, T.textDim, T.bg);
+}
+
 // ---- Atualizacao (OTA) -----------------------------------------------------
 
 function buildOtaLines() {
@@ -897,6 +976,11 @@ function onTap() {
         drawAll();
         return;
     }
+    if (tela === "som" && typeof System.playTone === "function" &&
+        hit(t, 24, 212, 192, 30)) {
+        System.playTone([[784, 90], [988, 90], [1319, 140]]);
+        return;
+    }
 
     if (tela === "menu") {
         var idx = rowAt(t);
@@ -907,6 +991,8 @@ function onTap() {
         else if (a === "time") go("time");
         else if (a === "sec") go("security");
         else if (a === "display") go("display");
+        else if (a === "som") go("som");
+        else if (a === "sensors") go("sensors");
         else if (a === "ota") go("update");
         else if (a === "about") go("about");
         else if (a === "notif") go("notif");
@@ -1115,6 +1201,22 @@ while (true) {
                 }
             }
         }
+        // slider de volume (API 13): arrastar ajusta, soltar persiste
+        if (tela === "som" && typeof System.setVolume === "function") {
+            if (!dragVol && t.x >= 10 && t.x <= 230 && t.y >= 138 && t.y <= 196) {
+                dragVol = true;
+                movedPx = 99;
+            }
+            if (dragVol) {
+                var vv = Math.round((t.x - 24) * 100 / 192);
+                if (vv < 0) vv = 0;
+                if (vv > 100) vv = 100;
+                if (vv !== volLvl) {
+                    volLvl = vv;
+                    drawAll();
+                }
+            }
+        }
     } else if (down) {
         down = false;
         var wasPressed = pressIdx >= 0;
@@ -1122,6 +1224,9 @@ while (true) {
         if (dragBri) {
             dragBri = false;
             System.setBrightness(blLvl);  // persiste (grava sozinho)
+        } else if (dragVol) {
+            dragVol = false;
+            System.setVolume(volLvl);     // aplica e persiste
         } else if (scrolled) {
             scrolled = false;
             drawAll();  // posicao final da rolagem
@@ -1157,6 +1262,8 @@ while (true) {
                     clampScroll();
                     drawAll();
                 }
+            } else if (tela === "sensors") {
+                drawAll();          // valores vivos (accel/passos/temp)
             }
         }
     }

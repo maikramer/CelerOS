@@ -1,7 +1,8 @@
-// CelerOS Snake — classico da cobrinha (API 3)
-// ES5 puro (Duktape). Swipe do dedo para virar; a cobra acelera a cada
-// fruta. Recorde persistido em /local/config_snake_hi.txt. Desenho por
-// celulas alteradas (sem sprite): zero flicker e barato para o heap.
+// CelerOS Snake — classico da cobrinha (API 7)
+// ES5 puro (Duktape). Swipe do dedo para virar; toque pausa. A cobra acelera
+// a cada fruta e toda 5a fruta e dourada (+3, pisca e expira). Recorde
+// persistido em /local/config_snake_hi.txt. Sons via playTone quando o
+// firmware tem (API 12+). Desenho por celulas alteradas: zero flicker.
 
 var T = System.theme();
 var W = 240, H = 320;
@@ -14,6 +15,19 @@ var FY = 32;                    // y do campo (sob o placar fino)
 var FW = COLS * CELL;
 var FH = ROWS * CELL;
 var HI_FILE = "/local/config_snake_hi.txt";
+var GOLD_EVERY = 5;             // fruta dourada a cada N frutas
+var GOLD_MS = 7000;             // validade da dourada
+
+var hasTone = (typeof System.playTone === "function");
+function tone(hz, ms) {          // playTone aceita melodia [[freq,ms],...]
+    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+}
+function tune(notes) {           // sequencia curta (ex.: recorde)
+    if (hasTone) { try { System.playTone(notes); } catch (e) {} }
+}
+if (typeof System.keepAwake === "function") {
+    try { System.keepAwake(120000); } catch (e) {}  // partida sem apagar tela
+}
 
 var hi = 0;
 var raw = FS.readTextFile(HI_FILE);
@@ -23,8 +37,8 @@ if (raw) {
 }
 
 // ------------------------------------------------------------ estado ------
-var snake, dir, nextDir, food, score, interval, state, growPending;
-var newRecord = false;
+var snake, dir, nextDir, food, gold, score, interval, state, growPending;
+var fruits, goldUntil, newRecord;
 
 function reset() {
     snake = [{ x: 8, y: 11 }, { x: 7, y: 11 }, { x: 6, y: 11 }];
@@ -33,6 +47,9 @@ function reset() {
     score = 0;
     interval = 220;
     growPending = 0;
+    fruits = 0;
+    gold = null;
+    goldUntil = 0;
     newRecord = false;
     state = "count";
     spawnFood();
@@ -60,21 +77,33 @@ function onSnake(x, y) {
     return false;
 }
 
-function spawnFood() {
+function freeCell() {
     var tries = 0;
     while (tries < 300) {
         var x = Math.floor(Math.random() * COLS);
         var y = Math.floor(Math.random() * ROWS);
-        if (!onSnake(x, y)) { food = { x: x, y: y }; return; }
+        if (!onSnake(x, y)) return { x: x, y: y };
         tries++;
     }
     // campo quase cheio: primeira celula livre
     for (var j = 0; j < ROWS; j++) {
         for (var i2 = 0; i2 < COLS; i2++) {
-            if (!onSnake(i2, j)) { food = { x: i2, y: j }; return; }
+            if (!onSnake(i2, j)) return { x: i2, y: j };
         }
     }
-    food = null;  // venceu de verdade
+    return null;  // venceu de verdade
+}
+
+function spawnFood() {
+    food = freeCell();
+    if (!food) { saveHi(); state = "over"; drawGameOver(true); }
+}
+
+function spawnGold() {
+    var c = freeCell();
+    if (!c) return;
+    gold = c;
+    goldUntil = System.millis() + GOLD_MS;
 }
 
 // ------------------------------------------------------------- desenho ----
@@ -101,11 +130,25 @@ function drawFood() {
     System.fillCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 4) / 2, T.err);
 }
 
+function drawGold(on) {
+    if (!gold) return;
+    var r = cellRect(gold.x, gold.y);
+    if (on) System.fillCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 3) / 2, T.warn);
+    else System.fillRect(r.x, r.y, r.w, r.h, T.bg);
+}
+
+function level() {
+    return 1 + Math.floor((220 - interval) / 6);
+}
+
 function drawHeader() {
     // o nome vive na faixa do sistema (retratil); aqui e so o placar
     System.fillRoundRect(0, 0, W, 26, 0, T.card);
     System.setTextColor(T.text, T.card);
     System.drawString("Pontos " + score, 10, 8, 2);
+    System.setTextColor(T.textDim, T.card);
+    var mid = "Nv " + level();
+    System.drawString(mid, 108, 10, 1);
     var right = "Rec " + hi;
     var rx = W - 12 - System.textWidth(right, 1);
     // passou o recorde em jogo: numero fica verde
@@ -120,16 +163,30 @@ function ctext(s, cx, cy, f, col, bg) {
 }
 
 function drawGameOver(win) {
-    System.fillRoundRect(25, 105, 190, 116, 10, T.card);
-    System.drawRoundRect(25, 105, 190, 116, 10, T.accent);
-    ctext(win ? "Você venceu!" : "Fim de jogo", 120, 126, 2, T.warn, T.card);
-    ctext("Pontos: " + score, 120, 150, 2, T.text, T.card);
+    System.fillRoundRect(25, 95, 190, 136, 10, T.card);
+    System.drawRoundRect(25, 95, 190, 136, 10, T.accent);
+    ctext(win ? "Você venceu!" : "Fim de jogo", 120, 116, 2, T.warn, T.card);
+    ctext("Pontos: " + score, 120, 140, 2, T.text, T.card);
+    ctext("Tamanho: " + snake.length, 120, 158, 1, T.textDim, T.card);
     if (newRecord) {
-        ctext("Novo recorde!", 120, 170, 1, T.ok, T.card);
+        ctext("Novo recorde!", 120, 178, 1, T.ok, T.card);
     } else {
-        ctext("Recorde: " + hi, 120, 170, 1, T.textDim, T.card);
+        ctext("Recorde: " + hi, 120, 178, 1, T.textDim, T.card);
     }
-    ctext("toque para jogar de novo", 120, 202, 1, T.accent, T.card);
+    ctext("toque para jogar de novo", 120, 210, 1, T.accent, T.card);
+}
+
+function drawPause() {
+    System.fillRoundRect(35, 110, 170, 104, 10, T.card);
+    System.drawRoundRect(35, 110, 170, 104, 10, T.warn);
+    ctext("Pausado", 120, 132, 2, T.warn, T.card);
+    ctext("Nv " + level() + " - " + score + " pts", 120, 152, 1, T.textDim, T.card);
+    // dois botoes: continuar (esq) e reiniciar (dir)
+    System.fillRoundRect(45, 168, 70, 32, 8, T.accent);
+    ctext("Seguir", 80, 184, 1, T.onAccent, T.accent);
+    System.fillRoundRect(125, 168, 70, 32, 8, T.raised);
+    System.drawRoundRect(125, 168, 70, 32, 8, T.stroke);
+    ctext("Reiniciar", 160, 184, 1, T.text, T.raised);
 }
 
 function saveHi() {
@@ -137,6 +194,7 @@ function saveHi() {
         hi = score;
         newRecord = true;
         FS.writeTextFile(HI_FILE, String(hi));
+        tune([[880, 90], [1320, 120]]);
     }
 }
 
@@ -161,29 +219,53 @@ function step() {
     drawCell(head.x, head.y, T.ok);
     if (snake.length > 1) drawCell(snake[1].x, snake[1].y, T.accent);
 
+    var ate = 0;
     if (food && head.x === food.x && head.y === food.y) {
-        score++;
+        ate = 1;
+        drawCell(food.x, food.y, T.bg);  // limpa a fruta por baixo
+        fruits++;
+    } else if (gold && head.x === gold.x && head.y === gold.y) {
+        ate = 3;
+        gold = null;
+        fruits++;
+    }
+
+    if (ate > 0) {
+        score += ate;
         if (score > hi && !newRecord) {
             newRecord = true;
             drawHeader();
         }
-        growPending += 2;
-        interval = Math.max(90, 220 - score * 6);
+        growPending += ate + 1;
+        interval = Math.max(90, 220 - fruits * 6);
         drawHeader();
-        if (score >= COLS * ROWS) { saveHi(); state = "over"; win = true; drawGameOver(true); return; }
-        spawnFood();
+        tone(ate === 3 ? 990 : 660, ate === 3 ? 70 : 45);
+        if (fruits % GOLD_EVERY === 0 && !gold) spawnGold();
+        if (food && ate === 1) spawnFood();
+        if (!food) { saveHi(); state = "over"; drawGameOver(true); return; }
         drawFood();
+    }
+
+    // dourada pisca e expira
+    if (gold) {
+        if (System.millis() > goldUntil) {
+            drawGold(false);
+            gold = null;
+        } else {
+            drawGold(Math.floor(System.millis() / 220) % 2 === 0);
+        }
     }
 
     if (growPending > 0) {
         growPending--;
     } else {
-        var tail = snake.pop();
-        drawCell(tail.x, tail.y, T.bg);
+        var t2 = snake.pop();
+        drawCell(t2.x, t2.y, T.bg);
     }
 }
 
 function die() {
+    tone(150, 220);
     saveHi();
     drawHeader();
     state = "over";
@@ -204,9 +286,28 @@ function pollTouch() {
         var dx = lastP.x - press.x, dy = lastP.y - press.y;
         press = null;
         if (state === "play") {
-            if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return false;  // tap: segue
+            if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
+                state = "pause";      // toque seco: pausa
+                drawPause();
+                return false;
+            }
             if (Math.abs(dx) > Math.abs(dy)) nextDir = { dx: dx > 0 ? 1 : -1, dy: 0 };
             else nextDir = { dx: 0, dy: dy > 0 ? 1 : -1 };
+        } else if (state === "pause") {
+            // botoes do cartao de pausa
+            if (lastP.y >= 168 && lastP.y <= 200) {
+                if (lastP.x >= 45 && lastP.x <= 115) {
+                    // seguir: redesenha o campo por cima do cartao
+                    drawBoard();
+                    drawFood();
+                    if (gold) drawGold(true);
+                    state = "play";
+                } else if (lastP.x >= 125 && lastP.x <= 195) {
+                    System.fillScreen(T.bg);
+                    reset();
+                    countdown();
+                }
+            }
         }
         return true;  // gesto completo (usado no game over)
     }
@@ -214,7 +315,6 @@ function pollTouch() {
 }
 
 // ------------------------------------------------------------------ main ---
-var win = false;
 reset();
 countdown();
 
@@ -231,7 +331,7 @@ while (true) {
             lastTick = now;
             step();
         }
-    } else if (done) {
+    } else if (state === "over" && done) {
         // game over: toque completo reinicia
         System.fillScreen(T.bg);
         reset();

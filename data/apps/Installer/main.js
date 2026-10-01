@@ -284,7 +284,15 @@ function drawDetail() {
     System.drawString(stTxt, 16, 210, 1);
 
     System.setTextColor(T.textDim, T.bg);
-    System.drawString(trunc("Instalar em: " + destBase() + "/" + app.pkg, 216, 1), 12, 234, 1);
+    System.drawString(trunc("Instalar em: " + destBase() + "/" + app.pkg, 216, 1), 12, 230, 1);
+    var kb = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.round(n / 1024) + "KB"; };
+    var need = 0;
+    try {
+        need = (FS.getFileSize(app.folder + "/main.js") || 0) +
+               (FS.getFileSize(app.folder + "/app.json") || 0) +
+               (FS.getFileSize(app.folder + "/icon.png") || 0);
+    } catch (e2) { need = 0; }
+    System.drawString("Pacote: " + kb(need) + "  -  Livre: " + kb(FS.getFreeSpace(destBase())), 12, 244, 1);
 
     var lbl = "Instalar";
     if (inst !== null) lbl = isUpd ? "Atualizar" : "Reinstalar";
@@ -389,6 +397,9 @@ function tryInstall(app) {
     if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);
     if (ok) {
         System.rescanApps();
+        if (typeof System.playTone === "function") {
+            try { System.playTone([[784, 80], [1047, 110]]); } catch (e1) {}
+        }
         showAlert("Instalado!",
                   [trunc(app.name, 34, 1),
                    "v" + app.version,

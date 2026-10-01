@@ -1,10 +1,11 @@
 {
   "name": "HTTP Demo",
   "packageName": "celeros.httpdemo",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Demonstra a API Net.* (nivel 2): busca a cotacao USD/BRL em uma API publica e mostra na tela. Requer WiFi conectado.",
   "type": "Utility",
   "category": "Utility",
-  "api": 7
+  "api": 7,
+  "changelog": "1.1.0 - BTC/USD (coinbase) alem do USD/BRL, latencia medida por consulta, auto-refresh a cada 60s com contagem no rodape\n1.0.2 - primeira versao estavel"
 }

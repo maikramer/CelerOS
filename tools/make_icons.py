@@ -212,6 +212,8 @@ APP_PKG_ICONS = {
     "Web Server": "web",
     "Terminal": "terminal",
     "Snake": "snake",
+    "HTTP Demo": "httpdemo",
+    "Touch Test": "touchtest",
 }
 
 # Apps do CelerOS Hub (hub_apps/<Nome>/) e o id do icone do pacote
@@ -219,6 +221,15 @@ HUB_PKG_ICONS = {
     "2048": "2048",
     "Breakout": "breakout",
     "Cronometro": "cronometro",
+    "Celer Remote": "remote",
+    "Calculator": "calculator",
+    "2D Runner": "runner",
+    "Clock": "clockapp",
+    "Cube 3D": "cube",
+    "LED Controller": "led",
+    "Physics Drop": "physics",
+    "System Info": "sysinfo",
+    "Tic Tac Toe": "tictactoe",
 }
 
 

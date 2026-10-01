@@ -1,11 +1,12 @@
 {
   "name": "Touch Test",
   "packageName": "celeros.touchtest",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "Teste de display, touch e topbar custom: barras RGB, contador de toques e chips na faixa do sistema. Toque no X (canto superior direito) para sair.",
   "type": "Utility",
   "category": "Utility",
   "api": 6,
-  "topbar": true
+  "topbar": true,
+  "changelog": "1.2.0 - rastro continuo de arrasto, coords vivas com faixa min/max, rampa de cinza 16 niveis, card de informacoes do aparelho e amostras/s\n1.1.0 - barras RGB + chips da topbar (API 6)"
 }

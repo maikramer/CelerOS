@@ -65,7 +65,24 @@ function draw() {
         System.drawString("senha: " + auth.pass, 20, y + 72, 1);
         System.setTextColor(T.textDim, T.card);
         System.drawString("acesso protegido - arquivos e OTA", 20, y + 92, 1);
-        y += 108 + 12;
+        y += 108 + 10;
+
+        // card de armazenamento (onde os uploads e backups vao parar)
+        var kb = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.round(n / 1024) + "KB"; };
+        System.fillRoundRect(8, y, 224, 52, 10, T.card);
+        System.drawRoundRect(8, y, 224, 52, 10, T.stroke);
+        System.setTextColor(T.textDim, T.card);
+        System.drawString("armazenamento", 20, y + 8, 1);
+        System.setTextColor(T.text, T.card);
+        var loc = FS.getFreeSpace("/local"), tot = FS.getTotalSpace("/local");
+        System.drawString("/local  " + kb(loc) + " livres de " + kb(tot), 20, y + 24, 1);
+        if (FS.getTotalSpace("/sd")) {
+            System.drawString("/sd     " + kb(FS.getFreeSpace("/sd")) + " livres", 20, y + 38, 1);
+        } else {
+            System.setTextColor(T.textDim, T.card);
+            System.drawString("/sd     sem cartao", 20, y + 38, 1);
+        }
+        y += 52 + 10;
     }
 
     // botao toggle (o X da faixa do sistema sai do app)

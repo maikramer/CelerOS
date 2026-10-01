@@ -13,6 +13,20 @@ var cwd = "/local";
 var lines = [];                 // historico de saida: {s, c}
 var MAXLINES = 120;
 var histCmds = [];              // comandos ja digitados (cmd 'history')
+var HIST_FILE = "/local/config_term_hist.txt";
+(function () {                  // historico persistido: ultimos 20 comandos
+    var raw = FS.readTextFile(HIST_FILE);
+    if (!raw) return;
+    var hs = raw.split("\n");
+    var start = Math.max(0, hs.length - 20);
+    for (var i = start; i < hs.length; i++) {
+        if (hs[i]) histCmds.push(hs[i]);
+    }
+})();
+function saveHist() {
+    var last = histCmds.slice(-20);
+    FS.writeTextFile(HIST_FILE, last.join("\n") + "\n");
+}
 var kbTop = H;
 var useKeypad = false;
 var redrawAll = true;
@@ -132,9 +146,11 @@ var cmds = {
         out("Comandos:", T.accent);
         out("  ls cd pwd cat echo touch mkdir rmdir rm");
         out("  mv cp df free uname date uptime whoami");
-        out("  history clear neofetch js wifi reboot exit");
+        out("  apps vol tone battery sensors");
+        out("  history !! !n clear neofetch js wifi reboot exit");
         out("Dica: echo txt > arquivo grava no FS;", T.textDim);
         out("js 2+2 avalia expressões JavaScript.", T.textDim);
+        out("!! repete o ultimo comando, !n o n-esimo.", T.textDim);
     },
     ls: function(a) {
         var p = a.length ? resolve(a[0]) : cwd;
@@ -262,6 +278,51 @@ var cmds = {
         out("ligado há " + fmtUptime(System.getInfo().uptimeMs));
     },
     whoami: function() { out("root"); },
+    apps: function() {
+        out("apps instalados:", T.accent);
+        var bases = ["/local/apps", "/sd/apps"];
+        for (var b = 0; b < bases.length; b++) {
+            if (!FS.isDirectory(bases[b])) continue;
+            var ent = FS.listDir(bases[b]) || [];
+            out(bases[b] + " (" + ent.length + ")", T.textDim);
+            for (var i = 0; i < ent.length; i++) {
+                var n = ent[i];
+                if (n.charAt(0) === "/") n = baseName(n);
+                out("  " + n);
+            }
+        }
+    },
+    vol: function(a) {
+        if (typeof System.getVolume !== "function") { out("vol: firmware sem API 13", T.warn); return; }
+        if (a.length) {
+            var v = parseInt(a[0], 10);
+            if (isNaN(v) || v < 0 || v > 100) { out("uso: vol 0..100", T.warn); return; }
+            System.setVolume(v);
+        }
+        out("volume: " + System.getVolume() + "%");
+    },
+    tone: function(a) {
+        if (typeof System.playTone !== "function") { out("tone: firmware sem API 12", T.warn); return; }
+        var hz = a.length ? parseInt(a[0], 10) : 880;
+        var ms = a.length > 1 ? parseInt(a[1], 10) : 120;
+        if (isNaN(hz) || isNaN(ms) || hz < 20 || hz > 20000) { out("uso: tone [hz 20-20k] [ms]", T.warn); return; }
+        System.playTone([[hz, ms]]);
+        out("ok " + hz + "Hz por " + ms + "ms");
+    },
+    battery: function() {
+        if (typeof System.battery !== "function") { out("sem API 10 (bateria)", T.warn); return; }
+        var mv = System.battery();
+        if (mv < 0) { out("sem divisor de bateria nesta placa", T.textDim); return; }
+        out("bateria: " + (mv / 1000).toFixed(2) + "V (" + mv + " mV)");
+    },
+    sensors: function() {
+        if (typeof Sensors === "undefined" || !Sensors.accel) { out("sem sensores (API 13, watch)", T.warn); return; }
+        var a = Sensors.accel();
+        if (!a) { out("acelerometro indisponivel", T.warn); return; }
+        out("acel x " + a.x.toFixed(2) + "  y " + a.y.toFixed(2) + "  z " + a.z.toFixed(2));
+        if (Sensors.steps) out("passos " + Sensors.steps());
+        if (Sensors.temp) out("temp " + Sensors.temp().toFixed(1) + "C");
+    },
     history: function() {
         for (var i = 0; i < histCmds.length; i++) out("  " + (i + 1) + "  " + histCmds[i]);
     },
@@ -375,10 +436,32 @@ while (true) {
         var ev = System.keypadPoll();
         if (ev) {
             if (ev.type === "enter") {
-                out(promptStr() + ev.text, T.accent);
-                if (ev.text) histCmds.push(ev.text);
+                var line = ev.text;
+                var echo = true;
+                if (line === "!!" && histCmds.length) {          // repete o ultimo
+                    line = histCmds[histCmds.length - 1];
+                    out(promptStr() + ev.text + "  -> " + line, T.accent);
+                    echo = false;
+                } else if (line.length > 1 && line.charAt(0) === "!" &&
+                           /^!\d+$/.test(line)) {                // roda o n-esimo
+                    var hn = parseInt(line.substring(1), 10);
+                    if (hn >= 1 && hn <= histCmds.length) {
+                        line = histCmds[hn - 1];
+                        out(promptStr() + ev.text + "  -> " + line, T.accent);
+                        echo = false;
+                    } else {
+                        out("historico vazio na posicao " + hn, T.err);
+                        line = "";
+                    }
+                }
+                if (echo) out(promptStr() + ev.text, T.accent);
+                if (line && line !== histCmds[histCmds.length - 1]) {
+                    histCmds.push(line);
+                    if (histCmds.length > 20) histCmds.shift();
+                    saveHist();
+                }
                 cursorOn = true;
-                execute(ev.text);
+                if (line) execute(line);
                 redrawAll = true;
             } else if (ev.type === "change") {
                 inputDirty = true;
