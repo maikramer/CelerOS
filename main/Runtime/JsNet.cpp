@@ -13,6 +13,7 @@
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_rom_md5.h"
 #include "../Display/Backlight.h"
 #include "../Display/Theme.h"
@@ -169,32 +170,74 @@ duk_ret_t JSBindings::js_netIsConnected(duk_context *ctx) {
 //   var h = Net.beginGet(url);        // -1 se sem slot/WiFi
 //   var r = Net.pollGet(h);           // null = rodando; {done,ok,status,
 //                                     //  body,error} quando termina
-//   Net.cancelGet(h);                 // abandona (slot volta sozinho no fim)
+//   Net.cancelGet(h);                 // abandona: o proximo pollGet concluido
+//                                     // devolve {ok:false,error:"cancelado"}
+//                                     // e libera o slot (a task zumbi roda
+//                                     // ate o timeout dela, so que descartada)
 // A requisicao roda em task propria: o app continua desenhando/respondendo
 // enquanto o HTTP/TLS resolve. Pool de 2 slots; cada slot ocupa a task so
 // durante a requisicao (timeout 10s).
+//
+// Concorrencia (S3 e dual-core): um mutex por slot e UM unico escritor —
+// a task dona escreve resultado/estado sob lock; o beginGet so prepara o
+// slot quando nenhuma task esta viva (state 0); o pollGet so transita
+// 2->0. Antes o cancelGet liberava o slot com a task ainda escrevendo e o
+// beginGet reusava o slot: duas tasks no mesmo std::string.
 struct NetAsyncSlot {
-    volatile bool busy = false;   // slot em uso (requisicao ou zumbi)
-    volatile bool done = false;   // resultado pronto para o poll
-    volatile bool ok = false;
+    SemaphoreHandle_t mux = nullptr;  // criado no 1o uso (beginGet/reset)
+    int state = 0;                    // 0=livre 1=task rodando 2=resultado pronto
+    bool discard = false;             // cancelGet/reset: resultado sera descartado
+    bool ok = false;
     int status = 0;
-    std::string url;
-    std::string body;
+    std::string url;                  // imutavel enquanto state==1
+    std::string body;                 // escritos SO pela task (transicao 1->2)
     std::string error;
 };
 static NetAsyncSlot s_netAsync[2];
+
+static bool netMuxTake(NetAsyncSlot& s) {
+    if (s.mux == nullptr) s.mux = xSemaphoreCreateMutex();
+    return s.mux != nullptr && xSemaphoreTake(s.mux, portMAX_DELAY) == pdTRUE;
+}
+
+// Chamado no lancamento de cada app: zumbis do app anterior descartam,
+// resultados nao consumidos sao liberados. O slot nunca atravessa apps.
+void JSBindings::netAsyncReset() {
+    for (NetAsyncSlot& s : s_netAsync) {
+        if (!netMuxTake(s)) continue;
+        s.discard = true;
+        if (s.state == 2) {
+            s.state = 0;
+            s.body.clear();
+            s.body.shrink_to_fit();
+        }
+        xSemaphoreGive(s.mux);
+    }
+}
 
 static void netAsyncTask(void* raw) {
     NetAsyncSlot* s = (NetAsyncSlot*)raw;
     HttpClient http;
     http.setTimeout(10000);
     HttpResponse resp = http.get(s->url.c_str());
-    s->ok = resp.isOk();
-    s->status = resp.statusCode;
     if (resp.body.size() > NET_MAX_BODY) resp.body.resize(NET_MAX_BODY);
-    s->body = std::move(resp.body);
-    s->error = resp.success ? "" : resp.errorMessage;
-    s->done = true;
+    if (netMuxTake(*s)) {
+        if (s->discard) {
+            s->ok = false;
+            s->status = 0;
+            s->body.clear();
+            s->body.shrink_to_fit();
+            s->error = "cancelado";
+        } else {
+            s->ok = resp.isOk();
+            s->status = resp.statusCode;
+            s->body = std::move(resp.body);
+            s->error = resp.success ? "" : resp.errorMessage;
+        }
+        s->discard = false;
+        s->state = 2;
+        xSemaphoreGive(s->mux);
+    }
     vTaskDelete(nullptr);
 }
 
@@ -204,20 +247,27 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
 
     for (int i = 0; i < 2; i++) {
         NetAsyncSlot& s = s_netAsync[i];
-        if (s.busy && !s.done) continue;  // ainda rodando (ou zumbi cancelado)
-        if (s.busy && s.done) {           // resultado nao consumido: descarta
-            s.body.clear();
-            s.body.shrink_to_fit();
+        if (!netMuxTake(s)) continue;
+        if (s.state == 1) {  // task viva (rodando ou zumbi cancelado)
+            xSemaphoreGive(s.mux);
+            continue;
         }
-        s.busy = true;
-        s.done = false;
+        // state 0 (livre) ou 2 (resultado nao consumido): reusa
+        s.discard = false;
         s.ok = false;
         s.status = 0;
-        s.url = url;
+        s.body.clear();
+        s.body.shrink_to_fit();
         s.error.clear();
+        s.url = url;  // nenhuma task viva: seguro reescrever
+        s.state = 1;
+        xSemaphoreGive(s.mux);
 
         if (xTaskCreate(netAsyncTask, "jsnet", 12288, &s, 3, nullptr) != pdPASS) {
-            s.busy = false;
+            // task nao nasceu: nada escrevera o slot, devolve ao estado livre
+            netMuxTake(s);
+            if (s.state == 1) s.state = 0;
+            xSemaphoreGive(s.mux);
             break;
         }
         duk_push_int(ctx, i);
@@ -229,25 +279,45 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_netPollGet(duk_context *ctx) {
     int h = duk_require_int(ctx, 0);
-    if (h < 0 || h >= 2 || !s_netAsync[h].busy) { duk_push_null(ctx); return 1; }
+    if (h < 0 || h >= 2) { duk_push_null(ctx); return 1; }
     NetAsyncSlot& s = s_netAsync[h];
-    if (!s.done) { duk_push_null(ctx); return 1; }  // ainda rodando
+    if (!netMuxTake(s)) { duk_push_null(ctx); return 1; }
+    if (s.state != 2) {
+        xSemaphoreGive(s.mux);
+        duk_push_null(ctx);
+        return 1;  // ainda rodando
+    }
+
+    // Copia o resultado para fora do lock: montar o objeto no Duktape pode
+    // alocar/lanca (longjmp) e o mutex nao pode vazar nesse caminho
+    bool ok = s.ok;
+    int status = s.status;
+    size_t bodyLen = s.body.size();
+    char* bodyBuf = (char*)malloc(bodyLen > 0 ? bodyLen : 1);
+    if (bodyBuf != nullptr && bodyLen > 0) memcpy(bodyBuf, s.body.data(), bodyLen);
+    char errBuf[64];
+    snprintf(errBuf, sizeof(errBuf), "%s", s.error.c_str());
+    s.state = 0;  // slot liberado para o proximo beginGet
+    s.body.clear();
+    s.body.shrink_to_fit();
+    xSemaphoreGive(s.mux);
 
     duk_push_object(ctx);
     duk_push_boolean(ctx, 1);
     duk_put_prop_string(ctx, -2, "done");
-    duk_push_boolean(ctx, s.ok ? 1 : 0);
+    duk_push_boolean(ctx, ok ? 1 : 0);
     duk_put_prop_string(ctx, -2, "ok");
-    duk_push_int(ctx, s.status);
+    duk_push_int(ctx, status);
     duk_put_prop_string(ctx, -2, "status");
-    duk_push_string(ctx, s.body.c_str());
+    if (bodyBuf != nullptr) {
+        duk_push_lstring(ctx, bodyBuf, bodyLen);  // corpo pode conter NUL
+        free(bodyBuf);
+    } else {
+        duk_push_string(ctx, "");
+    }
     duk_put_prop_string(ctx, -2, "body");
-    duk_push_string(ctx, s.error.c_str());
+    duk_push_string(ctx, errBuf);
     duk_put_prop_string(ctx, -2, "error");
-
-    s.busy = false;  // slot liberado; corpo nao e mais valido apos o return
-    s.body.clear();
-    s.body.shrink_to_fit();
     return 1;
 }
 
@@ -255,7 +325,12 @@ duk_ret_t JSBindings::js_netCancelGet(duk_context *ctx) {
     int h = duk_require_int(ctx, 0);
     if (h < 0 || h >= 2) return 0;
     // Nao mata a task (matar no meio do TLS vaza): marca como descartavel —
-    // o slot fica ocupado ate a task terminar sozinha (timeout 10s)
-    s_netAsync[h].done = true;
+    // quando a task terminar (timeout 10s no pior caso) ela mesma grava o
+    // resultado "cancelado" e libera o slot
+    NetAsyncSlot& s = s_netAsync[h];
+    if (netMuxTake(s)) {
+        if (s.state == 1) s.discard = true;
+        xSemaphoreGive(s.mux);
+    }
     return 0;
 }

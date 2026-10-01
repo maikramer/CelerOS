@@ -471,7 +471,10 @@ bool List::onTouch(const TouchEvent& ev, Rect myRect) {
                 return true;
             }
             if (ev.isTap() && myRect.contains(ev.x, ev.y)) {
-                int idx = (ev.y - rect.y + (int)m_scroll) / rowH();
+                // Seleciona pela posicao do POUSO (startY), nao do release:
+                // no resistivo o dedo deriva ao pressionar e a linha da vez
+                // trocava no fim (mesmo fix do teclado, Keyboard.cpp).
+                int idx = (ev.startY - rect.y + (int)m_scroll) / rowH();
                 if (idx >= 0 && idx < (int)items.size() && items[idx].enabled) {
                     selected = idx;
                     if (onSelect) onSelect(idx);
@@ -809,7 +812,14 @@ void Navigator::remove(Screen* s) {
         bool wasTop = (i == s_stack.size() - 1);
         s->onExit();
         s_stack.erase(s_stack.begin() + i);
-        if (wasTop && !s_stack.empty()) s_stack.back()->onEnter();
+        // Espelha o pop(): a tela de baixo reajusta estado visual no
+        // onResume (ex.: LauncherScreen::m_needClear limpa o vidro stale
+        // do app que saiu no modo Direct da CYD). Faltava so o onEnter,
+        // que nao reseta quem ja entrou antes.
+        if (wasTop && !s_stack.empty()) {
+            s_stack.back()->onEnter();
+            s_stack.back()->onResume();
+        }
         s_repaint = true;
         return;
     }

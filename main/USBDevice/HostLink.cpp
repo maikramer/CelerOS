@@ -599,13 +599,22 @@ void handleCoredump() {
 
     const uint8_t* p = (const uint8_t*)mapped + (addr - part->address);
     size_t off = 0;
+    bool sentAll = true;
     while (off < size && s_writer != nullptr) {
         size_t rest = size - off;
         uint16_t chunk = (uint16_t)((rest > HostLink::MAX_PAYLOAD) ? HostLink::MAX_PAYLOAD : rest);
         respond(KL_COREDUMP_DATA, 0, p + off, chunk);
         off += chunk;
     }
+    if (off < size) sentAll = false;  // leitor desconectou no meio
     esp_partition_munmap(mh);
+
+    // Dump consumido apaga a particao: sem isso o MESMO dump velho voltava a
+    // ser reportado em todo reboot ate ser sobrescrito por um novo crash.
+    if (sentAll) {
+        esp_core_dump_image_erase();
+        celer_log_println("[HL] coredump lido e apagado");
+    }
 }
 
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {

@@ -206,6 +206,8 @@ private:
     static duk_ret_t js_netBeginGet(duk_context *ctx);
     static duk_ret_t js_netPollGet(duk_context *ctx);
     static duk_ret_t js_netCancelGet(duk_context *ctx);
+    // Descarta zumbis/resultados do app anterior (chamado no init de cada app)
+    static void netAsyncReset();
 
     // Net nivel 3 (WiFi)
     static duk_ret_t js_wifiScan(duk_context *ctx);

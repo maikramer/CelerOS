@@ -19,13 +19,22 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "JsFsJail.h"
 
 // =====================================================
 // FileSystem Bindings
 // =====================================================
 
+// Operacoes de CONTEUDO em arquivo do sistema sem a capability "system":
+// erro legivel (o app ve a causa em vez de um null misterioso).
+static void fsDeny(duk_context *ctx, const char* path) {
+    duk_error(ctx, DUK_ERR_ERROR,
+              "FS: %s e arquivo do sistema (requer permissao \"system\")", path);
+}
+
 duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
     std::string content = FileSystem::readTextFile(path);
     if (content.length() == 0 && !FileSystem::exists(path)) {
         duk_push_null(ctx);
@@ -37,6 +46,7 @@ duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
     const char *content = duk_require_string(ctx, 1);
     bool success = FileSystem::writeTextFile(path, content);
     duk_push_boolean(ctx, success);
@@ -45,6 +55,7 @@ duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_deleteFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
     bool success = FileSystem::deleteFile(path);
     duk_push_boolean(ctx, success);
     return 1;
@@ -52,7 +63,7 @@ duk_ret_t JSBindings::js_deleteFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_fileExists(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    bool exists = FileSystem::exists(path);
+    bool exists = fsPathAllowed(path) && FileSystem::exists(path);
     duk_push_boolean(ctx, exists);
     return 1;
 }
@@ -72,6 +83,7 @@ duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_appendTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
     const char *content = duk_require_string(ctx, 1);
     duk_push_boolean(ctx, FileSystem::appendTextFile(path, content));
     return 1;
@@ -80,6 +92,8 @@ duk_ret_t JSBindings::js_appendTextFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_renameFile(duk_context *ctx) {
     const char *pathFrom = duk_require_string(ctx, 0);
     const char *pathTo = duk_require_string(ctx, 1);
+    if (!fsPathAllowed(pathFrom)) fsDeny(ctx, pathFrom);
+    if (!fsPathAllowed(pathTo)) fsDeny(ctx, pathTo);
     duk_push_boolean(ctx, FileSystem::renameFile(pathFrom, pathTo));
     return 1;
 }
@@ -98,19 +112,19 @@ duk_ret_t JSBindings::js_rmdir(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_isDirectory(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    duk_push_boolean(ctx, FileSystem::isDirectory(path));
+    duk_push_boolean(ctx, fsPathAllowed(path) && FileSystem::isDirectory(path));
     return 1;
 }
 
 duk_ret_t JSBindings::js_isFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    duk_push_boolean(ctx, FileSystem::isFile(path));
+    duk_push_boolean(ctx, fsPathAllowed(path) && FileSystem::isFile(path));
     return 1;
 }
 
 duk_ret_t JSBindings::js_getFileSize(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    duk_push_uint(ctx, FileSystem::getFileSize(path));
+    duk_push_uint(ctx, fsPathAllowed(path) ? FileSystem::getFileSize(path) : 0);
     return 1;
 }
 
@@ -135,6 +149,7 @@ duk_ret_t JSBindings::js_getFreeSpace(duk_context *ctx) {
 duk_ret_t JSBindings::js_getFileMD5(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);
     duk_push_string(ctx, FileSystem::getFileMD5(path).c_str());
     return 1;
 }

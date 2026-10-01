@@ -18,3 +18,7 @@ __pycache__/
 
 # estado local de ferramentas de agente (logs de sessao, baseline do size_report)
 .omo/
+
+# segredos locais (nunca commitar; ver nota de seguranca no AGENTS.md)
+extras/esp_components/config/config/
+celer_screencap.png

@@ -20,6 +20,7 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "JsFsJail.h"
 #include "../Utils/CelerSettings.h"
 #include "../Boards/Board.h"
 #include "driver/ledc.h"
@@ -513,37 +514,58 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
 }
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    duk_push_boolean(ctx, FileSystem::copyFile(duk_require_string(ctx, 0),
-                                               duk_require_string(ctx, 1)) ? 1 : 0);
+    const char* from = duk_require_string(ctx, 0);
+    const char* to = duk_require_string(ctx, 1);
+    if (!fsPathAllowed(from)) {
+        duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", from);
+    }
+    duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
     return 1;
 }
 
 duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    duk_push_boolean(ctx, FileSystem::copyDirectory(duk_require_string(ctx, 0),
+    const char* from = duk_require_string(ctx, 0);
+    if (!fsTreeAllowed(from)) {
+        duk_error(ctx, DUK_ERR_ERROR,
+                  "FS: copiar %s requer permissao \"system\"", from);
+    }
+    duk_push_boolean(ctx, FileSystem::copyDirectory(from,
                                                     duk_require_string(ctx, 1)) ? 1 : 0);
     return 1;
 }
 
 // Remocao recursiva (app = pasta com app.json/main.js/icon.bin...). rmdir so
 // aceita pasta vazia; sem isso o Settings nao conseguiria desinstalar apps.
+// Re-lista em passos de 50: pastas com mais filhos saiam truncadas (o
+// buffer fixo fazia a remocao parar no 50o sem erro).
 static bool removeTree(const std::string& dir) {
-    FileEntry entries[50];
-    int n = FileSystem::listDirectory(dir.c_str(), entries, 50);
-    if (n < 0) n = 0;
-    for (int i = 0; i < n; i++) {
-        if (entries[i].isDir) {
-            if (!removeTree(entries[i].path)) return false;
-        } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
-            return false;
+    for (;;) {
+        FileEntry entries[50];
+        int n = FileSystem::listDirectory(dir.c_str(), entries, 50);
+        if (n < 0) n = 0;
+        if (n == 0) break;
+        for (int i = 0; i < n; i++) {
+            if (!fsPathAllowed(entries[i].path.c_str())) continue;  // jail: nao e dono
+            if (entries[i].isDir) {
+                if (!removeTree(entries[i].path)) return false;
+            } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
+                return false;
+            }
         }
+        if (n < 50) break;
     }
     return FileSystem::rmdir(dir.c_str());
 }
 
 duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    duk_push_boolean(ctx, removeTree(duk_require_string(ctx, 0)) ? 1 : 0);
+    const char* path = duk_require_string(ctx, 0);
+    if (!fsTreeAllowed(path)) {
+        duk_error(ctx, DUK_ERR_ERROR,
+                  "FS: remover %s requer permissao \"system\"", path);
+    }
+    duk_push_boolean(ctx, removeTree(path) ? 1 : 0);
     return 1;
 }
 
@@ -597,6 +619,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     CelerLink::appReset();
 #endif
 
+    // Requisicoes async de um app anterior: zumbis descartam o resultado e
+    // resultados nao consumidos sao liberados (o slot nunca atravessa apps)
+    netAsyncReset();
+
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
     s_barOnGlass = false;
@@ -641,30 +667,32 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_push_object(ctx); // System
 
 #if CONFIG_CELEROS_JS_GPIO
-    // System.gpio sub-object — so com a capability "gpio" (F4)
-    if (perm(celer::PERM_GPIO))
-    duk_push_object(ctx);
-    static const JsFn kFns1[] = {
-        {"pinMode", js_pinMode, 2},
-        {"digitalWrite", js_digitalWrite, 2},
-        {"digitalRead", js_digitalRead, 1},
-        {"analogRead", js_analogRead, 1},
-        {"analogWrite", js_analogWrite, 2},
-        {"pulseIn", js_pulseIn, 3},
-        {"servo", js_servo, 2},
-        {"servoOff", js_servoOff, 1},
-    };
-    putFns(ctx, kFns1);
-    
-    // GPIO Constants
-    duk_push_int(ctx, OUTPUT); duk_put_prop_string(ctx, -2, "OUTPUT");
-    duk_push_int(ctx, INPUT); duk_put_prop_string(ctx, -2, "INPUT");
-    duk_push_int(ctx, INPUT_PULLUP); duk_put_prop_string(ctx, -2, "INPUT_PULLUP");
-    duk_push_int(ctx, HIGH); duk_put_prop_string(ctx, -2, "HIGH");
-    duk_push_int(ctx, LOW); duk_put_prop_string(ctx, -2, "LOW");
-    
-    if (perm(celer::PERM_GPIO))
-    duk_put_prop_string(ctx, -2, "gpio");
+    // System.gpio: funcoes E constantes so com a capability "gpio" (F4).
+    // Antes o if so decidia o sub-objeto: sem a permissao as funcoes caiam
+    // soltas no objeto System (System.pinMode/digitalWrite chamaveis).
+    if (perm(celer::PERM_GPIO)) {
+        duk_push_object(ctx);
+        static const JsFn kFns1[] = {
+            {"pinMode", js_pinMode, 2},
+            {"digitalWrite", js_digitalWrite, 2},
+            {"digitalRead", js_digitalRead, 1},
+            {"analogRead", js_analogRead, 1},
+            {"analogWrite", js_analogWrite, 2},
+            {"pulseIn", js_pulseIn, 3},
+            {"servo", js_servo, 2},
+            {"servoOff", js_servoOff, 1},
+        };
+        putFns(ctx, kFns1);
+
+        // GPIO Constants
+        duk_push_int(ctx, OUTPUT); duk_put_prop_string(ctx, -2, "OUTPUT");
+        duk_push_int(ctx, INPUT); duk_put_prop_string(ctx, -2, "INPUT");
+        duk_push_int(ctx, INPUT_PULLUP); duk_put_prop_string(ctx, -2, "INPUT_PULLUP");
+        duk_push_int(ctx, HIGH); duk_put_prop_string(ctx, -2, "HIGH");
+        duk_push_int(ctx, LOW); duk_put_prop_string(ctx, -2, "LOW");
+
+        duk_put_prop_string(ctx, -2, "gpio");
+    }
 #endif
 
     // --- Drawing Primitives ---
@@ -810,14 +838,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setting", js_setting, 2},
         {"toast", js_toast, 1},
         {"beep", js_beep, 2},
-        {"led", js_led, 3},
-        {"relay", js_relay, 2},
-        {"relayState", js_relayState, 1},
-        {"relayCount", js_relayCount, 0},
         {"battery", js_battery, 0},
         {"micLevel", js_micLevel, 0},
         {"touchPad", js_touchPad, 0},
-        {"neopixel", js_neopixel, 2},
         {"lightLevel", js_lightLevel, 0},
         {"setTimezone", js_setTimezone, 1},
         {"setManualTime", js_setManualTime, 5},
@@ -829,6 +852,19 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"drawIcon", js_drawIcon, 3},
     };
     putFns(ctx, kFns16);
+
+    // Hardware EXTERNO ligado a pinos: capability "gpio" (a mesma dos
+    // servos/digitalWrite). Nas SKUs "Y" o relay comuta rede eletrica —
+    // um app de loja sem "gpio" nao pode acionar. Sensores de leitura
+    // (battery/micLevel/lightLevel/touchPad) seguem abertos.
+    static const JsFn kFnsHw[] = {
+        {"led", js_led, 3},
+        {"relay", js_relay, 2},
+        {"relayState", js_relayState, 1},
+        {"relayCount", js_relayCount, 0},
+        {"neopixel", js_neopixel, 2},
+    };
+    if (perm(celer::PERM_GPIO)) putFns(ctx, kFnsHw);
 
     // Chamadas que comprometem o aparelho: capability "system" (F4)
     static const JsFn kFnsSysDanger[] = {

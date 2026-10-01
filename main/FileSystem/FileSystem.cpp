@@ -173,8 +173,12 @@ bool FileSystem::formatSD() {
 // ---------------------------------------------------------------------------
 
 static bool pathOk(const char* path) {
-    return path != nullptr &&
-           (strncmp(path, "/local", 6) == 0 || strncmp(path, "/sd", 3) == 0);
+    // O prefixo tem que ser um SEGMENTO inteiro: "/localfoo"/"/sdcard"
+    // passavam no strncmp e caíam fora do jail (F6).
+    if (path == nullptr) return false;
+    if (strncmp(path, "/local", 6) == 0) return path[6] == '\0' || path[6] == '/';
+    if (strncmp(path, "/sd", 3) == 0) return path[3] == '\0' || path[3] == '/';
+    return false;
 }
 
 std::string FileSystem::readTextFile(const char* path) {
@@ -463,9 +467,34 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
     if (valStart >= (int)json.length()) return "";
 
     if (json[valStart] == '"') {
-        int valEnd = kstr::indexOf(json, '"', valStart + 1);
+        // Fecha a string respeitando escapes (\" e \\): antes a primeira
+        // aspa escapada encerrava o valor (update.json com URL/version
+        // contendo \" quebrava o OTA silenciosamente)
+        int valEnd = -1;
+        for (int i = valStart + 1; i < (int)json.length(); ++i) {
+            char c = json[i];
+            if (c == '\\') { ++i; continue; }
+            if (c == '"') { valEnd = i; break; }
+        }
         if (valEnd == -1) return "";
-        return json.substr(valStart + 1, valEnd - valStart - 1);
+        // Destranspila o basico do JSON (suficiente para manifests:
+        // version/firmware_url/changelog nao carregam \uXXXX)
+        std::string out;
+        out.reserve(valEnd - valStart);
+        for (int i = valStart + 1; i < valEnd; ++i) {
+            if (json[i] != '\\' || i + 1 >= valEnd) { out += json[i]; continue; }
+            char e = json[++i];
+            switch (e) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                case '/': out += '/';  break;
+                default: out += e;     break;  // \\ e \" (e \x literal)
+            }
+        }
+        return out;
     } else {
         int valEnd = valStart;
         while (valEnd < (int)json.length() && json[valEnd] != ',' && json[valEnd] != '}' && json[valEnd] != '\n') valEnd++;

@@ -8,6 +8,7 @@
 #include "../Kernel/TimeManager.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/PinStore.h"
+#include "../Utils/CelerSettings.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
@@ -195,6 +196,7 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         WebManager::forgetAllNetworks();
         FileSystem::formatLittleFS();
         PinStore::clear();     // flag NVS nao vive no LittleFS
+        CelerSettings::eraseAll();  // idem: configs NVS nao sobrevivem ao total
         WebAuth::regenerate();
         duk_push_boolean(ctx, 1);
         return 1;
@@ -208,6 +210,9 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
         "/local/settings_pin2.bin", "/local/ota_allow_http.txt",
     };
     for (const char* f : cfgFiles) FileSystem::deleteFile(f);
+    CelerSettings::eraseAll();  // configs vivem no NVS desde a F3: o reset
+                                // tinha ficado pela metade (brilho/web_on
+                                // sobreviviam ao factoryReset "configs")
     PinStore::clear();        // limpa tambem a flag NVS do PIN
     WebAuth::regenerate();    // senha web nova (a antiga era "config")
     WebManager::forgetAllNetworks();
@@ -325,14 +330,16 @@ duk_ret_t JSBindings::js_webActive(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
-    // Toggle do servidor web (persiste em web_on.txt e age ao vivo), igual a
-    // tela C++ original — mas sem reboot. NAO desliga o WiFi (isso e o
-    // nowifi.txt / WebManager::disable).
+    // Toggle do servidor web (persiste na flag NVS web_on e age ao vivo),
+    // igual a tela C++ original — mas sem reboot. NAO desliga o WiFi (isso
+    // e o nowifi / WebManager::disable). Antes gravava o /local/web_on.txt
+    // legado: o boot decide pelo NVS, entao desligar nao sobrevivia ao
+    // reboot (a migracao one-shot consumia o arquivo e o NVS "1" vencia).
     if (duk_require_boolean(ctx, 0)) {
-        FileSystem::writeTextFile("/local/web_on.txt", "1");
+        CelerSettings::set("web_on", "1");
         if (WebManager::isActive()) WebManager::startWebServerIfNeeded();
     } else {
-        FileSystem::deleteFile("/local/web_on.txt");
+        CelerSettings::set("web_on", "");  // valor vazio apaga a key
         WebManager::stopWebServer();
     }
     return 0;
