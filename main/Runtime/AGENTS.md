@@ -21,12 +21,12 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 |------|----------|
 | Add a binding | define `JSBindings::js_x` in the module file, declare it in `JSBindings.h`, add `{"name", js_x, nargs}` to the right `kFnsN[]` table in `init()` |
 | Per-app reset of all binding state | `JSBindings::init(ctx, tft, appTitle, topbarFixed)`, called by CelerKernel on each app launch |
-| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 12) |
+| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 13) |
 | Streaming download | `Net.download` in `JsNet.cpp` (API 6; older firmware truncated bodies at 32KB) |
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 
 ## API LEVEL HISTORY
-1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page, Latin-1 text in every font (apps with accented strings declare `api: 7`), `System.led`/`lightLevel`/auto-brightness and working `beep` on the CYD (`Hardware/BoardIO`). · 9 `CelerLink` BLE global · 10 `System.gpio.servo` (5 canais), `relay*`, `System.battery`/`micLevel`/`touchPad`/`neopixel` (onda robotica: board `spotpear-dog`).
+1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page, Latin-1 text in every font (apps with accented strings declare `api: 7`), `System.led`/`lightLevel`/auto-brightness and working `beep` on the CYD (`Hardware/BoardIO`). · 9 `CelerLink` BLE global · 10 `System.gpio.servo` (5 canais), `relay*`, `System.battery`/`micLevel`/`touchPad`/`neopixel` (onda robotica: board `spotpear-dog`) · 11 Celer Link pairing por codigo + teclado `{hint:"num"}` · 12 timers (`setTimeout`/`setInterval` no present), `Storage` NVS privado por packageName (+`clearFor` system-gated), sprites multiplos, `FS.readFile`/`writeFile` binario, `setTextDatum`, tempo de tela/deepSleep/alarme/hora persistente, `playTone`/`notify`+centro, widgets Kui · 13 `Sensors` (accel/steps/temp do QMI8658), `System.getWeekday`/`keepAwake`/`setVolume`/`getVolume`/`playWav` (onda watch: board `waveshare-watch`).
 
 ## CONVENTIONS
 - JS works in virtual 240x320 coordinates. Every draw and touch conversion goes through `UI::sx/sy` (in) and the inverse (touch out). Don't expose physical pixels to JS.
