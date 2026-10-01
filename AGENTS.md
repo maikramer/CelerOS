@@ -91,7 +91,7 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 ```
 
 ## NOTES
-- **SECURITY:** the Supabase service_role key was removed from the tree (commit 3e9a6ca; path now in .gitignore), but it is STILL IN HISTORY (1c5c2c8) and pushed to origin. Rotating it in the dashboard and rewriting history (`git filter-repo`) are pending.
+- **SECURITY:** the Supabase service_role key was removed from the tree AND purged from the whole git history with `git filter-repo` + force-push (2026-10-01; every commit hash changed). ROTATION in the Supabase dashboard is STILL MANDATORY: the old history remains reachable through old clones, forks and GitHub's PR refs (`refs/pull/1/head`). The key file lives locally at `extras/esp_components/config/config/supabase_config.h` (gitignored, never commit).
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
 - CI (`.github/workflows/build.yml`): JS harness + app_lint (incl. board apps + drift check) + host C++ tests, then firmware builds for every board in the matrix with an OTA-slot size gate. Hardware validation is still manual.
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
