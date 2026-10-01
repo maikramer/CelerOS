@@ -50,7 +50,7 @@ const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage', 'Sensors'];
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
 // declaracao vira diagnostico de variavel/funcao nao declarada.
@@ -773,7 +773,9 @@ function collectTargets(args) {
     const abs = path.resolve(ROOT, p);
     let st;
     try { st = fs.statSync(abs); } catch (e) {
-      targets.push({ error: 'caminho inacessivel: ' + p });
+      // caminho inexistente nao e erro do APP: o CI lista boards/*/data/apps
+      // que podem ainda nao estar commitados (rodada em voo). Aviso e segue.
+      console.error('  aviso: caminho inexistente (ignorado): ' + p);
       continue;
     }
     if (st.isFile()) {
