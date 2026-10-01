@@ -96,6 +96,31 @@ bool OtaManager::checkForUpdates() {
     }
     info.hasFirmware = info.firmwareUrl.length() > 0;
 
+    // Variante (API da SKU): update.json pode declarar "variant" e o
+    // dispositivo recusa firmware de outra variante — o caso real e a
+    // SmartDisplay "Y" (reles): o canal generico desinstalaria o suporte a
+    // rele (os pinos voltam a ser I2S/alto-falante). Dispositivo COM reles
+    // tambem recusa manifest SEM variant (a imagem generica e que tira os
+    // reles); dispositivo padrao aceita manifest sem variant (retrocompat).
+    std::string manifestVariant = FileSystem::parseJsonValue(payload, "variant");
+    std::string mine = Board::profile().relay.count > 0
+                           ? std::string("smartdisplay-y") +
+                                 std::to_string(Board::profile().relay.count)
+                           : std::string("");
+    if (!mine.empty() && manifestVariant != mine) {
+        info.available = false;
+        info.hasFirmware = false;
+        info.type = "Atualizacao para outra variante";
+        info.changelog = "Este aparelho e a variante " + mine +
+                         " e a atualizacao publicada e para outra variante (" +
+                         (manifestVariant.empty() ? std::string("padrao") : manifestVariant) +
+                         "). Nao instalar.";
+        info.guide = "";
+        ESP_LOGW("celer.ota", "variante %s != %s: update recusado",
+                 manifestVariant.c_str(), mine.c_str());
+        return false;
+    }
+
     if (celer::versionGreater(info.version, CELEROS_VERSION)) {
         info.available = true;
     }

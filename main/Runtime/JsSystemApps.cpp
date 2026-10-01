@@ -10,6 +10,9 @@
 #include "../Utils/PinStore.h"
 #include "../Utils/CelerSettings.h"
 #include "esp_sleep.h"
+#include "esp_task_wdt.h"
+#include "../Hardware/BoardIO.h"
+#include "../UI/Kui.h"
 #include "driver/gpio.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
@@ -439,4 +442,136 @@ duk_ret_t JSBindings::js_getAlarm(duk_context *ctx) {
     duk_push_string(ctx, j.c_str());
     duk_json_decode(ctx, -1);  // decodifica no lugar: objeto fica no topo
     return 1;
+}
+
+// ---- Audio em sequencia e notificacoes (API 12) ----
+
+// System.playTone([[freq,ms],...]): melodia bloqueante — cada nota toca no
+// hardware (LEDC/I2S do beep) com o watchdog alimentado entre notas. Pares
+// como array-de-arrays ou plano [f,ms,f,ms]; max 64 notas / 15 s no total.
+duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
+    if (!duk_is_array(ctx, 0)) {
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "playTone: esperado array [freq,ms,...]");
+    }
+    present();  // bloqueante: o que o app desenhou aparece antes
+
+    duk_size_t n = duk_get_length(ctx, 0);
+    bool flat = false;
+    if (n > 0) {
+        duk_get_prop_index(ctx, 0, 0);
+        flat = duk_is_number(ctx, -1);
+        duk_pop(ctx);
+    }
+    int notes = flat ? (int)n / 2 : (int)n;
+    if (notes < 1 || notes > 64) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "playTone: 1 a 64 notas");
+    }
+
+    int total = 0;
+    int played = 0;
+    for (int i = 0; i < notes; i++) {
+        int f, ms;
+        if (flat) {
+            duk_get_prop_index(ctx, 0, i * 2); f = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, 0, i * 2 + 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
+        } else {
+            duk_get_prop_index(ctx, 0, i);
+            if (!duk_is_array(ctx, -1)) { duk_pop(ctx); duk_error(ctx, DUK_ERR_TYPE_ERROR, "playTone: nota %d nao e [freq,ms]", i); }
+            duk_get_prop_index(ctx, -1, 0); f = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, -1, 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_pop(ctx);
+        }
+        if (f < 20 || f > 20000 || ms <= 0 || ms > 2000) {
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "playTone: nota %d fora da faixa (20-20kHz, 1-2000ms)", i);
+        }
+        total += ms;
+        if (total > 15000) {
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "playTone: maximo 15s no total");
+        }
+    }
+    for (int i = 0; i < notes; i++) {
+        int f, ms;
+        if (flat) {
+            duk_get_prop_index(ctx, 0, i * 2); f = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, 0, i * 2 + 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
+        } else {
+            duk_get_prop_index(ctx, 0, i);
+            duk_get_prop_index(ctx, -1, 0); f = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, -1, 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
+            duk_pop(ctx);
+        }
+        esp_task_wdt_reset();
+        if (BoardIO::tone(f, ms)) played++;
+    }
+    duk_push_int(ctx, played);
+    return 1;
+}
+
+// System.notify(titulo[, msg]): toast AGORA + registra no historico
+// (/local/notifications.txt, cap 20 — o Settings lista em Notificacoes).
+duk_ret_t JSBindings::js_notify(duk_context *ctx) {
+    const char* title = duk_require_string(ctx, 0);
+    const char* msg = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
+
+    kui::Navigator::toast(title, THEME_ACCENT, 3000);
+
+    // linha "epoch|titulo|msg" sem pipes/quebras dentro dos campos
+    std::string t = title, m = msg;
+    for (char& c : t) if (c == '|' || c == '\n') c = ' ';
+    for (char& c : m) if (c == '|' || c == '\n') c = ' ';
+    time_t now; time(&now);
+    char line[192];
+    snprintf(line, sizeof(line), "%lld|%s|%s", (long long)now, t.c_str(), m.c_str());
+
+    const char* NF = "/local/notifications.txt";
+    std::string hist = FileSystem::readTextFile(NF);
+    if (!hist.empty() && hist.back() != '\n') hist += '\n';
+    hist += line;
+    hist += '\n';
+    // cap 20: corta as mais antigas
+    int nl = 0;
+    for (char c : hist) if (c == '\n') nl++;
+    if (nl > 20) {
+        int skip = nl - 20;
+        size_t pos = 0;
+        while (skip > 0 && pos < hist.size()) {
+            if (hist[pos] == '\n') skip--;
+            pos++;
+        }
+        hist = hist.substr(pos);
+    }
+    FileSystem::writeTextFile(NF, hist.c_str());
+    return 0;
+}
+
+// Notificacoes para o Settings: lista (array de {epoch,title,msg}) e limpeza
+duk_ret_t JSBindings::js_notifications(duk_context *ctx) {
+    std::string hist = FileSystem::readTextFile("/local/notifications.txt");
+    duk_push_array(ctx);
+    duk_idx_t i = 0;
+    size_t pos = 0;
+    while (pos < hist.size()) {
+        size_t eol = hist.find('\n', pos);
+        if (eol == std::string::npos) eol = hist.size();
+        std::string line = hist.substr(pos, eol - pos);
+        pos = eol + 1;
+        size_t p1 = line.find('|');
+        if (p1 == std::string::npos) continue;
+        size_t p2 = line.find('|', p1 + 1);
+        if (p2 == std::string::npos) continue;
+        duk_push_object(ctx);
+        duk_push_number(ctx, (duk_double_t)atoll(line.substr(0, p1).c_str()));
+        duk_put_prop_string(ctx, -2, "epoch");
+        duk_push_string(ctx, line.substr(p1 + 1, p2 - p1 - 1).c_str());
+        duk_put_prop_string(ctx, -2, "title");
+        duk_push_string(ctx, line.substr(p2 + 1).c_str());
+        duk_put_prop_string(ctx, -2, "msg");
+        duk_put_prop_index(ctx, -2, (duk_idx_t)i++);
+    }
+    return 1;
+}
+
+duk_ret_t JSBindings::js_notificationsClear(duk_context *ctx) {
+    FileSystem::deleteFile("/local/notifications.txt");
+    return 0;
 }

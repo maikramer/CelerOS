@@ -870,6 +870,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setAlarm", js_setAlarm, 3},
         {"clearAlarm", js_clearAlarm, 0},
         {"getAlarm", js_getAlarm, 0},
+        {"playTone", js_playTone, 1},
+        {"notify", js_notify, 2},
     };
     putFns(ctx, kFns16);
 
@@ -901,6 +903,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsSysDanger);
 
+    // Historico de notificacoes so interessa a quem pode limpar/tocar nele
+    static const JsFn kFnsNotif[] = {
+        {"notifications", js_notifications, 0},
+        {"notificationsClear", js_notificationsClear, 0},
+    };
+    if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsNotif);
+
     // Assign to global variable 'System'
     duk_put_prop_string(ctx, -2, "System");
 
@@ -924,6 +933,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"remove", js_storageRemove, 1},
         {"clear", js_storageClear, 0},
     };
+    putFns(ctx, kFnsStorage);
     // clearFor apaga o Storage de OUTRO app (desinstalacao): so "system"
     static const JsFn kFnsStorageSys[] = {
         {"clearFor", js_storageClearFor, 1},

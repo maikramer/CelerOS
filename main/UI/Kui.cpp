@@ -499,6 +499,88 @@ bool List::tick(uint32_t dtMs) {
     return true;
 }
 
+// ---- Switch / Slider / ProgressBar / Spinner (API 12 do toolkit) --------
+
+void Switch::draw(Canvas& c) {
+    bool pressed = isPressed(rect);
+    int h = rect.h, w = h * 2;                 // pilula 2:1 dentro do rect
+    if (w > rect.w) { w = rect.w; h = w / 2; }
+    int x = rect.x + (rect.w - w) / 2, y = rect.y + (rect.h - h) / 2;
+    int r = h / 2;
+    uint32_t fillc = on ? THEME_ACCENT : (pressed ? THEME_RAISED : THEME_CARD);
+    c.fillRoundRect(Rect{x, y, w, h}, r, fillc);
+    c.drawRoundRect(Rect{x, y, w, h}, r, THEME_STROKE);
+    int knob = h - UI::sy(6);
+    c.fillCircle(x + (on ? w - knob / 2 - UI::sx(3) : knob / 2 + UI::sx(3)), y + h / 2, knob / 2,
+                 pressed ? THEME_TEXT_DIM : THEME_TEXT);
+}
+
+bool Switch::onTouch(const TouchEvent& ev, Rect myRect) {
+    if (!myRect.contains(ev.startX, ev.startY)) return false;
+    if (ev.isTap() && myRect.contains(ev.x, ev.y)) {
+        on = !on;
+        if (onChange) onChange(on);
+        return true;
+    }
+    if (ev.type == TouchEvent::Press) return true;  // consome o press (feedback)
+    return false;
+}
+
+void Slider::draw(Canvas& c) {
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    int h = UI::sy(12);
+    int y = rect.y + (rect.h - h) / 2;
+    int r = h / 2;
+    c.fillRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_CARD);
+    c.drawRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_STROKE);
+    int fw = (int)((long)rect.w * value / 100);
+    if (fw > r * 2) c.fillRoundRect(Rect{rect.x, y, fw, h}, r, isPressed(rect) ? THEME_ACCENT_D : THEME_ACCENT);
+    c.fillCircle(rect.x + fw, y + h / 2, UI::sy(9), THEME_TEXT);
+}
+
+bool Slider::onTouch(const TouchEvent& ev, Rect myRect) {
+    bool inside = myRect.contains(ev.startX, ev.startY);
+    if (!inside && ev.type != TouchEvent::Drag) return false;
+    if (!inside) return false;
+    if (ev.type == TouchEvent::Press || ev.type == TouchEvent::Drag) {
+        int v = (int)((long)(ev.x - myRect.x) * 100 / myRect.w);
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        if (v != value) {
+            value = v;
+            if (onLiveChange) onLiveChange(value);
+        }
+        return true;
+    }
+    if (ev.type == TouchEvent::Release) {
+        if (onChange) onChange(value);
+        return true;
+    }
+    return false;
+}
+
+void ProgressBar::draw(Canvas& c) {
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    int h = UI::sy(10);
+    int y = rect.y + (rect.h - h) / 2;
+    int r = h / 2;
+    c.fillRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_CARD);
+    c.drawRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_STROKE);
+    int fw = (int)((long)rect.w * value / 100);
+    if (fw > r * 2) c.fillRoundRect(Rect{rect.x, y, fw, h}, r, THEME_ACCENT);
+}
+
+void Spinner::draw(Canvas& c) {
+    // arco de 90 graus girando ~360 graus/s — barato e sem alocar
+    uint32_t ms = millis() % 1000;
+    int a = (int)(ms * 360 / 1000);
+    int r = rect.h / 2 - UI::sy(2);
+    if (r < UI::sy(4)) r = UI::sy(4);
+    c.fillArc(rect.x + rect.w / 2, rect.y + rect.h / 2, r - UI::sy(3), r, (float)a, (float)a + 90, color);
+}
+
 // ---- Dialog -------------------------------------------------------------
 
 Rect Dialog::cardRect() const {

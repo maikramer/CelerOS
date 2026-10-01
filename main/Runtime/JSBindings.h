@@ -98,6 +98,10 @@ private:
     static duk_ret_t js_setAlarm(duk_context *ctx);
     static duk_ret_t js_clearAlarm(duk_context *ctx);
     static duk_ret_t js_getAlarm(duk_context *ctx);
+    static duk_ret_t js_playTone(duk_context *ctx);   // sequencia de notas
+    static duk_ret_t js_notify(duk_context *ctx);     // toast + historico
+    static duk_ret_t js_notifications(duk_context *ctx);      // lista (system)
+    static duk_ret_t js_notificationsClear(duk_context *ctx); // limpar (system)
 
     // Display Bindings - Utility
     static duk_ret_t js_color(duk_context *ctx);

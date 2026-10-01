@@ -242,6 +242,7 @@ function titleNow() {
     if (tela === "wifi") return "Wi-Fi";
     if (tela === "apps") return "Aplicativos";
     if (tela === "reset") return "Reset";
+    if (tela === "notif") return "Notificações";
     return "Settings";
 }
 function rebuildItems() {
@@ -252,6 +253,7 @@ function rebuildItems() {
     else if (tela === "tz") setItems(buildTz());
     else if (tela === "security") setItems(buildSec());
     else if (tela === "about") setItems(buildAbout());
+    else if (tela === "notif") setItems(buildNotif());
     else setItems([]);
 }
 function go(s) {
@@ -326,7 +328,8 @@ function drawAll() {
 }
 
 function drawContent() {
-    if (tela === "menu" || tela === "tz" || tela === "security" || tela === "about") {
+    if (tela === "menu" || tela === "tz" || tela === "security" ||
+        tela === "about" || tela === "notif") {
         drawRows();
     } else if (tela === "wifi") {
         drawWifi();
@@ -350,6 +353,33 @@ function drawContent() {
 
 // ---- menu principal --------------------------------------------------------
 
+// Notificacoes (API 12): historico do System.notify
+function notifSupported() {
+    return typeof System.notifications === "function";
+}
+function notifList() {
+    var l = [];
+    try { l = System.notifications() || []; } catch (e) {}
+    return l;
+}
+function notifCount() { return notifList().length; }
+function notifWhen(ep) {
+    if (!ep) return "";
+    var d = new Date(ep * 1000);
+    function p2(v) { return (v < 10 ? "0" : "") + v; }
+    return p2(d.getDate()) + "/" + p2(d.getMonth() + 1) + " " + p2(d.getHours()) + ":" + p2(d.getMinutes());
+}
+function buildNotif() {
+    var a = [];
+    var l = notifList();
+    for (var i = l.length - 1; i >= 0; i--) {
+        a.push({ l: trunc(l[i].title, 150, 1), v: notifWhen(l[i].epoch), i: 1 });
+    }
+    if (l.length === 0) a.push({ l: "Nenhuma notificação", i: 1 });
+    a.push({ l: "Limpar notificações", a: "clearnot" });
+    return a;
+}
+
 function buildMenu() {
     var w = System.wifiStatus();
     var a = [];
@@ -366,6 +396,7 @@ function buildMenu() {
     });
     a.push({ l: "Atualização", a: "ota" });
     a.push({ l: "Sobre", v: "v" + System.getOSVersion(), a: "about" });
+    if (notifSupported()) a.push({ l: "Notificações", v: String(notifCount()), a: "notif" });
     a.push({ l: "Reset", a: "reset" });
     return a;
 }
@@ -878,6 +909,7 @@ function onTap() {
         else if (a === "display") go("display");
         else if (a === "ota") go("update");
         else if (a === "about") go("about");
+        else if (a === "notif") go("notif");
         else if (a === "reset") go("reset");
     } else if (tela === "wifi") {
         if (hit(t, 48, 150, 144, 36)) {
@@ -900,6 +932,14 @@ function onTap() {
         }
     } else if (tela === "appdetail") {
         if (hit(t, 48, 246, 144, 32)) askUninstall(selApp);
+    } else if (tela === "notif") {
+        var idxN = rowAt(t);
+        if (idxN < 0) return;
+        if (items[idxN].a === "clearnot") {
+            System.notificationsClear();
+            note("Notificações", "Histórico apagado.");
+            go("menu");
+        }
     } else if (tela === "time") {
         var idx3 = rowAt(t);
         if (idx3 < 0) return;

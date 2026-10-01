@@ -27,6 +27,7 @@ inline bool fsPathAllowed(const char* path) {
         "/local/web_on.txt",
         "/local/brightness.txt",
         "/local/config_install_sd.txt",
+        "/local/notifications.txt",
     };
     for (const char* p : kProtected)
         if (strcmp(path, p) == 0) return false;

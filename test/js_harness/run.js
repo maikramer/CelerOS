@@ -331,7 +331,15 @@ function makeEnv() {
             return true;
         },
         clearAlarm: function() { env.__alarm = null; },
-        getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; }
+        getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; },
+        // Onda 5: melodia + notificacoes
+        playTone: function(seq) {
+            log.push('[tone] ' + (seq && seq.length ? seq.length : 0) + ' notas');
+            return seq ? Math.floor(seq.length / (seq.length > 0 && seq[0].length !== undefined ? 1 : 2)) : 0;
+        },
+        notify: function(t, m) { log.push('[notify] ' + t + '|' + (m || '')); },
+        notifications: function() { return env.__notifs || []; },
+        notificationsClear: function() { env.__notifs = []; }
     };
 
     env.FS = FS;
@@ -1408,6 +1416,30 @@ function holdFrames(x, y, n) {
     check('set/get alarm', j.indexOf('7/30/cafe') >= 0, j);
     check('hora invalida rejeitada', j.indexOf('/false') >= 0, j);
     check('clear desarma', j.indexOf('true') >= 0);
+})();
+
+(function() {
+    console.log('API 12 (playTone/notify):');
+    var src = [
+        'var n = System.playTone([[880,120],[0,60],[1320,180]]);',
+        'System.drawString("notas:" + n, 1, 1);',
+        'System.notify("Bateria fraca", "15% restante");',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    var err = null;
+    try {
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+    } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    var j = joinLog(env.__harness.log);
+    check('playTone aceita pares', j.indexOf('notas:3') >= 0, j);
+    check('notify registra toast', j.indexOf('[notify] Bateria fraca|15% restante') >= 0);
 })();
 
 // resumo

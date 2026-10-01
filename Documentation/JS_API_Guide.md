@@ -1087,3 +1087,41 @@ network fell back to 1970.
 device** after 15 s. A pure JS loop with NO API call at all still trips the
 WDT — in that case the app is genuinely stuck (and `celerctl shell "exit"`
 recovers the device remotely).
+
+## 18. API Level 12 — Melodies, notifications and toolkit widgets
+
+### 18.1 `System.playTone(notes)` — blocking melody
+
+`notes` is an array of pairs `[[freq, ms], ...]` or flat `[freq, ms, freq,
+ms, ...]`. Each note plays on the board's audio hardware (same as `beep`;
+I2S speaker or LEDC buzzer) with the watchdog fed between notes. Limits:
+1-64 notes, 20 Hz-20 kHz for 1-2000 ms each, 15 s total. Returns the number
+of notes played. Blocking: draw before calling.
+
+### 18.2 `System.notify(title[, msg])` + notification center
+
+Toast **now** + history entry in `/local/notifications.txt` (cap 20,
+protected by the jail — apps only write through this call). **Settings →
+Notificações** lists everything with date/time plus a "Limpar notificações"
+action. Apps with `"system"` can also read via `System.notifications()`
+(array of `{epoch,title,msg}`) and clear via `System.notificationsClear()`.
+
+```js
+System.notify("Low battery", "15% left");
+```
+
+### 18.3 Per-variant OTA (relay SKUs "Y")
+
+`update.json` may declare `"variant"` (e.g. `"smartdisplay-y3"`). The device
+compares against its own variant (relay boards are `smartdisplay-y1`/`-y3`)
+and **refuses** updates for another variant — and a device WITH relays also
+refuses a manifest WITHOUT a variant (the generic image is what uninstalls
+relay support). No `variant` in the manifest: installs only on relay-less
+devices (retro-compatible with the current channel).
+
+### 18.4 Native Kui widgets (C++ toolkit)
+
+`Switch` (on/off pill with onChange), `Slider` (0..100 with onLiveChange/
+onChange), `ProgressBar` (0..100 fill) and `Spinner` (spinning arc) join the
+native toolkit (`main/UI/Kui.h`) for system screens — same patterns as
+`Button`/`List` (immediate mode, press feedback, Rect hit-testing).

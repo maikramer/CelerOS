@@ -286,6 +286,41 @@ private:
     bool m_dragging = false;
 };
 
+// Switch: pilula on/off. Tap alterna (feedback de press como o Button).
+class Switch : public Widget {
+public:
+    bool on = false;
+    std::function<void(bool)> onChange;
+    void draw(Canvas& c) override;
+    bool onTouch(const TouchEvent& ev, Rect myRect) override;
+};
+
+// Slider horizontal 0..100: arrasto define o valor (live) e o release
+// confirma (onChange).
+class Slider : public Widget {
+public:
+    int value = 50;   // 0..100
+    std::function<void(int)> onLiveChange;  // durante o arrasto
+    std::function<void(int)> onChange;      // ao soltar
+    void draw(Canvas& c) override;
+    bool onTouch(const TouchEvent& ev, Rect myRect) override;
+};
+
+// ProgressBar: preenchimento 0..100 (sem interacao).
+class ProgressBar : public Widget {
+public:
+    int value = 0;   // 0..100
+    void draw(Canvas& c) override;
+};
+
+// Spinner: arco girando enquanto espera. Chame onTick(dt) no onTick da
+// tela e redesenhe; o angulo vive do millis() (draw e idempotente).
+class Spinner : public Widget {
+public:
+    uint32_t color = THEME_ACCENT;
+    void draw(Canvas& c) override;
+};
+
 // Dialog modal: overlay escuro + card + botoes. Exibido pelo Navigator
 // ACIMA da tela corrente; nao bloqueia o loop.
 class Dialog : public Widget {

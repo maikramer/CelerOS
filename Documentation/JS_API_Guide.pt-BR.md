@@ -1328,3 +1328,48 @@ sistema: **loops de jogo que só chamam `getTouch`/`present` não reiniciam
 mais o aparelho** aos 15 s. Um loop JS puro sem NENHUMA chamada de API
 continua derrubando o WDT — nesse caso o app é o travado mesmo (e o
 `celerctl shell "exit"` recupera o aparelho remotamente).
+
+## 18. Nível de API 12 — Melodias, notificações e widgets do toolkit
+
+### 18.1 `System.playTone(notas)` — melodia bloqueante
+
+`notas` é array de pares `[[freq, ms], ...]` ou plano `[freq, ms, freq, ms,
+...]`. Cada nota toca no hardware de áudio da placa (o mesmo do `beep`;
+alto-falante I2S ou buzzer LEDC), com o watchdog alimentado entre notas.
+Limites: 1–64 notas, nota de 20 Hz–20 kHz por 1–2000 ms, 15 s no total.
+Devolve o número de notas tocadas. Blocking: desenhe antes.
+
+```js
+System.playTone([[880,120],[0,60],[1320,180]]);  // pausa = freq 0? -> use nota de 20ms a 20Hz p/ pausa
+```
+*Correção: não há nota "silêncio" — intercale notas curtas de grave ou corte
+a melodia em chamadas.*
+
+### 18.2 `System.notify(titulo[, msg])` + centro de notificações
+
+Toast **agora** + registro no histórico `/local/notifications.txt` (cap 20
+entradas, protegido pelo jail — apps só escrevem nele por esta chamada). O
+**Configurações → Notificações** lista tudo com data/hora e tem "Limpar
+notificações". Apps com `"system"` também leem via
+`System.notifications()` (array `{epoch,title,msg}`) e limpam via
+`System.notificationsClear()`.
+
+```js
+System.notify("Bateria fraca", "15% restante");
+```
+
+### 18.3 OTA por variante (SKUs "Y" de relé)
+
+O `update.json` pode declarar `"variant"` (ex.: `"smartdisplay-y3"`). O
+dispositivo compara com a própria variante (placas com relés são
+`smartdisplay-y1`/`-y3`) e **recusa** atualização de outra variante — e um
+aparelho COM relés também recusa manifest **sem** variant (a imagem genérica
+é a que desinstala o suporte a relé). Sem `variant` no manifest: instala só
+em dispositivos sem relés (retrocompatível com o canal atual).
+
+### 18.4 Widgets nativos do Kui (toolkit C++)
+
+`Switch` (pilula on/off com onChange), `Slider` (0..100 com onLiveChange/
+onChange), `ProgressBar` (fill 0..100) e `Spinner` (arco girando) entram no
+toolkit nativo (`main/UI/Kui.h`) para as telas do sistema — mesmos padrões
+de `Button`/`List` (immediate mode, feedback de pressão, hit-test no Rect).
