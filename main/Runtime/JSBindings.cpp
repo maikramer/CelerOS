@@ -11,6 +11,7 @@
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
+#include "esp_task_wdt.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenCapture.h"
 #include "../Display/Theme.h"
@@ -324,6 +325,13 @@ void JSBindings::applyDisplayClip() {
 }
 
 void JSBindings::present() {
+    // App vivo e cedendo: alimenta o TWDT AQUI, no ponto de cedida
+    // universal. Antes so o delay() alimentava (em fatias): um loop de jogo
+    // `while(true){System.getTouch()}` legitimo derrubava o aparelho inteiro
+    // aos 15s. O reset e barato e todo chamador passa por aqui. Loop JS
+    // puro sem NENHUMA chamada continua no WDT — conter esse exige o
+    // interrupt do executor do Duktape (proximo degrau, ver ENGINE_NOTES).
+    esp_task_wdt_reset();
     // Timers (API 12) disparam aqui: present() roda no inicio de delay/
     // getTouch/keypadPoll e das chamadas bloqueantes — os pontos onde o app
     // cede. Callback que desenha marca o quadro sujo e o push abaixo o leva
@@ -857,6 +865,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"getNtpEnabled", js_getNtpEnabled, 0},
         {"theme", js_theme, 0},
         {"drawIcon", js_drawIcon, 3},
+        {"setScreenTimeout", js_setScreenTimeout, 1},
+        {"screenTimeout", js_screenTimeout, 0},
+        {"setAlarm", js_setAlarm, 3},
+        {"clearAlarm", js_clearAlarm, 0},
+        {"getAlarm", js_getAlarm, 0},
     };
     putFns(ctx, kFns16);
 
@@ -884,6 +897,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"webSetActive", js_webSetActive, 1},
         {"webAuthInfo", js_webAuthInfo, 0},
         {"webAuthSetPass", js_webAuthSetPass, 1},
+        {"deepSleep", js_deepSleep, 2},
     };
     if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsSysDanger);
 

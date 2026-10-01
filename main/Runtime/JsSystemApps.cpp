@@ -9,6 +9,8 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/PinStore.h"
 #include "../Utils/CelerSettings.h"
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
@@ -380,3 +382,61 @@ duk_ret_t JSBindings::js_wifiDisconnect(duk_context *ctx) {
     return 0;
 }
 
+
+// ---- Energia/tela e alarme (API 12) ----
+
+// System.setScreenTimeout(ms): 0 = nunca apagar (default). O primeiro toque
+// depois de apagado so acorda (e e consumido).
+duk_ret_t JSBindings::js_setScreenTimeout(duk_context *ctx) {
+    uint32_t ms = duk_require_uint(ctx, 0);
+    Backlight::setIdleTimeout(ms);
+    return 0;
+}
+
+duk_ret_t JSBindings::js_screenTimeout(duk_context *ctx) {
+    duk_push_uint(ctx, Backlight::idleTimeout());
+    return 1;
+}
+
+// System.deepSleep(ms[, wakePin]): dorme DE VERDADE (reboot ao acordar —
+// apps nao sobrevivem). Timer sempre armado; wakePin opcional acorda com
+// nivel ALTO (touch INT, botao...). Requer "system": derruba o aparelho.
+duk_ret_t JSBindings::js_deepSleep(duk_context *ctx) {
+    uint32_t ms = duk_require_uint(ctx, 0);
+    if (ms == 0) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "deepSleep: ms deve ser > 0");
+    }
+    present();  // ultimo frame e despedida visiveis
+    if (duk_is_number(ctx, 1)) {
+        int pin = duk_require_int(ctx, 1);
+        if (pin >= 0) {
+            // ext0 (nivel alto): disponivel no ESP32 classico e no S3
+            esp_sleep_enable_ext0_wakeup((gpio_num_t)pin, 1);
+        }
+    }
+    esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL);
+    esp_deep_sleep_start();
+    return 0;  // nunca chega (reboot ao acordar)
+}
+
+duk_ret_t JSBindings::js_setAlarm(duk_context *ctx) {
+    int h = duk_require_int(ctx, 0);
+    int m = duk_require_int(ctx, 1);
+    const char* msg = duk_is_string(ctx, 2) ? duk_require_string(ctx, 2) : "";
+    duk_push_boolean(ctx, TimeManager::setAlarm(h, m, msg) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_clearAlarm(duk_context *ctx) {
+    (void)ctx;
+    TimeManager::clearAlarm();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_getAlarm(duk_context *ctx) {
+    std::string j = TimeManager::getAlarmJson();
+    if (j == "null") { duk_push_null(ctx); return 1; }
+    duk_push_string(ctx, j.c_str());
+    duk_json_decode(ctx, -1);  // decodifica no lugar: objeto fica no topo
+    return 1;
+}

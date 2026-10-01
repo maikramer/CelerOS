@@ -1283,3 +1283,48 @@ System.setTextDatum(5);               // meio-centro
 System.drawString("GAME OVER", 120, 160, 4);
 System.setTextDatum(0);               // bom costume: devolve ao default
 ```
+
+## 17. Nível de API 12 — Energia e hora
+
+### 17.1 Tempo de tela — `System.setScreenTimeout(ms)` / `System.screenTimeout()`
+
+Sem toque por `ms` milissegundos o backlight apaga; o **primeiro** toque
+depois disso apenas acorda a tela (o evento é consumido — nada é clicado às
+cegas). `0` = sempre ligada (default). Faixa aceita: 10 s a 4 h. Persistido
+entre boots e configurável também em **Configurações → Tela** ("Tela
+apaga"). Placa sem backlight PWM: no-op.
+
+### 17.2 Sono profundo — `System.deepSleep(ms[, wakePin])` *(requer `"system"`)*
+
+Dorme de verdade: o chip desliga e **acorda com um reboot completo** (apps
+não sobrevivem — o `resetReason` do boot seguinte é `"deep sleep"`). O timer
+de `ms` sempre acorda; `wakePin` opcional também acorda com nível alto
+(botão, INT do touch...). Uso típico: robôs/bateria que acordam de hora em
+hora para checar a rede.
+
+```js
+System.deepSleep(3600000);        // 1 hora
+System.deepSleep(0, 4);           // so o pino 4 (0 ms = erro)
+System.deepSleep(600000, 4);      // o que vier primeiro
+```
+
+### 17.3 Alarme do dia — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
+
+Quando o relógio local passa de `h:m`, o sistema dispara um toast
+**ALARME: msg** e desarma. Em RAM (não sobrevive a reboot); precisa de hora
+válida (NTP ou ajuste manual). Requer `System.getAlarm()` devolve
+`{armed, hour, minute, msg}` ou `null`.
+
+### 17.4 Hora persistente
+
+Sem RTC externo, a hora agora sobrevive a reboot: o sistema grava o epoch
+no NVS a cada 10 min e recupera no boot (precisão de minutos — o tempo
+desligado não é contado). Sem isso, todo boot sem rede voltava a 1970.
+
+### 17.5 Mudança de watchdog para apps legítimos
+
+`System.getTouch()` (e todo ponto de espera) agora alimenta o watchdog do
+sistema: **loops de jogo que só chamam `getTouch`/`present` não reiniciam
+mais o aparelho** aos 15 s. Um loop JS puro sem NENHUMA chamada de API
+continua derrubando o WDT — nesse caso o app é o travado mesmo (e o
+`celerctl shell "exit"` recupera o aparelho remotamente).

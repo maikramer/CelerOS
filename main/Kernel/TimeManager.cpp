@@ -1,6 +1,9 @@
 #include "TimeManager.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/CelerSettings.h"
+#include "../UI/Kui.h"
+#include "../Display/Theme.h"
 #include <esp_sntp.h>
 #include "esp_netif_sntp.h"
 
@@ -33,6 +36,10 @@ void TimeManager::init() {
     loadPreferences();
     setenv("TZ", currentTimezone.c_str(), 1);
     tzset();
+    // Sem RTC externo, a hora morria em todo reboot sem rede: recupera o
+    // ultimo epoch salvo (a cada 10 min no tick) — precisao de minutos, nao
+    // de segundos (o uptime desde o save nao e contado).
+    restoreEpoch();
     // Defer esp_sntp_init() until syncNTP() to prevent LwIP assertions
 }
 
@@ -56,15 +63,94 @@ bool TimeManager::isTimeValid() {
     return getYear() >= 2020;
 }
 
+// ---- Persistencia aproximada da hora (sem RTC externo) ---------------------
+// O tick grava o epoch no NVS a cada 10 min; o boot recupera se a hora
+// ainda for invalida. Drift = tempo desligado (minutos, tipicamente).
+
+void TimeManager::saveEpoch() {
+    time_t now;
+    time(&now);
+    if (now < 1577836800) return;  // < 2020: nao persistir lixo
+    char buf[24];  // epoch em segundos cabe folgado (int64 max = 20 digitos)
+    snprintf(buf, sizeof(buf), "%lld", (long long)now);
+    CelerSettings::set("epoch", buf);
+}
+
+void TimeManager::restoreEpoch() {
+    if (isTimeValid()) return;
+    std::string v = CelerSettings::get("epoch", "");
+    if (v.empty()) return;
+    long long e = atoll(v.c_str());
+    if (e < 1577836800) return;
+    struct timeval now = { .tv_sec = (time_t)e, .tv_usec = 0 };
+    settimeofday(&now, NULL);
+}
+
+// ---- Alarme do dia (API 12) -------------------------------------------------
+
+static bool s_alarmArmed = false;
+static int s_alarmH = 0, s_alarmM = 0;
+static std::string s_alarmMsg;
+
+bool TimeManager::setAlarm(int hour, int minute, const std::string& msg) {
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return false;
+    s_alarmArmed = true;
+    s_alarmH = hour;
+    s_alarmM = minute;
+    s_alarmMsg = msg;
+    return true;
+}
+
+void TimeManager::clearAlarm() {
+    s_alarmArmed = false;
+    s_alarmMsg.clear();
+}
+
+std::string TimeManager::getAlarmJson() {
+    if (!s_alarmArmed) return "null";
+    std::string msg = s_alarmMsg;
+    for (char& c : msg)  // aspas/quebra nao tem lugar num string JSON
+        if (c == '"' || c == '\\' || c == '\n') c = ' ';
+    char buf[96];
+    snprintf(buf, sizeof(buf), "{\"armed\":true,\"hour\":%d,\"minute\":%d,\"msg\":\"%s\"}",
+             s_alarmH, s_alarmM, msg.c_str());
+    return std::string(buf);
+}
+
 void TimeManager::tick(bool networkUp) {
     // Rede no ar e hora ainda invalida: insiste a cada 30 s (pacote UDP
     // perdido, DNS lento no boot...) — o intervalo normal do SNTP e 1 h.
     static uint32_t lastTryMs = 0;
-    if (!ntpEnabled || !networkUp || isTimeValid()) return;
-    uint32_t now = millis();
-    if (lastTryMs != 0 && now - lastTryMs < 30000) return;
-    lastTryMs = now;
-    syncNTP();
+    if (ntpEnabled && networkUp && !isTimeValid()) {
+        uint32_t now = millis();
+        if (lastTryMs == 0 || now - lastTryMs >= 30000) {
+            lastTryMs = now;
+            syncNTP();
+        }
+    }
+
+    // Hora valida -> persiste (barato: 1 escrita NVS a cada 10 min)
+    static uint32_t lastSaveMs = 0;
+    if (isTimeValid()) {
+        uint32_t now2 = millis();
+        if (lastSaveMs == 0 || now2 - lastSaveMs >= 600000UL) {
+            lastSaveMs = now2;
+            saveEpoch();
+        }
+    }
+
+    // Alarme do dia: relogio local passa de hh:mm -> toast e desarma
+    if (s_alarmArmed && isTimeValid()) {
+        time_t now3;
+        time(&now3);
+        struct tm ti;
+        localtime_r(&now3, &ti);
+        if (ti.tm_hour > s_alarmH || (ti.tm_hour == s_alarmH && ti.tm_min >= s_alarmM)) {
+            s_alarmArmed = false;
+            std::string msg = s_alarmMsg.empty() ? "Alarme" : s_alarmMsg;
+            kui::Navigator::toast("ALARME: " + msg, THEME_WARN, 5000);
+        }
+    }
 }
 
 void TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {

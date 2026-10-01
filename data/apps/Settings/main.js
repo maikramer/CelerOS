@@ -606,6 +606,19 @@ function autoBriSupported() {
     return typeof System.getAutoBrightness === "function" && System.getAutoBrightness() !== null;
 }
 
+// Tempo de tela (API 12): 0 = sempre ligada; cicla no toque
+var TMOPTS = [[0, "sempre ligada"], [30000, "30 s"], [60000, "1 min"],
+              [300000, "5 min"], [600000, "10 min"]];
+function screenTimeoutSupported() {
+    return typeof System.setScreenTimeout === "function";
+}
+function tmoLabel() {
+    var v = System.screenTimeout();
+    for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) return TMOPTS[i][1];
+    return TMOPTS[0][1];
+}
+function tmoY() { return autoBriSupported() ? 250 : 212; }
+
 function drawDisplay() {
     if (!System.backlightSupported()) {
         ctext("Backlight fixo", 120, 120, 2, T.warn, T.bg);
@@ -631,6 +644,12 @@ function drawDisplay() {
         System.drawRoundRect(24, 212, 192, 30, 8, T.stroke);
         ctext("Brilho automático: " + (on ? "ligado" : "desligado"), 120, 227, 1,
               on ? T.onAccent : T.text, bg);
+    }
+    if (screenTimeoutSupported()) {
+        var ty = tmoY();
+        System.fillRoundRect(24, ty, 192, 30, 8, T.card);
+        System.drawRoundRect(24, ty, 192, 30, 8, T.stroke);
+        ctext("Tela apaga: " + tmoLabel(), 120, ty + 15, 1, T.text, T.card);
     }
 }
 
@@ -836,6 +855,14 @@ function onTap() {
 
     if (tela === "display" && autoBriSupported() && hit(t, 24, 212, 192, 30)) {
         System.setAutoBrightness(!System.getAutoBrightness());
+        drawAll();
+        return;
+    }
+    if (tela === "display" && screenTimeoutSupported() && hit(t, 24, tmoY(), 192, 30)) {
+        var v = System.screenTimeout();
+        var idx = 0;
+        for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) idx = i;
+        System.setScreenTimeout(TMOPTS[(idx + 1) % TMOPTS.length][0]);
         drawAll();
         return;
     }

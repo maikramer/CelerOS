@@ -1041,3 +1041,49 @@ System.setTextDatum(5);               // middle-center
 System.drawString("GAME OVER", 120, 160, 4);
 System.setTextDatum(0);               // good practice: restore default
 ```
+
+## 17. API Level 12 — Power and time
+
+### 17.1 Screen timeout — `System.setScreenTimeout(ms)` / `System.screenTimeout()`
+
+With no touch for `ms` milliseconds the backlight turns off; the **first**
+touch after that only wakes the screen (the event is consumed — nothing is
+clicked blind). `0` = always on (default). Accepted range: 10 s to 4 h.
+Persisted across boots and also configurable in **Settings → Display**
+("Tela apaga"). Board without PWM backlight: no-op.
+
+### 17.2 Deep sleep — `System.deepSleep(ms[, wakePin])` *(requires `"system"`)*
+
+Real sleep: the chip powers down and **wakes up into a full reboot** (apps
+do not survive — the next boot's `resetReason` is `"deep sleep"`). The `ms`
+timer always wakes; an optional `wakePin` also wakes on HIGH level (button,
+touch INT...). Typical use: battery robots waking hourly to check the
+network.
+
+```js
+System.deepSleep(3600000);        // 1 hour
+System.deepSleep(0, 4);           // pin 4 only (0 ms = error)
+System.deepSleep(600000, 4);      // whichever comes first
+```
+
+### 17.3 Daily alarm — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
+
+When the local clock passes `h:m`, the system fires an **ALARME: msg**
+toast and disarms. In RAM (does not survive a reboot); needs a valid time
+(NTP or manual). `System.getAlarm()` returns `{armed, hour, minute, msg}`
+or `null`.
+
+### 17.4 Persistent time
+
+Without an external RTC the time now survives reboots: the system saves the
+epoch to NVS every 10 minutes and restores it at boot (minute-level
+accuracy — powered-off time is not counted). Before, every boot without
+network fell back to 1970.
+
+### 17.5 Watchdog change for legitimate apps
+
+`System.getTouch()` (and every yield point) now feeds the system watchdog:
+**game loops that only call `getTouch`/`present` no longer reboot the
+device** after 15 s. A pure JS loop with NO API call at all still trips the
+WDT — in that case the app is genuinely stuck (and `celerctl shell "exit"`
+recovers the device remotely).

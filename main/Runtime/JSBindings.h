@@ -91,6 +91,14 @@ private:
     static duk_ret_t js_storageClear(duk_context *ctx);
     static duk_ret_t js_storageClearFor(duk_context *ctx);  // system-gated
 
+    // Energia/tela e alarme (API 12)
+    static duk_ret_t js_setScreenTimeout(duk_context *ctx);
+    static duk_ret_t js_screenTimeout(duk_context *ctx);
+    static duk_ret_t js_deepSleep(duk_context *ctx);  // "system"
+    static duk_ret_t js_setAlarm(duk_context *ctx);
+    static duk_ret_t js_clearAlarm(duk_context *ctx);
+    static duk_ret_t js_getAlarm(duk_context *ctx);
+
     // Display Bindings - Utility
     static duk_ret_t js_color(duk_context *ctx);
     static duk_ret_t js_screenWidth(duk_context *ctx);

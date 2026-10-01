@@ -25,6 +25,17 @@ public:
     static bool isAuto();
     static void setAuto(bool on, bool persist = true);
     static void tick();
+
+    // Timeout de tela (API 12): sem toque por X ms o backlight desliga; o
+    // proximo toque acorda (e e CONSUMIDO — nao clica em nada as cegas).
+    // 0 = desligado (default). Persistido em "screen_timeout". Placa sem
+    // backlight PWM: no-op. noteActivity() alimenta a qualquer toque REAL
+    // ou injetado (kui::readTouch); devolve true se este toque ACORDOU a
+    // tela (quem chamou deve engolir o evento).
+    static void setIdleTimeout(uint32_t ms, bool persist = true);
+    static uint32_t idleTimeout();
+    static bool isOff();
+    static bool noteActivity();
 };
 
 #endif // CELEROS_BACKLIGHT_H

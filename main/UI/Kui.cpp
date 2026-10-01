@@ -2,6 +2,7 @@
 #include "../Assets/Fonts/CelerFonts.h"
 
 #include "../Display/Icon.h"
+#include "../Display/Backlight.h"
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cmath>
@@ -600,6 +601,7 @@ void TouchPump::reset() {
 }
 
 bool readTouch(uint16_t* x, uint16_t* y) {
+    bool down;
     if (TouchInjector::active()) {
         // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e soltar
         TouchInjector::Sample smp;
@@ -614,9 +616,14 @@ bool readTouch(uint16_t* x, uint16_t* y) {
             *x = s_injX;
             *y = s_injY;
         }
-        return s_injDown;
+        down = s_injDown;
+    } else {
+        down = Board::display().getTouch(x, y) != 0;
     }
-    return Board::display().getTouch(x, y) != 0;
+    // Timeout de tela: toque valido conta como atividade; se ele SO acordou
+    // a tela, engole (o primeiro toque nao clica em nada as cegas)
+    if (down && Backlight::noteActivity()) return false;
+    return down;
 }
 
 void TouchPump::poll(const Handler& onEvent) {

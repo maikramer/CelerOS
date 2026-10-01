@@ -14,6 +14,12 @@ static bool autoOn = false;
 static float luxAvg = -1;        // media movel do sensor (0..100)
 static uint32_t lastTickMs = 0;
 
+// Timeout de tela: sem toque por X ms o backlight apaga; o primeiro toque
+// depois disso acorda (e e consumido pelo readTouch).
+static uint32_t idleTimeoutMs = 0;   // 0 = desligado
+static uint32_t lastActivityMs = 0;
+static bool screenOff = false;
+
 bool Backlight::isSupported() { return Board::profile().backlightPwm; }
 
 int Backlight::get() { return currentLevel; }
@@ -61,6 +67,14 @@ void Backlight::setAuto(bool on, bool persist) {
 }
 
 void Backlight::tick() {
+    // Timeout de tela: apaga SEM chamar apply() (o nivel escolhido segue
+    // valido para o despertar); sem PWM nao ha o que apagar
+    if (idleTimeoutMs > 0 && !screenOff && isSupported() &&
+        millis() - lastActivityMs >= idleTimeoutMs) {
+        screenOff = true;
+        if (blTft) blTft->setBrightness(0);
+    }
+    if (screenOff) return;  // apagado: nada de auto-brilho rodando
     if (!autoOn) return;
     uint32_t now = millis();
     if (lastTickMs != 0 && now - lastTickMs < 1000) return;  // 1x/s: ADC barato
@@ -74,10 +88,38 @@ void Backlight::tick() {
     if (appliedLevel < 0 || abs(target - appliedLevel) >= 4) apply(target);
 }
 
+void Backlight::setIdleTimeout(uint32_t ms, bool persist) {
+    // valores saneados: 0 (nunca) ou 10s..4h
+    if (ms != 0) {
+        if (ms < 10000) ms = 10000;
+        if (ms > 14400000UL) ms = 14400000UL;
+    }
+    idleTimeoutMs = ms;
+    if (screenOff && ms == 0) {
+        // religou por config: acorda na hora
+        screenOff = false;
+        apply(autoOn ? autoTarget() : currentLevel);
+    }
+    if (persist) CelerSettings::set("screen_timeout", ms ? std::to_string(ms).c_str() : "");
+}
+
+uint32_t Backlight::idleTimeout() { return idleTimeoutMs; }
+bool Backlight::isOff() { return screenOff; }
+
+bool Backlight::noteActivity() {
+    lastActivityMs = millis();
+    if (!screenOff) return false;
+    screenOff = false;
+    apply(autoOn ? autoTarget() : currentLevel);
+    return true;  // este toque so acordou: quem leu deve engolir
+}
+
 void Backlight::init(CelerDisplay* tft) {
     blTft = tft;
     int lvl = (int)kstr::toInt(CelerSettings::get("brightness", "100"));
     if (lvl < 5 || lvl > 100) lvl = 100;
     set(lvl, false);
     setAuto(CelerSettings::get("auto_brightness", "0") == "1", false);
+    setIdleTimeout((uint32_t)kstr::toInt(CelerSettings::get("screen_timeout", "0")), false);
+    lastActivityMs = millis();
 }

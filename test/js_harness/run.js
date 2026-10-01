@@ -320,7 +320,18 @@ function makeEnv() {
         set24hFormat: function() {},
         get24hFormat: function() { return 1; },
         setNtpEnabled: function() {},
-        getNtpEnabled: function() { return 1; }
+        getNtpEnabled: function() { return 1; },
+        // Energia/alarme (API 12)
+        setScreenTimeout: function(ms) { env.__scrTmo = ms | 0; },
+        screenTimeout: function() { return env.__scrTmo || 0; },
+        deepSleep: function() { log.push('[deepSleep] ' + arguments[0] + 'ms'); throw 'OS_EXIT'; },
+        setAlarm: function(h, m, msg) {
+            if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+            env.__alarm = { armed: true, hour: h, minute: m, msg: msg || '' };
+            return true;
+        },
+        clearAlarm: function() { env.__alarm = null; },
+        getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; }
     };
 
     env.FS = FS;
@@ -1355,6 +1366,48 @@ function holdFrames(x, y, n) {
     check('roda sem erro', err === null, err || '');
     var j = joinLog(env.__harness.log);
     check('bytes atravessam sem truncar no NUL', j.indexOf('5:1,2,255') >= 0, j);
+})();
+
+(function() {
+    console.log('Settings (tempo de tela):');
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        // abre "Tela" (linha 4) e toca na linha do timeout duas vezes
+        env.__harness.tap(120, 247);
+        var ty = env.System.getAutoBrightness() !== null ? 250 : 212;
+        env.__harness.tap(120, ty + 15);
+        env.__harness.tap(120, ty + 15);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('linha do timeout desenha', j.indexOf('Tela apaga:') >= 0);
+    check('dois toques avancam 2 opcoes (sempre -> 1 min)', r.env.__scrTmo === 60000, 'tmo=' + r.env.__scrTmo);
+})();
+
+(function() {
+    console.log('API 12 (alarme):');
+    var src = [
+        'System.setAlarm(7, 30, "cafe");',
+        'var a = System.getAlarm();',
+        'System.drawString(a.hour + "/" + a.minute + "/" + a.msg + "/" + System.setAlarm(25, 0, "x"), 1, 1);',
+        'System.clearAlarm();',
+        'System.drawString(String(System.getAlarm() === null), 1, 20);',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    var err = null;
+    try {
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+    } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    var j = joinLog(env.__harness.log);
+    check('set/get alarm', j.indexOf('7/30/cafe') >= 0, j);
+    check('hora invalida rejeitada', j.indexOf('/false') >= 0, j);
+    check('clear desarma', j.indexOf('true') >= 0);
 })();
 
 // resumo

@@ -1,7 +1,7 @@
 {
   "name": "Settings",
   "packageName": "celeros.settings",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "author": "CelerOS",
   "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN nativo com salt + senha web), tela, atualizacao OTA e sobre.",
   "type": "System",
@@ -16,5 +16,5 @@
     "system",
     "net"
   ],
-  "changelog": "1.4.0 - teclado numerico nos campos de numero (API 11: {hint:num}); PIN agora digita mascarado ({mask}) com botao ver/ocu. "
+  "changelog": "1.4.1 - tempo de tela (apaga sem toque; o primeiro toque so acorda, API 12). 1.4.0 - teclado numerico nos campos de numero (API 11: {hint:num}); PIN agora digita mascarado ({mask}) com botao ver/ocu. "
 }
