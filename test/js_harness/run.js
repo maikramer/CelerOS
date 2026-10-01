@@ -1496,6 +1496,39 @@ function holdFrames(x, y, n) {
     check('playWav chama o player com o caminho', joinLog(env.__harness.log).indexOf('[wav] /local/t.wav') >= 0);
 })();
 
+// Smoke dos apps de sistema sem cobertura (Installer/Help/WebServer/TouchTest/HTTPDemo)
+(function() {
+    console.log('Apps de sistema (smoke):');
+    var r = runApp('data/apps/Installer/main.js');
+    check('Installer roda', r.err === null, r.err || '');
+    check('Installer varre o SD e avisa vazio', joinLog(r.log).indexOf('sem apps') >= 0 || joinLog(r.log).indexOf('Nenhum app') >= 0);
+})();
+(function() {
+    var r = runApp('data/apps/Help/main.js');
+    check('Help roda', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('Help abre o indice', j.indexOf('Como usar') >= 0, j.substring(0, 80));
+})();
+(function() {
+    var r = runApp('data/apps/Web Server/main.js');
+    check('Web Server roda', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('Web Server mostra estado sem rede', j.indexOf('WiFi') >= 0 || j.indexOf('Servidor') >= 0);
+})();
+(function() {
+    var r = runApp('data/apps/Touch Test/main.js', function(env) {
+        env.__harness.tap(120, 160);
+        env.__harness.tap(60, 80);
+    });
+    check('Touch Test roda', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('Touch Test responde ao toque', j.indexOf('TouchTest: x=120 y=160') >= 0);
+})();
+(function() {
+    var r = runApp('data/apps/HTTP Demo/main.js');
+    check('HTTP Demo roda', r.err === null, r.err || '');
+})();
+
 // resumo
 console.log('');
 if (failures) {
