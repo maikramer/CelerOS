@@ -880,6 +880,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"clearAlarm", js_clearAlarm, 0},
         {"getAlarm", js_getAlarm, 0},
         {"playTone", js_playTone, 1},
+        {"playWav", js_playWav, 1},
         {"notify", js_notify, 2},
     };
     putFns(ctx, kFns16);

@@ -99,6 +99,7 @@ private:
     static duk_ret_t js_clearAlarm(duk_context *ctx);
     static duk_ret_t js_getAlarm(duk_context *ctx);
     static duk_ret_t js_playTone(duk_context *ctx);   // sequencia de notas
+    static duk_ret_t js_playWav(duk_context *ctx);   // arquivo WAV (API 13)
 
     // Sensors do IMU da placa (API 13: watch)
     static duk_ret_t js_sensorsAccel(duk_context *ctx);   // {x,y,z} em g

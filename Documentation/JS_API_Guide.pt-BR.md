@@ -1345,6 +1345,19 @@ System.playTone([[880,120],[0,60],[1320,180]]);  // pausa = freq 0? -> use nota 
 *Correção: não há nota "silêncio" — intercale notas curtas de grave ou corte
 a melodia em chamadas.*
 
+### 18.1b `System.playWav(caminho)` — arquivo WAV do FS
+
+Toca um **WAV PCM 16-bit** (mono ou estéreo, 8–48 kHz) direto do FS
+(`/local` ou `/sd`) em streaming pelo I2S — o arquivo não carrega inteiro
+na RAM, o watchdog é alimentado por chunk e o volume é o do
+`System.setVolume`. Bloqueante. `true` = tocou; `false` = placa sem
+alto-falante I2S, arquivo ausente ou cabeçalho inválido. Regras do jail
+valem (arquivo do sistema exige `"system"`).
+
+```js
+System.playWav("/sd/aviso.wav");
+```
+
 ### 18.2 `System.notify(titulo[, msg])` + centro de notificações
 
 Toast **agora** + registro no histórico `/local/notifications.txt` (cap 20

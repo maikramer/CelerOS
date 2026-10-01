@@ -12,6 +12,7 @@
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
 #include "../Hardware/BoardIO.h"
+#include "../Hardware/AudioPlayer.h"
 #include "../UI/Kui.h"
 #include "driver/gpio.h"
 #include "HttpClient.h"
@@ -25,6 +26,7 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "JsFsJail.h"
 
 // =====================================================
 // System nivel 3 — suporte aos apps de sistema em JS (W8)
@@ -586,4 +588,17 @@ duk_ret_t JSBindings::js_notifications(duk_context *ctx) {
 duk_ret_t JSBindings::js_notificationsClear(duk_context *ctx) {
     FileSystem::deleteFile("/local/notifications.txt");
     return 0;
+}
+
+// System.playWav(path) (API 13): toca WAV PCM 16-bit (mono/stereo, 8-48 kHz)
+// do FS em streaming pelo I2S. true = tocou; false = sem audio na placa,
+// arquivo ausem ou cabecalho invalido. Bloqueante — desenhe antes.
+duk_ret_t JSBindings::js_playWav(duk_context *ctx) {
+    const char* path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) {
+        duk_error(ctx, DUK_ERR_ERROR, "System.playWav: %s e arquivo do sistema", path);
+    }
+    present();
+    duk_push_boolean(ctx, AudioPlayer::playWav(path) == AudioPlayer::WavError::None ? 1 : 0);
+    return 1;
 }

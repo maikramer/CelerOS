@@ -347,6 +347,7 @@ function makeEnv() {
         clearAlarm: function() { env.__alarm = null; },
         getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; },
         // Onda 5: melodia + notificacoes
+        playWav: function(p) { log.push('[wav] ' + p); return true; },
         playTone: function(seq) {
             log.push('[tone] ' + (seq && seq.length ? seq.length : 0) + ' notas');
             return seq ? Math.floor(seq.length / (seq.length > 0 && seq[0].length !== undefined ? 1 : 2)) : 0;
@@ -1477,6 +1478,22 @@ function holdFrames(x, y, n) {
     var j = joinLog(env.__harness.log);
     check('playTone aceita pares', j.indexOf('notas:3') >= 0, j);
     check('notify registra toast', j.indexOf('[notify] Bateria fraca|15% restante') >= 0);
+})();
+
+(function() {
+    console.log('API 13 (playWav):');
+    var src = [
+        'var ok = FS.writeFile("/local/t.wav", "RIFFxxxxWAVE");',
+        'System.drawString("wav:" + System.playWav("/local/t.wav"), 1, 1);',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    var err = null;
+    try { runInline(src, env); } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    check('playWav chama o player com o caminho', joinLog(env.__harness.log).indexOf('[wav] /local/t.wav') >= 0);
 })();
 
 // resumo

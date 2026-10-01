@@ -75,7 +75,15 @@ jobs:
             -DSDKCONFIG=build-${{ matrix.board }}/sdkconfig \
             -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
             -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }}
-          idf.py -B build-${{ matrix.board }} build
+          # esp_littlefs "corrupted" e flake do cache do runner (nao reproduz
+          # no container local com download limpo): 2a tentativa com cache zerado
+          idf.py -B build-${{ matrix.board }} build ||
+            (rm -rf managed_components build-${{ matrix.board }} &&
+             idf.py -B build-${{ matrix.board }} \
+               -DSDKCONFIG=build-${{ matrix.board }}/sdkconfig \
+               -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
+               -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }} &&
+             idf.py -B build-${{ matrix.board }} build)
       - name: Orcamento do slot OTA (min 64 KB livres)
         shell: bash
         run: |

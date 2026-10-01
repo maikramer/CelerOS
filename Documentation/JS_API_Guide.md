@@ -1098,6 +1098,19 @@ I2S speaker or LEDC buzzer) with the watchdog fed between notes. Limits:
 1-64 notes, 20 Hz-20 kHz for 1-2000 ms each, 15 s total. Returns the number
 of notes played. Blocking: draw before calling.
 
+### 18.1b `System.playWav(path)` — WAV file from the FS
+
+Plays a **16-bit PCM WAV** (mono or stereo, 8–48 kHz) straight from the FS
+(`/local` or `/sd`), streamed over I2S — the file is never fully loaded
+into RAM, the watchdog is fed per chunk and volume follows
+`System.setVolume`. Blocking. `true` = played; `false` = board without an
+I2S speaker, missing file or invalid header. Jail rules apply (system
+files require `"system"`).
+
+```js
+System.playWav("/sd/alert.wav");
+```
+
 ### 18.2 `System.notify(title[, msg])` + notification center
 
 Toast **now** + history entry in `/local/notifications.txt` (cap 20,
