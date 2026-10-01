@@ -1,0 +1,9 @@
+{
+  "version": "1.4.0",
+  "api_version": 13,
+  "major_update": false,
+  "minor_update": true,
+  "security_update": false,
+  "changelog": "Primeira build do CelerOS para o smartwatch Waveshare ESP32-S3-Touch-AMOLED-2.06 (board waveshare-watch): AMOLED 410x502 CO5300 em QSPI, touch FT3168, PMU AXP2101, RTC PCF85063, IMU QMI8658 (pedometro + levantar o pulso), codec ES8311, botoes BOOT/PWR e escada de tela dim/AOD/off com deep sleep. API 13: Sensors.accel/steps/temp, System.getWeekday, keepAwake, setVolume/getVolume. App Watchface como tela inicial, Celer Link BLE e slot SD.",
+  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update."
+}
