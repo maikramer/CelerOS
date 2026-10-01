@@ -28,7 +28,7 @@ jobs:
       - name: SDK tests (scaffold/types/renderer/emu)
         run: node test/sdk/run.js
       - name: Lint dos apps do repo (data/apps + hub_apps + boards/*/data/apps)
-        run: node tools/app_lint/lint.js data/apps hub_apps boards/spotpear-dog/data/apps
+        run: node tools/app_lint/lint.js data/apps hub_apps boards/spotpear-dog/data/apps boards/waveshare-watch/data/apps
       - name: Drift check (codigo x docs x stubs do harness + types do SDK)
         run: node tools/sdk/celer.js check
       - name: C++ host tests (lógica pura de main/Utils)
@@ -52,8 +52,15 @@ jobs:
             target: esp32
           - board: spotpear-dog
             target: esp32s3
+          - board: waveshare-watch
+            target: esp32s3
     container:
-      image: espressif/idf:release-v6.1
+      # PINADO: a tag release-v6.1 flutua (snapshot do dia) e uma build nova
+      # do IDF 6.1 removeu os dac_ll_* que o LovyanGFX 1.2.30 usa no
+      # Panel_CVBS (firmware job vermelho em todas as placas desde 30/09).
+      # O pin bate com o IDF local (v6.1.0). Ao trocar o IDF local, troque
+      # aqui tambem — e valide o LovyanGFX antes.
+      image: espressif/idf:v6.1@sha256:f81b6e077e6af93c312181cd7d4e7936cfbafc5c7f77cbacba8fdd34994f218a  # v6.1.0 GA (26/08/2026)
     steps:
       - uses: actions/checkout@v4
         with:
