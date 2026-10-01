@@ -30,6 +30,7 @@ data/
 - The app loop is a blocking `while` with `System.delay()`; there are no events or callbacks. Exit through `System.exitApp()`.
 - Work in 240x320 virtual coords and take colors from `System.theme()`. Never hardcode the screen size.
 - Persist state under `/local/...`, never inside another app's folder.
+- Optional `test.js` next to `main.js`: exports `wire(env)` (taps via `env.__harness.*`, canned Net/CelerLink state) and is auto-injected by `node tools/sdk/celer.js test|emu <folder>`. It never ships to the device (dev-only files are filtered on install).
 - UI strings are Portuguese, with accents (the fonts cover Latin-1: á é ç ã õ ô °...; not em dash, curly quotes or emoji). `python3 tools/acentuar.py --write <main.js>` restores accents inside strings.
 
 ## ANTI-PATTERNS
