@@ -1,11 +1,11 @@
 {
   "name": "Cube 3D",
-  "packageName": "com.kryonos.cube3d",
-  "version": "1.1.0",
+  "packageName": "celeros.cube3d",
+  "version": "1.2.0",
   "api": 3,
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Cubo 3D em software puro girando no toque: demo de render do canvas.",
-  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+  "description": "Cubo 3D interativo: arraste para girar, modo solido ou so arestas e contador de FPS. Renderizador por fatias sem flicker.",
+  "changelog": "1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR\n1.1.0 - migracao da era KryonOS"
 }

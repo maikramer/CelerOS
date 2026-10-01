@@ -1,11 +1,11 @@
 {
   "name": "Clock",
-  "packageName": "com.kryonos.clock",
-  "version": "1.1.0",
-  "api": 3,
+  "packageName": "celeros.clock",
+  "version": "1.2.0",
+  "api": 7,
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Relogio grande de tela cheia com data e segundos.",
-  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+  "description": "Relogio completo: hora com segundos, fuso, horas do mundo, cronometro, timer e alarme que dispara pelo sistema (vale ate com o app fechado).",
+  "changelog": "1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer\n1.1.0 - migracao da era KryonOS"
 }

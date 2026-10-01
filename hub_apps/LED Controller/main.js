@@ -1,80 +1,124 @@
-// HarixOS Hardware LED Controller
-// Demonstrates direct GPIO hardware control from JavaScript
+// CelerOS LED Controller — controla um LED/fita por GPIO direto.
+// Pino escolhivel, liga/desliga, brilho PWM (analogWrite) e modo piscar.
+// Requer permissao gpio no app.json. ES5 (Duktape).
 
-var SW = System.screenWidth();
-var SH = System.screenHeight();
+var T = System.theme();
+var W = 240;
+var G = System.gpio;
 
-// Standard ESP32 onboard blue LED is usually on GPIO 2
-var LED_PIN = 2; 
+var PIN_MIN = 2, PIN_MAX = 48;
+var pin = 2;                    // LED onboard classico do ESP32
+var on = false;
+var duty = 100;                 // 0..100 (PWM quando < 100)
+var mode = 0;                   // 0 fixo | 1 pisca lento | 2 pisca rapido
+var MODES = [["fixo", 0], ["pisca", 700], ["rapido", 220]];
 
-// Initialize the physical hardware pin as an OUTPUT
-System.gpio.pinMode(LED_PIN, System.gpio.OUTPUT);
-
-var ledState = false;
-var lastTouch = false;
-
-function applyState() {
-    if (ledState) {
-        System.gpio.digitalWrite(LED_PIN, System.gpio.HIGH); // 3.3v Output
+function apply(level) {         // level 0..100 no pino
+    if (level <= 0) {
+        G.digitalWrite(pin, G.LOW);
+    } else if (level >= 100) {
+        G.digitalWrite(pin, G.HIGH);
+    } else if (G.analogWrite) {
+        G.analogWrite(pin, Math.round(level * 255 / 100));
     } else {
-        System.gpio.digitalWrite(LED_PIN, System.gpio.LOW);  // 0v Output
+        G.digitalWrite(pin, G.HIGH);
     }
 }
 
-function drawUI() {
-    System.fillScreen(0x0000); // Deep Black
-    
-    // Header
-    System.setTextColor(0x07FF, 0x0000); // Cyan
-    System.drawString("HARDWARE CONTROL", 10, 20, 4);
-    System.setTextColor(0xFFFF, 0x0000);
-    System.drawString("GPIO Pin 2 (Onboard LED)", 20, 50, 2);
-    
-    // Main Power Button
-    var btnColor = ledState ? 0x07E0 : 0xF800; // Green if ON, Red if OFF
-    System.fillRoundRect(40, 100, 160, 120, 15, btnColor);
-    System.drawRoundRect(40, 100, 160, 120, 15, 0xFFFF); // White border
-    
-    // Button Text
-    System.setTextColor(0xFFFF, btnColor);
-    var text = ledState ? "POWER OFF" : "POWER ON";
-    System.drawString(text, 60, 145, 4);
-    
-    // Instruction Footer
-    System.setTextColor(0x7BEF, 0x0000);
-    System.drawString("Tap the big button to physically", 15, 260, 2);
-    System.drawString("toggle the blue LED on your ESP32!", 15, 280, 2);
+function setupPin() {
+    G.pinMode(pin, G.OUTPUT);
+    apply(on ? duty : 0);
 }
 
-// Set initial state to OFF
-applyState();
-drawUI();
+function ctext(s, cx, y, f, col, bg) {
+    System.setTextColor(col, bg || T.bg);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
+}
 
+function draw() {
+    System.fillScreen(T.bg);
+
+    // seletor de pino
+    System.fillRoundRect(8, 34, W - 16, 36, 10, T.card);
+    System.drawRoundRect(8, 34, W - 16, 36, 10, T.stroke);
+    System.fillRoundRect(16, 42, 28, 20, 6, T.raised);
+    ctext("-", 30, 47, 2, T.text, T.raised);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("GPIO", 56, 47, 1);
+    System.setTextColor(T.accent, T.card);
+    System.drawString(String(pin), 88, 44, 2);
+    System.fillRoundRect(196, 42, 28, 20, 6, T.raised);
+    ctext("+", 210, 47, 2, T.text, T.raised);
+
+    // botao grande
+    var bg = on ? T.ok : T.err;
+    System.fillRoundRect(40, 84, 160, 100, 16, bg);
+    System.drawRoundRect(40, 84, 160, 100, 16, T.stroke);
+    ctext(on ? "LIGADO" : "DESLIGADO", 120, 116, 3, T.bg, bg);
+    ctext("toque para alternar", 120, 152, 1, T.bg, bg);
+
+    // brilho (PWM)
+    System.setTextColor(T.textDim, T.bg);
+    System.drawString("brilho " + duty + "%", 16, 200, 1);
+    System.fillRoundRect(16, 212, 208, 10, 5, T.card);
+    System.drawRoundRect(16, 212, 208, 10, 5, T.stroke);
+    var fw = Math.round(208 * duty / 100);
+    if (fw > 3) System.fillRoundRect(16, 212, fw, 10, 5, T.accent);
+    System.fillCircle(16 + fw, 217, 6, T.text);
+
+    // modo (toque cicla)
+    System.fillRoundRect(16, 236, 208, 30, 8, T.card);
+    System.drawRoundRect(16, 236, 208, 30, 8, T.stroke);
+    ctext("modo: " + MODES[mode][0], 120, 245, 1, T.text, T.card);
+
+    ctext("GPIO " + pin + (on ? " - duty " + duty + "%" : " - nivel 0"),
+          120, 282, 1, T.textDim);
+    ctext("confira o pino antes de ligar", 120, 296, 1, T.textDim);
+}
+
+setupPin();
+draw();
+
+var lastTouch = false;
+var blinkOn = true;
+var lastBlink = System.millis();
 while (true) {
     var t = System.getTouch();
-    var isTapped = t.touched && !lastTouch;
-    
-    if (isTapped) {
-        // Did they tap inside the Power Button box?
-        if (t.x >= 40 && t.x <= 200 && t.y >= 100 && t.y <= 220) {
-            
-            // Toggle the state
-            ledState = !ledState;
-            
-            // Send the electrical signal to the physical pin!
-            applyState();
-            
-            // Visual click feedback (flash the button border yellow)
-            System.drawRoundRect(40, 100, 160, 120, 15, 0xFFE0);
-            System.delay(60);
-            
-            // Redraw the UI with the new color
-            drawUI();
+    var tap = t.touched && !lastTouch;
+    var hold = t.touched && t.y >= 205 && t.y <= 228;   // arrastar no trilho
+
+    if (hold) {
+        var d = Math.round((t.x - 16) * 100 / 208);
+        if (d < 0) d = 0;
+        if (d > 100) d = 100;
+        if (d !== duty) {
+            duty = d;
+            if (on && mode === 0) apply(duty);
+            draw();
+        }
+    } else if (tap) {
+        if (t.y >= 40 && t.y <= 64) {
+            if (t.x < 50 && pin > PIN_MIN) { pin--; setupPin(); }
+            else if (t.x > 190 && pin < PIN_MAX) { pin++; setupPin(); }
+            draw();
+        } else if (t.y >= 84 && t.y <= 184 && t.x >= 40 && t.x <= 200) {
+            on = !on;
+            apply(on ? duty : 0);
+            draw();
+        } else if (t.y >= 236 && t.y <= 266) {
+            mode = (mode + 1) % MODES.length;
+            if (mode === 0) apply(on ? duty : 0);
+            draw();
         }
     }
-    
     lastTouch = t.touched;
-    
-    // Required system yield for Garbage Collection & touch polling
-    System.delay(20); 
+
+    // modo piscar: alterna o nivel no ritmo do modo
+    if (on && mode > 0 && System.millis() - lastBlink >= MODES[mode][1]) {
+        lastBlink = System.millis();
+        blinkOn = !blinkOn;
+        apply(blinkOn ? duty : 0);
+    }
+
+    System.delay(20);
 }

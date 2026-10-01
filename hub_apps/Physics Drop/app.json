@@ -1,11 +1,11 @@
 {
   "name": "Physics Drop",
-  "packageName": "com.kryonos.physicsdrop",
-  "version": "1.1.0",
+  "packageName": "celeros.physicsdrop",
+  "version": "1.2.0",
   "author": "CelerOS",
-  "description": "Bolas caem e quicam com gravidade e colisao: brinque desenhando obstaculos.",
+  "description": "Sandbox de fisica (integracao de Verlet): desenhe linhas que caem, solte cordas e panos e brinque com a gravidade (ate invertida).",
   "type": "Demo",
   "category": "Simulation",
   "api": 3,
-  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+  "changelog": "1.2.0 - preformas corda/pano, 5 presets de gravidade e tema CelerOS\n1.1.0 - migracao da era KryonOS"
 }

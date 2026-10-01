@@ -5,19 +5,28 @@ var TAB_STOPWATCH = 3;
 var TAB_TIMER = 4;
 var currentTab = TAB_CLOCK;
 
-var COLOR_BG = System.color(20, 20, 30);
-var COLOR_TAB_INACTIVE = System.color(50, 50, 60);
-var COLOR_TAB_ACTIVE = System.color(0, 200, 255);
-var COLOR_TEXT = System.color(255, 255, 255);
-var COLOR_ACCENT = System.color(0, 255, 150);
+var T = System.theme();
+var COLOR_BG = T.bg;
+var COLOR_TAB_INACTIVE = T.card;
+var COLOR_TAB_ACTIVE = T.accent;
+var COLOR_TEXT = T.text;
+var COLOR_ACCENT = T.accent;
+
+if (typeof System.keepAwake === "function") {
+    try { System.keepAwake(1800000); } catch (e0) {}   // relogio de mesa: tela ligada
+}
+var hasTone = (typeof System.playTone === "function");
+function tone(notes) {
+    if (hasTone) { try { System.playTone(notes); } catch (e1) {} }
+}
 
 var lastTouch = false;
 
 // --- World Clock Data ---
 var cities = [
-    { name: "New York", offset: -5 },
-    { name: "London", offset: 0 },
-    { name: "Tokyo", offset: 9 },
+    { name: "Nova York", offset: -5 },
+    { name: "Londres", offset: 0 },
+    { name: "Tóquio", offset: 9 },
     { name: "Dubai", offset: 4 }
 ];
 
@@ -86,9 +95,9 @@ var timerTotalMs = 5 * 60 * 1000; // 5 mins
 var timerRemaining = timerTotalMs;
 
 function drawTabs() {
-    System.fillRect(0, 280, 240, 40, System.color(10, 10, 15));
+    System.fillRect(0, 280, 240, 40, T.raised);
     var tabW = 240 / 5;
-    var labels = ["Clock", "World", "Alarm", "Stopwatch", "Timer"];
+    var labels = ["Relógio", "Mundo", "Alarme", "Cronô.", "Timer"];
     var xOffsets = [9, 57, 105, 141, 201];
     
     // Draw all backgrounds first so tabs don't overwrite long text from previous tabs
@@ -143,15 +152,16 @@ function renderClock() {
         System.drawString(str, 40, 80, 4);
         
         System.setTextColor(COLOR_TEXT, COLOR_BG);
-        System.drawString("Date: " + System.getDate() + "   ", 30, 140, 2);
-        System.drawString("Zone: " + System.getTimezone() + "   ", 30, 170, 2);
+        System.drawString((System.getWeekday ? System.getWeekday() + ", " : "") + System.getDate() + "   ", 30, 140, 2);
+        System.setTextColor(T.textDim, COLOR_BG);
+        System.drawString("fuso " + System.getTimezone() + "   ", 30, 170, 2);
         lastRenderedClock = str;
     }
 }
 
 function renderWorld() {
     System.setTextColor(COLOR_ACCENT, COLOR_BG);
-    System.drawString("World Clock", 50, 15, 2);
+    System.drawString("Relógio mundial", 44, 15, 2);
     
     var y = 60;
     for (var i = 0; i < cities.length; i++) {
@@ -159,7 +169,7 @@ function renderWorld() {
         System.setTextColor(COLOR_TEXT, COLOR_BG);
         System.drawString(cities[i].name, 20, y, 2);
         
-        System.setTextColor(System.color(255,200,0), COLOR_BG);
+        System.setTextColor(T.warn, COLOR_BG);
         System.drawString(tStr + "   ", 160, y, 2);
         y += 40;
     }
@@ -167,36 +177,36 @@ function renderWorld() {
 
 function renderAlarm() {
     System.setTextColor(COLOR_ACCENT, COLOR_BG);
-    System.drawString("Alarm", 90, 15, 2);
+    System.drawString("Alarme", 92, 15, 2);
     
     // Live ticking current time
-    System.setTextColor(System.color(150,150,150), COLOR_BG);
-    System.drawString("Now: " + format2(currentH) + ":" + format2(currentM) + ":" + format2(currentS), 55, 45, 2);
+    System.setTextColor(T.textDim, COLOR_BG);
+    System.drawString("agora " + format2(currentH) + ":" + format2(currentM) + ":" + format2(currentS), 55, 45, 2);
     
     System.setTextColor(COLOR_TEXT, COLOR_BG);
     System.drawString(format2(alarmH) + ":" + format2(alarmM), 65, 80, 4);
     
     // Buttons + - (H, M)
-    System.fillRoundRect(20, 140, 40, 40, 5, System.color(50,50,50));
+    System.fillRoundRect(20, 140, 40, 40, 5, T.raised);
     System.drawString("H+", 30, 150, 2);
-    System.fillRoundRect(70, 140, 40, 40, 5, System.color(50,50,50));
+    System.fillRoundRect(70, 140, 40, 40, 5, T.raised);
     System.drawString("H-", 80, 150, 2);
     
-    System.fillRoundRect(130, 140, 40, 40, 5, System.color(50,50,50));
+    System.fillRoundRect(130, 140, 40, 40, 5, T.raised);
     System.drawString("M+", 140, 150, 2);
-    System.fillRoundRect(180, 140, 40, 40, 5, System.color(50,50,50));
+    System.fillRoundRect(180, 140, 40, 40, 5, T.raised);
     System.drawString("M-", 190, 150, 2);
     
     // Toggle
-    var tc = alarmOn ? System.color(0, 255, 0) : System.color(255, 0, 0);
+    var tc = alarmOn ? T.ok : T.err;
     System.fillRoundRect(50, 210, 140, 40, 5, tc);
-    System.setTextColor(System.color(0,0,0), tc);
-    System.drawString(alarmOn ? "ALARM ON" : "ALARM OFF", 75, 222, 2);
+    System.setTextColor(T.bg, tc);
+    System.drawString(alarmOn ? "LIGADO" : "DESLIGADO", 72, 222, 2);
 }
 
 function renderStopwatch() {
     System.setTextColor(COLOR_ACCENT, COLOR_BG);
-    System.drawString("Stopwatch", 65, 15, 2);
+    System.drawString("Cronômetro", 64, 15, 2);
     
     var currentMs = swAccumulated;
     if (swRunning) {
@@ -206,12 +216,12 @@ function renderStopwatch() {
     System.setTextColor(COLOR_TEXT, COLOR_BG);
     System.drawString(formatMillis(currentMs), 50, 80, 4);
     
-    System.fillRoundRect(20, 180, 90, 40, 5, swRunning ? System.color(255,100,0) : System.color(0,200,0));
-    System.setTextColor(System.color(0,0,0));
-    System.drawString(swRunning ? "STOP" : "START", 45, 192, 2);
+    System.fillRoundRect(20, 180, 90, 40, 5, swRunning ? T.warn : T.ok);
+    System.setTextColor(T.bg);
+    System.drawString(swRunning ? "PARAR" : "INICIAR", 32, 192, 2);
     
-    System.fillRoundRect(130, 180, 90, 40, 5, System.color(100,100,100));
-    System.drawString("RESET", 155, 192, 2);
+    System.fillRoundRect(130, 180, 90, 40, 5, T.raised);
+    System.drawString("ZERAR", 152, 192, 2);
 }
 
 function renderTimer() {
@@ -226,6 +236,7 @@ function renderTimer() {
             timerRunning = false;
             timerRemaining = 0;
             isAlarmRinging = true; // trigger alarm screen
+            tone([[880, 150], [660, 150], [880, 200]]);
         }
     } else {
         currentMs = timerTotalMs; // reset visual
@@ -235,32 +246,32 @@ function renderTimer() {
     System.drawString(formatMillis(currentMs), 50, 80, 4);
     
     if (!timerRunning) {
-        System.fillRoundRect(20, 140, 90, 30, 5, System.color(50,50,50));
+        System.fillRoundRect(20, 140, 90, 30, 5, T.raised);
         System.setTextColor(COLOR_TEXT);
-        System.drawString("+1 Min", 45, 148, 2);
+        System.drawString("+1 min", 42, 148, 2);
         
-        System.fillRoundRect(130, 140, 90, 30, 5, System.color(50,50,50));
-        System.drawString("-1 Min", 155, 148, 2);
+        System.fillRoundRect(130, 140, 90, 30, 5, T.raised);
+        System.drawString("-1 min", 152, 148, 2);
     } else {
         System.fillRect(20, 140, 200, 30, COLOR_BG); // hide edit buttons
     }
     
-    System.fillRoundRect(20, 200, 90, 40, 5, timerRunning ? System.color(255,100,0) : System.color(0,200,0));
-    System.setTextColor(System.color(0,0,0));
-    System.drawString(timerRunning ? "PAUSE" : "START", 45, 212, 2);
+    System.fillRoundRect(20, 200, 90, 40, 5, timerRunning ? T.warn : T.ok);
+    System.setTextColor(T.bg);
+    System.drawString(timerRunning ? "PAUSAR" : "INICIAR", 28, 212, 2);
     
-    System.fillRoundRect(130, 200, 90, 40, 5, System.color(100,100,100));
-    System.drawString("RESET", 155, 212, 2);
+    System.fillRoundRect(130, 200, 90, 40, 5, T.raised);
+    System.drawString("ZERAR", 152, 212, 2);
 }
 
 function renderRinging() {
     System.fillRect(0,0,240,320, System.color(255,0,0));
     System.setTextColor(System.color(255,255,255), System.color(255,0,0));
-    System.drawString("WAKE UP!", 40, 100, 4);
+    System.drawString("ACORDAR!", 32, 100, 4);
     
     System.fillRoundRect(40, 200, 160, 60, 10, System.color(255,255,255));
-    System.setTextColor(System.color(0,0,0), System.color(255,255,255));
-    System.drawString("DISMISS", 80, 220, 2);
+    System.setTextColor(T.bg, System.color(255,255,255));
+    System.drawString("PARAR", 88, 220, 2);
 }
 
 // ==========================================
@@ -292,6 +303,14 @@ function handleAlarmTouch(x, y) {
     }
     if (y >= 210 && y <= 250 && x >= 50 && x <= 190) {
         alarmOn = !alarmOn;
+        // alarme de verdade no OS (API 12+): dispara mesmo com o app fechado
+        if (typeof System.setAlarm === "function") {
+            if (alarmOn) {
+                try { System.setAlarm(alarmH, alarmM, "Alarme"); } catch (ea) {}
+            } else {
+                try { System.clearAlarm(); } catch (eb) {}
+            }
+        }
         renderAlarm();
     }
 }

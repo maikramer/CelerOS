@@ -41,6 +41,21 @@ var score = 0;
 var speed = 150; // pixels per second
 var distanceTraveled = 0;
 
+// recorde persistido no aparelho
+var HI_FILE = (FS.appData ? FS.appData() : "/local/") + "hi.txt";
+var hi = 0;
+var rawHi = FS.readTextFile(HI_FILE);
+if (rawHi) {
+    var hv = parseInt(rawHi, 10);
+    if (!isNaN(hv)) hi = hv;
+}
+var newRecord = false;
+
+var hasTone = (typeof System.playTone === "function");
+function tone(hz, ms) {
+    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+}
+
 var entities = []; // Array of objects: { type: "train"|"coin", lane: 0..2, y: int, h: int }
 
 // Timing & Input
@@ -60,6 +75,16 @@ function resetGame() {
     entities = [];
     spawnTimer = 0;
     lastTime = System.millis();
+    newRecord = false;
+}
+
+function saveHi() {
+    if (score > hi) {
+        hi = score;
+        newRecord = true;
+        FS.writeTextFile(HI_FILE, String(hi));
+        if (hasTone) { try { System.playTone([[784, 80], [1047, 110]]); } catch (e) {} }
+    }
 }
 
 // Update Game Logic
@@ -116,12 +141,15 @@ function update(dt) {
                 // Train hitbox
                 if (pY < e.y + e.h && pY + pH > e.y) {
                     // CRASH!
+                    tone(150, 250);
+                    saveHi();
                     currentState = STATE_GAMEOVER;
                 }
             } else if (e.type === "coin") {
                 // Coin hitbox (approximate as rect)
                 if (pY < e.y + 10 && pY + pH > e.y - 10) {
                     score += 50;
+                    tone(988, 40);
                     entities.splice(i, 1); // Collect coin
                 }
             }
@@ -179,7 +207,9 @@ function drawSlice(sliceY, dt) {
         // --- HUD ---
         if (sliceY === 0) { // Only draw on top slice
             System.setTextColor(C_TEXT, C_BG);
-            System.drawString("SCORE: " + score, 10, 10, 2);
+            System.drawString("PONTOS " + score, 10, 10, 2);
+            System.setTextColor(0xFFE0, C_BG);
+            System.drawString("REC " + hi, 130, 10, 2);
         }
     }
     else if (currentState === STATE_MENU) {
@@ -193,44 +223,54 @@ function drawSlice(sliceY, dt) {
         System.drawString("SURFER", 50, 100 + titleBob - sliceY, 4);
 
         // Start Button at Y=180
+        System.setTextColor(0xFFE0, C_BG);
+        System.drawString("recorde " + hi, 70, 150 - sliceY, 2);
+
         System.fillRoundRect(40, 180 - sliceY, 160, 40, 5, 0x07E0);
         System.setTextColor(0x0000, 0x07E0);
-        System.drawString("START GAME", 65, 192 - sliceY, 2);
+        System.drawString("JOGAR", 85, 192 - sliceY, 2);
 
         // Settings Button at Y=240
         System.fillRoundRect(40, 240 - sliceY, 160, 40, 5, 0x7BEF);
         System.setTextColor(0x0000, 0x7BEF);
-        System.drawString("SETTINGS", 75, 252 - sliceY, 2);
+        System.drawString("AJUSTES", 80, 252 - sliceY, 2);
     }
     else if (currentState === STATE_SETTINGS) {
         System.setTextColor(C_TEXT, C_BG);
-        System.drawString("SETTINGS", 60, 30 - sliceY, 4);
+        System.drawString("AJUSTES", 60, 30 - sliceY, 4);
 
         // FPS Toggle Y=100
         System.fillRoundRect(20, 100 - sliceY, 200, 40, 5, showFPS ? 0x07E0 : 0x7BEF);
         System.setTextColor(0x0000, showFPS ? 0x07E0 : 0x7BEF);
-        System.drawString("FPS Counter: " + (showFPS ? "ON" : "OFF"), 40, 112 - sliceY, 2);
+        System.drawString("contador de FPS: " + (showFPS ? "SIM" : "NAO"), 30, 112 - sliceY, 2);
 
         // Temp Toggle Y=160
         System.fillRoundRect(20, 160 - sliceY, 200, 40, 5, showTemp ? 0x07E0 : 0x7BEF);
         System.setTextColor(0x0000, showTemp ? 0x07E0 : 0x7BEF);
-        System.drawString("Temp Counter: " + (showTemp ? "ON" : "OFF"), 35, 172 - sliceY, 2);
+        System.drawString("temperatura: " + (showTemp ? "SIM" : "NAO"), 45, 172 - sliceY, 2);
 
         // Back Button Y=250
         System.fillRoundRect(40, 250 - sliceY, 160, 40, 5, 0xF800);
         System.setTextColor(0x0000, 0xF800);
-        System.drawString("BACK", 95, 262 - sliceY, 2);
+        System.drawString("VOLTAR", 85, 262 - sliceY, 2);
     }
     else if (currentState === STATE_GAMEOVER) {
         System.setTextColor(0xF800, C_BG);
-        System.drawString("CRASHED!", 50, 120 - sliceY, 4);
+        System.drawString("BATEU!", 60, 120 - sliceY, 4);
 
         System.setTextColor(C_TEXT, C_BG);
-        System.drawString("FINAL SCORE: " + score, 45, 160 - sliceY, 2);
+        System.drawString("PONTOS: " + score, 55, 160 - sliceY, 2);
+        if (newRecord) {
+            System.setTextColor(0xFFE0, C_BG);
+            System.drawString("NOVO RECORDE!", 45, 185 - sliceY, 2);
+        } else {
+            System.setTextColor(0x7BEF, C_BG);
+            System.drawString("recorde: " + hi, 75, 185 - sliceY, 2);
+        }
 
         System.fillRoundRect(40, 220 - sliceY, 160, 40, 5, 0x07E0);
         System.setTextColor(0x0000, 0x07E0);
-        System.drawString("PLAY AGAIN", 65, 232 - sliceY, 2);
+        System.drawString("DE NOVO", 75, 232 - sliceY, 2);
     }
 
     // --- Global Overlays (FPS/Temp) ---
@@ -277,7 +317,7 @@ function handleInput() {
             }
         }
         else if (currentState === STATE_PLAY) {
-            // Tap left half to move left, right half to move right
+            // toque: metade esquerda/direita move; arraste curto tambem
             if (t.x < SW / 2) {
                 if (playerLane > 0) playerLane--;
             } else {

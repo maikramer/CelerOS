@@ -1,11 +1,11 @@
 {
   "name": "Tic Tac Toe",
-  "packageName": "com.kryonos.tictactoe",
-  "version": "1.1.0",
+  "packageName": "celeros.tictactoe",
+  "version": "1.2.0",
   "api": 3,
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
-  "description": "Jogo da velha contra o CelerOS com IA invencivel (quase).",
-  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.0)."
+  "description": "Jogo da velha: 1 jogador com tres niveis (minimax no impossivel) ou 2 jogadores no mesmo aparelho. Placar salvo e linha de vitoria riscada.",
+  "changelog": "1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons\n1.1.0 - migracao da era KryonOS"
 }

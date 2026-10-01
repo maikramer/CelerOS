@@ -1,11 +1,11 @@
 {
   "name": "2D Runner",
-  "packageName": "com.kryonos.2dendlessrunner",
-  "version": "1.1.0",
+  "packageName": "celeros.runner2d",
+  "version": "1.2.0",
   "api": 3,
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
-  "description": "Corrida infinita: desvie dos obstaculos que aceleram com a distancia.",
-  "changelog": "1.1.0 - migrada para o CelerOS (autor, icon e API). 1.0.0 - original da era KryonOS (1.0.1)."
+  "description": "Corrida infinita neon: desvie dos trens, pegue as moedas e bata o recorde (salvo no aparelho). Render por fatias sem flicker.",
+  "changelog": "1.2.0 - recorde persistido, sons, PT-BR e destaque de novo recorde\n1.1.0 - migracao da era KryonOS"
 }

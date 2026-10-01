@@ -1,290 +1,298 @@
-// HarixOS Tic-Tac-Toe Game
-// Play against a Bot!
+// CelerOS Tic Tac Toe — jogo da velha no tema do OS.
+// 1 jogador (3 niveis de bot, minimax no impossivel) ou 2 jogadores no mesmo
+// aparelho. Placar persistido no FS e linha de vitoria destacada. ES5.
 
-var SW = System.screenWidth();
-var SH = System.screenHeight();
+var T = System.theme();
+var W = 240;
 
-var STATE_MENU = 0;
-var STATE_PLAYING = 1;
-var STATE_GAMEOVER = 2;
+var SCORE_FILE = (FS.appData ? FS.appData() : "/local/") + "score.txt";
+var score = { v: 0, d: 0, e: 0 };   // vitorias, derrotas, empates
+(function () {
+    var raw = FS.readTextFile(SCORE_FILE);
+    if (!raw) return;
+    var p = raw.split(",");
+    if (p.length === 3) {
+        score.v = parseInt(p[0], 10) || 0;
+        score.d = parseInt(p[1], 10) || 0;
+        score.e = parseInt(p[2], 10) || 0;
+    }
+})();
+function saveScore() {
+    FS.writeTextFile(SCORE_FILE, score.v + "," + score.d + "," + score.e);
+}
 
+var hasTone = (typeof System.playTone === "function");
+function tone(hz, ms) {
+    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+}
+
+var STATE_MENU = 0, STATE_PLAYING = 1, STATE_OVER = 2;
 var state = STATE_MENU;
-var board = [0,0,0, 0,0,0, 0,0,0]; // 0=Empty, 1=Player(X), 2=Bot(O)
-var turn = 1; // 1 = Player, 2 = Bot
-var winner = 0; // 0=None, 1=Player, 2=Bot, 3=Draw
+var board = [0, 0, 0, 0, 0, 0, 0, 0, 0];   // 0 vazio | 1 X | 2 O
+var turn = 1;
+var winner = 0;                             // 0 ninguem | 1 X | 2 O | 3 empate
+var winLine = -1;                           // indice do trio vencedor
+var twoPlayers = false;
+var difficulty = 1;                         // 0 facil | 1 medio | 2 impossivel
+var diffNames = ["facil", "medio", "impossivel"];
 
-var difficulty = 0; // 0=Easy, 1=Medium, 2=Hard, 3=Extreme
-var diffNames = ["Easy", "Medium", "Hard", "Extreme"];
-
-// Math.random polyfill if needed, but Duktape has it
-function getRandomInt(max) {
-    return Math.floor(Math.random() * max);
-}
-
-function drawMenu() {
-    System.fillScreen(BLACK);
-    System.setTextColor(GREEN, BLACK);
-    System.drawString("TIC TAC TOE", 20, 50, 4);
-    
-    System.setTextColor(WHITE, BLACK);
-    System.drawString("Difficulty: " + diffNames[difficulty], 20, 100, 2);
-    
-    // Difficulty Button
-    System.fillRoundRect(20, 140, 90, 40, 5, BLUE);
-    System.setTextColor(WHITE, BLUE);
-    System.drawString("CHANGE", 25, 150, 2);
-    
-    // Play Button
-    System.fillRoundRect(130, 140, 90, 40, 5, RED);
-    System.setTextColor(WHITE, RED);
-    System.drawString("PLAY", 155, 150, 2);
-    
-    System.setTextColor(DARKGREY, BLACK);
-    System.drawString("You: X    Bot: O", 40, 240, 2);
-}
-
-function drawGrid() {
-    System.fillScreen(BLACK);
-    System.setTextColor(WHITE, BLACK);
-    System.drawString("Tic Tac Toe", 10, 10, 4);
-    if (turn === 1) {
-        System.drawString("Your Turn (X)", 10, 40, 2);
-    } else {
-        System.drawString("Bot Thinking...", 10, 40, 2);
-    }
-
-    var cellSize = 60;
-    var offsetX = 30;
-    var offsetY = 80;
-
-    // Draw grid lines
-    for (var k = 1; k < 3; k++) {
-        System.fillRect(offsetX + k * cellSize - 2, offsetY, 4, cellSize * 3, WHITE);
-        System.fillRect(offsetX, offsetY + k * cellSize - 2, cellSize * 3, 4, WHITE);
-    }
-
-    // Draw X and O
-    for (var idx = 0; idx < 9; idx++) {
-        var row = Math.floor(idx / 3);
-        var col = idx % 3;
-        var cx = offsetX + col * cellSize + cellSize / 2;
-        var cy = offsetY + row * cellSize + cellSize / 2;
-
-        if (board[idx] === 1) {
-            // Draw X
-            System.drawLine(cx - 15, cy - 15, cx + 15, cy + 15, BLUE);
-            System.drawLine(cx - 15, cy + 15, cx + 15, cy - 15, BLUE);
-            // Thicken X
-            System.drawLine(cx - 14, cy - 15, cx + 16, cy + 15, BLUE);
-            System.drawLine(cx - 14, cy + 15, cx + 16, cy - 15, BLUE);
-        } else if (board[idx] === 2) {
-            // Draw O
-            System.drawCircle(cx, cy, 18, RED);
-            System.drawCircle(cx, cy, 17, RED);
-        }
-    }
-}
-
-function drawGameOver() {
-    System.fillRect(20, 100, 200, 120, DARKGREY);
-    System.drawRect(20, 100, 200, 120, WHITE);
-    
-    System.setTextColor(WHITE, DARKGREY);
-    if (winner === 1) {
-        System.drawString("YOU WIN!", 70, 120, 4);
-    } else if (winner === 2) {
-        System.drawString("BOT WINS!", 65, 120, 4);
-    } else {
-        System.drawString("DRAW!", 90, 120, 4);
-    }
-    
-    System.fillRoundRect(60, 160, 120, 40, 5, GREEN);
-    System.setTextColor(BLACK, GREEN);
-    System.drawString("AGAIN", 90, 170, 4);
-}
+var CELL = 62, OX = 27, OY = 88;
 
 var WINS = [
-    0,1,2, 3,4,5, 6,7,8, // Rows
-    0,3,6, 1,4,7, 2,5,8, // Cols
-    0,4,8, 2,4,6         // Diagonals
+    0, 1, 2, 3, 4, 5, 6, 7, 8,
+    0, 3, 6, 1, 4, 7, 2, 5, 8,
+    0, 4, 8, 2, 4, 6
 ];
 
-function checkWinnerState(b) {
+function ctext(s, cx, y, f, col, bg) {
+    System.setTextColor(col, bg || T.bg);
+    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
+}
+
+function checkBoard(b) {
     for (var m = 0; m < 24; m += 3) {
         var v = b[WINS[m]];
-        if (v !== 0 && v === b[WINS[m+1]] && v === b[WINS[m+2]]) return v;
+        if (v !== 0 && v === b[WINS[m + 1]] && v === b[WINS[m + 2]]) {
+            return { who: v, line: m / 3 };
+        }
     }
-    for (var j = 0; j < 9; j++) {
-        if (b[j] === 0) return 0; // Not finished
-    }
-    return 3; // Draw
+    for (var j = 0; j < 9; j++) if (b[j] === 0) return null;
+    return { who: 3, line: -1 };
 }
 
-function checkWinner() {
-    return checkWinnerState(board);
-}
-
-function minimax(b, depth, isMaximizing) {
-    // Pet the watchdog occasionally on deep branches
-    if (depth === 1) System.delay(1);
-    
-    var result = checkWinnerState(b);
-    if (result === 2) return 10 - depth; // Bot wins
-    if (result === 1) return depth - 10; // Player wins
-    if (result === 3) return 0; // Draw
-    
-    // Limit depth to avoid out-of-memory or watchdog resets on slow ESP32
-    if (depth > 6) return 0;
-    
-    if (isMaximizing) {
-        var bestScore = -Infinity;
-        for (var i = 0; i < 9; i++) {
-            if (b[i] === 0) {
-                b[i] = 2; // Bot
-                var score = minimax(b, depth + 1, false);
-                b[i] = 0;
-                if (score > bestScore) bestScore = score;
-            }
-        }
-        return bestScore;
-    } else {
-        var bestScore = Infinity;
-        for (var i = 0; i < 9; i++) {
-            if (b[i] === 0) {
-                b[i] = 1; // Player
-                var score = minimax(b, depth + 1, true);
-                b[i] = 0;
-                if (score < bestScore) bestScore = score;
-            }
-        }
-        return bestScore;
+function minimax(b, depth, bot) {
+    if (depth === 1) System.delay(1);       // cede ao watchdog nos ramos fundos
+    var r = checkBoard(b);
+    if (r) {
+        if (r.who === 2) return 10 - depth;
+        if (r.who === 1) return depth - 10;
+        return 0;
     }
+    if (depth > 7) return 0;                // teto de profundidade pro ESP32
+    var best = bot ? -99 : 99;
+    for (var i = 0; i < 9; i++) {
+        if (b[i] !== 0) continue;
+        b[i] = bot ? 2 : 1;
+        var s = minimax(b, depth + 1, !bot);
+        b[i] = 0;
+        if (bot ? s > best : s < best) best = s;
+    }
+    return best;
 }
 
 function botMove() {
-    System.delay(200); // Fake thinking delay
-    
-    var emptySpots = [];
-    for (var e=0; e<9; e++) {
-        if (board[e] === 0) emptySpots.push(e);
-    }
-    
+    System.delay(250);                      // "pensando" (nao pisca: draw ja foi)
+    var empty = [];
+    for (var e = 0; e < 9; e++) if (board[e] === 0) empty.push(e);
+
+    var rnd = false;
+    if (difficulty === 0) rnd = true;
+    else if (difficulty === 1) rnd = Math.random() > 0.6;
     var choice = -1;
-    var doRandom = false;
-    
-    if (difficulty === 0) doRandom = true;
-    else if (difficulty === 1) doRandom = (Math.random() > 0.5); // 50% optimal
-    else if (difficulty === 2) doRandom = (Math.random() > 0.8); // 80% optimal
-    else doRandom = false; // Extreme
-    
-    if (doRandom && emptySpots.length > 0) {
-        choice = emptySpots[getRandomInt(emptySpots.length)];
-    } else if (emptySpots.length > 0) {
-        // Fast hardcoded first move logic (avoids 300,000 branch depth searches for first move)
-        if (emptySpots.length === 9) {
-            choice = 4; // Center
-        } else if (emptySpots.length === 8) {
-            // If player took center, take corner. Else take center.
-            if (board[4] === 1) choice = 0;
-            else choice = 4;
-        } else {
-            var bestScore = -Infinity;
-            for (var i = 0; i < emptySpots.length; i++) {
-                var spot = emptySpots[i];
-                board[spot] = 2;
-                var score = minimax(board, 0, false);
-                board[spot] = 0;
-                
-                if (score > bestScore || (score === bestScore && Math.random() > 0.5)) {
-                    bestScore = score;
-                    choice = spot;
-                }
+
+    if (empty.length === 0) return;
+    if (rnd) {
+        choice = empty[Math.floor(Math.random() * empty.length)];
+    } else if (empty.length === 9) {
+        choice = Math.random() > 0.5 ? 4 : [0, 2, 6, 8][Math.floor(Math.random() * 4)];
+    } else {
+        var bestScore = -99;
+        for (var i = 0; i < empty.length; i++) {
+            var spot = empty[i];
+            board[spot] = 2;
+            var s = minimax(board, 0, false);
+            board[spot] = 0;
+            if (s > bestScore || (s === bestScore && Math.random() > 0.5)) {
+                bestScore = s;
+                choice = spot;
             }
         }
-        if (choice === -1) choice = emptySpots[0];
     }
-    
-    if (choice !== -1) {
-        board[choice] = 2; // Bot is O
+    if (choice >= 0) board[choice] = 2;
+    tone(392, 40);
+}
+
+// ---------------------------------------------------------------- desenho ----
+function cellCenter(idx) {
+    return {
+        x: OX + (idx % 3) * CELL + CELL / 2,
+        y: OY + Math.floor(idx / 3) * CELL + CELL / 2
+    };
+}
+
+function drawMark(idx, ghost) {
+    var c = cellCenter(idx);
+    var v = board[idx];
+    var col = ghost ? T.textDim : (v === 1 ? T.accent : T.warn);
+    if (v === 1) {
+        var r = 16;
+        System.drawLine(c.x - r, c.y - r, c.x + r, c.y + r, col);
+        System.drawLine(c.x - r + 1, c.y - r, c.x + r + 1, c.y + r, col);
+        System.drawLine(c.x - r, c.y + r, c.x + r, c.y - r, col);
+        System.drawLine(c.x - r + 1, c.y + r, c.x + r + 1, c.y - r, col);
+    } else if (v === 2) {
+        System.drawCircle(c.x, c.y, 17, col);
+        System.drawCircle(c.x, c.y, 16, col);
     }
-    
-    winner = checkWinner();
-    if (winner !== 0) {
-        state = STATE_GAMEOVER;
+}
+
+function drawBoard() {
+    System.fillScreen(T.bg);
+
+    System.fillRoundRect(0, 0, W, 26, 0, T.card);
+    System.setTextColor(turn === 1 ? T.accent : T.warn, T.card);
+    var vez = twoPlayers ? ("vez: " + (turn === 1 ? "X" : "O"))
+                         : (turn === 1 ? "sua vez (X)" : "bot pensando...");
+    System.drawString(vez, 10, 8, 2);
+    System.setTextColor(T.textDim, T.card);
+    var sc = "V" + score.v + " D" + score.d + " E" + score.e;
+    System.drawString(sc, 228 - System.textWidth(sc, 1), 10, 1);
+    System.fillRect(0, 26, W, 2, T.accent);
+
+    System.fillRoundRect(OX - 6, OY - 6, CELL * 3 + 12, CELL * 3 + 12, 10, T.card);
+    for (var k = 1; k < 3; k++) {
+        System.fillRect(OX + k * CELL - 1, OY, 2, CELL * 3, T.stroke);
+        System.fillRect(OX, OY + k * CELL - 1, CELL * 3, 2, T.stroke);
+    }
+    for (var idx = 0; idx < 9; idx++) drawMark(idx, false);
+
+    // linha de vitoria riscando o trio
+    if (winLine >= 0) {
+        var base = winLine * 3;
+        var a = cellCenter(WINS[base]);
+        var b = cellCenter(WINS[base + 2]);
+        System.drawLine(a.x, a.y, b.x, b.y, T.ok);
+        System.drawLine(a.x + 1, a.y, b.x + 1, b.y, T.ok);
+    }
+}
+
+function drawMenu() {
+    System.fillScreen(T.bg);
+    ctext("Jogo da Velha", 120, 44, 3, T.text);
+
+    // placar
+    System.fillRoundRect(28, 76, 184, 40, 10, T.card);
+    System.drawRoundRect(28, 76, 184, 40, 10, T.stroke);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("voce", 48, 88, 1);
+    System.drawString("empates", 120, 88, 1);
+    System.drawString("bot", 192, 88, 1);
+    System.setTextColor(T.ok, T.card);
+    System.drawString(String(score.v), 48, 100, 2);
+    System.setTextColor(T.text, T.card);
+    System.drawString(String(score.e), 120, 100, 2);
+    System.setTextColor(T.err, T.card);
+    System.drawString(String(score.d), 192, 100, 2);
+
+    // alternador de modo
+    System.fillRoundRect(16, 136, 208, 34, 8, T.card);
+    System.drawRoundRect(16, 136, 208, 34, 8, T.stroke);
+    ctext(twoPlayers ? "2 jogadores (mesmo aparelho)" :
+                       "1 jogador  -  nivel: " + diffNames[difficulty],
+          120, 145, 1, T.accent, T.card);
+
+    System.fillRoundRect(16, 186, 208, 44, 10, T.accent);
+    ctext("Jogar", 120, 201, 3, T.onAccent, T.accent);
+
+    ctext("toque no seletor para mudar o modo", 120, 252, 1, T.textDim);
+    ctext("X comeca; placar fica salvo no aparelho", 120, 268, 1, T.textDim);
+}
+
+function drawOver() {
+    var msg, col;
+    if (winner === 3) { msg = "Empate!"; col = T.textDim; }
+    else if (twoPlayers) { msg = (winner === 1 ? "X" : "O") + " venceu!"; col = T.accent; }
+    else if (winner === 1) { msg = "Voce venceu!"; col = T.ok; }
+    else { msg = "Bot venceu!"; col = T.err; }
+
+    System.fillRoundRect(20, 96, 200, 128, 10, T.card);
+    System.drawRoundRect(20, 96, 200, 128, 10, col);
+    ctext(msg, 120, 118, 3, col, T.card);
+    ctext("V " + score.v + "  E " + score.e + "  D " + score.d, 120, 150, 2, T.text, T.card);
+    System.fillRoundRect(45, 176, 150, 34, 8, T.accent);
+    ctext("Jogar de novo", 120, 188, 2, T.onAccent, T.accent);
+}
+
+// ------------------------------------------------------------------ fluxo ----
+function finishTurn() {
+    var r = checkBoard(board);
+    if (!r) return false;
+    winner = r.who;
+    winLine = r.line;
+    state = STATE_OVER;
+    if (winner === 3) {
+        score.e++;
+        tone(330, 120);
+    } else if (twoPlayers || winner === 1) {
+        if (!twoPlayers) score.v++;
+        tone(784, 80);
+        tone(1047, 110);
     } else {
-        turn = 1;
+        score.d++;
+        tone(196, 200);
     }
-    drawGrid();
-    if (state === STATE_GAMEOVER) drawGameOver();
+    saveScore();
+    drawBoard();
+    drawOver();
+    return true;
 }
 
 function resetGame() {
-    for (var c=0; c<9; c++) board[c] = 0;
+    for (var c = 0; c < 9; c++) board[c] = 0;
     turn = 1;
     winner = 0;
+    winLine = -1;
     state = STATE_PLAYING;
-    drawGrid();
+    drawBoard();
 }
 
-// Initial draw
 drawMenu();
 
+var lastTouch = false;
 while (true) {
     var t = System.getTouch();
-    
-    // Wait for touch release logic
-    if (t.touched && t.x < 200) { // Avoid top right OS close button
+    var tap = t.touched && !lastTouch;
+
+    if (tap && t.x < 210) {                 // X da faixa fecha o app sozinho
         if (state === STATE_MENU) {
-            // CHANGE Difficulty
-            if (t.x >= 20 && t.x <= 110 && t.y >= 140 && t.y <= 180) {
-                difficulty = (difficulty + 1) % 4;
+            if (t.y >= 136 && t.y <= 170) {          // seletor de modo/nivel
+                if (twoPlayers) twoPlayers = false;
+                else if (difficulty < 2) difficulty++;
+                else { difficulty = 0; twoPlayers = true; }
                 drawMenu();
-                System.delay(300); // Debounce
-            }
-            // PLAY GAME
-            else if (t.x >= 130 && t.x <= 220 && t.y >= 140 && t.y <= 180) {
+            } else if (t.y >= 186 && t.y <= 230) {   // jogar
                 resetGame();
-                System.delay(300); // Debounce
             }
-        } 
-        else if (state === STATE_PLAYING && turn === 1) {
-            var cellSize = 60;
-            var offsetX = 30;
-            var offsetY = 80;
-            
-            if (t.x >= offsetX && t.x <= offsetX + cellSize*3 &&
-                t.y >= offsetY && t.y <= offsetY + cellSize*3) {
-                
-                var col = Math.floor((t.x - offsetX) / cellSize);
-                var row = Math.floor((t.y - offsetY) / cellSize);
-                var idx = row * 3 + col;
-                
+        } else if (state === STATE_PLAYING && (turn === 1 || twoPlayers)) {
+            if (t.x >= OX && t.x <= OX + CELL * 3 && t.y >= OY && t.y <= OY + CELL * 3) {
+                var col2 = Math.floor((t.x - OX) / CELL);
+                var row2 = Math.floor((t.y - OY) / CELL);
+                var idx = row2 * 3 + col2;
                 if (board[idx] === 0) {
-                    board[idx] = 1; // Player move
-                    winner = checkWinner();
-                    if (winner !== 0) {
-                        state = STATE_GAMEOVER;
-                        drawGrid();
-                        drawGameOver();
-                    } else {
-                        turn = 2; // Bot turn
-                        drawGrid();
+                    board[idx] = turn;
+                    drawBoard();
+                    if (!finishTurn()) {
+                        tone(523, 35);
+                        turn = turn === 1 ? 2 : 1;
+                        drawBoard();
                     }
-                    System.delay(300); // Debounce
                 }
             }
-        }
-        else if (state === STATE_GAMEOVER) {
-            if (t.x >= 60 && t.x <= 180 && t.y >= 160 && t.y <= 200) {
+        } else if (state === STATE_OVER) {
+            if (t.y >= 176 && t.y <= 210 && t.x >= 45 && t.x <= 195) {
                 resetGame();
-                System.delay(300); // Debounce
             }
         }
     }
-    
-    if (state === STATE_PLAYING && turn === 2) {
+    lastTouch = t.touched;
+
+    if (state === STATE_PLAYING && !twoPlayers && turn === 2) {
         botMove();
+        if (!finishTurn()) {
+            turn = 1;
+            drawBoard();
+        }
     }
-    
+
     System.delay(10);
 }
