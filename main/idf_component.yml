@@ -1,8 +1,6 @@
 dependencies:
   bblanchon/arduinojson:
     version: "^7.1.0"
-  joltwallet/esp_littlefs:
-    git: https://github.com/joltwallet/esp_littlefs.git
   espressif/esp_tinyusb:
     version: "^2.0.1~1"
     rules:
