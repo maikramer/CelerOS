@@ -69,7 +69,8 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  info            versao/board/rede\n"
         "  reboot          reinicia o sistema\n"
         "  rescan          reler lista de apps do launcher\n"
-        "  run <app>       abre um app (pasta, nome ou pacote)\n");
+        "  run <app>       abre um app (pasta, nome ou pacote)\n"
+        "  exit            encerra o app em execucao\n");
     return 0;
 }
 
@@ -342,6 +343,17 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+int cmdExit(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    // Pede o encerramento do app em execucao: os pontos de espera do runtime
+    // (delay/getTouch/keypadPoll) transformam o pedido na mesma saida limpa do
+    // X da topbar. Sem app rodando o pedido fica pendente ate o proximo app —
+    // inofensivo (dev loop usa exit+run em sequencia).
+    LauncherUI::requestAppExit();
+    print(ctx, "encerrando app atual (se houver)\r\n");
+    return 0;
+}
+
 int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -358,7 +370,7 @@ const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
-    {"rescan", cmdRescan}, {"run", cmdRun},
+    {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
     {"colorbars", cmdColorBars},
 };
 

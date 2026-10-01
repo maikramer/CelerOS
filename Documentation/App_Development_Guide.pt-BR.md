@@ -202,3 +202,44 @@ são o contrato — nunca assuma que um periférico existe.
 > Para ver tudo o que dá para fazer no `main.js`, consulte o **[Guia da API
 > JS](JS_API_Guide.pt-BR.md)** completo! Lá está toda a documentação de
 > desenho, pinos GPIO, sistema de arquivos, componentes de UI e mais.
+
+## 5. SDK: do scaffold à publicação
+
+As ferramentas de desenvolvimento moram em `tools/` do repo e têm uma porta de
+entrada única (`tools/sdk/celer.js`), sem dependências para instalar. Fluxo
+recomendado:
+
+```bash
+# 1) crie o esqueleto (app.json no API level atual, main.js de exemplo,
+#    icon.png e celer.d.ts para autocomplete no VS Code)
+node tools/sdk/celer.js new MeuApp
+
+# 2) itere localmente: lint a cada save, emulador com preview da tela
+node tools/sdk/celer.js lint MeuApp
+node tools/sdk/celer.js emu MeuApp            # salva MeuApp/.dev/tela.png
+
+# 3) dev loop no aparelho: watch dos arquivos, reinstalla o que mudou,
+#    encerra o app em execucao (shell `exit`) e reabre, com logs ao vivo
+python3 tools/celerctl.py dev MeuApp [--shots]
+
+# 4) publique
+node tools/sdk/celer.js publish MeuApp --dry  # valida offline
+node tools/sdk/celer.js publish MeuApp
+```
+
+Detalhes que valem saber:
+
+* **`celer.d.ts`** (gerado de `tools/sdk/celer.js types`): tipos da API para
+  o editor — o scaffold copia para a pasta do app junto de um
+  `jsconfig.json`. É artefato gerado do código do firmware; ao mudar a API,
+  regenere e commite (o `celer.js check` acusa drift no CI).
+* **Emulador** (`emu`): roda o app no harness Node com desenhos reais num
+  framebuffer 240x320 e salva um PNG da tela. É uma aproximação (fonte 8x8,
+  `drawPNG`/`drawBMP` não renderizam) — a tela final sempre é a do aparelho.
+* **`test`/`emu` aceitam script de eventos**: crie `test.js` na pasta do app
+  exportando `wire(env)` (toques via `env.__harness.tap/pushTouch`, respostas
+  de rede, estado do CelerLink) e o runner injeta antes de executar.
+* **`celerctl dev`** negocia 921600 baud sozinho e mantém um keepalive com o
+  aparelho (o canal cai para console após 8s sem tráfego do host). O comando
+  `exit` do shell do aparelho encerra o app em execução de forma limpa —
+  é ele que permite o reload sem reboot.

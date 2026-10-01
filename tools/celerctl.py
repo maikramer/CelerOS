@@ -22,11 +22,19 @@ Comandos:
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
   swipe X0 Y0 X1 Y1 [ms]      injeta um arrasto (scroll/troca de pagina)
+  dev PASTA                   loop de desenvolvimento: assiste a pasta, reinstala
+                              o que mudou e relanca o app (exit+run), com logs
+                              ao vivo (Ctrl-C sai)
+  apps list                   lista apps instalados
+  apps install PASTA [--run]  instala (lint antes); --run abre o app ao final
+  apps pull NOME [DESTINO]    baixa um app instalado para o PC (backup)
+  apps rm NOME                remove um app instalado
 
 Exemplos:
   python3 tools/celerctl.py devices
   python3 tools/celerctl.py shell ls /local
   python3 tools/celerctl.py -b 921600 push firmware.bin /sd/fw.bin
+  python3 tools/celerctl.py dev hub_apps/Celer Remote
 
 Dependencias: pyserial (pip install -r tools/requirements.txt)
 """
@@ -679,37 +687,242 @@ def _rm_tree(link, path):
     link.simple("DELETE", path.encode() + b"\0")
 
 
-def _lint_app_folder(folder):
+def _lint_app_folder(folder, fatal=True):
     """Lint estatico (tools/app_lint) antes de empurrar o app ao dispositivo:
     parse ES5 + checagem contra a API do firmware. Sem Node no PATH so avisa e
-    segue (celerctl roda em maquinas variadas); erros abortam o install."""
+    segue (celerctl roda em maquinas variadas); erros abortam o install (ou
+    apenas avisam com fatal=False, usado pelo loop `dev`). Retorna True se o
+    app esta apto a instalar."""
     import subprocess
     lint = Path(__file__).resolve().parent / "app_lint" / "lint.js"
     if not lint.is_file():
         print("aviso: tools/app_lint/lint.js ausente; instalando sem lint")
-        return
+        return True
     try:
         out = subprocess.run(["node", str(lint), "--json", str(folder)],
                              capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
         print("aviso: node ausente no PATH; instalando sem lint")
-        return
+        return True
     except subprocess.TimeoutExpired:
-        die("lint do app demorou demais (120s)")
+        if fatal:
+            die("lint do app demorou demais (120s)")
+        print("aviso: lint do app demorou demais; instalando sem lint")
+        return True
     if out.returncode == 2:
-        die(f"lint falhou: {(out.stderr or out.stdout).strip()}")
+        msg = f"lint falhou: {(out.stderr or out.stdout).strip()}"
+        if fatal:
+            die(msg)
+        print(f"aviso: {msg}")
+        return False
     try:
         import json as _json
         r = _json.loads(out.stdout)
     except ValueError:
         print("aviso: saida inesperada do lint; instalando sem lint")
-        return
+        return True
     diags = [d for a in r.get("apps", []) for d in a.get("diagnostics", [])]
     for d in diags:
         print(f"{d.get('severity')}: {d['file']}:{d['line']}:{d['col']} {d['message']}")
     erros = sum(1 for d in diags if d.get("severity") == "erro")
-    if erros:
+    if erros and fatal:
         die(f"{erros} erro(s) no app — corrija ou force com --pula-lint")
+    return erros == 0
+
+
+def _push_app_files(link, src, dest, only=None, progress=True):
+    """Empurra os arquivos da pasta de app para <dest> no dispositivo.
+    `only` limita aos caminhos relativos dados (reload do `dev`); None = tudo
+    (install completo, cria a arvore de diretorios)."""
+    if only is None:
+        link.simple("MKDIR", dest.encode() + b"\0")
+        files = [f for f in sorted(src.rglob("*")) if f.is_file() and ".dev" not in f.parts]
+        for f in files:
+            rel = f.relative_to(src).parent
+            if str(rel) != ".":
+                d = dest + "/" + rel.as_posix()
+                link.simple("MKDIR", d.encode() + b"\0")
+    else:
+        files = [src / rel for rel in only if (src / rel).is_file()]
+    for f in files:
+        link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}", progress=progress)
+    return [f.relative_to(src).as_posix() for f in files]
+
+
+def _relaunch(link, app_name):
+    """Encerra o app em execucao (shell `exit`) e abre de novo (`run`).
+    Firmware sem o comando `exit` apenas avisa — o run entao espera o app
+    atual sair sozinho."""
+    try:
+        code, out = link.exec("exit")
+        if code != 0:
+            print(f"aviso: 'exit' recusado ({out.strip()}) — firmware antigo? "
+                  "o run abre quando o app atual sair")
+    except CelerError as e:
+        print(f"aviso: exit falhou ({e}); tentando run mesmo assim")
+    link.exec(f"run {app_name}")
+
+
+def _snapshot(src):
+    """Mapa caminho_relativo -> (mtime_ns, size) dos arquivos da pasta de app
+    (a subpasta .dev/, onde o dev guarda screenshots, fica de fora)."""
+    out = {}
+    for f in src.rglob("*"):
+        if f.is_file() and ".dev" not in f.parts:
+            st = f.stat()
+            out[f.relative_to(src).as_posix()] = (st.st_mtime_ns, st.st_size)
+    return out
+
+
+def _pull_tree(link, remote_dir, local_dir):
+    count = 0
+    for e in sorted(link.ls(remote_dir), key=lambda e: e["name"]):
+        rpath = f"{remote_dir}/{e['name']}"
+        lpath = Path(local_dir) / e["name"]
+        if e["dir"]:
+            lpath.mkdir(parents=True, exist_ok=True)
+            count += _pull_tree(link, rpath, lpath)
+        else:
+            lpath.parent.mkdir(parents=True, exist_ok=True)
+            link.read_file(rpath, str(lpath), progress=False)
+            count += 1
+    return count
+
+
+def cmd_dev(args):
+    """Loop de desenvolvimento: instala a pasta de app, abre o app no
+    dispositivo e assiste aos arquivos — a cada mudanca roda o lint, empurra
+    so o que mudou, encerra o app em execucao (shell `exit`) e abre de novo,
+    com os logs do dispositivo ao vivo. Ctrl-C encerra (o app segue aberto).
+
+    Detalhes do protocolo que sustentam este loop:
+      - o canal HostLink cai para CONSOLE apos 8s sem bytes DO HOST, entao o
+        loop manda um HELLO de keepalive a cada 5s;
+      - logs chegam como frames LOG_DATA nao-solicitados entre comandos.
+    """
+    src = Path(args.folder).resolve()
+    if not (src / "app.json").is_file():
+        die(f"{src} nao tem app.json")
+    if args.baud == DEFAULT_BAUD:
+        args.baud = 921600  # push/pull no dev ganham muito; -b explicito vence
+
+    base = "/sd/apps" if args.sd else "/local/apps"
+    dest = f"{base}/{src.name}"
+    shots_dir = src / ".dev"
+
+    link = open_link(args)
+    state = {}
+    last_keepalive = time.monotonic()
+    print(f"dev: {src} -> {dest} (Ctrl-C para sair)")
+    try:
+        link.logcat_on()
+        first = True
+        while True:
+            snap = _snapshot(src)
+            if first:
+                first = False
+                changed = sorted(snap)  # primeira passada: instala tudo
+            else:
+                changed = [rp for rp, sig in snap.items() if state.get(rp) != sig]
+            removed = [rp for rp in state if rp not in snap]
+            if changed or removed:
+                stamp = time.strftime("%H:%M:%S")
+                print(f"\n== [{stamp}] mudou: {', '.join(changed + removed)}")
+                for rp in removed:
+                    link.simple("DELETE", f"{dest}/{rp}".encode() + b"\0")
+                    state.pop(rp, None)
+                ok = args.no_lint or _lint_app_folder(src, fatal=False)
+                if ok:
+                    sent = _push_app_files(link, src, dest, only=changed or None,
+                                           progress=False)
+                    for rp, sig in snap.items():
+                        if rp in sent:
+                            state[rp] = sig
+                    if any(rp == "app.json" or rp.endswith(".bin") or rp.endswith(".png")
+                           for rp in changed):
+                        link.exec("rescan")
+                    _relaunch(link, src.name)
+                    if args.shots:
+                        time.sleep(2.5)  # launcher rescaneia (run pede rescan) e abre o app
+                        _dev_screenshot(link, shots_dir)
+                else:
+                    print("== lint com erros; corriga e salve para tentar de novo")
+                    # assume estado atual mesmo assim (nao reenvia ate mudar)
+                    for rp in changed:
+                        state[rp] = snap.get(rp)
+                print("== aguardando mudancas...", flush=True)
+
+            # drena logs acumulados durante os comandos acima
+            while link.push_queue:
+                cmd, payload = link.push_queue.pop(0)
+                if cmd == KL["LOG_DATA"]:
+                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
+            sys.stdout.flush()
+
+            # logs ao vivo + keepalive do canal (idle de 8s no firmware)
+            try:
+                cmd, payload = link._read_frame(timeout=0.3)
+                if cmd == KL["LOG_DATA"]:
+                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
+                    sys.stdout.flush()
+            except CelerError:
+                pass  # sem frame neste tick
+            if time.monotonic() - last_keepalive > 5.0:
+                last_keepalive = time.monotonic()
+                try:
+                    link.xfer(KL["HELLO"], b"CELERCTL1", timeout=1.0)
+                except (CelerError, serial.SerialException):
+                    print("\ndev: conexao caiu (placa reiniciou?); tentando reconectar...")
+                    link = _reconnect(link)
+                    link.logcat_on()
+                    _relaunch(link, src.name)
+    except KeyboardInterrupt:
+        print("\ndev: encerrando (app segue aberto no dispositivo)")
+    finally:
+        try:
+            link.logcat_off()
+        except Exception:
+            pass
+        link.close()
+
+
+def _reconnect(old):
+    """Reabre a porta apos a conexao cair (placa reiniciou)."""
+    port = old.ser.port
+    baud = old.ser.baudrate
+    old.close()
+    for _ in range(20):  # ~20s: boot + montagens
+        time.sleep(1.0)
+        try:
+            link = HostLink(port, timeout=3.0)
+            link.hello()
+            if baud != DEFAULT_BAUD:
+                link.set_baud(baud)
+            print("dev: reconectado")
+            return link
+        except (CelerError, serial.SerialException, OSError):
+            continue
+    die("dev: nao conseguiu reconectar")
+
+
+def _dev_screenshot(link, shots_dir):
+    shots_dir.mkdir(exist_ok=True)
+    out = shots_dir / "last.png"
+    try:
+        w, h, data = link.screenshot()
+        from PIL import Image
+        pixels = struct.unpack(f"<{w * h}H", data)
+        rgb = bytearray(w * h * 3)
+        for i, p in enumerate(pixels):
+            rgb[i * 3] = ((p >> 8) & 0xF8) | (p >> 13)
+            rgb[i * 3 + 1] = ((p >> 3) & 0xFC) | ((p >> 9) & 0x03)
+            rgb[i * 3 + 2] = (p << 3) & 0xF8 | ((p >> 2) & 0x07)
+        Image.frombytes("RGB", (w, h), bytes(rgb)).save(out)
+        print(f"== tela: {out} ({w}x{h})")
+    except ImportError:
+        print("== tela: pip install Pillow para --shots")
+    except CelerError as e:
+        print(f"== tela: falhou ({e})")
 
 
 def cmd_apps(args):
@@ -745,7 +958,8 @@ def cmd_apps(args):
                 _lint_app_folder(src)
             base = "/sd/apps" if args.sd else "/local/apps"
             dest = f"{base}/{src.name}"
-            files = [f for f in sorted(src.rglob("*")) if f.is_file()]
+            files = [f for f in sorted(src.rglob("*"))
+                     if f.is_file() and ".dev" not in f.parts]
             link.simple("MKDIR", dest.encode() + b"\0")
             for f in files:
                 rel = f.relative_to(src).parent
@@ -756,6 +970,25 @@ def cmd_apps(args):
                 link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}")
             link.exec("rescan")
             print(f"instalado: {dest} ({len(files)} arquivos)")
+            if args.run:
+                _relaunch(link, src.name)
+                print(f"abrindo: {src.name}")
+        elif args.action == "pull":
+            # procura o app em /local/apps e depois /sd/apps
+            target = None
+            for candidate_base in ("/local/apps", "/sd/apps"):
+                st = link.stat(f"{candidate_base}/{args.name}")
+                if st is not None and st["dir"]:
+                    target = f"{candidate_base}/{args.name}"
+                    break
+            if target is None:
+                die(f"app '{args.name}' nao encontrado em /local/apps nem /sd/apps")
+            out_dir = Path(args.dest) if args.dest else Path(args.name)
+            if out_dir.exists() and any(out_dir.iterdir()):
+                die(f"{out_dir} ja existe e nao esta vazia")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            n = _pull_tree(link, target, out_dir)
+            print(f"baixado: {target} -> {out_dir} ({n} arquivos)")
         elif args.action == "rm":
             base = "/sd/apps" if args.sd else "/local/apps"
             target = f"{base}/{args.name}"
@@ -863,6 +1096,14 @@ def main():
     p.add_argument("duration", nargs="?", type=int, default=250, help="duracao em ms (default 250)")
     p.set_defaults(func=cmd_swipe)
 
+    p = sub.add_parser("dev", help="loop de desenvolvimento: watch + reload + logs")
+    p.add_argument("folder", help="pasta do app (com app.json)")
+    p.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
+    p.add_argument("--shots", action="store_true",
+                   help="salva screenshot apos cada reload em PASTA/.dev/last.png")
+    p.add_argument("--no-lint", action="store_true", help="pula o lint a cada reload")
+    p.set_defaults(func=cmd_dev)
+
     p = sub.add_parser("apps", help="gerencia apps instalados no dispositivo")
     apps_sub = p.add_subparsers(dest="action", required=True)
     a = apps_sub.add_parser("list", help="lista apps de /local/apps e /sd/apps")
@@ -870,6 +1111,11 @@ def main():
     a.add_argument("folder", help="pasta com app.json + main.js (+ icon.bin)")
     a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
     a.add_argument("--pula-lint", action="store_true", help="instala mesmo com erros de lint")
+    a.add_argument("--run", action="store_true",
+                   help="abre o app ao final (exit + run; encerra o anterior)")
+    a = apps_sub.add_parser("pull", help="baixa um app instalado para o PC")
+    a.add_argument("name", help="nome da pasta do app no dispositivo")
+    a.add_argument("dest", nargs="?", default=None, help="pasta de destino (default ./<nome>)")
     a = apps_sub.add_parser("rm", help="remove um app instalado")
     a.add_argument("name", help="nome da pasta do app")
     a.add_argument("--sd", action="store_true", help="remove de /sd/apps")

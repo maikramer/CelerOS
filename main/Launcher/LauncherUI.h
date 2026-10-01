@@ -14,6 +14,11 @@ public:
     // LauncherScreen no loop da UI. Aceita caminho da pasta/arquivo ou nome.
     static void requestLaunch(const std::string& pathOrName);
     static bool takeLaunchRequest(std::string& out);
+    // Pedido de encerrar o app em execucao (shell "exit" / dev loop do SDK):
+    // consumido pelos pontos de espera do runtime JS (delay/getTouch/keypadPoll)
+    // via throwAppExit — mesma saida limpa do X da topbar.
+    static void requestAppExit();
+    static bool consumeAppExitRequest();
     static int findEntry(const std::string& pathOrName);  // -1 se nao achar
     static void scanLocalApps();
     // Abre sozinho apos o boot o app cujo pacote/caminho esta em

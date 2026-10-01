@@ -1,0 +1,350 @@
+// celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
+// ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
+// + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
+// API level 12 — 163 funcoes.
+
+interface CelerTheme {
+    bg: number; card: number; raised: number; stroke: number;
+    accent: number; accentD: number; onAccent: number;
+    text: number; textDim: number; ok: number; warn: number; err: number;
+}
+
+interface TouchPoint { x: number; y: number; touched: boolean; }
+
+declare function setTimeout(callback: () => void, ms: number): number;
+declare function setInterval(callback: () => void, ms: number): number;
+declare function clearTimeout(id: number): void;
+declare function clearInterval(id: number): void;
+
+declare const System: {
+    /** aloca um buffer de Sprite persistente off-screen na RAM. Força GC automaticamente e cai para 8 bits para garantir memória contígua. */
+    createSprite(width: number, height: number): any;
+    /** destrói o Sprite instantaneamente e libera a RAM. Você DEVE chamar isso ao terminar para evitar vazamentos severos de memória! */
+    deleteSprite(arg0?: number): void;
+    /** empurra todo o buffer oculto para a tela física instantaneamente via DMA. O buffer permanece na RAM e pode ser modificado */
+    pushSprite(x: number, y: number): void;
+    /** se true, TODAS as chamadas System.draw... e `System.fill...` subsequentes são interceptadas e desenhadas */
+    bindSprite(enabled: boolean): void;
+    useSprite(arg0: number): any;
+    /** desenho de linha vertical acelerado por hardware. Substancialmente mais rápido que `System.fillRect()` para fatias de */
+    drawFastVLine(x: number, y: number, h: number, color: number): void;
+    /** desenho de linha horizontal acelerado por hardware. */
+    drawFastHLine(x: number, y: number, w: number, color: number): void;
+    /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
+    fillScreen(color: number): void;
+    /** desenha retângulos vazados ou preenchidos. */
+    fillRect(x: number, y: number, w: number, h: number, color: number): void;
+    drawRect(x: number, y: number, w: number, h: number, color: number): void;
+    /** usa o algoritmo de Bresenham para renderizar uma linha reta entre dois pontos. */
+    drawLine(x1: number, y1: number, x2: number, y2: number, color: number): void;
+    /** renderiza um único pixel. */
+    drawPixel(x: number, y: number, color: number): void;
+    drawCircle(x: number, y: number, radius: number, color: number): void;
+    /** renderiza círculos perfeitos, vazados ou preenchidos. */
+    fillCircle(x: number, y: number, radius: number, color: number): void;
+    drawTriangle(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, color: number): void;
+    /** renderiza triângulos vazados ou preenchidos. Útil para projeções 3D ou indicadores de UI. */
+    fillTriangle(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, color: number): void;
+    drawRoundRect(x: number, y: number, w: number, h: number, radius: number, color: number): void;
+    /** desenha retângulo com cantos arredondados na cor especificada. */
+    fillRoundRect(x: number, y: number, w: number, h: number, radius: number, color: number): void;
+    /** lê uma imagem .bmp de 16, 24 ou 32 bits do sistema de arquivos (`/sd/` ou `/local/`) e a transmite em `x, y` sem usar RAM do */
+    drawBMP(path: string, x: number, y: number): any;
+    /** desenha uma imagem .png do sistema de arquivos (/sd/ ou `/local/`) em `x, y`, decodificada em streaming linha a linha (sem pico de */
+    drawPNG(path: string, x: number, y: number): any;
+    /** renderiza strings em alta velocidade no display. O texto é UTF-8 e todas as fontes cobrem Latin-1 (U+0020..U+00FF), então acentos */
+    drawString(text: string, x: number, y: number, font?: number): void;
+    /** define as cores ativas de renderização de texto. Com `bg_color`, o texto sobrescreve em nível de hardware, apagando os pixels */
+    setTextColor(fg_color: number, bg_color?: number): void;
+    /** multiplica a escala da fonte pixel padrão. */
+    setTextSize(size: number): void;
+    setTextDatum(arg0: number): void;
+    textWidth(str: string, font?: number): number;
+    fontHeight(font?: number): any;
+    /** empacota valores RGB 8/8/8 de 24 bits no formato RGB 5/6/5 de 16 bits esperado pelo hardware. */
+    color(r: number, g: number, b: number): any;
+    /** largura do canvas de design em que os apps desenham. Em painéis maiores o runtime escala tudo para a tela física (veja a nota do */
+    screenWidth(): any;
+    /** altura do canvas de design em que os apps desenham. */
+    screenHeight(): any;
+    /** consulta o controlador de toque. */
+    getTouch(): TouchPoint;
+    /** devolve o uptime total do hardware ESP32 em milissegundos desde o boot. Útil para física com delta-time e temporização de loop. */
+    millis(): number;
+    /** devolve o uptime total do hardware ESP32 em microssegundos desde o boot. Essencial para temporização de altíssima resolução (ex.: */
+    micros(): number;
+    /** pausa a execução do JavaScript. CRÍTICO: essa função comanda o kernel C++ para executar Garbage Collection em background. Se */
+    delay(ms: number): void;
+    /** delays sub-milissegundo de alta precisão, nativamente. Bloqueia a CPU de forma limpa, sem disparar Garbage Collection. */
+    delayMicroseconds(us: number): void;
+    /** imprime uma mensagem no monitor serial USB físico num computador conectado (baud 115200). Útil para depurar variáveis enquanto a */
+    print(str: string): void;
+    /** lê o sensor de temperatura interno do ESP32 e devolve o valor em Celsius. */
+    getTemperature(): any;
+    /** verifica se a revisão do hardware ESP32 instalada suporta o sensor de temperatura interno (alguns chips novos removeram). Devolve */
+    hasTemperatureSensor(): any;
+    /** devolve um objeto com o estado atual do hardware ESP32, incluindo uso de memória, velocidade de CPU e especificações. Útil para */
+    getInfo(): any;
+    /** devolve a hora local atual formatada pelo SO, respeitando automaticamente a preferência do usuário (12 ou 24 horas). */
+    getTime(): any;
+    /** devolve o segundo local atual direto do RTC. */
+    getSeconds(): any;
+    /** devolve a data local atual formatada como DD/MM/AAAA. */
+    getDate(): any;
+    /** devolve o ano local atual com 4 dígitos. */
+    getYear(): any;
+    /** devolve o mês local atual. */
+    getMonth(): any;
+    /** devolve o dia local atual do mês. */
+    getDay(): any;
+    /** devolve o offset/fuso horário configurado pelo usuário. */
+    getTimezone(): any;
+    /** devolve a string da versão atual do SO. */
+    getOSVersion(): any;
+    /** devolve o inteiro do Nível de API do SO. */
+    getAPILevel(): any;
+    /** devolve o endereço IP local atual do ESP32 (ex. "192.168.1.11") se o WiFi estiver conectado. */
+    getIPAddress(): any;
+    /** devolve true se o ESP32 estiver conectado a uma rede WiFi. */
+    isWiFiActive(): any;
+    prompt(promptMsg?: number, initialText?: number, options?: number): any;
+    keypadOpen(options?: number): any;
+    /** bombeia o toque para o teclado, redesenha as teclas quando necessário (feedback de pressionamento, páginas de layout, cursor piscando) */
+    keypadPoll(): any;
+    keypadText(): any;
+    keypadRect(): any;
+    keypadDraw(): void;
+    keypadClose(): void;
+    topbarText(texto: string): void;
+    topbarButtons(labels?: number): any;
+    topbarPop(): any;
+    setBrightness(level: number): void;
+    getBrightness(): any;
+    backlightSupported(): any;
+    setAutoBrightness(on?: boolean): any;
+    getAutoBrightness(): any;
+    exitApp(): void;
+    setClip(x: number, y: number, w: number, h: number): void;
+    clearClip(): void;
+    present(): void;
+    isBuffered(): any;
+    wifiStatus(): any;
+    md5(str: string): any;
+    setPin(pin: number): any;
+    verifyPin(arg0: number): any;
+    pinClear(): void;
+    pinState(): any;
+    rescanApps(): void;
+    setting(key: string, arg1?: number): any;
+    toast(mensagem: number): void;
+    beep(arg0: number, arg1: number): any;
+    /** leitura media de ADC com cache de ~2 s. No cão robótico SpotPear lê o divisor 2:1 da Li-ion no GPIO2 (~4100 mV na USB, ~3300 mV = vazia). (API 10) */
+    battery(): any;
+    /** bloqueante curto (~100 ms); o desenho pendente aparece antes. A primeira chamada inicializa o canal RX (~300 ms). (API 10) */
+    micLevel(): any;
+    /** pad capacitivo avulso (a "cabeca" do cao robotico). A referencia e calibrada na primeira chamada — mantenha o pad solto nesse instante. (API 10) */
+    touchPad(): any;
+    lightLevel(): any;
+    setTimezone(tz: number): void;
+    setManualTime(arg0: number, arg1: number, arg2: number, arg3: number, arg4: number): void;
+    set24hFormat(arg0: number): void;
+    get24hFormat(): any;
+    setNtpEnabled(arg0: number): void;
+    getNtpEnabled(): any;
+    theme(): CelerTheme;
+    /** desenha um ícone 64x64 de /local/icons/<name>.png com mesclagem de alpha (`.bin` legado aceito). */
+    drawIcon(name: string, x: number, y: number): void;
+    /** @permission "gpio" */
+    led(r?: number, g?: number, b?: number): any;
+    /** @permission "gpio" */
+    relay(n: number, on: boolean): any;
+    /** @permission "gpio" */
+    relayState(arg0: number): any;
+    /** @permission "gpio" */
+    relayCount(): any;
+    /** atualiza a fita inteira via RMT (sem DMA). Exemplo: System.neopixel(0, [0xFF0000, 0, 0x00FF00]). As fitas apagam quando o app sai. (API 10) */
+    /** @permission "gpio" */
+    neopixel(strip: number, cores?: number): any;
+    /** reinicia instantaneamente o hardware ESP32. */
+    /** @permission "system" */
+    restart(): void;
+    /** @permission "system" */
+    openWifiSetup(): void;
+    /** @permission "system" */
+    factoryReset(mode?: number): any;
+    /** @permission "system" */
+    otaCheck(): any;
+    /** @permission "system" */
+    otaStart(url: string, progressCallback?: number): any;
+    /** @permission "system" */
+    webActive(): any;
+    /** @permission "system" */
+    webSetActive(arg0: number): void;
+    /** @permission "system" */
+    webAuthInfo(): any;
+    /** @permission "system" */
+    webAuthSetPass(arg0: number): any;
+    gpio: {
+        /** define o estado elétrico físico de um pino (ex.: pino 2 como OUTPUT para acender um LED). */
+        /** @permission "gpio" */
+        pinMode(pin: number, mode: number): void;
+        /** aplica 3,3V (HIGH) ou 0V (LOW) num pino específico. */
+        /** @permission "gpio" */
+        digitalWrite(pin: number, state: number): void;
+        /** lê o estado de tensão físico de um pino. */
+        /** @permission "gpio" */
+        digitalRead(pin: number): any;
+        /** aciona o conversor analógico-digital de 12 bits do ESP32 para ler um nível de tensão contínuo. */
+        /** @permission "gpio" */
+        analogRead(pin: number): any;
+        /** inicia um sinal PWM (Pulse Width Modulation) automático de hardware num pino. Útil para controle de motores ou dimmer de LEDs. */
+        /** @permission "gpio" */
+        analogWrite(pin: number, pwmValue: number): void;
+        /** Medição Nativa de Pulsos por Hardware. Suspende o motor JS e delega ao kernel C++ a medição precisa da duração de um pulso de */
+        /** @permission "gpio" */
+        pulseIn(pin: number, state: number, timeout: number): any;
+        /** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: (API 10) */
+        /** @permission "gpio" */
+        servo(pin: number, angulo: number): any;
+        /** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia (API 10) */
+        /** @permission "gpio" */
+        servoOff(pin: number): any;
+        /** constante */
+        OUTPUT: number;
+        /** constante */
+        INPUT: number;
+        /** constante */
+        INPUT_PULLUP: number;
+        /** constante */
+        HIGH: number;
+        /** constante */
+        LOW: number;
+    };
+};
+
+declare const Storage: {
+    /** @permission "system" */
+    clearFor(arg0: number): any;
+};
+
+declare const Net: {
+    /** executa um HTTP GET. Segue redirects. Lança erro se o WiFi não estiver conectado. */
+    /** @permission "net" */
+    get(url?: string): any;
+    /** como Net.get(), mas parseia o corpo como JSON. Um corpo JSON malformado lança um erro visível no script. */
+    /** @permission "net" */
+    getJSON(url?: string): any;
+    /** executa um HTTP POST. Lança erro se o WiFi não estiver conectado. */
+    /** @permission "net" */
+    post(url?: string, body?: string, contentType?: number): any;
+    /** baixa direto para um arquivo em modo streaming — o corpo nunca passa pela heap do JS, então **não sofre o teto de 32 KB** (é (API 6) */
+    /** @permission "net" */
+    download(url: string, caminho: number, onProgress?: number): any;
+    /** @permission "net" */
+    beginGet(url: string): any;
+    /** @permission "net" */
+    pollGet(arg0: number): any;
+    /** @permission "net" */
+    cancelGet(arg0: number): void;
+    /** devolve true se o WiFi estiver conectado. */
+    /** @permission "net" */
+    isConnected(): any;
+    /** @permission "net" */
+    wifiScan(): any;
+    /** @permission "net+system" */
+    wifiConnect(arg0: number, arg1?: number): any;
+    /** @permission "net+system" */
+    wifiDisconnect(): void;
+};
+
+declare const FS: {
+    /** carregador de alta velocidade para RAM. Lê o arquivo inteiro num bloco contíguo de String na RAM. Não use em arquivos maiores */
+    /** @permission "fs" */
+    readTextFile(path: string): string | null;
+    /** @permission "fs" */
+    readFile(arg0: number, arg1?: number): any;
+    /** apaga qualquer arquivo existente e escreve a totalidade de `content` no disco. */
+    /** @permission "fs" */
+    writeTextFile(path: string, content: number): any;
+    /** @permission "fs" */
+    writeFile(arg0: number, arg1: number): any;
+    /** acrescenta a string ao final de um arquivo existente. */
+    /** @permission "fs" */
+    appendTextFile(path: string, content: number): any;
+    /** apaga permanentemente um arquivo da partição. */
+    /** @permission "fs" */
+    deleteFile(path: string): any;
+    /** renomeia um arquivo ou o move entre diretórios na mesma partição. */
+    /** @permission "fs" */
+    renameFile(pathFrom: number, pathTo: number): any;
+    /** valida se um arquivo ou pasta existe fisicamente. */
+    /** @permission "fs" */
+    exists(path: string): any;
+    /** percorre um diretório e devolve um array de caminhos absolutos (ex.: `["/local/app.js"]`). */
+    /** @permission "fs" */
+    listDir(path: string): string[];
+    /** cria um novo diretório. */
+    /** @permission "fs" */
+    mkdir(path: string): any;
+    /** remove um diretório vazio. */
+    /** @permission "fs" */
+    rmdir(path: string): any;
+    /** avalia se o caminho alvo é diretório ou arquivo. */
+    /** @permission "fs" */
+    isDirectory(path: string): any;
+    /** @permission "fs" */
+    isFile(arg0: number): any;
+    /** devolve o tamanho físico total de um arquivo em bytes. */
+    /** @permission "fs" */
+    getFileSize(path: string): any;
+    /** devolve métricas exatas de armazenamento da partição indicada. */
+    /** @permission "fs" */
+    getTotalSpace(drive: number): any;
+    /** @permission "fs" */
+    getUsedSpace(arg0: number): any;
+    /** @permission "fs" */
+    getFreeSpace(arg0: number): any;
+    /** usa o motor criptográfico mbedtls acelerado por hardware para processar o arquivo em streaming e devolver seu hash MD5 preciso. */
+    /** @permission "fs" */
+    getFileMD5(path: string): any;
+    /** dispara um remount/unmount SPI do cartão SD físico. */
+    /** @permission "fs" */
+    mountSD(): any;
+    /** @permission "fs" */
+    unmountSD(): void;
+    /** @permission "fs" */
+    copyFile(arg0: number, arg1: number): any;
+    /** @permission "fs" */
+    copyDirectory(arg0: number, arg1: number): any;
+    /** @permission "fs" */
+    removeDirectory(arg0: number): any;
+    /** @permission "fs" */
+    appData(): any;
+};
+
+declare const CelerLink: CelerLinkApi | undefined
+
+interface CelerLinkApi {
+    start(nome?: string, opcoes?: number): any;
+    stop(): any;
+    scan(timeoutMs: number): any;
+    connect(idOuNome: number, timeoutMs: number): any;
+    disconnect(): any;
+    send(mensagem?: number): any;
+    poll(): any;
+    status(): any;
+    verify(codigo: number): any;
+    unpair(id?: string): any;
+}
+
+declare const BLACK: number;
+declare const WHITE: number;
+declare const RED: number;
+declare const GREEN: number;
+declare const BLUE: number;
+declare const YELLOW: number;
+declare const CYAN: number;
+declare const MAGENTA: number;
+declare const ORANGE: number;
+declare const DARKGREY: number;
+

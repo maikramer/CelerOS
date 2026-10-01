@@ -52,6 +52,32 @@ bool LauncherUI::takeLaunchRequest(std::string& out) {
     return true;
 }
 
+namespace {
+portMUX_TYPE s_appExitMux = portMUX_INITIALIZER_UNLOCKED;
+volatile bool s_appExitPending = false;   // protegido por s_appExitMux
+volatile uint32_t s_appExitAt = 0;        // tick do pedido (expira sozinho)
+}  // namespace
+
+void LauncherUI::requestAppExit() {
+    portENTER_CRITICAL(&s_appExitMux);
+    s_appExitPending = true;
+    s_appExitAt = xTaskGetTickCount();
+    portEXIT_CRITICAL(&s_appExitMux);
+}
+
+bool LauncherUI::consumeAppExitRequest() {
+    bool out = false;
+    portENTER_CRITICAL(&s_appExitMux);
+    if (s_appExitPending) {
+        s_appExitPending = false;
+        // Pedido sem app em execucao nao pode sobreviver e matar o PROXIMO
+        // app na primeira chamada de delay/getTouch: expira em 2s.
+        out = (xTaskGetTickCount() - s_appExitAt) < pdMS_TO_TICKS(2000);
+    }
+    portEXIT_CRITICAL(&s_appExitMux);
+    return out;
+}
+
 int LauncherUI::findEntry(const std::string& pathOrName) {
     std::string want = pathOrName;
     while (want.size() > 1 && want.back() == '/') want.pop_back();

@@ -1,0 +1,260 @@
+'use strict';
+// Renderer headless do emulador: framebuffer 240x320 RGB565 em Node puro
+// (sem canvas nativo) com o subconjunto de desenho da API JS. Instalado como
+// `wire` do runApp (test/js_harness): sobrepoe os stubs no-op do makeEnv, que
+// continua sendo a fonte de System/FS/Net/CelerLink — zero duplicacao.
+//
+// Aproximacoes conscientes (preview, nao pixel-perfect com o device):
+//   - texto: glifos 8x8 (font8x8 public domain), metrica {1:6, 2:8, 4:16}px
+//     por caractere (textWidth coerente com o desenho — layouts centrados
+//     batem entre si, nao com a fonte real do firmware);
+//   - drawPNG/drawBMP/drawIcon nao renderizam (ficam no-op como no harness,
+//     registrados em `unsupported` para o CLI avisar).
+
+const { glyph } = require('./font8x8.js');
+const { encodePng } = require('./png.js');
+
+const W = 240, H = 320;
+const ADVANCE = { 1: 6, 2: 8, 4: 16 };   // px por caractere por tamanho de fonte
+
+class Renderer {
+    constructor() {
+        this.fb = new Uint16Array(W * H);  // RGB565
+        this.fg = 0xFFFF;
+        this.bg = 0x0000;
+        this.textSize = 1;
+        this.textDatum = 0;    // TL (ancoras 0-8 como no LovyanGFX)
+        this.sprite = null;     // { w, h, fb } criado por createSprite
+        this.bound = false;     // bindSprite(true): draws vao ao sprite (contrato do firmware)
+        this.unsupported = new Set();
+    }
+
+    // ------------------------------------------------------------ pixgrade
+    target() { return (this.bound && this.sprite) ? this.sprite.fb : this.fb; }
+    targetW() { return (this.bound && this.sprite) ? this.sprite.w : W; }
+    targetH() { return (this.bound && this.sprite) ? this.sprite.h : H; }
+
+    px(x, y, c) {
+        x |= 0; y |= 0;
+        if (x < 0 || y < 0 || x >= this.targetW() || y >= this.targetH()) return;
+        this.target()[y * this.targetW() + x] = c & 0xFFFF;
+    }
+
+    hLine(x, y, w, c) { for (let i = 0; i < w; i++) this.px(x + i, y, c); }
+    vLine(x, y, h, c) { for (let i = 0; i < h; i++) this.px(x, y + i, c); }
+
+    rect(x, y, w, h, c, filled) {
+        if (filled) {
+            for (let j = 0; j < h; j++) this.hLine(x, y + j, w, c);
+        } else {
+            this.hLine(x, y, w, c);
+            this.hLine(x, y + h - 1, w, c);
+            this.vLine(x, y, h, c);
+            this.vLine(x + w - 1, y, h, c);
+        }
+    }
+
+    // cantos de circulo para roundRect: quadrantes (cx,cy,r)
+    corner(cx, cy, r, c, filled) {
+        for (let dy = -r; dy <= r; dy++) {
+            for (let dx = -r; dx <= r; dx++) {
+                const d2 = dx * dx + dy * dy;
+                if (filled ? d2 <= r * r : (d2 <= r * r && d2 >= (r - 1) * (r - 1))) {
+                    this.px(cx + dx, cy + dy, c);
+                }
+            }
+        }
+    }
+
+    roundRect(x, y, w, h, r, c, filled) {
+        const r2 = Math.max(0, Math.min(r, Math.floor(Math.min(w, h) / 2)));
+        // miolo + faixas (sem os cantos)
+        if (filled) {
+            for (let j = r2; j < h - r2; j++) this.hLine(x, y + j, w, c);
+            for (let j = 0; j < r2; j++) {
+                const dy = r2 - j;
+                const half = Math.round(Math.sqrt(Math.max(0, r2 * r2 - dy * dy)));
+                this.hLine(x + r2 - half, y + j, (w - 2 * r2) + 2 * half, c);
+                this.hLine(x + r2 - half, y + h - 1 - j, (w - 2 * r2) + 2 * half, c);
+            }
+        } else {
+            this.hLine(x + r2, y, w - 2 * r2, c);
+            this.hLine(x + r2, y + h - 1, w - 2 * r2, c);
+            this.vLine(x, y + r2, h - 2 * r2, c);
+            this.vLine(x + w - 1, y + r2, h - 2 * r2, c);
+            this.corner(x + r2, y + r2, r2, c, false);
+            this.corner(x + w - 1 - r2, y + r2, r2, c, false);
+            this.corner(x + r2, y + h - 1 - r2, r2, c, false);
+            this.corner(x + w - 1 - r2, y + h - 1 - r2, r2, c, false);
+        }
+    }
+
+    line(x0, y0, x1, y1, c) {
+        x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
+        const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
+        const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+        let err = dx + dy;
+        for (;;) {
+            this.px(x0, y0, c);
+            if (x0 === x1 && y0 === y1) break;
+            const e2 = 2 * err;
+            if (e2 >= dy) { err += dy; x0 += sx; }
+            if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+    }
+
+    circle(cx, cy, r, c, filled) {
+        cx |= 0; cy |= 0; r = Math.max(0, r | 0);
+        for (let dy = -r; dy <= r; dy++) {
+            for (let dx = -r; dx <= r; dx++) {
+                const d2 = dx * dx + dy * dy;
+                if (filled ? d2 <= r * r : (d2 <= r * r && d2 >= (r - 1) * (r - 1))) {
+                    this.px(cx + dx, cy + dy, c);
+                }
+            }
+        }
+    }
+
+    // triângulo cheio por scanline (interpola as duas arestas ate o vertice
+    // medio); contorno por tres linhas
+    triangle(x0, y0, x1, y1, x2, y2, c, filled) {
+        if (!filled) {
+            this.line(x0, y0, x1, y1, c);
+            this.line(x1, y1, x2, y2, c);
+            this.line(x2, y2, x0, y0, c);
+            return;
+        }
+        const pts = [[x0, y0], [x1, y1], [x2, y2]].sort((a, b) => a[1] - b[1]);
+        const ax = pts[0][0], ay = pts[0][1];
+        const bx = pts[1][0], by = pts[1][1];
+        const cx = pts[2][0], cy2 = pts[2][1];
+        for (let y = ay; y <= cy2; y++) {
+            const t1 = cy2 === ay ? 0 : (y - ay) / (cy2 - ay);
+            let xl = ax + (cx - ax) * t1;
+            let xr;
+            if (y <= by) {
+                const t2 = by === ay ? 0 : (y - ay) / (by - ay);
+                xr = ax + (bx - ax) * t2;
+            } else {
+                const t3 = cy2 === by ? 0 : (y - by) / (cy2 - by);
+                xr = bx + (cx - bx) * t3;
+            }
+            if (xl > xr) { const t = xl; xl = xr; xr = t; }
+            this.hLine(Math.round(xl), y, Math.max(1, Math.round(xr) - Math.round(xl) + 1), c);
+        }
+    }
+
+    // ---------------------------------------------------------------- texto
+    // Metrica por tamanho de fonte (aproximacao; textWidth e drawString usam
+    // a MESMA tabela para layouts centrados baterem entre si)
+    glyphW(font) { return (ADVANCE[font] || 8 * Math.max(1, font)) * Math.max(1, this.textSize); }
+    glyphH(font) { return 8 * Math.max(1, Math.round(this.glyphW(font) / 8)); }
+
+    drawString(s, x, y, font) {
+        s = String(s);
+        font = font || 1;
+        const g = this.glyphW(font);
+        const h = this.glyphH(font);
+        const w = s.length * g;
+        // datum (LovyanGFX): 0=TL 1=TC 2=TR 3=ML 4=MC 5=MR 6=BL 7=BC 8=BR
+        const d = this.textDatum;
+        if (d === 1 || d === 4 || d === 7) x -= w / 2;
+        else if (d === 2 || d === 5 || d === 8) x -= w;
+        if (d === 3 || d === 4 || d === 5) y -= h / 2;
+        else if (d === 6 || d === 7 || d === 8) y -= h;
+        const src = Math.max(1, Math.round(g / 8));      // escala do glifo 8x8
+        const cols = Math.min(8, Math.round(g / src));   // font1: 6 colunas
+        for (let i = 0; i < s.length; i++) {
+            const code = s.charCodeAt(i);
+            const bm = glyph(code) || glyph(0x7F);  // fora da cobertura: bloco
+            const gx = x + i * g;
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < cols; col++) {
+                    const c = ((bm[row] >> col) & 1) ? this.fg : this.bg;
+                    // pinta o bloco escalado do pixel do glifo
+                    for (let sy = 0; sy < src; sy++) {
+                        for (let sx = 0; sx < src; sx++) {
+                            this.px(gx + col * src + sx, y + row * src + sy, c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ snapshot
+    rgb888() {
+        const out = Buffer.alloc(W * H * 3);
+        for (let i = 0; i < W * H; i++) {
+            const p = this.fb[i];
+            out[i * 3] = ((p >> 11) & 0x1F) * 255 / 31 | 0;
+            out[i * 3 + 1] = ((p >> 5) & 0x3F) * 255 / 63 | 0;
+            out[i * 3 + 2] = (p & 0x1F) * 255 / 31 | 0;
+        }
+        return out;
+    }
+
+    png() { return encodePng(W, H, this.rgb888(), false); }
+
+    // ---------------------------------------------------------------- wire
+    // Sobrepoe os stubs de desenho do makeEnv (mantem o resto: touch, FS,
+    // relógio, etc). wire de teste do usuario roda DEPOIS e pode ajustar.
+    wire(env) {
+        const r = this;
+        const S = env.System;
+        S.fillScreen = (c) => { r.fb.fill((c == null ? 0 : c) & 0xFFFF); };
+        S.fillRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, true);
+        S.drawRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, false);
+        S.drawLine = (x0, y0, x1, y1, c) => r.line(x0, y0, x1, y1, c);
+        S.drawPixel = (x, y, c) => r.px(x, y, c);
+        S.drawFastHLine = (x, y, w, c) => r.hLine(x, y, w, c);
+        S.drawFastVLine = (x, y, h, c) => r.vLine(x, y, h, c);
+        S.drawCircle = (x, y, rad, c) => r.circle(x, y, rad, c, false);
+        S.fillCircle = (x, y, rad, c) => r.circle(x, y, rad, c, true);
+        S.drawTriangle = (x0, y0, x1, y1, x2, y2, c) => r.triangle(x0, y0, x1, y1, x2, y2, c, false);
+        S.fillTriangle = (x0, y0, x1, y1, x2, y2, c) => r.triangle(x0, y0, x1, y1, x2, y2, c, true);
+        S.drawRoundRect = (x, y, w, h, rad, c) => r.roundRect(x, y, w, h, rad, c, false);
+        S.fillRoundRect = (x, y, w, h, rad, c) => r.roundRect(x, y, w, h, rad, c, true);
+        S.setTextColor = (fg, bg) => { r.fg = fg; r.bg = (bg == null ? 0 : bg); };
+        S.setTextSize = (sz) => { r.textSize = Math.max(1, sz | 0); };
+        S.setTextDatum = (d) => { r.textDatum = Math.max(0, Math.min(8, d | 0)); };
+        S.drawString = (s, x, y, font) => r.drawString(s, x, y, font);
+        S.textWidth = (s, font) => String(s).length * r.glyphW(font || 1);
+        S.fontHeight = (font) => r.glyphH(font || 1);
+        // sprite global (contrato do firmware: um por vez; desenho direcionado
+        // so enquanto bindSprite(true); pushSprite copia para a tela)
+        S.createSprite = (w, h) => {
+            r.sprite = { w: Math.max(1, w | 0), h: Math.max(1, h | 0), fb: new Uint16Array(Math.max(1, w | 0) * Math.max(1, h | 0)) };
+            return true;
+        };
+        S.bindSprite = (enable) => { r.bound = !!enable && !!r.sprite; };
+        S.pushSprite = (x, y) => {
+            const sp = r.sprite;
+            if (!sp) return;
+            for (let j = 0; j < sp.h; j++) {
+                for (let i = 0; i < sp.w; i++) {
+                    r.px(x + i, y + j, sp.fb[j * sp.w + i]);  // px ja recusa fora do fb
+                }
+            }
+        };
+        S.deleteSprite = () => { r.sprite = null; r.bound = false; };
+        // nao renderizados no emulador (mesmo comportamento do harness + aviso)
+        for (const name of ['drawPNG', 'drawBMP', 'drawIcon']) {
+            const orig = S[name];
+            S[name] = (...args) => { r.unsupported.add(name); return orig(...args); };
+        }
+        return this;
+    }
+}
+
+// funcoes que o wire substitui (o `celer.js check` cruza com o manifest
+// para acusar primitive nova no firmware sem render no emulador)
+const RENDERED = [
+    'fillScreen', 'fillRect', 'drawRect', 'drawLine', 'drawPixel',
+    'drawFastHLine', 'drawFastVLine', 'drawCircle', 'fillCircle',
+    'drawTriangle', 'fillTriangle', 'drawRoundRect', 'fillRoundRect',
+    'setTextColor', 'setTextSize', 'setTextDatum', 'drawString', 'textWidth',
+    'fontHeight', 'createSprite', 'bindSprite', 'pushSprite', 'deleteSprite',
+];
+
+module.exports = { Renderer, W, H, RENDERED };
