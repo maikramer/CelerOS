@@ -14,6 +14,8 @@
 #include "esp_task_wdt.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenCapture.h"
+#include "../Display/ScreenPower.h"
+#include "../Hardware/Buttons.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
@@ -340,6 +342,9 @@ void JSBindings::present() {
     if (s_jsCtx != nullptr) timersTick(s_jsCtx);
     if (tftInstance == nullptr) return;
     Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
+    Buttons::tick(true);  // app cedeu: bombeia botoes fisicos (BOOT/PWR do watch)
+    ScreenPower::tick(true);  // estados de tela do watch (dim/AOD/off)
+    if (ScreenPower::suppressAppFrame()) return;  // AOD/off: quadro do app nao vai ao vidro
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
     bool wantBar = s_topbarFixed || s_barShown;
@@ -783,6 +788,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"getMonth", js_getMonth, 0},
         {"getDay", js_getDay, 0},
         {"getTimezone", js_getTimezone, 0},
+        {"getWeekday", js_getWeekday, 0},   // API 13 (watchface)
+        {"keepAwake", js_keepAwake, 1},     // API 13 (jogos: tela acesa)
     };
     putFns(ctx, kFns8);
 
@@ -835,6 +842,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     static const JsFn kFns16[] = {
         {"setBrightness", js_setBrightness, 1},
         {"getBrightness", js_getBrightness, 0},
+        {"setVolume", js_setVolume, 1},   // API 13: audio do OS
+        {"getVolume", js_getVolume, 0},
         {"backlightSupported", js_backlightSupported, 0},
         {"setAutoBrightness", js_setAutoBrightness, 1},
         {"getAutoBrightness", js_getAutoBrightness, 0},
@@ -940,6 +949,17 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsStorageSys);
     duk_put_prop_string(ctx, -2, "Storage");
+
+    // Sensors (API 13): IMU da placa (hoje o watch — hooks imu* do perfil).
+    // Leituras abertas, no padrao dos demais sensores (bateria/luz).
+    duk_push_object(ctx);  // Sensors
+    static const JsFn kFnsSensors[] = {
+        {"accel", js_sensorsAccel, 0},   // {x,y,z} em g (ou null)
+        {"steps", js_sensorsSteps, 0},   // passos do dia (-1 sem IMU)
+        {"temp", js_sensorsTemp, 0},     // die do IMU em °C (-255 sem sensor)
+    };
+    putFns(ctx, kFnsSensors);
+    duk_put_prop_string(ctx, -2, "Sensors");
 
     // --- Net Object (HTTP para apps, API level 2) — capability "net" (F4) ---
     if (perm(celer::PERM_NET)) {

@@ -7,6 +7,7 @@
 #include <string>
 #include "JSBindings.h"
 #include "../Display/Layout.h"
+#include "../Launcher/LauncherUI.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 
 extern CelerDisplay* s_jsTft;
@@ -30,6 +31,13 @@ inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
     duk_put_prop_string(ctx, -2, "celerExit");
     (void)duk_throw(ctx);  // longjmp: nunca retorna de verdade
     while (true) { }       // so para calmar o -Wreturn-type
+}
+
+// Encerramento remoto do app (shell "exit" / dev loop do SDK): checado nos
+// pontos de espera do runtime (delay/getTouch/keypadPoll). Reusa a saida
+// limpa do X da topbar — o kernel volta ao launcher normalmente.
+inline void checkRemoteAppExit(duk_context* ctx) {
+    if (LauncherUI::consumeAppExitRequest()) throwAppExit(ctx);
 }
 
 bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y);

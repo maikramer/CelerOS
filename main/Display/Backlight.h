@@ -36,6 +36,17 @@ public:
     static uint32_t idleTimeout();
     static bool isOff();
     static bool noteActivity();
+
+    // Brilho temporario ABAIXO do fluxo normal (estagios dim/AOD do
+    // ScreenPower do watch): escreve direto no vidro e invalida o nivel
+    // aplicado, para que o proximo apply()/wake() restaure de verdade.
+    // undim() volta ao nivel escolhido; lastActivity() expoe o hub de
+    // atividade (toques reais e injetados); forceOff() derruba a tela como
+    // se o timeout tivesse batido (glance que expira).
+    static void dim(int raw255);
+    static void undim();
+    static uint32_t lastActivity();
+    static void forceOff();
 };
 
 #endif // CELEROS_BACKLIGHT_H

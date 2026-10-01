@@ -12,6 +12,7 @@
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | No PSRAM; CH340 serial; asks for touch calibration on first boot; simpler UI ([see below](#cyd-classic-esp32)) |
 | **CYD-VSPI** (untested variant) | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | Legacy pinout (TFT on VSPI 18/23/19, shared touch bus, backlight GPIO22) kept for boards wired that way — **never tested on hardware**; build with `-DCELEROS_BOARD=cyd-vspi` |
 | **Robot dog** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB embedded PSRAM) | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 4 servos (legs), mic + speaker I²S, 2x WS2812, battery ADC; boots into the Dog Face app (profile `homeApp`); driven by the Celer Remote app over Celer Link BLE; build with `-DCELEROS_BOARD=spotpear-dog` — see [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) |
+| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB embedded PSRAM) | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash, AXP2101 PMU, RTC PCF85063 + IMU QMI8658 (pedometer) + audio ES8311 codec on I²C, microSD on SPI3; boots into the Watchface app (profile `homeApp`); Celer Link BLE; console on the native USB-Serial/JTAG; build with `-DCELEROS_BOARD=waveshare-watch` |
 
 ## Where a board is defined
 
@@ -109,3 +110,42 @@ auto-brightness in Settings → Screen) and the speaker output on GPIO26
 * Unicore with the free IRAM byte-accessible (compile source, TLS buffers
   and JS heap overflow area). Details and numbers in
   [Documentation/ENGINE_NOTES.md](Documentation/ENGINE_NOTES.md).
+
+### Waveshare AMOLED 2.06 watch (ESP32-S3)
+
+Smartwatch board (ESP32-S3R8: 32 MB flash, 8 MB octal PSRAM) with a round
+2.06" AMOLED 410x502 driven by a **CO5300 over QSPI** (SDIO0..3 = GPIO4..7,
+SCLK=11, CS=12, RST=8; the visible glass sits at column offset 22). The
+AXP2101 PMU powers the display rails (DCDC1 + ALDO1 at 3.3 V) and must be
+configured before the panel init — the board HAL does it in `Board::init()`.
+
+* Build: `idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/waveshare-watch/sdkconfig.defaults" -DCELEROS_BOARD=waveshare-watch set-target esp32s3`.
+* Flash data with `tools/flash_data.sh waveshare-watch` (defaults to
+  `/dev/ttyACM0` — the watch only exposes the native USB-Serial/JTAG;
+  `celerctl` over UART0 has no physical port, day-to-day is WebManager and
+  Celer Link BLE).
+* Touch is an FT3168 on I²C (SDA=15, SCL=14, addr 0x38, RST=9, INT=38),
+  driven by the IDF `i2c_master` driver in `main/Display/Touch_FT3168_IDF.h`
+  (same pattern as the GT911 — LovyanGFX's own I²C layer is broken on
+  IDF 6.1, and the chip needs register 0xA5 = monitor mode at init).
+* Brightness is the AMOLED's WRDISBV (DCS 0x51) — no `Light_PWM`; the
+  backlight control in Settings works through the panel driver.
+* The panel only accepts even-aligned write windows, so the display runs
+  on a LovyanGFX framebuffer in PSRAM (also gives `readRect` back for
+  screenshots/screen mirror).
+* The glass is round-cornered: launcher grid corners are slightly clipped
+  and the virtual 240x320 canvas is scaled ~1.71x/1.57x (mild vertical
+  squash). The bundled **Watchface** app (`celeros.watchface`, the boot
+  `homeApp`) is designed for the glass; swipe up opens the launcher.
+* Pin map and init sequences were ported from the Rust firmware
+  `waveshare-watch-rs` (same watch, standalone firmware).
+
+**Board peripherals used by the system:** microSD on SPI3 (CS=17, SCK=2,
+MOSI=1, MISO=3, mounted at `/sd`), Celer Link BLE (NimBLE), ES8311 codec +
+PA (GPIO46) for `System.beep` (16 kHz, MCLK 4,096 MHz on GPIO16), QMI8658
+IMU (pedometer + raise-to-wake, `Sensors.*` API 13), PCF85063 RTC (time
+survives reboots), AXP2101 battery in `System.battery()`, BOOT/PWR buttons
+(short = home, hold = screenshot / deep sleep) and the ScreenPower ladder
+(dim 8 s → AOD 15 s with anti burn-in → off → deep sleep by EXT1 on the
+buttons). Planned: ULP-RISC-V motion monitoring during deep sleep and the
+ES8311 mic.

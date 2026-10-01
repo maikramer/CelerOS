@@ -32,6 +32,12 @@ idf.py -B build-cyd -DSDKCONFIG=build-cyd/sdkconfig \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/cyd/sdkconfig.defaults" \
   -DCELEROS_BOARD=cyd set-target esp32
 idf.py -B build-cyd build flash -p /dev/ttyUSB0 monitor
+
+# Watch Waveshare AMOLED 2.06 (ESP32-S3, USB-Serial/JTAG)
+idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/waveshare-watch/sdkconfig.defaults" \
+  -DCELEROS_BOARD=waveshare-watch set-target esp32s3
+idf.py -B build-watch build flash -p /dev/ttyACM0 monitor
 ```
 
 Cada placa usa um diretório de build próprio (`build/`, `build-cyd/`) com o

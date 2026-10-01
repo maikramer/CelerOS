@@ -68,10 +68,13 @@ void Backlight::setAuto(bool on, bool persist) {
 
 void Backlight::tick() {
     // Timeout de tela: apaga SEM chamar apply() (o nivel escolhido segue
-    // valido para o despertar); sem PWM nao ha o que apagar
+    // valido para o despertar); sem PWM nao ha o que apagar. O nivel
+    // aplicado e invalidado para o despertar reescrever de verdade (no
+    // watch o painel pode estar em SLPIN e a escrita se perder).
     if (idleTimeoutMs > 0 && !screenOff && isSupported() &&
         millis() - lastActivityMs >= idleTimeoutMs) {
         screenOff = true;
+        appliedLevel = -1;
         if (blTft) blTft->setBrightness(0);
     }
     if (screenOff) return;  // apagado: nada de auto-brilho rodando
@@ -112,6 +115,34 @@ bool Backlight::noteActivity() {
     screenOff = false;
     apply(autoOn ? autoTarget() : currentLevel);
     return true;  // este toque so acordou: quem leu deve engolir
+}
+
+// ---- brilho temporario (dim/AOD) --------------------------------------------
+
+static bool tempDim = false;
+
+void Backlight::dim(int raw255) {
+    if (!blTft || !isSupported()) return;
+    tempDim = true;
+    appliedLevel = -1;  // o apply() do despertar tem que reescrever
+    blTft->setBrightness((uint8_t)raw255);
+}
+
+void Backlight::undim() {
+    if (!tempDim) return;
+    tempDim = false;
+    appliedLevel = -1;
+    apply(autoOn ? autoTarget() : currentLevel);
+}
+
+uint32_t Backlight::lastActivity() { return lastActivityMs; }
+
+void Backlight::forceOff() {
+    if (screenOff || !blTft) return;
+    screenOff = true;
+    tempDim = false;
+    appliedLevel = -1;
+    blTft->setBrightness(0);
 }
 
 void Backlight::init(CelerDisplay* tft) {

@@ -4,8 +4,10 @@
 #include "../Utils/CelerSettings.h"
 #include "../UI/Kui.h"
 #include "../Display/Theme.h"
+#include "../Boards/Board.h"
 #include <esp_sntp.h>
 #include "esp_netif_sntp.h"
+#include "esp_log.h"
 
 std::string TimeManager::currentTimezone = "UTC0";
 bool TimeManager::use24hFormat = true;
@@ -32,10 +34,51 @@ void TimeManager::savePreferences() {
     FileSystem::writeTextFile(PREF_FILE, content.c_str());
 }
 
+// ---- RTC externo da placa (hooks do BoardProfile) ---------------------------
+// No watch (PCF85063) a hora precisa sobrevive a reboot sem rede: le no boot
+// quando a hora do sistema ainda e invalida e grava de volta apos o NTP (ou
+// ajuste manual / troca de fuso). A hora gravada e LOCAL — mktime/localtime_r
+// sob o TZ ja carregado fazem a conversao.
+
+static void syncExternalRtc(const char* motivo) {
+    const BoardProfile& bp = Board::profile();
+    if (!bp.writeRtc) return;
+    time_t now;
+    time(&now);
+    struct tm t;
+    localtime_r(&now, &t);
+    if (bp.writeRtc(t)) {
+        ESP_LOGI("celer.time", "RTC externo gravado (%s)", motivo);
+    } else {
+        ESP_LOGW("celer.time", "RTC externo nao gravou (%s)", motivo);
+    }
+}
+
+static void restoreExternalRtc() {
+    const BoardProfile& bp = Board::profile();
+    if (!bp.readRtc) return;
+    struct tm t;
+    if (!bp.readRtc(t)) {
+        // Normal no 1o boot (bateria do RTC nova/oscilador parado) — a hora
+        // chega por NTP/ajuste manual e o tick grava o RTC dali em diante.
+        ESP_LOGI("celer.time", "RTC externo sem hora valida (aguardando NTP/ajuste)");
+        return;
+    }
+    time_t e = mktime(&t);
+    if (e <= 0) return;
+    struct timeval now = { .tv_sec = e, .tv_usec = 0 };
+    settimeofday(&now, NULL);
+    ESP_LOGI("celer.time", "hora restaurada do RTC externo: %04d-%02d-%02d %02d:%02d:%02d",
+             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+}
+
 void TimeManager::init() {
     loadPreferences();
     setenv("TZ", currentTimezone.c_str(), 1);
     tzset();
+    // RTC externo primeiro (precisao de segundos); o epoch-NVS abaixo e a
+    // rede de seguridad das placas sem RTC (drift de minutos).
+    restoreExternalRtc();
     // Sem RTC externo, a hora morria em todo reboot sem rede: recupera o
     // ultimo epoch salvo (a cada 10 min no tick) — precisao de minutos, nao
     // de segundos (o uptime desde o save nao e contado).
@@ -137,6 +180,13 @@ void TimeManager::tick(bool networkUp) {
             lastSaveMs = now2;
             saveEpoch();
         }
+        // Primeira hora valida da sessao (SNTP seta async): grava no RTC
+        // externo uma unica vez — o oscilador dele corre sozinho daqui.
+        static bool rtcWritten = false;
+        if (!rtcWritten) {
+            rtcWritten = true;
+            syncExternalRtc("hora valida");
+        }
     }
 
     // Alarme do dia: relogio local passa de hh:mm -> toast e desarma
@@ -164,9 +214,10 @@ void TimeManager::setManualTime(int year, int month, int day, int hour, int minu
     t.tm_isdst = -1;
     
     time_t epoch = mktime(&t);
-    
+
     struct timeval now = { .tv_sec = epoch, .tv_usec = 0 };
     settimeofday(&now, NULL);
+    syncExternalRtc("ajuste manual");
 }
 
 void TimeManager::setTimezone(const std::string& tzOffset) {
@@ -174,6 +225,8 @@ void TimeManager::setTimezone(const std::string& tzOffset) {
     setenv("TZ", currentTimezone.c_str(), 1);
     tzset();
     savePreferences();
+    // A hora gravada no RTC e local: fuso novo = hora local nova.
+    if (isTimeValid()) syncExternalRtc("fuso trocado");
 }
 
 void TimeManager::setTimeFormat(bool use24h) {
@@ -239,4 +292,10 @@ int TimeManager::getSeconds() {
     time_t now; time(&now);
     struct tm timeinfo; localtime_r(&now, &timeinfo);
     return timeinfo.tm_sec;
+}
+
+int TimeManager::getWeekday() {
+    time_t now; time(&now);
+    struct tm timeinfo; localtime_r(&now, &timeinfo);
+    return timeinfo.tm_wday;   // 0=domingo (mesma convencao do RTC/watchface)
 }

@@ -151,6 +151,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
+    checkRemoteAppExit(ctx);  // shell "exit": encerra mesmo sem teclado aberto
     if (!s_kb || !tftInstance) {
         duk_push_null(ctx);
         return 1;

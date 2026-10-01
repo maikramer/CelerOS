@@ -2,6 +2,7 @@
 #define CELER_BOARDS_BOARD_H
 
 #include <stdint.h>
+#include <time.h>  // struct tm dos hooks readRtc/writeRtc
 #include "../Display/Display.h"
 #include "BoardDisplay.h"  // resolve para main/Boards/<placa>/ (include path do CMake)
 
@@ -17,6 +18,9 @@
 struct SdConfig {
     int cs, sck, miso, mosi;
     int freqKhz;
+    // Host SPI do slot (-1 = SPI2, o classico das placas RGB). Placas cujo
+    // display toma o SPI2 (ex.: QSPI do watch) apontam o SPI3 aqui.
+    int spiHost = -1;
 };
 
 // LED RGB de status (PWM). r < 0 = placa sem LED.
@@ -26,11 +30,13 @@ struct RgbLedPins {
 };
 
 // Saida de audio digital I2S para amplificador na placa (NS4168 na
-// SmartDisplay 4848S040: 16-bit stereo, sem MCLK). dout < 0 = sem I2S.
+// SmartDisplay 4848S040: 16-bit stereo, sem MCLK; ES8311 do watch: 16 kHz
+// com MCLK 256x). dout < 0 = sem I2S.
 struct AudioI2sPins {
     int dout = -1;
     int bclk = -1;
     int lrc = -1;
+    int mclk = -1;   // codec que precisa de MCLK do pino (ES8311: 4,096 MHz)
 };
 
 // Rele(s) da placa (linhas L1..L3 da SmartDisplay 4848S040 variante Y,
@@ -83,6 +89,34 @@ struct BoardProfile {
     int batteryPin = -1;     // divisor de bateria no ADC (System.battery); -1 = nao ha
     int batteryScalePct = 100;  // mV da bateria = mV no pino * scale / 100 (divisor 2:1 = 200)
     int touchPad = -1;       // pad capacitivo avulso (System.touchPad); -1 = nao ha
+    // Hooks de hardware opcional da placa (nullptr = nao ha). Padrao usado
+    // pelos campos acima: diferenca de placa vive no perfil, nunca em #ifdef.
+    bool (*readRtc)(struct tm&) = nullptr;        // RTC externo (PCF85063)
+    bool (*writeRtc)(const struct tm&) = nullptr; // gravar apos NTP/manual
+    bool (*readBatteryMv)(int* mv) = nullptr;     // bateria por PMU (AXP2101),
+                                                  // antes do caminho ADC
+    // Botoes fisicos (ativo-baixo, pull-up; -1 = nao ha). Botao 1: curto =
+    // home/encerra app, segurar ~1,2 s = screenshot. Botao 2: acorda a tela.
+    int buttonPin = -1;
+    int buttonPin2 = -1;
+    bool (*raisePoll)() = nullptr;                // gesto "levantar o pulso"
+                                                  // (consumivel: true 1x/gesto)
+    // Sono REAL do painel (ScreenPower): SLPIN/SLPOUT do AMOLED do watch.
+    // screenSleep != nullptr liga a maquina de estados de tela (dim/AOD/off).
+    void (*screenSleep)() = nullptr;
+    void (*screenWake)() = nullptr;
+    // IMU (Sensors.* do runtime JS, API 13). imuAccel != nullptr marca
+    // "tem IMU" no getInfo().
+    bool (*imuAccel)(float* x, float* y, float* z) = nullptr;  // cache, em g
+    int32_t (*imuSteps)() = nullptr;                           // passos do dia
+    bool (*imuTemp)(float* c) = nullptr;                       // die, °C
+    // Audio com codec I2C (ES8311 do watch): wake/sleep em volta do tom
+    // (o codec dorme de verdade entre beeps) + PA do amp.
+    int audioPaPin = -1;
+    bool (*audioCodecWake)() = nullptr;
+    void (*audioCodecSleep)() = nullptr;
+    // Ritual pre-deep-sleep da placa (persistir estado, desligar IMU...).
+    void (*sleepPrep)() = nullptr;
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;

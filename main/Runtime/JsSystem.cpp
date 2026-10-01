@@ -1,6 +1,7 @@
 #include "JSBindings.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
+#include "../Display/ScreenPower.h"
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
 #include "../WebManager/WebManager.h"
@@ -36,6 +37,7 @@
 duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     uint16_t tx = 0, ty = 0;
     bool touched = false;
+    checkRemoteAppExit(ctx);  // shell "exit": encerra antes de tocar no hardware
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
     if (tftInstance) {
         touched = kui::readTouch(&tx, &ty);
@@ -81,6 +83,7 @@ duk_ret_t JSBindings::js_micros(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_delay(duk_context *ctx) {
     int ms = duk_require_int(ctx, 0);
+    checkRemoteAppExit(ctx);  // shell "exit": app parado num delay longo tambem sai
     present();
     uint32_t t0 = millis();
     // Mark-and-sweep completo (so ciclos; o resto e refcount) custa ms em
@@ -104,6 +107,7 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
             uint32_t slice = remain > 4000 ? 4000 : remain;
             ScreenCapture::serviceDelay(slice);  // espera atendendo a tela no navegador
             remain -= slice;
+            checkRemoteAppExit(ctx);  // delay de ate 30s tambem responde ao "exit"
         }
     }
     return 0;
@@ -176,6 +180,10 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "hasLightSensor");
     duk_push_boolean(ctx, BoardIO::hasSpeaker() ? 1 : 0);
     duk_put_prop_string(ctx, -2, "hasSpeaker");
+    duk_push_boolean(ctx, Board::profile().mic.ws >= 0);  // API 13
+    duk_put_prop_string(ctx, -2, "hasMic");
+    duk_push_boolean(ctx, Board::profile().imuAccel != nullptr);  // API 13
+    duk_put_prop_string(ctx, -2, "hasImu");
 
     // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
     duk_push_uint(ctx, ESP.getCpuFreqMHz());
@@ -223,6 +231,18 @@ duk_ret_t JSBindings::js_getTime(duk_context *ctx) {
 duk_ret_t JSBindings::js_getSeconds(duk_context *ctx) {
     duk_push_int(ctx, TimeManager::getSeconds());
     return 1;
+}
+
+duk_ret_t JSBindings::js_getWeekday(duk_context *ctx) {
+    duk_push_int(ctx, TimeManager::getWeekday());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_keepAwake(duk_context *ctx) {
+    // Jogos/apps que seguram a tela acesa (maquina de estados do ScreenPower
+    // pula os estagios dim/AOD enquanto true). Sem estados de tela: no-op.
+    ScreenPower::keepAwake(duk_require_boolean(ctx, 0) != 0);
+    return 0;
 }
 
 duk_ret_t JSBindings::js_getDate(duk_context *ctx) {

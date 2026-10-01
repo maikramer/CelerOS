@@ -99,8 +99,13 @@ bool FileSystem::mountSD() {
 #if CONFIG_CELEROS_SD_CARD
     if (s_sd_card != nullptr) return true;
 
+    // Host do perfil: -1 = SPI2 (classico). Placas com display no SPI2
+    // (ex.: QSPI do watch) apontam o SPI3 no perfil.
+    const SdConfig& sd = Board::profile().sd;
+    spi_host_device_t sdHost = (sd.spiHost >= 0)
+        ? (spi_host_device_t)sd.spiHost : (spi_host_device_t)CELEROS_SD_SPI_HOST;
+
     if (!s_spi_bus_ready) {
-        const SdConfig& sd = Board::profile().sd;
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = sd.mosi;
         buscfg.miso_io_num = sd.miso;
@@ -108,7 +113,7 @@ bool FileSystem::mountSD() {
         buscfg.quadwp_io_num = -1;
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 4092;
-        esp_err_t err = spi_bus_initialize(CELEROS_SD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+        esp_err_t err = spi_bus_initialize(sdHost, &buscfg, SPI_DMA_CH_AUTO);
         if (err != ESP_OK) {
             ESP_LOGE(FS_TAG, "spi_bus_initialize falhou: %s", esp_err_to_name(err));
             return false;
@@ -127,12 +132,12 @@ bool FileSystem::mountSD() {
     }
 
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.host_id = (spi_host_device_t)CELEROS_SD_SPI_HOST;
+    slot.host_id = sdHost;
     slot.gpio_cs = (gpio_num_t)Board::profile().sd.cs;
     slot.gpio_cd = GPIO_NUM_NC;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = CELEROS_SD_SPI_HOST;
+    host.slot = sdHost;
     if (Board::profile().sd.freqKhz > 0) {
         host.max_freq_khz = Board::profile().sd.freqKhz;
     }

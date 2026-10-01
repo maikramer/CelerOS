@@ -78,7 +78,16 @@ void stripsOff();
 // Nivel de som 0..100 (RMS de uma captura curta, slot esquerdo).
 // -1 = placa sem microfone (mic.ws < 0). Primeira chamada inicializa o
 // canal I2S1 (~300 ms); as seguintes sao rapidas (~100 ms de audio).
+// Placa com codec (ES8311 do watch): o ADC do codec e religado a cada
+// leitura (ele dorme apos cada beep) — clocks vem do proprio I2S1 (MCLK).
 int micLevel();
+
+// ---- volume (System.setVolume, API 13) ----
+// 0..100 persistido em "volume" (default 100). I2S: escala digital da
+// senoide (NS4168/ES8311); codec do watch tambem recebe o registrador de
+// volume. Buzzer LEDC: no-op (ganho fixo).
+int volumePct();
+void setVolumePct(int pct, bool persist = true);
 
 // ---- pad capacitivo avulso ----
 // 1 = tocado, 0 = solto; -1 = placa sem pad (touchPad < 0). A referencia

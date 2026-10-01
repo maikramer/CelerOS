@@ -1,0 +1,84 @@
+#include "Boards/Board.h"
+#include "Axp2101.h"
+#include "Pcf85063.h"
+#include "Es8311.h"
+#include "Motion.h"
+#include "Hardware/BoardIO.h"
+
+// Smartwatch Waveshare ESP32-S3-Touch-AMOLED-2.06: ESP32-S3R8 (8MB PSRAM
+// octal, 32MB flash), AMOLED 410x502 CO5300 em QSPI, PMU AXP2101, touch
+// FT3168, RTC PCF85063 e IMU QMI8658 no mesmo I2C0, audio ES8311 e SD em
+// SPI3. Pinout e sequencias portados do firmware Rust do watch
+// (waveshare-watch-rs, src/board.rs).
+
+namespace {
+BoardDisplay s_display;
+}  // namespace
+
+namespace Board {
+
+static const BoardProfile s_profile = {
+    .id = "waveshare-amoled206",
+    .otaChannel = "waveshare_amoled206",
+    .name = "smartwatch Waveshare AMOLED 2.06 (ESP32-S3R8)",
+    .sd = {.cs = 17, .sck = 2, .miso = 3, .mosi = 1, .freqKhz = 4000, .spiHost = SPI3_HOST},
+    .hasPsram = true,        // 8MB octal embutida no S3R8
+    .backlightPwm = true,    // brilho = WRDISBV do painel AMOLED (DCS 0x51)
+    .capacitiveTouch = true, // FT3168, sem calibracao interativa
+    .speakerPin = -1,        // audio e ES8311+I2S0 (proxima leva)
+    .rotation = 0,           // painel ja e portrait 410x502
+    .led = {-1, -1, -1, false},
+    .lightSensorPin = -1,
+    .i2s = {.dout = 40, .bclk = 41, .lrc = 45, .mclk = 16},  // ES8311: 16 kHz, MCLK 4,096 MHz
+    .relay = {},
+    .servo = {},
+    // Microfone = ADC do ES8311 (ASDOUT GPIO42): o canal I2S1 do micLevel
+    // e master nos mesmos clocks do codec (MCLK pelo campo i2s.mclk acima).
+    .mic = {.ws = 45, .bck = 41, .din = 42},
+    .strips = {},
+    .batteryPin = -1,        // bateria vem do AXP2101 pelo hook abaixo
+    .batteryScalePct = 100,
+    .touchPad = -1,
+    .readRtc = Pcf85063::read,        // hora sobrevive a reboot sem rede
+    .writeRtc = Pcf85063::write,      // gravado apos NTP/ajuste manual/fuso
+    .readBatteryMv = Axp2101::readBatteryMv,
+    .buttonPin = 0,     // BOOT: curto = home/encerra app; segurar = screenshot
+    .buttonPin2 = 10,   // PWR: acorda a tela (F3); hold e candidato a desligar
+    .raisePoll = Motion::raisePoll,   // raise-to-wake (consumido pelo ScreenPower)
+    .screenSleep = []() { s_display.panelSleep(); },   // SLPIN do AMOLED
+    .screenWake  = []() { s_display.panelWakeup(); },  // SLPOUT (GRAM intacta)
+    .imuAccel = Motion::accel,   // Sensors.accel() — cache da task
+    .imuSteps = Motion::steps,   // Sensors.steps() — pedometro do dia
+    .imuTemp  = Motion::temp,    // Sensors.temp() — die do QMI8658
+    .audioPaPin = 46,            // amp PA: alto so durante o beep
+    .audioCodecWake = []() {
+        return Es8311::init() && Es8311::unmuteVolume(BoardIO::volumePct());
+    },
+    .audioCodecSleep = []() { Es8311::shutdown(); },
+    .sleepPrep = []() { Motion::prepareSleep(); },  // passos no NVS + IMU off
+    .homeApp = "celeros.watchface",  // o relogio e a casa do watch
+};
+
+void init() {
+    // Trilhos do PMU antes de tudo: sem DCDC1/ALDO1 em 3,3V o AMOLED fica
+    // preto mesmo inicializado (o AXP2101 solta o bus I2C ao terminar; o
+    // driver do touch abre o dele em seguida).
+    Axp2101::enableDisplayRails(GPIO_NUM_15, GPIO_NUM_14);
+    s_display.init();
+    s_display.setSwapBytes(true);
+    // Framebuffer na PSRAM (~402 KB): o CO5300 so escreve janelas alinhadas
+    // a par e nao tem readback — o FB resolve os dois (+readRect/screencap).
+    s_display.enableFrameBuffer(true);
+    // IMU (pedometro + raise): task propria no bus I2C compartilhado.
+    Motion::start();
+}
+
+CelerDisplay& display() {
+    return s_display;
+}
+
+const BoardProfile& profile() {
+    return s_profile;
+}
+
+}  // namespace Board

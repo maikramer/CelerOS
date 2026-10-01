@@ -24,6 +24,7 @@ BOARDS = {
     "cyd": {"build": "build-cyd", "csv": "partitions_4MB.csv"},
     "cyd-vspi": {"build": "build-cyd-vspi", "csv": "partitions_4MB.csv"},
     "spotpear-dog": {"build": "build-dog", "csv": "partitions_16MB.csv"},
+    "waveshare-watch": {"build": "build-watch", "csv": "partitions_32MB.csv"},
 }
 
 
@@ -48,12 +49,19 @@ def archive_sizes(map_path):
 
 def measure(board):
     cfg = BOARDS[board]
-    bdir = os.path.join(ROOT, cfg["build"])
-    binp = os.path.join(bdir, "CelerOS.bin")
-    if not os.path.exists(binp):
+    # Local usa apelidos curtos (build-cyd, build-dog...); o CI constroi em
+    # build-<board>. Procura o apelido primeiro e cai no padrao do CI — sem
+    # isso o gate do slot OTA pulava silenciosamente ("sem build") no CI.
+    bdir = None
+    for cand in (cfg["build"], f"build-{board}"):
+        p = os.path.join(ROOT, cand)
+        if os.path.exists(os.path.join(p, "CelerOS.bin")):
+            bdir = p
+            break
+    if bdir is None:
         return None
     return {
-        "image": os.path.getsize(binp),
+        "image": os.path.getsize(os.path.join(bdir, "CelerOS.bin")),
         "slot": slot_size(cfg["csv"]),
         "archives": archive_sizes(os.path.join(bdir, "CelerOS.map")),
     }

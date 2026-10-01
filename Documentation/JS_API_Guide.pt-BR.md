@@ -10,8 +10,8 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 12
-### Nível de API: 12
+### API Level: 13
+### Nível de API: 13
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -1373,3 +1373,50 @@ em dispositivos sem relés (retrocompatível com o canal atual).
 onChange), `ProgressBar` (fill 0..100) e `Spinner` (arco girando) entram no
 toolkit nativo (`main/UI/Kui.h`) para as telas do sistema — mesmos padrões
 de `Button`/`List` (immediate mode, feedback de pressão, hit-test no Rect).
+
+## 19. Nível de API 13 — Sensores do watch (IMU), dia da semana, keepAwake
+
+Adicionadas para a board do smartwatch Waveshare AMOLED 2.06 (IMU QMI8658);
+em placas sem o hardware as chamadas degradam limpo (feature-detect com
+`System.getInfo().hasImu`).
+
+### 19.1 `Sensors.accel()`
+
+- **Retorna:** `Object` -> `{ x, y, z }` em **g** (faixa ±8 g), ou `null`
+  se a placa não tem IMU.
+- **Descrição:** última amostra da task de movimento (cache a ~30 Hz — não
+  faz I²C na chamada, segura em loops).
+
+### 19.2 `Sensors.steps()`
+
+- **Retorna:** `Integer` — passos do dia corrente (zera à meia-noite,
+  persistido entre reboots), ou `-1` sem IMU.
+- **Descrição:** pedômetro portado do firmware de referência do watch
+  (pico/vale sobre a aceleração dinâmica, linha de base com LPF, cadência
+  mínima de 280 ms).
+
+### 19.3 `Sensors.temp()`
+
+- **Retorna:** `Number` — temperatura do die do IMU em °C, ou `-255` se
+  indisponível (leitura I²C on-demand; não chamar em loops apertados).
+
+### 19.4 `System.getWeekday()`
+
+- **Retorna:** `Integer` — `0` (domingo) .. `6` (sábado), hora local.
+
+### 19.5 `System.keepAwake(bool)`
+
+- **Descrição:** segura a tela acesa (pula a escada dim/AOD/off do
+  ScreenPower) enquanto `true`. Jogos e apps de treino chamam
+  `System.keepAwake(true)` ao abrir e `false` ao sair. No-op em placas sem
+  estados de tela.
+
+### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
+
+- **Parâmetros/Retorna:** `pct` 0..100 (persistido; default 100).
+- **Descrição:** volume do áudio do OS. Nas placas I²S escala a forma de
+  onda; no codec do watch (ES8311) também vai no registrador de volume de
+  hardware. `System.beep`/`playTone` pegam o valor sozinhos. Placas de
+  buzzer (LEDC) têm ganho fixo — o valor segue guardado.
+  `System.getInfo().hasMic` diz se há `System.micLevel()` disponível (cão
+  robô e o watch).

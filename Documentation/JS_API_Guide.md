@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 12
+### API Level: 13
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1125,3 +1125,50 @@ devices (retro-compatible with the current channel).
 onChange), `ProgressBar` (0..100 fill) and `Spinner` (spinning arc) join the
 native toolkit (`main/UI/Kui.h`) for system screens — same patterns as
 `Button`/`List` (immediate mode, press feedback, Rect hit-testing).
+
+## 19. API Level 13 — Watch sensors (IMU), weekday, keepAwake
+
+Added for the Waveshare AMOLED 2.06 watch board (QMI8658 IMU); on boards
+without the hardware the calls degrade gracefully (feature-detect with
+`System.getInfo().hasImu`).
+
+### 19.1 `Sensors.accel()`
+
+- **Returns:** `Object` -> `{ x, y, z }` in **g** (±8 g range), or `null` if
+  the board has no IMU.
+- **Description:** latest sample from the motion task (cached at ~30 Hz —
+  no I²C on the call itself, safe in loops).
+
+### 19.2 `Sensors.steps()`
+
+- **Returns:** `Integer` — steps of the current day (rolls over at
+  midnight, persisted across reboots), or `-1` if the board has no IMU.
+- **Description:** pedometer ported from the reference watch firmware
+  (peak/valley over dynamic acceleration, LPF baseline, 280 ms minimum
+  cadence).
+
+### 19.3 `Sensors.temp()`
+
+- **Returns:** `Number` — IMU die temperature in °C, or `-255` if
+  unavailable (on-demand I²C read; do not call in tight loops).
+
+### 19.4 `System.getWeekday()`
+
+- **Returns:** `Integer` — `0` (Sunday) .. `6` (Saturday), local time.
+
+### 19.5 `System.keepAwake(bool)`
+
+- **Description:** holds the screen awake (skips the dim/AOD/off ladder of
+  the ScreenPower state machine) while `true`. Games and workout apps call
+  `System.keepAwake(true)` on start and `false` on exit. No-op on boards
+  without screen states.
+
+### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
+
+- **Parameters/Returns:** `pct` 0..100 (persisted; default 100).
+- **Description:** OS-wide audio volume. On I²S boards it scales the
+  waveform; on the watch codec (ES8311) it also sets the hardware volume
+  register. `System.beep`/`playTone` pick it up automatically. Buzzer
+  (LEDC) boards have fixed gain — the value is still stored.
+  `System.getInfo().hasMic` tells whether `System.micLevel()` is available
+  (robot dog and the watch).

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include "../Boards/Board.h"
+#include "../Utils/CelerSettings.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -106,11 +107,15 @@ void sineInit() {
     s_sineReady = true;
 }
 
-// Tom via amplificador digital I2S (NS4168 da SmartDisplay): aloca o canal,
-// transmite a senoide pelo tempo pedido e devolve os pinos ao GPIO matrix.
+// Tom via amplificador digital I2S (NS4168 na SmartDisplay: 44,1 kHz sem
+// MCLK; ES8311 do watch: 16 kHz com MCLK 256x e codec no I2C — wake/sleep
+// em volta do tom, PA so durante a transmissao). Aloca o canal, transmite
+// a senoide pelo tempo pedido e devolve os pinos ao GPIO matrix.
 bool toneI2s(int freqHz, int ms) {
-    constexpr uint32_t kSampleRate = 44100;  // cobre a faixa 20..20000 Hz
-    const AudioI2sPins& p = Board::profile().i2s;
+    const BoardProfile& bp = Board::profile();
+    const AudioI2sPins& p = bp.i2s;
+    const bool hasCodec = bp.audioCodecWake != nullptr;
+    const uint32_t kSampleRate = hasCodec ? 16000 : 44100;  // ES8311: 16 kHz
     if (freqHz >= (int)kSampleRate / 2) return false;
 
     i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -123,7 +128,7 @@ bool toneI2s(int freqHz, int ms) {
     i2s_std_config_t stdCfg = {};
     stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
     stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    stdCfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;  // NS4168 nao usa MCLK
+    stdCfg.gpio_cfg.mclk = p.mclk >= 0 ? (gpio_num_t)p.mclk : I2S_GPIO_UNUSED;  // ES8311: 256x fs
     stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
     stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
     stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
@@ -133,9 +138,18 @@ bool toneI2s(int freqHz, int ms) {
         return false;
     }
 
+    // Codec no I2C (ES8311): acorda, PA sobe, toca, PA desce, dorme
+    if (hasCodec) bp.audioCodecWake();
+    if (bp.audioPaPin >= 0) {
+        pinMode(bp.audioPaPin, OUTPUT);
+        digitalWrite(bp.audioPaPin, HIGH);
+        delay(2);  // PA estabiliza antes do primeiro sample
+    }
+
     sineInit();
     // Fase em Q16.16 sobre a tabela de 256 amostras.
     const uint32_t step = (uint32_t)(((uint64_t)freqHz << 24) / kSampleRate);
+    const int vol = volumePct();  // escala digital (codec tambem tem reg.)
     uint32_t phase = 0;
     static int16_t frames[512][2];  // estereo L/R duplicado (amp mono)
     const uint32_t framesNeeded = (uint32_t)(((uint64_t)ms * kSampleRate) / 1000);
@@ -145,7 +159,7 @@ bool toneI2s(int freqHz, int ms) {
         if (n > 512) n = 512;
         for (uint32_t i = 0; i < n; i++) {
             phase += step;
-            const int16_t s = s_sine[(phase >> 16) & 0xFF];
+            const int16_t s = (int16_t)(((int32_t)s_sine[(phase >> 16) & 0xFF] * vol) / 100);
             frames[i][0] = s;
             frames[i][1] = s;
         }
@@ -154,6 +168,8 @@ bool toneI2s(int freqHz, int ms) {
         esp_task_wdt_reset();
         sent += n;
     }
+    if (bp.audioPaPin >= 0) digitalWrite(bp.audioPaPin, LOW);
+    if (hasCodec) bp.audioCodecSleep();
     i2s_channel_disable(tx);
     i2s_del_channel(tx);
     return true;
@@ -264,9 +280,18 @@ bool battCaliInit() {
 
 int batteryMv() {
     const BoardProfile& bp = Board::profile();
-    if (bp.batteryPin < 0) return -1;
+    if (bp.batteryPin < 0 && !bp.readBatteryMv) return -1;
     const int64_t now = (int64_t)millis();
     if (s_battMv >= 0 && now - s_battAt < 2000) return s_battMv;  // cache 2 s
+    // Bateria por PMU (AXP2101 do watch): hook da placa vem antes do ADC.
+    // Sem resposta do PMU nao ha fallback util (a placa nao tem divisor).
+    if (bp.readBatteryMv) {
+        int mv = 0;
+        if (!bp.readBatteryMv(&mv)) return -1;
+        s_battMv = mv;
+        s_battAt = now;
+        return mv;
+    }
     if (!battCaliInit()) return -1;
     // ADC ruidoso (servos puxando corrente): media de 16 leituras
     int sum = 0;
@@ -488,7 +513,9 @@ bool micInit() {
     i2s_std_config_t cfg = {};
     cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000);
     cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    cfg.gpio_cfg.mclk = Board::profile().i2s.mclk >= 0
+                            ? (gpio_num_t)Board::profile().i2s.mclk
+                            : I2S_GPIO_UNUSED;  // codec (ES8311): MCLK do I2S1
     cfg.gpio_cfg.bclk = (gpio_num_t)m.bck;
     cfg.gpio_cfg.ws = (gpio_num_t)m.ws;
     cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
@@ -505,6 +532,11 @@ bool micInit() {
 
 int micLevel() {
     if (!micInit()) return -1;
+    // Placa com codec (watch): o ES8311 dorme apos cada beep — religa o ADC
+    // a cada leitura (~1 ms de I2C; os clocks ja correm pelo canal acima).
+    const BoardProfile& bp = Board::profile();
+    if (bp.audioCodecWake != nullptr && !bp.audioCodecWake()) return -1;
+
     int16_t buf[512];  // 256 frames stereo
     size_t r = 0;
     if (i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150)) != ESP_OK || r < 64)
@@ -525,6 +557,34 @@ int micLevel() {
     const int rms = (int)sqrtf((float)var);
     int lvl = rms / 60;  // fundo ~0-3, voz/media sala 15-40, grito >60
     return lvl > 100 ? 100 : lvl;
+}
+
+// ---- volume (System.setVolume, API 13) --------------------------------------
+
+namespace {
+int s_volume = -1;  // 0..100; -1 = ainda nao carregou do NVS
+
+void volumeLoad() {
+    if (s_volume >= 0) return;
+    int v = atoi(CelerSettings::get("volume", "100").c_str());
+    s_volume = (v < 0 || v > 100) ? 100 : v;
+}
+}  // namespace
+
+int volumePct() {
+    volumeLoad();
+    return s_volume;
+}
+
+void setVolumePct(int pct, bool persist) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    s_volume = pct;
+    if (persist) {
+        char v[8];
+        snprintf(v, sizeof(v), "%d", pct);
+        CelerSettings::set("volume", v);
+    }
 }
 
 // ---- pad capacitivo avulso (touch driver novo do IDF, hw v2 do S3) ----

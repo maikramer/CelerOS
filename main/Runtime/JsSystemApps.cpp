@@ -40,6 +40,18 @@ duk_ret_t JSBindings::js_getBrightness(duk_context *ctx) {
     return 1;
 }
 
+// Volume do audio (API 13): I2S escala digital + registrador do codec
+// (ES8311 do watch); buzzer LEDC e ganho fixo (so persiste o valor).
+duk_ret_t JSBindings::js_setVolume(duk_context *ctx) {
+    BoardIO::setVolumePct(duk_require_int(ctx, 0));
+    return 0;
+}
+
+duk_ret_t JSBindings::js_getVolume(duk_context *ctx) {
+    duk_push_int(ctx, BoardIO::volumePct());
+    return 1;
+}
+
 // System.setAutoBrightness(bool) -> bool (false sem sensor de luz)
 duk_ret_t JSBindings::js_setAutoBrightness(duk_context *ctx) {
     bool on = duk_to_boolean(ctx, 0);

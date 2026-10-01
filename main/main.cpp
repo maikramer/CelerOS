@@ -4,6 +4,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
+#include "esp_sleep.h"
 #include "esp_ota_ops.h"
 #include "esp_core_dump.h"
 #include "freertos/FreeRTOS.h"
@@ -13,6 +14,8 @@
 #include "Display/Theme.h"
 #include "Display/Backlight.h"
 #include "Display/ScreenCapture.h"
+#include "Display/ScreenPower.h"
+#include "Hardware/Buttons.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
 #include "Settings/TouchCalibrator.h"
@@ -93,6 +96,12 @@ static void celerSetup() {
 
     // Brilho do backlight (depois do FS: le /local/brightness.txt)
     Backlight::init(&tft);
+
+    // Botoes fisicos do perfil (no-op sem pins; watch: BOOT/PWR)
+    Buttons::init();
+
+    // Estados de tela do watch (dim/AOD/off; no-op sem hooks no perfil)
+    ScreenPower::init();
     
     // Initialize Time Manager
     TimeManager::init();
@@ -146,6 +155,17 @@ static void celerSetup() {
     // coredump gravado na particao dedicada viram toast no launcher
     esp_reset_reason_t rr = esp_reset_reason();
     celer_log_printf("reset: motivo %d\n", (int)rr);  // esp_reset_reason_t
+    if (rr == ESP_RST_DEEPSLEEP) {
+        // Watch dormindo acordou (EXT1 dos botoes): a causa diz quem foi
+        esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
+        if (wc == ESP_SLEEP_WAKEUP_EXT1) {
+            uint64_t m = esp_sleep_get_ext1_wakeup_status();
+            celer_log_printf("acordou do deep sleep: botao (ext1 mask 0x%llx)\n",
+                             (unsigned long long)m);
+        } else {
+            celer_log_printf("acordou do deep sleep: causa %d\n", (int)wc);
+        }
+    }
     if (const char* fatal = CelerKernel::takeLastFatal()) {
         celer_log_printf("reiniciou por fatal do runtime JS: %s\n", fatal);
         kui::Navigator::toast(i18n::TR("Um app ficou sem memória e o sistema reiniciou",
@@ -201,6 +221,9 @@ static void celerLoop() {
     TimeManager::tick(WebManager::isActive());
     Backlight::tick();  // brilho automatico (so com sensor de luz e a opcao ligada)
     ScreenCapture::service();  // tela no navegador / celerctl screencap (le aqui, na task da UI)
+    Buttons::tick(false);  // botoes fisicos (no-op sem pins no perfil); apps
+                           // bombeiam pelo present() — aqui e a UI do sistema
+    ScreenPower::tick(false);  // dim/AOD/off (apps bombeiam pelo present())
     confirmPendingOta();
 
     delay(5);

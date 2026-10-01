@@ -17,6 +17,10 @@ function makeEnv() {
     var LIMIT = 200000;
     var env = {};
 
+    // Cores globais do firmware (RGB565), como globais do script
+    env.__prelude = 'var BLACK=0x0000,WHITE=0xFFFF,RED=0xF800,GREEN=0x07E0,BLUE=0x001F,' +
+                    'YELLOW=0xFFE0,CYAN=0x07FF,MAGENTA=0xF81F,ORANGE=0xFDA0,DARKGREY=0x7BEF;';
+
     // ---- Timers (API 12): mesmo modelo do firmware — disparam no delay/
     // getTouch (os pontos de "present"); erro do callback propaga.
     var timers = [];
@@ -269,6 +273,10 @@ function makeEnv() {
         getYear: function() { return 2026; },
         getMonth: function() { return 9; },
         getDay: function() { return 27; },
+        getWeekday: function() { return 0; },   // API 13 (domingo)
+        keepAwake: function() {},               // API 13 (no-op no host)
+        setVolume: function() {},               // API 13 (audio)
+        getVolume: function() { return 100; },
         getTimezone: function() { return 'UTC'; },
         wifiStatus: function() { return { connected: false, ip: '', webServer: false, savedNetworks: 0 }; },
         getIPAddress: function() { return ''; },
@@ -279,7 +287,9 @@ function makeEnv() {
         led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
         gpio: {
             servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
-            servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; }
+            servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; },
+            pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
+            analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
         },
         lightLevel: function() { return 80; },
         beep: function() { return true; },
@@ -296,6 +306,10 @@ function makeEnv() {
         present: function() { fireTimers(); }, isBuffered: function() { return false; },
         useSprite: function() { return true; },
         setTextDatum: function() {},
+        createSprite: function() { return 1; },
+        deleteSprite: function() {},
+        pushSprite: function() {},
+        bindSprite: function() { return true; },
         // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
         setPin: function() { return true; },
         verifyPin: function() { return true; },
@@ -434,6 +448,12 @@ function makeEnv() {
         clear: function() { storageMap = {}; return true; },
         clearFor: function() { return true; }
     };
+    // Sensors (API 13): IMU da placa — no host simula parado (gravidade em z)
+    env.Sensors = {
+        accel: function() { return { x: 0, y: 0, z: 1 }; },
+        steps: function() { return 0; },
+        temp: function() { return 30; }
+    };
     env.__storage = storageMap;
     env.setTimeout = function (fn, ms) { return timerAdd(fn, ms, false); };
     env.setInterval = function (fn, ms) { return timerAdd(fn, ms, true); };
@@ -448,9 +468,10 @@ function runApp(relPath, wire) {
     wire && wire(env);
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
@@ -476,6 +497,15 @@ function check(name, cond, extra) {
 }
 
 function joinLog(log) { return log.join('\n'); }
+
+// Testes inline: monta o Function com o mesmo prelude/parametros do runApp
+function runInline(src, env) {
+    var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                          (env.__prelude || '') + '\n' + src);
+    fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+}
 
 // --- Terminal ---------------------------------------------------------------
 (function() {
@@ -842,9 +872,10 @@ function joinLog(log) { return log.join('\n'); }
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1291,9 +1322,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1314,9 +1346,10 @@ function holdFrames(x, y, n) {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
     }
@@ -1339,9 +1372,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1365,9 +1399,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1405,9 +1440,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1430,9 +1466,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
-                              'Storage', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', src);
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
-           env.Storage, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }

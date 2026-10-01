@@ -32,6 +32,7 @@ public:
     static int getMonth();
     static int getDay();
     static int getSeconds();
+    static int getWeekday();   // 0=domingo..6=sabado (API 13: System.getWeekday)
 
     // Preferences state
     static std::string currentTimezone;

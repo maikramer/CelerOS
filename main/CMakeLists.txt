@@ -33,6 +33,7 @@ set(CELEROS_SRCS
     "Runtime/JsSystemApps.cpp"
     "Runtime/JsTimers.cpp"
     "Runtime/JsStorage.cpp"
+    "Runtime/JsSensors.cpp"
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
@@ -43,6 +44,8 @@ set(CELEROS_SRCS
     "UI/Kui.cpp"
     "UI/Keyboard.cpp"
     "Launcher/Screens.cpp"
+    "Hardware/Buttons.cpp"
+    "Display/ScreenPower.cpp"
 )
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
@@ -81,6 +84,8 @@ elseif(CELEROS_BOARD STREQUAL "spotpear-dog")
     set(CELEROS_BOARD_DIR Boards/spotpear-dog)
 elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_BOARD_DIR Boards/waveshare-watch)
+    # Servico de movimento (QMI8658: pedometro + raise) e exclusivo do watch
+    list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Motion.cpp")
 else()
     message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch)")
 endif()
@@ -168,7 +173,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.3.0"
-    CELEROS_API_LEVEL=12
+    CELEROS_API_LEVEL=13
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

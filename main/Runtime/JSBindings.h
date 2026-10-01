@@ -99,6 +99,13 @@ private:
     static duk_ret_t js_clearAlarm(duk_context *ctx);
     static duk_ret_t js_getAlarm(duk_context *ctx);
     static duk_ret_t js_playTone(duk_context *ctx);   // sequencia de notas
+
+    // Sensors do IMU da placa (API 13: watch)
+    static duk_ret_t js_sensorsAccel(duk_context *ctx);   // {x,y,z} em g
+    static duk_ret_t js_sensorsSteps(duk_context *ctx);   // passos do dia
+    static duk_ret_t js_sensorsTemp(duk_context *ctx);    // die do IMU, °C
+    static duk_ret_t js_getWeekday(duk_context *ctx);     // 0=dom..6=sab
+    static duk_ret_t js_keepAwake(duk_context *ctx);      // jogos: tela acesa
     static duk_ret_t js_notify(duk_context *ctx);     // toast + historico
     static duk_ret_t js_notifications(duk_context *ctx);      // lista (system)
     static duk_ret_t js_notificationsClear(duk_context *ctx); // limpar (system)
@@ -192,6 +199,8 @@ private:
     static duk_ret_t js_removeDirectory(duk_context *ctx);
     static duk_ret_t js_setBrightness(duk_context *ctx);
     static duk_ret_t js_getBrightness(duk_context *ctx);
+    static duk_ret_t js_setVolume(duk_context *ctx);   // API 13 (audio)
+    static duk_ret_t js_getVolume(duk_context *ctx);
     static duk_ret_t js_backlightSupported(duk_context *ctx);
     static duk_ret_t js_openWifiSetup(duk_context *ctx);
     static duk_ret_t js_exitApp(duk_context *ctx);
