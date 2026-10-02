@@ -125,10 +125,14 @@ const char* boardId() {
     return Board::profile().id;
 }
 
-// estado da escrita em curso (uma por vez, como o upload web)
+// estado da escrita em curso (uma por vez, como o upload web).
+// Em sessoes proto 2 os chunks carregam seq e o CRC e acumulado na chegada
+// (verificacao end-to-end no WRITE_END sem reler o arquivo).
 FILE* s_wrFile = nullptr;
 char s_wrPath[256] = {0};
 uint32_t s_wrTotal = 0;
+uint16_t s_wrSeq = 0;
+uint32_t s_wrCrc = 0;
 
 void closeWrite(bool keep) {
     if (s_wrFile != nullptr) {
@@ -169,6 +173,17 @@ void execPrint(void* ctx, const char* fmt, ...) {
         if (e->out.size() + (size_t)n > 32768) return;  // trunca em 32KB
         e->out.append(buf, (size_t)n);
     }
+}
+
+// ACK de chunk (proto 2): [u16 proximo seq esperado][u32 total aplicado].
+// O host casa pelo seq: maior que o enviado = chunk aplicado; menor/igual
+// = duplicado ou atrasado, e o "total" e a verdade para reconciliar.
+void ackChunk(uint8_t cmd, uint16_t nextSeq, uint32_t total) {
+    uint8_t rec[6];
+    rec[0] = (uint8_t)nextSeq;
+    rec[1] = (uint8_t)(nextSeq >> 8);
+    le32(rec + 2, total);
+    respond(cmd, 0, rec, sizeof(rec));
 }
 
 // ------------------------------------------------------------------ handlers
@@ -309,7 +324,11 @@ void handleRead(const uint8_t* payload, uint16_t len) {
         respondError(KL_READ, "pedido malformado");
         return;
     }
-    if (want > HostLink::MAX_PAYLOAD) want = HostLink::MAX_PAYLOAD;
+    // proto 2 prefixa o offset na resposta: o host pipelina N READs e
+    // casa cada uma pelo offset (respostas fora de ordem nao confundem)
+    const bool v2 = linkCtx() != nullptr && linkCtx()->v2();
+    const uint16_t room = (uint16_t)(HostLink::MAX_PAYLOAD - 1 - (v2 ? 4 : 0));
+    if (want > room) want = room;
 
     FILE* f = fopen(path, "rb");
     if (f == nullptr) {
@@ -317,12 +336,17 @@ void handleRead(const uint8_t* payload, uint16_t len) {
         return;
     }
     size_t got = 0;
+    uint8_t* dst = txData();
+    if (v2) {
+        le32(dst, offset);
+        dst += 4;
+    }
     if (fseek(f, (long)offset, SEEK_SET) == 0) {
-        got = fread(txData(), 1, want, f);  // direto no frame de resposta
+        got = fread(dst, 1, want, f);  // direto no frame de resposta
     }
     fclose(f);
     // o frame acrescenta o status; EOF e sinalizado por got < want
-    sendFrame(KL_READ, 0, (uint16_t)got);
+    sendFrame(KL_READ, 0, (uint16_t)((v2 ? 4 : 0) + got));
 }
 
 void handleWriteBegin(const uint8_t* payload, uint16_t len) {
@@ -340,6 +364,8 @@ void handleWriteBegin(const uint8_t* payload, uint16_t len) {
     }
     snprintf(s_wrPath, sizeof(s_wrPath), "%s", path);
     s_wrTotal = 0;
+    s_wrSeq = 0;
+    s_wrCrc = 0;
     respond(KL_WRITE_BEGIN, 0);
 }
 
@@ -348,18 +374,62 @@ void handleWriteChunk(const uint8_t* payload, uint16_t len) {
         respondError(KL_WRITE_CHUNK, "escrita nao iniciada");
         return;
     }
-    if (len > 0 && fwrite(payload, 1, len, s_wrFile) != len) {
+    const uint8_t* data = payload;
+    uint16_t n = len;
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        // proto 2: [seq u16][dados]; so aplica o seq esperado — reenvio de
+        // chunk cujo ACK se perdeu nao duplica bytes no arquivo
+        if (len < 2) {
+            respondError(KL_WRITE_CHUNK, "chunk sem seq");
+            return;
+        }
+        uint16_t seq = (uint16_t)(payload[0] | (payload[1] << 8));
+        if (seq != s_wrSeq) {
+            ackChunk(KL_WRITE_CHUNK, s_wrSeq, s_wrTotal);
+            return;
+        }
+        data = payload + 2;
+        n = (uint16_t)(len - 2);
+        if (n > 0) s_wrCrc = hostframe::crc32(data, n, s_wrCrc);
+        s_wrSeq++;
+    }
+    if (n > 0 && fwrite(data, 1, n, s_wrFile) != n) {
         closeWrite(false);
         respondError(KL_WRITE_CHUNK, "disco cheio/erro");
         return;
     }
-    s_wrTotal += len;
+    s_wrTotal += n;
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        ackChunk(KL_WRITE_CHUNK, s_wrSeq, s_wrTotal);
+        return;
+    }
     respond(KL_WRITE_CHUNK, 0);
 }
 
-void handleWriteEnd() {
+void handleWriteEnd(const uint8_t* payload, uint16_t len) {
     if (s_wrFile == nullptr) {
         respondError(KL_WRITE_END, "escrita nao iniciada");
+        return;
+    }
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        // [u32 crc do host][u32 tamanho do host] — verificacao de ponta a
+        // ponta: divergencia aborta e remove o parcial
+        uint32_t crcHost = 0, sizeHost = 0;
+        if (len < 8 || !takeU32(payload, len, crcHost) || !takeU32(payload, len, sizeHost)) {
+            respondError(KL_WRITE_END, "WRITE_END v2 sem crc/tamanho");
+            return;
+        }
+        if (sizeHost != s_wrTotal || crcHost != s_wrCrc) {
+            closeWrite(false);
+            respondError(KL_WRITE_END, "crc/tamanho divergem no fim da escrita");
+            return;
+        }
+        uint32_t total = s_wrTotal, crc = s_wrCrc;
+        closeWrite(true);
+        uint8_t rec[8];
+        le32(rec, total);
+        le32(rec + 4, crc);
+        respond(KL_WRITE_END, 0, rec, sizeof(rec));
         return;
     }
     uint32_t total = s_wrTotal;
@@ -467,6 +537,8 @@ void handleLogOff() {
 esp_ota_handle_t s_ota = 0;
 const esp_partition_t* s_otaPart = nullptr;
 uint32_t s_otaWritten = 0;
+uint16_t s_otaSeq = 0;
+uint32_t s_otaCrc = 0;
 
 void handleOtaBegin() {
     if (s_ota != 0) {
@@ -485,6 +557,8 @@ void handleOtaBegin() {
         return;
     }
     s_otaWritten = 0;
+    s_otaSeq = 0;
+    s_otaCrc = 0;
     respond(KL_OTA_BEGIN, 0, s_otaPart->label, (uint16_t)strlen(s_otaPart->label));
 }
 
@@ -493,20 +567,58 @@ void handleOtaChunk(const uint8_t* payload, uint16_t len) {
         respondError(KL_OTA_CHUNK, "OTA nao iniciada");
         return;
     }
-    if (len > 0 && esp_ota_write(s_ota, payload, len) != ESP_OK) {
+    const uint8_t* data = payload;
+    uint16_t n = len;
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        // [seq u16][dados] — mesma janela do WRITE_CHUNK: reenvio cujo ACK
+        // se perdeu nao grava 2x na particao (o ACK traz o total aplicado)
+        if (len < 2) {
+            respondError(KL_OTA_CHUNK, "chunk sem seq");
+            return;
+        }
+        uint16_t seq = (uint16_t)(payload[0] | (payload[1] << 8));
+        if (seq != s_otaSeq) {
+            ackChunk(KL_OTA_CHUNK, s_otaSeq, s_otaWritten);
+            return;
+        }
+        data = payload + 2;
+        n = (uint16_t)(len - 2);
+        if (n > 0) s_otaCrc = hostframe::crc32(data, n, s_otaCrc);
+        s_otaSeq++;
+    }
+    if (n > 0 && esp_ota_write(s_ota, data, n) != ESP_OK) {
         esp_ota_abort(s_ota);
         s_ota = 0;
         respondError(KL_OTA_CHUNK, "falha ao gravar particao");
         return;
     }
-    s_otaWritten += len;
+    s_otaWritten += n;
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        ackChunk(KL_OTA_CHUNK, s_otaSeq, s_otaWritten);
+        return;
+    }
     respond(KL_OTA_CHUNK, 0);
 }
 
-void handleOtaEnd() {
+void handleOtaEnd(const uint8_t* payload, uint16_t len) {
     if (s_ota == 0) {
         respondError(KL_OTA_END, "OTA nao iniciada");
         return;
+    }
+    if (linkCtx() != nullptr && linkCtx()->v2()) {
+        // [u32 crc do host][u32 tamanho do host] — imagem corrompida no
+        // caminho nunca chega a marca de boot
+        uint32_t crcHost = 0, sizeHost = 0;
+        if (len < 8 || !takeU32(payload, len, crcHost) || !takeU32(payload, len, sizeHost)) {
+            respondError(KL_OTA_END, "OTA_END v2 sem crc/tamanho");
+            return;
+        }
+        if (sizeHost != s_otaWritten || crcHost != s_otaCrc) {
+            esp_ota_abort(s_ota);
+            s_ota = 0;
+            respondError(KL_OTA_END, "crc/tamanho divergem no fim da OTA");
+            return;
+        }
     }
     esp_err_t errEnd = esp_ota_end(s_ota);
     s_ota = 0;
@@ -648,7 +760,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_READ: handleRead(payload, len); break;
         case KL_WRITE_BEGIN: handleWriteBegin(payload, len); break;
         case KL_WRITE_CHUNK: handleWriteChunk(payload, len); break;
-        case KL_WRITE_END: handleWriteEnd(); break;
+        case KL_WRITE_END: handleWriteEnd(payload, len); break;
         case KL_DELETE: handleDelete(payload, len); break;
         case KL_MKDIR: handleMkdir(payload, len); break;
         case KL_RENAME: handleRename(payload, len); break;
@@ -659,7 +771,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_LOG_OFF: handleLogOff(); break;
         case KL_OTA_BEGIN: handleOtaBegin(); break;
         case KL_OTA_CHUNK: handleOtaChunk(payload, len); break;
-        case KL_OTA_END: handleOtaEnd(); break;
+        case KL_OTA_END: handleOtaEnd(payload, len); break;
         case KL_OTA_ABORT: handleOtaAbort(); break;
         case KL_SCREENSHOT: handleScreenshot(payload, len); break;
         case KL_COREDUMP: handleCoredump(); break;
@@ -754,9 +866,11 @@ void HostLink::feed(uint8_t byte) {
 }
 
 void HostLink::run(StreamBufferHandle_t rx) {
+    // bloco por vez: 1 byte por xStreamBufferReceive nao escala com os
+    // chunks de 8KB do proto 2 (centenas de milhares de bytes/s no CDC)
+    uint8_t buf[64];
     for (;;) {
-        uint8_t byte;
-        if (xStreamBufferReceive(rx, &byte, 1, portMAX_DELAY) == 0) continue;
-        feed(byte);
+        size_t n = xStreamBufferReceive(rx, buf, sizeof(buf), portMAX_DELAY);
+        for (size_t i = 0; i < n; i++) feed(buf[i]);
     }
 }

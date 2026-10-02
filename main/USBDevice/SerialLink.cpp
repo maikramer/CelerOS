@@ -159,8 +159,15 @@ void linkTask(void*) {
 // ------------------------------------------------------------------- API
 
 bool SerialLink::init() {
-    // driver RX na UART do console (TX segue por escrita direta/polling)
-    esp_err_t err = uart_driver_install(K_UART, 2048, 0, 0, nullptr, 0);
+    // driver RX na UART do console (TX segue por escrita direta/polling).
+    // O ring segura os chunks em voo da janela do proto 2 enquanto a task
+    // escreve no flash: S3 tem DRAM de sobra; CYD fica com 4KB (heap).
+#if CONFIG_IDF_TARGET_ESP32S3
+    constexpr int kRxRing = 16384;
+#else
+    constexpr int kRxRing = 4096;
+#endif
+    esp_err_t err = uart_driver_install(K_UART, kRxRing, 0, 0, nullptr, 0);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "uart_driver_install: %s", esp_err_to_name(err));
         return false;
