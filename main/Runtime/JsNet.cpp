@@ -1,4 +1,5 @@
 #include "JSBindings.h"
+#include "esp_heap_caps.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -90,14 +91,19 @@ static bool netFetch(duk_context *ctx, bool isPost) {
     // Componente Http (esp_http_client): https usa o cert bundle do sistema
     NetBody got;
     bool ok;
+    const char* failWhy = "";
     {
         HttpClient http;
         http.setTimeout(10000);
         http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
         HttpResponse resp = isPost ? http.post(url, body, contentType) : http.get(url);
         ok = resp.isOk();
+        if (!ok) failWhy = resp.errorMessage.c_str();  // diagnostico (log)
     }  // TLS/cliente liberados antes de copiar o corpo para o heap JS
     if (!ok) {
+        celer_log_printf("[net] get falhou: why=%s internal=%u\n",
+                         failWhy[0] ? failWhy : "?",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         free(got.p);
         return false;
     }
@@ -292,13 +298,18 @@ static void netAsyncTask(void* raw) {
 
 duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
     const char* url = duk_require_string(ctx, 0);
-    if (!WebManager::isWifiConnected()) { duk_push_int(ctx, -1); return 1; }
+    if (!WebManager::isWifiConnected()) {
+        celer_log_println("[net] beginGet -1: wifi fora (state)");
+        duk_push_int(ctx, -1);
+        return 1;
+    }
 
     for (int i = 0; i < 2; i++) {
         NetAsyncSlot& s = s_netAsync[i];
         if (!netMuxTake(s)) continue;
         if (s.state == 1) {  // task viva (rodando ou zumbi cancelado)
             xSemaphoreGive(s.mux);
+            celer_log_printf("[net] beginGet -1: slot %d ocupado (state 1)\n", i);
             continue;
         }
         // state 0 (livre) ou 2 (resultado nao consumido): reusa
@@ -311,11 +322,13 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         s.state = 1;
         xSemaphoreGive(s.mux);
 
-        // Stack de 32KB: o caminho assincrono roda o MESMO HttpClient/TLS do
-        // Net.get (que execute na main de ~27KB) — com 12KB o handshake
-        // estoura e o pollGet vinha "UNKNOWN ERROR" (bancada 2026-10-02).
-        // Boards sem PSRAM nao abrem apps com "net", o custo e so no S3.
-        if (xTaskCreate(netAsyncTask, "jsnet", 32768, &s, 3, nullptr) != pdPASS) {
+        // Stack de 24KB: o caminho assincrono roda o MESMO HttpClient/TLS do
+        // Net.get (que execute na main de ~27KB TOTAL, com UI junto; aqui so
+        // http) — 12KB estourava o handshake ("UNKNOWN ERROR") e 32KB nao
+        // nascia (xTaskCreate falhava com a RAM interna da arvore API 17,
+        // bancada 2026-10-02). Boards sem PSRAM nao abrem apps com "net".
+        if (xTaskCreate(netAsyncTask, "jsnet", 24576, &s, 3, nullptr) != pdPASS) {
+            celer_log_println("[net] beginGet -1: xTaskCreate falhou (RAM p/ stack de 24KB)");
             // task nao nasceu: nada escrevera o slot, devolve ao estado livre
             netMuxTake(s);
             if (s.state == 1) s.state = 0;

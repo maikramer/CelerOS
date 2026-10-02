@@ -336,7 +336,12 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
                  (unsigned long)response.durationMs);
     } else {
         response.success = false;
-        response.errorMessage = esp_err_to_name(err);
+        // Codigo numerico SEMPRE: com CONFIG_ESP_ERR_TO_NAME_LOOKUP desligado
+        // (economia de flash) esp_err_to_name so diz "UNKNOWN ERROR" e o hex
+        // e a unica pista do erro real (bancada 2026-10-02)
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%s (0x%x)", esp_err_to_name(err), err);
+        response.errorMessage = msg;
         ESP_LOGE(TAG, "Request to %s failed: %s", url.c_str(), response.errorMessage.c_str());
         onError.trigger(url, response.errorMessage);
     }
