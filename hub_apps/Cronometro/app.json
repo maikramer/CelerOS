@@ -1,11 +1,12 @@
 {
   "name": "Cronometro",
   "packageName": "celeros.cronometro",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "CelerOS",
   "description": "Cronometro com centesimos, voltas e total de cada intervalo.",
   "type": "Utility",
   "category": "Utility",
   "api": 3,
-  "changelog": "1.1.0 - melhor e pior volta destacadas; 1.0.0 - primeiro lancamento"
+  "permissions": [],
+  "changelog": "1.1.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.0 - melhor e pior volta destacadas; 1.0.0 - primeiro lancamento"
 }

@@ -7,5 +7,6 @@
   "type": "Utility",
   "category": "Utility",
   "api": 7,
+  "permissions": ["net"],
   "changelog": "1.1.0 - BTC/USD (coinbase) alem do USD/BRL, latencia medida por consulta, auto-refresh a cada 60s com contagem no rodape\n1.0.2 - primeira versao estavel"
 }

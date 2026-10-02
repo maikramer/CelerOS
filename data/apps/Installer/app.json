@@ -7,6 +7,7 @@
   "type": "System",
   "category": "System",
   "api": 7,
+  "permissions": ["fs", "system"],
   "system": true,
   "order": 20,
   "icon": "installer",

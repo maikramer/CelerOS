@@ -1,11 +1,12 @@
 {
   "name": "Physics Drop",
   "packageName": "celeros.physicsdrop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "CelerOS",
   "description": "Sandbox de fisica (integracao de Verlet): desenhe linhas que caem, solte cordas e panos e brinque com a gravidade (ate invertida).",
   "type": "Demo",
   "category": "Simulation",
   "api": 3,
-  "changelog": "1.2.0 - preformas corda/pano, 5 presets de gravidade e tema CelerOS"
+  "permissions": [],
+  "changelog": "1.2.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - preformas corda/pano, 5 presets de gravidade e tema CelerOS"
 }

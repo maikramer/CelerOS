@@ -11,10 +11,6 @@
   "order": 30,
   "icon": "settings",
   "topbar": true,
-  "permissions": [
-    "fs",
-    "system",
-    "net"
-  ],
+  "permissions": ["fs", "net", "system"],
   "changelog": "1.5.0 - pagina Som (slider de volume + teste, API 13) e pagina Sensores ao vivo (watch, API 13)\n1.4.2 - tempo de tela e notificacoes"
 }

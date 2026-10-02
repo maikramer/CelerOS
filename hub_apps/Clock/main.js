@@ -298,6 +298,10 @@ function handleAlarmTouch(x, y) {
         if (x >= 70 && x <= 110) { alarmH = (alarmH - 1 + 24) % 24; }
         if (x >= 130 && x <= 170) { alarmM = (alarmM + 1) % 60; }
         if (x >= 180 && x <= 220) { alarmM = (alarmM - 1 + 60) % 60; }
+        // alarme ja ligado: reprograma o do OS com a hora nova
+        if (alarmOn && typeof System.setAlarm === "function") {
+            try { System.setAlarm(alarmH, alarmM, "Alarme"); } catch (ec) {}
+        }
         System.fillRect(0, 70, 240, 50, COLOR_BG); // clear old text area just in case
         renderAlarm();
     }

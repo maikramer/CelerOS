@@ -12,9 +12,5 @@
   "order": 10,
   "icon": "appstore",
   "topbar": true,
-  "permissions": [
-    "net",
-    "fs",
-    "system"
-  ]
+  "permissions": ["fs", "net", "system"]
 }

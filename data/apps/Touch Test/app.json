@@ -7,6 +7,7 @@
   "type": "Utility",
   "category": "Utility",
   "api": 6,
+  "permissions": [],
   "topbar": true,
   "changelog": "1.2.0 - rastro continuo de arrasto, coords vivas com faixa min/max, rampa de cinza 16 niveis, card de informacoes do aparelho e amostras/s\n1.1.0 - barras RGB + chips da topbar (API 6)"
 }

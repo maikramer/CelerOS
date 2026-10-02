@@ -104,7 +104,7 @@ var CATS = [
         { t: "Sons e áudio", d: "API 12 e 13",
           c: "System.playTone toca melodias curtas no alto-falante. System.playWav toca arquivos WAV PCM 16-bit (8 a 48 kHz) de /local ou /sd. System.setVolume e getVolume ajustam o volume geral (API 13)." },
         { t: "Sensores e relógio", d: "API 13",
-          c: "No watch, Sensors.accel le o acelerômetro, Sensors.steps conta passos e Sensors.temp a temperatura. System.getWeekday devolve o dia da semana, System.keepAwake(segundos) segura a tela acordada e o RTC mantém a hora entre reboots." }
+          c: "No watch, Sensors.accel le o acelerômetro, Sensors.steps conta passos e Sensors.temp a temperatura. System.getWeekday devolve o dia da semana, System.keepAwake(ms) segura a tela acordada por ms milissegundos (ou true/false) e o RTC mantém a hora entre reboots." }
     ]},
     { name: "Problemas Comuns", topics: [
         { t: "Tela preta", d: "Travamento em apps",

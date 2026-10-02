@@ -1,11 +1,12 @@
 {
   "name": "2D Runner",
   "packageName": "celeros.runner2d",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "api": 3,
+  "permissions": ["fs"],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Corrida infinita neon: desvie dos trens, pegue as moedas e bata o recorde (salvo no aparelho). Render por fatias sem flicker.",
-  "changelog": "1.2.0 - recorde persistido, sons, PT-BR e destaque de novo recorde"
+  "changelog": "1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - recorde persistido, sons, PT-BR e destaque de novo recorde"
 }

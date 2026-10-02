@@ -7,6 +7,7 @@
   "type": "App",
   "category": "Utility",
   "api": 7,
+  "permissions": ["fs", "net", "system"],
   "topbar": true,
   "changelog": "1.4.0 - historico persistido (20 comandos, !! e !n reexecutam), comandos apps/vol/tone/battery/sensors\n1.3.0 - chips da faixa, wifi scan\n1.2.0 - js eval e neofetch"
 }
