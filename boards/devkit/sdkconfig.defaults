@@ -1,0 +1,55 @@
+# Devkit barebone (ESP32 classico 4MB, sem PSRAM): mesmo perfil apertado da
+# CYD — unicore com IRAM-as-heap e stacks medidos — pois a RAM interna e o
+# slot OTA de 1.56MB sao os mesmos. Sem slot SD (o FAT/SDSPI sai do binario).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4MB.csv"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Sem vidro, mas o logcat do celerctl segue completo (nao passa por ESP_LOG).
+# ESP_LOGI/D de componentes fora do binario: slot de 1.56MB e apertado.
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
+# CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+# CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
+
+# Bundle de CAs "comum" (~45 raizes): ~35 KB a menos no slot OTA.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set
+
+# Devkit nao tem slot SD: FAT/SDSPI saem do binario (bom para o tamanho).
+# CONFIG_CELEROS_SD_CARD is not set
+
+# Heap para apps JS (piso do Duktape medido na CYD: 20KB deixa folga para
+# apps aninhados; o compile recursivo chega a ~8,5KB de pico).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
+
+# RAM interna (sem PSRAM): WiFi com 4 buffers RX estaticos + 16 dinamicos e
+# AMPDU off — throughput menor, heap maior (loja, OTA, web server).
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+
+# Stacks do sistema pelo uso medido (celerctl ps): sys_evt ~2KB, esp_timer
+# ~0,4KB — o que sobra vira heap 8-bit para o runtime JS e o TLS.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
+
+# Unicore + IRAM acessivel a byte (~40KB de IRAM livre viram heap): sem isso
+# apps JS com rede de ~30KB nao cabem na RAM interna (mesma conta da CYD).
+CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y
+CONFIG_FREERTOS_UNICORE=y
+CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
+CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+# Buffers TLS FIXOS (16KB RX + 4KB TX): o modo IRAM so desvia alocacoes >= 4KB.
+# CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
+
+# IRAM livre = heap: codigo que so esta na IRAM por desempenho vai para a
+# flash (WiFi perde throughput de pico; o devkit baixa JSON, nao video) e
+# malloc/free ficam na IRAM (compile do Duktape 2x mais rapido).
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set

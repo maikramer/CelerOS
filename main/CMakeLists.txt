@@ -99,8 +99,10 @@ elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_BOARD_DIR Boards/waveshare-watch)
     # Servico de movimento (QMI8658: pedometro + raise) e exclusivo do watch
     list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Motion.cpp")
+elseif(CELEROS_BOARD STREQUAL "devkit")
+    set(CELEROS_BOARD_DIR Boards/devkit)
 else()
-    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch)")
+    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit)")
 endif()
 list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Board.cpp")
 

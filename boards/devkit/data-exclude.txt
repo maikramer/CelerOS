@@ -1,0 +1,10 @@
+# Apps de data/ que NAO vao para o LittleFS do devkit (tools/flash_data.sh).
+# Um caminho por linha, relativo a data/. Sem vidro, apps que so desenham
+# nao servem de nada no barebone — a fabrica leva so o que roda headless
+# (servicos, rede, gpio; Help/Installer/Terminal ficam).
+apps/App Store
+apps/Settings
+apps/Snake
+apps/Touch Test
+apps/Watchface
+apps/Web Server

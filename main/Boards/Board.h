@@ -99,8 +99,12 @@ struct BoardProfile {
                                                   // nullptr = estima pela curva LiPo
     int (*readChargeState)() = nullptr;           // bit0 carregando, bit1 USB,
                                                   // bit2 cheia (-1 = falhou)
-    // Botoes fisicos (ativo-baixo, pull-up; -1 = nao ha). Botao 1: curto =
-    // home/encerra app, segurar ~1,2 s = screenshot. Botao 2: acorda a tela.
+    // Botoes fisicos (ativo-baixo, pull-up; -1 = nao ha). Comportamento
+    // padrao (buttonToApp = false): botao 1, curto = home/encerra app,
+    // segurar ~1,2 s = screenshot; botao 2 acorda a tela. Com buttonToApp
+    // (devkit headless), o botao 1 e input do app: curto/longo ficam
+    // disponiveis em System.button() (latch consumido pelo JS) e segurar
+    // ~1,2 s sai do app; no launcher, curto relanca o homeApp.
     int buttonPin = -1;
     int buttonPin2 = -1;
     bool (*raisePoll)() = nullptr;                // gesto "levantar o pulso"
@@ -147,6 +151,14 @@ struct BoardProfile {
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;
+    // Placa sem vidro (devkit barebone): o painel e um stub que descarta os
+    // flush (BoardDisplay.h). Pula o splash do boot e marca hasDisplay=false
+    // / shape="headless" no getInfo() dos apps JS.
+    bool headless = false;
+    // Botao 1 e input do app em vez de "home" (devkit headless): curto/longo
+    // chegam via System.button(), segurar ~1,2 s sai do app; no launcher, o
+    // curto relanca o homeApp (o device nunca fica preso no launcher).
+    bool buttonToApp = false;
     // GPIOs que o requirePin recusa alem dos strapping/USB (esp_gpio_is_reserved
     // nao conhece o modo da PSRAM nem o console): no ESP32-S3 com PSRAM OCTAL
     // (modulo N16R8, ex. 4848S040) GPIO33..37 sao as linhas DQ4..7/DQS — um PWM

@@ -25,6 +25,7 @@ BOARDS = {
     "cyd-vspi": {"build": "build-cyd-vspi", "csv": "partitions_4MB.csv"},
     "spotpear-dog": {"build": "build-dog", "csv": "partitions_16MB.csv"},
     "waveshare-watch": {"build": "build-watch", "csv": "partitions_32MB.csv"},
+    "devkit": {"build": "build-devkit", "csv": "partitions_4MB.csv"},
 }
 
 
