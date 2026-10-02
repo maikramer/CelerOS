@@ -180,7 +180,12 @@ bool SerialLink::init() {
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
 
-    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud);
+#if CONFIG_IDF_TARGET_ESP32S3
+    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 4);
+#else
+    // ESP32 classico (CYD): ring/heap curtos — janela menor de chunks em voo
+    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 2);
+#endif
     s_link = &link;
 
     if (xTaskCreate(linkTask, "dbg_link", 8192, nullptr, 4, nullptr) != pdPASS) {

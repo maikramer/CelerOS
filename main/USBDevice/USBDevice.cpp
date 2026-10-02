@@ -152,7 +152,9 @@ bool USBDevice::init() {
         return false;
     }
 
-    static HostLink link(&USBDevice::linkWrite);  // CDC: sem hook de baud
+    // CDC: sem hook de baud (USB nao tem baud); janela ampla — o flow
+    // control do USB nao derruba bytes no caminho
+    static HostLink link(&USBDevice::linkWrite, nullptr, 8);
     s_link = &link;
 
     if (xTaskCreate(usbShellTask, "usb_shell", 8192, nullptr, 3, nullptr) != pdPASS ||

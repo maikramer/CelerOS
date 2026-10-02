@@ -5,11 +5,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 
+#include "HostFrame.h"
+
 // Protocolo HostLink: canal binario da ferramenta celerctl sobre a CDC1
 // nativa ou a UART do CH340 (multiplexada com o console).
 //
-// Frame (little-endian):
-//   [0x43 'C'][cmd u8][len u16][payload de len bytes]
+// Frame (little-endian) — ver HostFrame.h (framer puro, testado no host):
+//   proto 1: [0x43 'C'][cmd u8][len u16][payload]
+//   proto 2: [0x43 'C'][cmd u8][len u16][crc32 u32][payload]  (crc no fio)
+// O formato e da sessao, negociado no HELLO: payload "CELERCTL2" ativa o
+// proto 2 (resposta do HELLO anuncia "proto 2|chunk W|win K"); qualquer
+// outro payload mantem proto 1 — celerctl novo e firmware velho (e o
+// contrario) conversam em proto 1 sem nada a fazer.
 //
 // Resposta reusa o opcode do pedido; o payload de resposta comeca com
 // u8 status (0 = OK, 1 = erro; no erro o resto do payload e a mensagem).
@@ -30,7 +37,8 @@ public:
     // Hook de troca de baud (so faz sentido em canais com baud, ex. UART)
     typedef void (*BaudFn)(uint32_t baud);
 
-    HostLink(WriteFn writer, BaudFn baudHook = nullptr);
+    // window: chunks em voo que o canal aceita (anunciado no HELLO proto 2)
+    HostLink(WriteFn writer, BaudFn baudHook = nullptr, uint8_t window = 4);
 
     // Loop da task do canal CDC (USB nativo): consome o stream buffer e
     // alimenta a maquina de frames. Nunca retorna.
@@ -52,21 +60,33 @@ public:
     // arbitrarias; nao passa pelos locks do dispatch (sem deadlock).
     static bool sendLogFrame(const char* line, size_t n);
 
-    static constexpr uint16_t MAX_PAYLOAD = 4096;  // maior payload aceitado
+    // Parametros anunciados no HELLO proto 2.
+    uint8_t window() const { return m_window; }
+    bool v2() const { return m_parser.v2(); }
+    // Troca o formato dos frames da SESSAO (handleHello negocia; a resposta
+    // do proprio HELLO sai no formato anterior — ver HostFrame.h).
+    void enableV2(bool on) { m_parser.setV2(on); }
+
+    // Maior payload aceitado: o S3 (CDC/UART com RAM de sobra) trabalha
+    // com chunks de 8 KB; o ESP32 classico da CYD mantem 4 KB (heap).
+#if CONFIG_IDF_TARGET_ESP32S3
+    static constexpr uint16_t MAX_PAYLOAD = 8192;
+#else
+    static constexpr uint16_t MAX_PAYLOAD = 4096;
+#endif
 
 private:
     // Valida o canal, abre/troca a sessao no HELLO e despacha o comando.
     void process(uint8_t cmd, const uint8_t* payload, uint16_t len);
+    static void trampoline(void* ctx, uint8_t cmd, const uint8_t* payload, uint16_t len);
 
     WriteFn m_writer;
     BaudFn m_baudHook;
+    uint8_t m_window;
 
-    // parser de frames (estado por instancia)
+    // parser de frames (estado por instancia); buffer logo apos na RAM
+    hostframe::FrameParser m_parser;
     uint8_t m_payload[MAX_PAYLOAD];
-    enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } m_state;
-    uint8_t m_cmd;
-    uint16_t m_need = 0, m_got = 0;
-    int64_t m_lastByteUs = 0;
 };
 
 // --- opcodes host -> device ---

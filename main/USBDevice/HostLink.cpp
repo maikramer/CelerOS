@@ -37,45 +37,47 @@ namespace {
 
 // Sessao unica: canal que recebeu o ultimo HELLO. O dispatch de comandos e
 // serializado por mutex (handlers usam estado global de escrita/OTA); o
-// contexto de escrita abaixo vale apenas dentro de um dispatch.
+// contexto abaixo vale apenas dentro de um dispatch.
 HostLink* volatile s_active = nullptr;
 SemaphoreHandle_t s_dispatchMutex = nullptr;
+HostLink* s_ctxLink = nullptr;  // instancia em dispatch (formato v1/v2, janela)
 HostLink::WriteFn s_ctxWriter = nullptr;
 HostLink::BaudFn s_ctxBaud = nullptr;
 
 // Buffer do frame de logcat: chamado de tasks arbitrarias, nao pode ser
 // stack (MAX_PAYLOAD cresce no S3). Serializado pelo proprio sendLogFrame.
 SemaphoreHandle_t s_logFrameMutex = nullptr;
-uint8_t s_logFrame[4 + 1 + HostLink::MAX_PAYLOAD];
+uint8_t s_logFrame[8 + 1 + HostLink::MAX_PAYLOAD];
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
+HostLink* linkCtx() { return s_ctxLink; }
 
 // ---------------------------------------------------------------- utilidades
 
 // Frame de resposta: frame inteiro numa unica escrita — logs concorrentes
-// (logcat) nunca intercalam bytes no meio de uma resposta. Quem produz dados
-// grandes (READ) escreve direto em txPayload() e chama sendFrame: sem um
-// segundo buffer de 4KB estatico (RAM interna e o que sobra para apps JS).
-uint8_t s_txFrame[4 + 1 + HostLink::MAX_PAYLOAD];
+// (logcat) nunca intercalam bytes no meio de uma resposta. O corpo (status
+// + dados) vive no offset fixo apos o maior header (v2 = 8 bytes) e o
+// build() da o deslocamento final para o formato da sessao. Quem produz
+// dados grandes (READ) escreve direto em txData() e chama sendFrame: sem
+// um segundo buffer de 8KB estatico (RAM interna e o que sobra para apps).
+uint8_t s_txFrame[8 + 1 + HostLink::MAX_PAYLOAD];
 
-uint8_t* txPayload() { return s_txFrame + 5; }
+uint8_t* txData() { return s_txFrame + 9; }  // dados apos o byte de status
 
 void sendFrame(uint8_t cmd, uint8_t status, uint16_t dataLen) {
     HostLink::WriteFn w = linkWriter();
-    if (w == nullptr) return;  // nenhum transporte no contexto
-    uint16_t total = (uint16_t)(1 + dataLen);
-    s_txFrame[0] = 0x43;
-    s_txFrame[1] = cmd;
-    s_txFrame[2] = (uint8_t)total;
-    s_txFrame[3] = (uint8_t)(total >> 8);
-    s_txFrame[4] = status;
-    w(s_txFrame, (size_t)(4 + total));
+    HostLink* ctx = linkCtx();
+    if (w == nullptr || ctx == nullptr) return;  // nenhum transporte no contexto
+    s_txFrame[8] = status;  // primeiro byte do payload da resposta
+    size_t n = hostframe::build(s_txFrame, sizeof(s_txFrame), ctx->v2(), cmd, s_txFrame + 8,
+                                (uint16_t)(1 + dataLen));
+    if (n > 0) w(s_txFrame, n);
 }
 
 void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
-    if (data != nullptr && dataLen > 0 && data != txPayload()) {
-        memcpy(txPayload(), data, dataLen);
+    if (data != nullptr && dataLen > 0 && data != txData()) {
+        memcpy(txData(), data, dataLen);
     }
     sendFrame(cmd, status, dataLen);
 }
@@ -172,9 +174,21 @@ void execPrint(void* ctx, const char* fmt, ...) {
 // ------------------------------------------------------------------ handlers
 
 void handleHello(const uint8_t* payload, uint16_t len) {
-    char id[64];
-    snprintf(id, sizeof(id), "CELEROS %s|%s|api %d|proto 1", CELEROS_VERSION, boardId(), CELEROS_API_LEVEL);
+    // Negociacao de formato (HostFrame.h): "CELERCTL2" ativa proto 2; a
+    // resposta sai no formato VIGENTE e a sessao troca apos o respond —
+    // o host ve "proto 2" e so entao passa a falar v2.
+    const bool v2 = len == 9 && memcmp(payload, "CELERCTL2", 9) == 0;
+    char id[96];
+    if (v2 && linkCtx() != nullptr) {
+        snprintf(id, sizeof(id), "CELEROS %s|%s|api %d|proto 2|chunk %u|win %u", CELEROS_VERSION,
+                 boardId(), CELEROS_API_LEVEL, (unsigned)HostLink::MAX_PAYLOAD,
+                 (unsigned)linkCtx()->window());
+    } else {
+        snprintf(id, sizeof(id), "CELEROS %s|%s|api %d|proto 1", CELEROS_VERSION, boardId(),
+                 CELEROS_API_LEVEL);
+    }
     respond(KL_HELLO, 0, id, (uint16_t)strlen(id));
+    if (linkCtx() != nullptr) linkCtx()->enableV2(v2);
 }
 
 void handleInfo() {
@@ -201,12 +215,13 @@ void handleInfo() {
 
     char json[640];
     snprintf(json, sizeof(json),
-             "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":1,"
+             "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":%d,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
              "\"web_user\":\"admin\",\"web_pass\":\"%s\","
              "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
+             (linkCtx() != nullptr && linkCtx()->v2()) ? 2 : 1,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              hasIp ? ip : "", hasSd ? "true" : "false",
@@ -253,23 +268,17 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     }
     closedir(dir);
 
-    // resposta num frame unico: u8 status + u16 n + entradas
-    size_t bodyLen = 2 + out.size();
-    if (bodyLen + 5 > 0xFFFF) {
+    // resposta num frame unico: u16 n + entradas (paginacao: ver KL_LS)
+    std::string body;
+    body.resize(2 + out.size());
+    body[0] = (char)(uint8_t)count;
+    body[1] = (char)(uint8_t)(count >> 8);
+    memcpy(body.data() + 2, out.data(), out.size());
+    if (body.size() + 1 > HostLink::MAX_PAYLOAD) {
         respondError(KL_LS, "diretorio grande demais");
         return;
     }
-    std::string frame;
-    frame.resize(4 + 1 + bodyLen);
-    frame[0] = 0x43;
-    frame[1] = KL_LS;
-    frame[2] = (uint8_t)(bodyLen + 1);
-    frame[3] = (uint8_t)((bodyLen + 1) >> 8);
-    frame[4] = 0;  // status OK
-    frame[5] = (uint8_t)count;
-    frame[6] = (uint8_t)(count >> 8);
-    memcpy(frame.data() + 7, out.data(), out.size());
-    if (linkWriter() != nullptr) linkWriter()((const uint8_t*)frame.data(), frame.size());
+    respond(KL_LS, 0, body.data(), (uint16_t)body.size());
 }
 
 void handleStat(const uint8_t* payload, uint16_t len) {
@@ -309,7 +318,7 @@ void handleRead(const uint8_t* payload, uint16_t len) {
     }
     size_t got = 0;
     if (fseek(f, (long)offset, SEEK_SET) == 0) {
-        got = fread(txPayload(), 1, want, f);  // direto no frame de resposta
+        got = fread(txData(), 1, want, f);  // direto no frame de resposta
     }
     fclose(f);
     // o frame acrescenta o status; EOF e sinalizado por got < want
@@ -544,7 +553,7 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     // corria com o desenho da UI — linhas deslocadas na captura. Blocos
     // montados direto no frame de resposta (sem 4KB extras de heap).
     const size_t cap = (HostLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
-    ScreenCapture::stream(rle, txPayload(), cap, [](const uint8_t*, size_t n) {
+    ScreenCapture::stream(rle, txData(), cap, [](const uint8_t*, size_t n) {
         if (linkWriter() == nullptr) return false;
         sendFrame(KL_SCR_DATA, 0, (uint16_t)n);
         return true;
@@ -661,16 +670,21 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 
 }  // namespace
 
-HostLink::HostLink(WriteFn writer, BaudFn baudHook)
-    : m_writer(writer), m_baudHook(baudHook), m_state(WANT_MAGIC), m_cmd(0) {
+HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window)
+    : m_writer(writer), m_baudHook(baudHook), m_window(window), m_parser(m_payload, MAX_PAYLOAD) {
     if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
     if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
+}
+
+void HostLink::trampoline(void* ctx, uint8_t cmd, const uint8_t* payload, uint16_t len) {
+    static_cast<HostLink*>(ctx)->process(cmd, payload, len);
 }
 
 void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     if (s_dispatchMutex != nullptr) xSemaphoreTake(s_dispatchMutex, portMAX_DELAY);
     s_ctxWriter = m_writer;
     s_ctxBaud = m_baudHook;
+    s_ctxLink = this;
     if (cmd == KL_HELLO) {
         s_active = this;  // ultimo HELLO ganha a sessao
     } else if (s_active != this) {
@@ -679,12 +693,14 @@ void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         respondError(cmd, "sessao ativa em outro canal");
         s_ctxWriter = nullptr;
         s_ctxBaud = nullptr;
+        s_ctxLink = nullptr;
         if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
         return;
     }
     dispatch(cmd, payload, len);
     s_ctxWriter = nullptr;
     s_ctxBaud = nullptr;
+    s_ctxLink = nullptr;
     if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
 }
 
@@ -695,7 +711,10 @@ HostLink* HostLink::active() {
 bool HostLink::endSession() {
     if (s_dispatchMutex != nullptr) xSemaphoreTake(s_dispatchMutex, portMAX_DELAY);
     bool was = s_active == this;
-    if (was) s_active = nullptr;
+    if (was) {
+        s_active = nullptr;
+        m_parser.setV2(false);  // nova sessao comeca negociando de novo
+    }
     if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
     return was;
 }
@@ -707,77 +726,31 @@ bool HostLink::sendLogFrame(const char* line, size_t n) {
     // logar no meio do proprio dispatch (EXEC/shell) e travariam
     if (s_logFrameMutex != nullptr) xSemaphoreTake(s_logFrameMutex, portMAX_DELAY);
     if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
-    uint16_t total = (uint16_t)(1 + n);
-    s_logFrame[0] = 0x43;
-    s_logFrame[1] = KL_LOG_DATA;
-    s_logFrame[2] = (uint8_t)total;
-    s_logFrame[3] = (uint8_t)(total >> 8);
-    s_logFrame[4] = 0;
-    memcpy(s_logFrame + 5, line, n);
-    bool ok = a->m_writer != nullptr && a->m_writer(s_logFrame, (size_t)(4 + total));
+    s_logFrame[8] = 0;  // status OK
+    memcpy(s_logFrame + 9, line, n);
+    size_t total = hostframe::build(s_logFrame, sizeof(s_logFrame), a->m_parser.v2(),
+                                    KL_LOG_DATA, s_logFrame + 8, (uint16_t)(1 + n));
+    bool ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_logFrame, total);
     if (s_logFrameMutex != nullptr) xSemaphoreGive(s_logFrameMutex);
     return ok;
 }
 
-// Maquina de estados de frames alimentada byte a byte.
+// Maquina de estados de frames alimentada byte a byte (logica no
+// HostFrame.h, testada no host). Rejeicoes com resposta sao tratadas aqui.
 void HostLink::feed(uint8_t byte) {
-    // Ressincronia: o host escreve cada frame de uma vez, entao um silencio
-    // no MEIO de um frame significa frame cortado (celerctl morto por
-    // timeout, byte 0x43 solto do console no boot). Sem isto o parser ficava
-    // esperando ate 4KB de "payload" e engolia os comandos seguintes — o
-    // link parecia morto ate reiniciar a placa (medido).
-    const int64_t now = esp_timer_get_time();
-    if (m_state != WANT_MAGIC && now - m_lastByteUs > 250000) {
-        m_state = WANT_MAGIC;
-        m_got = 0;
+    m_parser.feed(byte, esp_timer_get_time(), &HostLink::trampoline, this);
+    if (m_parser.takeReject() == hostframe::FrameParser::REJ_TOO_BIG) {
+        // rejeicao no parser: resposta direta pelo canal desta instancia
+        // (ainda nao ha contexto de dispatch)
+        const char msg[] = "payload grande demais";
+        uint8_t frame[8 + 24];
+        frame[8] = 1;  // status erro
+        memcpy(frame + 9, msg, sizeof(msg) - 1);
+        size_t n = hostframe::build(frame, sizeof(frame), m_parser.v2(), m_parser.rejectedCmd(),
+                                    frame + 8, (uint16_t)(1 + sizeof(msg) - 1));
+        if (n > 0 && m_writer != nullptr) m_writer(frame, n);
     }
-    m_lastByteUs = now;
-
-    switch (m_state) {
-        case WANT_MAGIC:
-            if (byte == 0x43) m_state = WANT_CMD;
-            break;
-        case WANT_CMD:
-            m_cmd = byte;
-            m_state = WANT_LEN_LO;
-            break;
-        case WANT_LEN_LO:
-            m_need = byte;
-            m_state = WANT_LEN_HI;
-            break;
-        case WANT_LEN_HI:
-            m_need |= (uint16_t)byte << 8;
-            m_got = 0;
-            if (m_need == 0) {
-                process(m_cmd, m_payload, 0);
-                m_state = WANT_MAGIC;
-            } else if (m_need <= MAX_PAYLOAD) {
-                m_state = WANT_PAYLOAD;
-            } else {
-                // rejeicao no parser: resposta direta pelo canal desta
-                // instancia (ainda nao ha contexto de dispatch)
-                const char msg[] = "payload grande demais";
-                uint8_t frame[32];
-                uint16_t total = (uint16_t)(1 + sizeof(msg) - 1);
-                frame[0] = 0x43;
-                frame[1] = m_cmd;
-                frame[2] = (uint8_t)total;
-                frame[3] = (uint8_t)(total >> 8);
-                frame[4] = 1;  // status erro
-                memcpy(frame + 5, msg, sizeof(msg) - 1);
-                if (m_writer != nullptr) m_writer(frame, (size_t)(4 + total));
-                m_state = WANT_MAGIC;
-            }
-            break;
-        case WANT_PAYLOAD:
-            m_payload[m_got++] = byte;
-            if (m_got >= m_need) {
-                process(m_cmd, m_payload, m_need);
-                m_got = 0;
-                m_state = WANT_MAGIC;
-            }
-            break;
-    }
+    // REJ_CRC: silencio — o host reenvia o frame (resync no proximo 0x43)
 }
 
 void HostLink::run(StreamBufferHandle_t rx) {
