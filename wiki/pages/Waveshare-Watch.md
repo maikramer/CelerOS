@@ -89,6 +89,11 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   Calls get their own screen (Reject/Answer go back to the phone), the
   clock and time zone are set from the phone, and music control, weather
   and "find device" work both ways. The watch reports battery and steps.
+  **"Find phone"**: the watch sends `{"t":"findPhone"}` and Gadgetbridge
+  decides whether to ring — set the **ping tone** (GB → Notification
+  settings) and, on Android 10+, the sound only plays reliably when the
+  pairing was done via **Companion Device** (MIUI needs extra permissions).
+  With no ack from Android, the watch shows "Pedido enviado ao celular".
 * **Settings → Watch** exposes raise-to-wake, sensitivity, glance length,
   always-on, screen-off time, return-to-face time, step goal, WiFi sleep
   and motion wake.

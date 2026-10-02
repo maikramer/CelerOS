@@ -457,6 +457,12 @@ bool findPhone(bool on) {
     return send(std::string("{\"t\":\"findPhone\",\"n\":") + (on ? "true" : "false") + "}");
 }
 
+void injectLine(const std::string& line) {
+    std::lock_guard<std::mutex> lock(s_mux);
+    if (s_lines.size() >= kMaxQueued) s_lines.pop_front();
+    s_lines.push_back(line);
+}
+
 bool callInfo(std::string& name, std::string& number) {
     if (!s_callActive) return false;
     name = s_callName;

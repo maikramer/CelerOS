@@ -90,6 +90,11 @@ família da placa do cachorro).
   som. Chamada tem tela própria (Recusar/Atender voltam ao celular), hora e
   fuso vêm do celular, e controle de música, clima e "encontrar dispositivo"
   funcionam nos dois sentidos. O relógio informa bateria e passos.
+  **"Achar celular"**: o relógio manda `{"t":"findPhone"}` e o Gadgetbridge
+  decide se toca — configure o **tom de ping** (GB → Ajustes de
+  notificação) e, no Android 10+, o som só toca de forma confiável com o
+  pareamento via **Companion Device** (e MIUI pede permissões extras). Sem
+  confirmação do Android, o relógio mostra "Pedido enviado ao celular".
 * **Ajustes → Relógio** expõe levantar o pulso, sensibilidade, duração do
   glance, sempre ligada, tempo de tela, volta ao mostrador, meta de passos,
   WiFi ocioso e acordar por movimento.

@@ -75,26 +75,28 @@ public:
 
         const int x = card.x + UI::sx(18);
         const int w = card.w - UI::sx(30);
-        const lgfx::IFont* fc = kui::type::caption();
-        const lgfx::IFont* fb = kui::type::body();
+        // um degrau acima do padrao das outras telas: alerta e leitura de
+        // relance no pulso (origem/corpo em body, titulo em title)
+        const lgfx::IFont* fc = kui::type::body();
+        const lgfx::IFont* ft = kui::type::title();
 
-        int y = card.y + UI::sy(14);
+        int y = card.y + UI::sy(12);
         std::string src = m_src.empty() ? "Aviso" : m_src;
-        c.text(c.ellipsize(src, fc, w - UI::sx(60)), x, y, fc, THEME_ACCENT, ML_DATUM);
+        c.text(c.ellipsize(src, fc, w - UI::sx(70)), x, y, fc, THEME_ACCENT, ML_DATUM);
         c.text(TimeManager::getFormattedTime(), card.x + card.w - UI::sx(14), y, fc,
                THEME_TEXT_DIM, MR_DATUM);
-        y += UI::sy(24);
+        y += UI::sy(26);
 
         std::string title = m_title.empty() ? m_msg : m_title;
-        for (const std::string& ln : wrapText(c, title, fb, w, 2)) {
-            c.text(ln, x, y, fb, THEME_TEXT, ML_DATUM);
-            y += UI::sy(22);
+        for (const std::string& ln : wrapText(c, title, ft, w, 2)) {
+            c.text(ln, x, y, ft, THEME_TEXT, ML_DATUM);
+            y += UI::sy(26);
         }
-        y += UI::sy(6);
+        y += UI::sy(8);
         if (!m_msg.empty() && !m_title.empty()) {
             for (const std::string& ln : wrapText(c, m_msg, fc, w, kBodyLines)) {
                 c.text(ln, x, y, fc, THEME_TEXT_DIM, ML_DATUM);
-                y += UI::sy(17);
+                y += UI::sy(19);
             }
         }
 

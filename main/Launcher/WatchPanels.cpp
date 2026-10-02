@@ -211,8 +211,12 @@ private:
 #if CONFIG_CELEROS_PHONE_LINK
             case 6: PhoneLink::setEnabled(!PhoneLink::enabled()); break;
             case 7:
-                kui::Navigator::toast(PhoneLink::findPhone(true) ? "Tocando o celular" : "Celular desconectado",
-                                      THEME_ACCENT, 2000);
+                // sem confirmacao do Android: o Gadgetbridge decide se toca
+                // (Ping tone no GB; Android 10+ pede pareamento via Companion
+                // Device — gadgetbridge.org/basics/features/find-phone)
+                kui::Navigator::toast(PhoneLink::findPhone(true) ? "Pedido enviado ao celular"
+                                                                 : "Celular desconectado",
+                                      THEME_ACCENT, 2500);
                 break;
 #endif
             case 5:

@@ -300,13 +300,14 @@ function trunc(s, font, maxW) {
 }
 
 // Linha de baixo: timer > musica tocando > clima do celular > sem celular
-// (o clima sai quando ha plugin, que ocupa a banda de widgets logo acima)
+// (o clima sai quando ha plugin, que ocupa a banda de widgets logo acima).
+// Tudo passa pelo trunc(): texto maior que a pilula vazava nas bordas.
 function drawFooter(n, bg) {
     var s = "", col = T.textDim;
-    if (n.timer) { s = "Timer " + n.timer; col = T.warn; }
+    if (n.timer) { s = trunc("Timer " + n.timer, 2, 152); col = T.warn; }
     else if (n.music) { s = trunc(n.music, 2, 152); col = T.accent; }
-    else if (!plugins.length && n.wx) { s = n.wx; }
-    else if (n.link) { s = n.link; }
+    else if (!plugins.length && n.wx) { s = trunc(n.wx, 2, 152); }
+    else if (n.link) { s = trunc(n.link, 2, 152); }
     if (bg !== null && s) System.fillRoundRect(40, BOTY - 26, 160, 22, 8, bg);
     if (s) ctext(s, BOTY - 22, 2, col);
 }

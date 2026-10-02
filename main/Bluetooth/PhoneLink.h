@@ -47,6 +47,10 @@ bool send(const std::string& json);
 bool sendMusic(const char* cmd);  // play|pause|playpause|next|previous|volumeup|volumedown
 bool findPhone(bool on);
 
+// Linha "recebida do celular" injetada localmente (shell "gb", para testar o
+// protocolo sem o Android): entra na mesma fila do RX do NUS e sai no tick.
+void injectLine(const std::string& line);
+
 // Chamada recebida em curso (CallScreen); false sem chamada.
 bool callInfo(std::string& name, std::string& number);
 // 0 = recusar, 1 = atender, 2 = ignorar (so silencia no celular)
