@@ -159,6 +159,13 @@ var errMsg = "", errHint = "", retryMode = "";
 var wasUpdate = false, selfUpdated = false;
 var batchOk = 0, batchFails = [];
 
+// Versao dos dados que alimentam as listas (apps/localMap/cats): sobe a cada
+// refresh(). curList()/chipsGeom() cachear por essa chave — o drag chamava
+// drawList a cada 20ms e refiltrava+reordenava o catalogo inteiro por frame
+// (installedItems: sort + catalogByPkg linear por item).
+var dataStamp = 0;
+var listCache = { key: null, items: null };
+
 var TAB_H = 26, FOOT_Y = 282, ROW_H = 44, PITCH = 50, LIST_END = 272;
 var LIST_Y = 54;      // 54 na Loja (chips acima), 32 nas outras abas
 var query = "";       // filtro de busca da Loja ("" = desligado)
@@ -277,6 +284,7 @@ function refresh() {
     countUpdates();
     sortByUpdate();
     buildCats();
+    dataStamp++;  // invalida os caches de lista/chips (curList/chipsGeom)
 }
 
 // itens da aba Meus apps: todo pkg instalado (do catalogo quando existir,
@@ -481,7 +489,10 @@ function drawTabs() {
 function searchChipLabel() {
     return query ? query + " x" : "Buscar";
 }
+var chipsCache = { key: null, g: null };
 function chipsGeom() {
+    var key = dataStamp + "|" + query;
+    if (chipsCache.key === key) return chipsCache.g;
     var xs = [], x = 8;
     var qw = System.textWidth(searchChipLabel(), 1) + 16;
     xs.push({ x: x, w: qw, search: true });
@@ -491,7 +502,9 @@ function chipsGeom() {
         xs.push({ x: x, w: w });
         x += w + 6;
     }
-    return { xs: xs, total: x };
+    chipsCache.key = key;
+    chipsCache.g = { xs: xs, total: x };
+    return chipsCache.g;
 }
 function drawChips() {
     var g = chipsGeom();
@@ -501,6 +514,9 @@ function drawChips() {
     if (typeof System.setClip === "function") {
         System.setClip(0, 30, 240, 20);
     }
+    // strip limpa AQUI (dentro do clip): o chipsDrag redesenha so os chips
+    // por frame, nao a tela inteira
+    System.fillRect(0, 30, 240, 20, T.bg);
     for (var i = 0; i < g.xs.length; i++) {
         var cx = g.xs[i].x - catScroll;
         if (cx + g.xs[i].w < 0 || cx > 240) continue;
@@ -535,9 +551,15 @@ function chipAt(x) {
 
 // ---- listas -----------------------------------------------------------------
 function curList() {
-    if (curTab === 0) return filteredApps();
-    if (curTab === 1) return updApps();
-    return installedItems();
+    var key = dataStamp + "|" + curTab + "|" + curCat + "|" + query;
+    if (listCache.key === key) return listCache.items;
+    var items;
+    if (curTab === 0) items = filteredApps();
+    else if (curTab === 1) items = updApps();
+    else items = installedItems();
+    listCache.key = key;
+    listCache.items = items;
+    return items;
 }
 function maxScroll(len) {
     var m = (len - 4) * PITCH;
@@ -568,34 +590,37 @@ function drawCountLine() {
 function drawRow(it, y, subLeft, subRight) {
     System.fillRoundRect(8, y, 224, ROW_H, 8, T.card);
     System.drawRoundRect(8, y, 224, ROW_H, 8, T.stroke);
-    var st = stateInfo(it);
-    var lbl = st.code === "new" ? "Novo" :
-              st.code === "upd" ? "Atualizar" :
-              st.code === "api" ? ("API " + it.api) : "Instalado";
-    var pw = System.textWidth(lbl, 1) + 12;
+    var st = stateInfo(it);  // 1x por linha (o pill usava o mesmo estado)
+    var pw = System.textWidth(st.txt, 1) + 12;
     System.setTextColor(T.text, T.card);
     System.drawString(truncLine(it.name, 224 - pw - 26, 2), 18, y + 3, 2);
-    statePillLine(it, y);
+    statePillLine(st, y);
     System.setTextColor(T.textDim, T.card);
     System.drawString(truncLine(subLeft, 150, 1), 18, y + 31, 1);
     if (subRight) {
         System.drawString(subRight, 224 - System.textWidth(subRight, 1), y + 31, 1);
     }
 }
-function statePillLine(it, y) {
-    var st = stateInfo(it);
+function statePillLine(st, y) {
     if (st.code === "new") pill("Novo", 224, y + 4, T.ok, T.bg);
     else if (st.code === "upd") pill("Atualizar", 224, y + 4, T.warn, T.bg);
-    else if (st.code === "api") pill("API " + it.api, 224, y + 4, T.raised, T.warn);
+    else if (st.code === "api") pill(st.txt, 224, y + 4, T.raised, T.warn);
     else pill("Instalado", 224, y + 4, T.raised, T.textDim);
 }
-function drawList() {
-    System.fillScreen(T.bg);
-    drawTabs();
+// listOnly: so a area da lista (usado no drag por frame) — abas/chips/rodape
+// nao mudam durante o scroll e cada frame deles era um redraw de tela cheia
+// (pisca no vidro direto; caixa suja do tamanho do vidro no quadro).
+function drawList(listOnly) {
     var items = curList();
     LIST_Y = listY();
-    if (curTab === 0) drawChips();
-    else drawCountLine();
+    if (!listOnly) {
+        System.fillScreen(T.bg);
+        drawTabs();
+        if (curTab === 0) drawChips();
+        else drawCountLine();
+    } else {
+        System.fillRect(0, LIST_Y, 240, LIST_END - LIST_Y, T.bg);
+    }
 
     var scrollY = scrollYs[curTab];
     clampScroll(items.length);
@@ -635,7 +660,7 @@ function drawList() {
     }
     if (clip) System.clearClip();
 
-    drawFooter();
+    if (!listOnly) drawFooter();
     if (maxScroll(items.length) > 0) {
         System.drawFastVLine(235, LIST_Y, LIST_END - LIST_Y, T.stroke);
         var trackH = LIST_END - LIST_Y;
@@ -660,6 +685,7 @@ function listDrag(t0, items) {
     var startY = t0.y;
     var startScroll = scrollYs[curTab];
     var moved = false;
+    var scrollable = maxScroll(items.length) > 0;
     var t = t0;
     var guard = 0;
     while (t.touched && guard < 400) {
@@ -669,7 +695,7 @@ function listDrag(t0, items) {
         if (moved) {
             scrollYs[curTab] = startScroll + (startY - t.y);
             clampScroll(items.length);
-            drawList();
+            if (scrollable) drawList(true);  // so a area que rola
         }
         System.delay(20);
         guard++;
@@ -763,7 +789,7 @@ function chipsDrag(t0) {
             catScroll = startScroll - (t.x - t0.x);
             if (catScroll < 0) catScroll = 0;
             if (catScroll > maxS) catScroll = maxS;
-            drawList();
+            drawChips();  // so a strip dos chips, nao a lista atras
         }
         System.delay(20);
         guard++;
@@ -948,27 +974,46 @@ function doUninstallFlow(it) {
 }
 
 // ---- instalacao / atualizacao ----------------------------------------------
-function drawDownload(name, sub) {
+// Progresso INCREMENTAL: drawDownload pinta o chrome (fundo, abas, titulo,
+// contorno da barra) UMA vez e drawProgress so toca o interior da barra e o
+// texto. Um fillScreen por KB (modelo antigo) sujava a caixa suja do quadro
+// inteiro (flush de tela cheia a cada chunk no watch) e, sem quadro, piscava
+// o vidro do primeiro ao ultimo byte. Throttle por conteudo (pct/texto
+// mudou), nao por tempo: os dois draws do stub do harness acontecem no mesmo
+// ms e continuam produzindo quadros.
+var progLast = { fillW: 0, txt: "" };
+// withBar so no download do main.js (unico com callback de progresso);
+// app.json e icon.png mostrariam uma barra vazia parada no lugar.
+function drawDownload(name, sub, withBar) {
     System.fillScreen(T.bg);
     drawTabs();
     ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 96, 2, T.text, T.bg);
     if (sub) ctext(sub, 120, 124, 1, T.textDim, T.bg);
+    if (withBar !== false) System.drawRoundRect(40, 126, 160, 16, 6, T.stroke);
+    progLast = { fillW: 0, txt: "" };
 }
-function drawProgress(name, got, total) {
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 96, 2, T.text, T.bg);
-    var gotKB = Math.floor(got / 1024);
-    System.drawRoundRect(40, 126, 160, 16, 6, T.stroke);
+function drawProgress(got, total) {
+    var fillW = 0, txt = "";
     if (total > 0) {
         var pct = got / total;
         if (pct > 1) pct = 1;
-        if (pct > 0.02) System.fillRect(43, 129, Math.floor(154 * pct), 10, T.accent);
-        ctext(Math.floor(pct * 100) + "%", 120, 160, 1, T.textDim, T.bg);
-    } else if (gotKB > 0) {
-        System.fillRect(43, 129, Math.min(154, 20 + (gotKB % 7) * 18), 10, T.accent);
-        ctext(gotKB + " KB", 120, 160, 1, T.textDim, T.bg);
+        fillW = Math.floor(154 * pct);
+        txt = Math.floor(pct * 100) + "%";
+    } else {
+        var kb = Math.floor(got / 1024);
+        if (kb > 0) {
+            fillW = Math.min(154, 20 + (kb % 7) * 18);
+            txt = kb + " KB";
+        }
     }
+    if (txt === progLast.txt && fillW >= progLast.fillW) return;  // nada novo
+    // barra: apaga o interior e preenche de novo (area 154x10, nao a tela)
+    System.fillRect(43, 129, 154, 10, T.bg);
+    if (fillW > 0) System.fillRect(43, 129, fillW, 10, T.accent);
+    // texto: limpa so a faixa dele antes de escrever o novo valor
+    System.fillRect(70, 152, 100, 18, T.bg);
+    ctext(txt, 120, 160, 1, T.textDim, T.bg);
+    progLast = { fillW: fillW, txt: txt };
 }
 // Update in-place: main.js novo entra como <pkg>/main.js.new (staging de um
 // arquivo dentro do proprio pacote), MD5 do catalogo conferido e rename
@@ -1004,7 +1049,7 @@ function installApp() {
 
     var json = "";
     if (!fail && it.metaUrl) {
-        drawDownload(it.name, "app.json");
+        drawDownload(it.name, "app.json", false);
         System.delay(30);
         json = fetchText(it.metaUrl);
         if (!json) fail = "Erro ao baixar app.json";
@@ -1014,12 +1059,12 @@ function installApp() {
     if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
 
     if (!fail) {
-        var lastKB = -1;
+        drawDownload(it.name, "main.js");  // chrome+barra uma vez (era por KB)
+        System.delay(30);
         var okDL = false;
         try {
             okDL = Net.download(it.appUrl, tmp, function (got, total) {
-                var kb = Math.floor(got / 1024);
-                if (kb !== lastKB) { lastKB = kb; drawProgress(it.name, got, total); }
+                drawProgress(got, total);  // delta interno decide se desenha
             });
         } catch (e) { okDL = false; }
         if (!okDL) fail = "Erro ao baixar main.js";
@@ -1044,7 +1089,7 @@ function installApp() {
     if (!fail) {
         if (it.icon) {
             var iconTmp = dir + "/icon.png.new";
-            drawDownload(it.name, "icon.png");
+            drawDownload(it.name, "icon.png", false);
             System.delay(30);
             var iconOk = false;
             try { iconOk = Net.download(it.icon, iconTmp); } catch (e3) { iconOk = false; }
@@ -1213,13 +1258,15 @@ function screenErr() {
     }
 }
 function screenWifi() {
+    // tela estatica: desenhada UMA vez (redesenhar a cada espera de 1,5s
+    // piscava o vidro sem quadro sem motivo)
+    System.fillScreen(T.bg);
+    drawTabs();
+    ctext("WiFi desconectado", 120, 104, 2, T.warn, T.bg);
+    ctext("Conecte o WiFi para usar", 120, 134, 1, T.textDim, T.bg);
+    ctext("a loja de apps.", 120, 150, 1, T.textDim, T.bg);
+    footerButton(8, 84, "< Sair", true);
     while (true) {
-        System.fillScreen(T.bg);
-        drawTabs();
-        ctext("WiFi desconectado", 120, 104, 2, T.warn, T.bg);
-        ctext("Conecte o WiFi para usar", 120, 134, 1, T.textDim, T.bg);
-        ctext("a loja de apps.", 120, 150, 1, T.textDim, T.bg);
-        footerButton(8, 84, "< Sair", true);
         var last = System.millis();
         var go = false;
         while (System.millis() - last < 1500) {

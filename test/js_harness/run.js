@@ -861,6 +861,15 @@ function runInline(src, env) {
     if (!api) return;
     var env = r.env;
 
+    // guarda do progresso incremental: conta fillScreen da loja (o modelo
+    // antigo repintava a tela inteira a cada chunk do download)
+    var fills = 0;
+    var origFillScreen = env.System.fillScreen;
+    env.System.fillScreen = function() {
+        fills++;
+        if (origFillScreen) origFillScreen();
+    };
+
     // preinstalado com pasta de nome diferente do packageName (caso Terminal)
     env.FS.mkdir('/local/apps/Terminal');
     env.FS.writeTextFile('/local/apps/Terminal/app.json',
@@ -936,6 +945,7 @@ function runInline(src, env) {
                          version: '1.0.0' }));
     env.FS.writeTextFile('/local/apps/App Store/main.js', 'LOJA-ANTIGA');
     dlUrls = [];
+    fills = 0;
     api.setCatalog([
         { pkg: 'celeros.appstore', metaUrl: 'h/celeros.appstore/app.json',
           appUrl: 'h/celeros.appstore/main.js', name: 'App Store',
@@ -956,6 +966,10 @@ function runInline(src, env) {
           env.FS.readTextFile('/local/apps/App Store/main.js') === 'NOVO-CODIGO');
     check('updCount = 0 apos lote', api.updCount() === 0);
     check('meus apps lista instalados', api.installed().length === 2);
+    // lote de 2 apps: drawBatch + drawDownload(app.json/main.js) por app =
+    // 6 fillScreen; o modelo antigo somava ~2 por chunk de download
+    check('lote nao repinta a tela por chunk', fills <= dlUrls.length * 4,
+          'fills=' + fills + ' downloads=' + dlUrls.length);
 })();
 
 // --- Celer Link (API 9) ------------------------------------------------------
