@@ -23,6 +23,17 @@ DUK_USE_BUFFEROBJECT_SUPPORT: false
 DUK_USE_COROUTINE_SUPPORT: false
 DUK_USE_JX: false
 DUK_USE_JC: false
+# Duktape.dump/load (bytecode serializado): nenhum app nem o firmware usam
+DUK_USE_BYTECODE_DUMP_SUPPORT: false
+
+# ---- Velocidade (2026-10) ----
+# JSON.stringify sem replacer (Storage, Net.post, apps salvando estado):
+# ~1,5KB de flash; medido no QEMU esp32 (-icount, -Os): 34% menos tempo
+# num stringify+parse de estado tipico. DUK_USE_FASTINT foi medido junto e
+# ficou de fora: +10KB de flash para -15% so em laco inteiro puro (contas de
+# coordenada e listas ficaram 1-3% PIORES) — o custo do Duktape aqui e o
+# dispatch, nao o soft-float.
+DUK_USE_JSON_STRINGIFY_FASTPATH: true
 
 # ---- Memoria (CYD sem PSRAM: heap Duktape disputa ~90KB de RAM interna) ----
 # Builtins (Object/Array/Math/JSON... e as strings deles) na FLASH: o heap
