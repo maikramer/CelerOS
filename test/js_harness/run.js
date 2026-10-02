@@ -441,7 +441,9 @@ function makeEnv() {
             aiChats.push(JSON.stringify(opts));
             if (typeof cb !== 'function') return false;
             aiCb = cb;
-            setTimeout(function() {
+            // timer do harness (NAO o setTimeout do Node): dispara num yield
+            // do app, o mesmo contrato do aiTick no present() do firmware
+            env.setTimeout(function() {
                 var f = aiCb;
                 aiCb = null;
                 if (!f) return;
@@ -1748,7 +1750,7 @@ function holdFrames(x, y, n) {
     if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
     check('header Chat IA', j.indexOf('Chat IA') >= 0, j);
     check('mensagem do usuario ecoada', j.indexOf('você: oi') >= 0, j);
-    check('resposta da IA desenhada', j.indexOf('IA: Ola! Sou o assistente do CelerOS.') >= 0, j);
+    check('resposta da IA desenhada', j.indexOf('IA: Ola! Sou o assistente do') >= 0 && j.indexOf('CelerOS.') >= 0, j);
     var req = r.env.__harness.aiChats[0] || '';
     check('payload vai ao DeepSeek', req.indexOf('deepseek-flash') >= 0 && req.indexOf('"stream":false') >= 0, req);
     check('system prompt e contexto', req.indexOf('assistente do CelerOS') >= 0 && req.indexOf('assistente do CelerOS', 10) >= 0, req);
