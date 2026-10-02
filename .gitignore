@@ -12,7 +12,10 @@ sdkconfig.old
 managed_components/
 
 # binario de ferramenta (baixar: ver tools/flash_data.sh)
-tools/bin/
+# bin do dev fica fora, menos o mklittlefs vendorado (CI gera a imagem
+# LittleFS do release com ele)
+tools/bin/*
+!tools/bin/mklittlefs.bin
 __pycache__/
 .playwright-mcp/
 

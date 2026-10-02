@@ -1,0 +1,159 @@
+name: release
+
+# Release de fabrica: pacotes por placa (firmware + data + flash.json) +
+# CelerOS Flasher executavel (linux/windows, esptool embutido via
+# PyInstaller) publicados num GitHub Release.
+#
+# Gatilho: tag "v*" (a versao da tag TEM que bater com a do CMakeLists.txt —
+# guard no job release) ou workflow_dispatch (empacota nos artifacts sem
+# publicar — util pra testar o pipeline).
+#
+# OTA continua vindo do hub (os.celer.tec.br) — este release e o
+# "primeiro flash" de fabrica.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    name: pacote (${{ matrix.board }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: smartdisplay
+            target: esp32s3
+          - board: cyd
+            target: esp32
+          - board: spotpear-dog
+            target: esp32s3
+          - board: waveshare-watch
+            target: esp32s3
+    container:
+      # mesmo pin do build.yml (IDF 6.1.0 GA) — nao deixar os dois divergirem
+      image: espressif/idf:v6.1@sha256:f81b6e077e6af93c312181cd7d4e7936cfbafc5c7f77cbacba8fdd34994f218a
+    env:
+      XDG_CACHE_HOME: /tmp/gh-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B build-${{ matrix.board }} \
+            -DSDKCONFIG=build-${{ matrix.board }}/sdkconfig \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
+            -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }}
+          idf.py -B build-${{ matrix.board }} build ||
+            (rm -rf managed_components build-${{ matrix.board }} &&
+             idf.py -B build-${{ matrix.board }} \
+               -DSDKCONFIG=build-${{ matrix.board }}/sdkconfig \
+               -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
+               -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }} &&
+             idf.py -B build-${{ matrix.board }} build)
+      - name: Pacote (bins + LittleFS + flash.json + zip)
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          python3 tools/release/package.py --board ${{ matrix.board }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.board }}
+          path: dist/
+          if-no-files-found: error
+
+  flasher:
+    name: flasher (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+          - os: windows-latest
+            suffix: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: PyInstaller
+        shell: bash
+        run: |
+          pip install "esptool==4.8.1" pyinstaller
+          VERSION=$(sed -n 's/project(CelerOS[[:space:]]*VERSION[[:space:]]*\(.*\))/\1/p' CMakeLists.txt)
+          # --collect-all: embute os stub_flasher_*.json do esptool (sem eles
+          # o exe conecta e morre no run_stub)
+          pyinstaller --onefile --console --clean --collect-all esptool \
+            --name "CelerOS_Flasher_${VERSION}_${{ matrix.suffix }}" \
+            tools/release/flasher.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-flash-${{ matrix.suffix }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: publicar release
+    needs: [firmware, flasher]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard de versao (tag x CMakeLists)
+        run: |
+          V_TAG="${GITHUB_REF_NAME#v}"
+          V_CMAKE=$(sed -n 's/project(CelerOS[[:space:]]*VERSION[[:space:]]*\(.*\))/\1/p' CMakeLists.txt)
+          [ "$V_TAG" = "$V_CMAKE" ] || { echo "tag v$V_TAG != CelerOS $V_CMAKE"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist/
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: cd dist && sha256sum * > SHA256SUMS && ls -la
+      - name: Criar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cat > /tmp/notes.md <<'FIM'
+          **Primeiro flash de fabrica.** Atualizacoes futuras chegam por OTA
+          (Settings > Atualizacao no aparelho).
+
+          ## Como gravar
+
+          1. Baixe o **CelerOS_Flasher** do seu sistema (linux ou windows) e o
+             **zip da sua placa**.
+          2. Extraia os dois na mesma pasta e execute o flasher.
+          3. Escolha placa -> porta USB -> "apagar tudo" (1a gravacao) -> ENTER.
+
+          Sem flasher: cada zip traz `README.txt` com a linha `esptool`
+          equivalente (offsets incluidos).
+
+          ## Pacotes
+
+          | Placa | Zip |
+          |---|---|
+          | SmartDisplay 4848S040 (ESP32-S3) | `CelerOS_*_smartdisplay.zip` |
+          | CYD ESP32-2432S028R (ESP32) | `CelerOS_*_cyd.zip` |
+          | SpotPear (robo cachorro, ESP32-S3) | `CelerOS_*_spotpear-dog.zip` |
+          | Waveshare AMOLED 2.06 watch (ESP32-S3) | `CelerOS_*_waveshare-watch.zip` |
+          FIM
+          # o corpo da tag (anotada) vira preambulo das notas
+          if git rev-parse -q --verify "refs/tags/$TAG^{tag}" >/dev/null; then
+            git tag -l --format='%(contents)' "$TAG" > /tmp/tag-body.md
+            printf '\n---\n\n' >> /tmp/tag-body.md
+            cat /tmp/notes.md >> /tmp/tag-body.md
+            mv /tmp/tag-body.md /tmp/notes.md
+          fi
+          gh release create "$TAG" --title "CelerOS $TAG" \
+            --notes-file /tmp/notes.md dist/*
