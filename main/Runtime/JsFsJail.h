@@ -3,7 +3,13 @@
 // Jail do FS para os bindings JS (F6). Header proprio para nao engordar o
 // JsInternal.h: so JsFs.cpp, JsNet.cpp e o nucleo (copy/remove) precisam disto.
 #include <cstring>
+#ifdef CELER_HOST_TEST
+// testes host (test/cpp): o teste fornece perm()/s_appPkg sem o Duktape
+#include <string>
+#include "../Utils/AppPerms.h"
+#else
 #include "JsInternal.h"
+#endif
 
 // Caminho CANONICO dentro de um ponto de montagem: comeca com o segmento
 // inteiro "/local" ou "/sd" e nao tem segmento vazio ("//"), "." nem "..".
@@ -40,6 +46,29 @@ inline bool fsIsMountRoot(const char* path, const char* mount) {
     return strncmp(path, mount, n) == 0 && (path[n] == '\0' || (path[n] == '/' && path[n + 1] == '\0'));
 }
 
+// Pasta de apps instalados (/local/apps, /sd/apps e tudo abaixo): o codigo
+// de OUTROS apps. Escrever ali reescreveria o main.js de um app com mais
+// permissoes concedidas e herdaria a concessao (AppGrants) — so "system".
+inline bool fsUnderAppsDir(const char* path) {
+    auto under = [path](const char* dir) {
+        size_t n = strlen(dir);
+        return strncmp(path, dir, n) == 0 && (path[n] == '\0' || path[n] == '/');
+    };
+    return under("/local/apps") || under("/sd/apps");
+}
+
+// /local/data/<pkg>/ e a pasta privada de CADA app (FS.appData): a de outro
+// pacote e invisivel. A raiz /local/data (lista de nomes) segue legivel.
+inline bool fsOtherAppData(const char* path) {
+    static const char kData[] = "/local/data/";
+    const size_t n = sizeof(kData) - 1;
+    if (strncmp(path, kData, n) != 0 || path[n] == '\0') return false;
+    const char* seg = path + n;
+    const char* end = strchr(seg, '/');
+    size_t len = end ? (size_t)(end - seg) : strlen(seg);
+    return s_appPkg.empty() || len != s_appPkg.size() || strncmp(seg, s_appPkg.c_str(), len) != 0;
+}
+
 // Arquivos do SISTEMA sob /local (credenciais, PIN, boot, OTA) so sao
 // visiveis a apps com a capability "system". /sd e o resto de /local
 // (incluindo o appData do proprio app) seguem abertos para quem tem "fs".
@@ -51,6 +80,7 @@ inline bool fsPathAllowed(const char* path) {
     if (!fsPathCanonical(path)) return false;
     if (perm(celer::PERM_SYSTEM)) return true;
     if (strncmp(path, "/local/", 7) != 0) return true;  // /sd
+    if (fsOtherAppData(path)) return false;
     static const char* const kProtected[] = {
         "/local/wifi.txt",
         "/local/wifi.txt.migrated",
@@ -76,12 +106,28 @@ inline bool fsPathAllowed(const char* path) {
     return true;
 }
 
-// Mesma regra para operacoes de ARVORE (origem E destino): a raiz /local
-// so pode ser copiada/removida/sobrescrita por apps "system" (senao o app
-// apagaria de uma vez credenciais, PIN e os outros apps — ou copiaria uma
-// arvore por cima dos arquivos protegidos, que vivem na raiz).
+// Escrita/remocao/criacao: a regra de leitura + nada nas pastas de apps
+inline bool fsWriteAllowed(const char* path) {
+    if (!fsPathAllowed(path)) return false;
+    return perm(celer::PERM_SYSTEM) || !fsUnderAppsDir(path);
+}
+
+// Operacoes de ARVORE (copiar a origem): a raiz /local (credenciais, PIN,
+// outros apps) e a raiz /local/data (dados de todos os apps) so para
+// "system".
 inline bool fsTreeAllowed(const char* path) {
     if (!fsPathCanonical(path)) return false;
     if (perm(celer::PERM_SYSTEM)) return true;
-    return !fsIsMountRoot(path, "/local");
+    if (fsIsMountRoot(path, "/local") || fsIsMountRoot(path, "/local/data")) return false;
+    return fsPathAllowed(path);
+}
+
+// Arvore como DESTINO ou removida (copyDirectory/removeDirectory/rmdir):
+// alem da leitura, nenhuma raiz de montagem (o /sd contem /sd/apps; o
+// /local, os protegidos) e nada nas pastas de apps.
+inline bool fsTreeWriteAllowed(const char* path) {
+    if (!fsTreeAllowed(path)) return false;
+    if (perm(celer::PERM_SYSTEM)) return true;
+    if (fsIsMountRoot(path, "/sd")) return false;
+    return !fsUnderAppsDir(path);
 }

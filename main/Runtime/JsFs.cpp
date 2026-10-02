@@ -21,6 +21,7 @@
 #include "JsInternal.h"
 #include "JsFsJail.h"
 #include <unistd.h>
+#include <dirent.h>
 
 // =====================================================
 // FileSystem Bindings
@@ -30,7 +31,7 @@
 // erro legivel (o app ve a causa em vez de um null misterioso).
 static void fsDeny(duk_context *ctx, const char* path) {
     duk_error(ctx, DUK_ERR_ERROR,
-              "FS: %s e arquivo do sistema (requer permissao \"system\")", path);
+              "FS: acesso negado a %s (arquivo do sistema, pasta de apps ou dados de outro app)", path);
 }
 
 duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
@@ -47,7 +48,7 @@ duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    if (!fsWriteAllowed(path)) fsDeny(ctx, path);
     const char *content = duk_require_string(ctx, 1);
     bool success = FileSystem::writeTextFile(path, content);
     duk_push_boolean(ctx, success);
@@ -56,7 +57,7 @@ duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_deleteFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    if (!fsWriteAllowed(path)) fsDeny(ctx, path);
     bool success = FileSystem::deleteFile(path);
     duk_push_boolean(ctx, success);
     return 1;
@@ -69,26 +70,51 @@ duk_ret_t JSBindings::js_fileExists(duk_context *ctx) {
     return 1;
 }
 
+// Le o diretorio direto para o array JS: sem teto (o vetor fixo de 128
+// cortava pastas grandes em silencio) e sem std::string intermediaria.
+// Montar o array pode lancar (sem RAM): roda em duk_safe_call e o DIR* e
+// fechado de qualquer jeito.
+struct ListDirArgs {
+    DIR* dir;
+    const char* path;
+};
+
+static duk_ret_t listDirPush(duk_context *ctx, void *udata) {
+    ListDirArgs* a = (ListDirArgs*)udata;
+    const size_t plen = strlen(a->path);
+    const bool slash = plen > 0 && a->path[plen - 1] == '/';
+    duk_push_array(ctx);
+    duk_uarridx_t n = 0;
+    struct dirent* ent;
+    while ((ent = readdir(a->dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        duk_push_string(ctx, a->path);
+        if (!slash) duk_push_string(ctx, "/");
+        duk_push_string(ctx, ent->d_name);
+        duk_concat(ctx, slash ? 2 : 3);
+        duk_put_prop_index(ctx, -2, n++);
+    }
+    return 1;
+}
+
 duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathCanonical(path)) {  // "/local/." etc.: lista vazia (como pasta ausente)
+    // "/local/." etc. e pasta privada de outro app: lista vazia (como ausente)
+    DIR* dir = fsPathAllowed(path) ? opendir(path) : nullptr;
+    if (dir == nullptr) {
         duk_push_array(ctx);
         return 1;
     }
-    std::vector<std::string> files(128);
-    int count = FileSystem::listDir(path, files.data(), (int)files.size());
-    
-    duk_push_array(ctx);
-    for (int i = 0; i < count; i++) {
-        duk_push_string(ctx, files[i].c_str());
-        duk_put_prop_index(ctx, -2, i);
-    }
+    ListDirArgs args{dir, path};
+    duk_int_t rc = duk_safe_call(ctx, listDirPush, &args, 0, 1);
+    closedir(dir);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
     return 1;
 }
 
 duk_ret_t JSBindings::js_appendTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    if (!fsWriteAllowed(path)) fsDeny(ctx, path);
     const char *content = duk_require_string(ctx, 1);
     duk_push_boolean(ctx, FileSystem::appendTextFile(path, content));
     return 1;
@@ -97,22 +123,22 @@ duk_ret_t JSBindings::js_appendTextFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_renameFile(duk_context *ctx) {
     const char *pathFrom = duk_require_string(ctx, 0);
     const char *pathTo = duk_require_string(ctx, 1);
-    if (!fsPathAllowed(pathFrom)) fsDeny(ctx, pathFrom);
-    if (!fsPathAllowed(pathTo)) fsDeny(ctx, pathTo);
+    if (!fsWriteAllowed(pathFrom)) fsDeny(ctx, pathFrom);
+    if (!fsWriteAllowed(pathTo)) fsDeny(ctx, pathTo);
     duk_push_boolean(ctx, FileSystem::renameFile(pathFrom, pathTo));
     return 1;
 }
 
 duk_ret_t JSBindings::js_mkdir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathAllowed(path)) fsDeny(ctx, path);  // pasta no nome de arquivo do sistema
+    if (!fsWriteAllowed(path)) fsDeny(ctx, path);  // pasta no nome de arquivo do sistema
     duk_push_boolean(ctx, FileSystem::mkdir(path));
     return 1;
 }
 
 duk_ret_t JSBindings::js_rmdir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsTreeAllowed(path)) fsDeny(ctx, path);
+    if (!fsTreeWriteAllowed(path)) fsDeny(ctx, path);
     duk_push_boolean(ctx, FileSystem::rmdir(path));
     return 1;
 }
@@ -208,7 +234,7 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
 // FS.appendTextFile (que tambem é byte-safe p/ strings com NUL).
 duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
-    if (!fsPathAllowed(path)) fsDeny(ctx, path);
+    if (!fsWriteAllowed(path)) fsDeny(ctx, path);
     size_t len = 0;
     const char* data = duk_require_lstring(ctx, 1, &len);
     if (len > 64 * 1024) {

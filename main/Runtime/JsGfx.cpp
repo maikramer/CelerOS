@@ -20,6 +20,7 @@
 #include "../Boards/Board.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "JsFsJail.h"
 
 // =====================================================
 // Double Buffering
@@ -318,9 +319,10 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     return 0;
 }
 
-// Caminhos de imagem aceitos: pontos de montagem reais do VFS
+// Caminhos de imagem aceitos: canonicos dentro de /local ou /sd (o prefixo
+// cru aceitava "/sdfoo" e "/local/../")
 bool imagePathOk(const char* path) {
-    return strncmp(path, "/sd", 3) == 0 || strncmp(path, "/local", 6) == 0;
+    return fsPathCanonical(path);
 }
 
 duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
