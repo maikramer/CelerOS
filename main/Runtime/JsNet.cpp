@@ -146,7 +146,9 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, "Net.download requer permissao \"fs\"");
     }
     if (!fsWriteAllowed(path)) {
-        duk_error(ctx, DUK_ERR_ERROR, "Net.download: destino %s nao permitido", path);
+        char msg[176];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
+        snprintf(msg, sizeof(msg), "Net.download: destino %s nao permitido", path);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     const bool hasProgress = duk_is_function(ctx, 2);
 

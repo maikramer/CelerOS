@@ -1,4 +1,6 @@
 #include "JSBindings.h"
+#include <stdio.h>
+#include "../Kernel/Core/CelerKernel.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -664,10 +666,14 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     // origem E destino: copiar POR CIMA de um arquivo do sistema (ota_url,
     // PIN...) era tao perigoso quanto ler um
     if (!fsPathAllowed(from)) {
-        duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", from);
+        char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
+        snprintf(msg, sizeof(msg), "FS: %s e arquivo do sistema", from);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     if (!fsWriteAllowed(to)) {
-        duk_error(ctx, DUK_ERR_ERROR, "FS: escrita negada em %s", to);
+        char msg[160];
+        snprintf(msg, sizeof(msg), "FS: escrita negada em %s", to);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
     return 1;
@@ -678,14 +684,16 @@ duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
     const char* from = duk_require_string(ctx, 0);
     const char* to = duk_require_string(ctx, 1);
     if (!fsTreeAllowed(from)) {
-        duk_error(ctx, DUK_ERR_ERROR,
-                  "FS: copiar %s requer permissao \"system\"", from);
+        char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
+        snprintf(msg, sizeof(msg), "FS: copiar %s requer permissao \"system\"", from);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     // destino na raiz /local sobrescreveria os arquivos protegidos (que
     // moram la): mesma regra de arvore da origem
     if (!fsTreeWriteAllowed(to)) {
-        duk_error(ctx, DUK_ERR_ERROR,
-                  "FS: copiar para %s requer permissao \"system\"", to);
+        char msg[160];
+        snprintf(msg, sizeof(msg), "FS: copiar para %s requer permissao \"system\"", to);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     duk_push_boolean(ctx, FileSystem::copyDirectory(from, to) ? 1 : 0);
     return 1;
@@ -718,8 +726,9 @@ duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* path = duk_require_string(ctx, 0);
     if (!fsTreeWriteAllowed(path)) {
-        duk_error(ctx, DUK_ERR_ERROR,
-                  "FS: remover %s requer permissao \"system\"", path);
+        char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
+        snprintf(msg, sizeof(msg), "FS: remover %s requer permissao \"system\"", path);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     duk_push_boolean(ctx, removeTree(path) ? 1 : 0);
     return 1;

@@ -110,6 +110,37 @@ for (const c of CASES) {
   check('dogfood data/apps + hub_apps', r.ok && r.totals.errors === 0, fmt(r.totals));
 }
 
+// Guard duk_error variadico: lightfunc + %s/%d corrompe o heap (bancada
+// 2026-10). Detecta o padrao (inclusive string na linha seguinte) e nao
+// acusa o formato seguro (snprintf pre-formatado).
+{
+  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'duk-'));
+  fs.writeFileSync(path.join(tmp, 'JsFake.cpp'), [
+    'duk_ret_t js_a(duk_context *ctx) {',
+    '    duk_error(ctx, DUK_ERR_ERROR, "pin %d invalido", pin);',  // ruim: %d + arg
+    '}',
+    'duk_ret_t js_b(duk_context *ctx) {',
+    '    duk_error(ctx, DUK_ERR_ERROR,',                                // ruim: multiline
+    '              "FS: %s negado", path);',
+    '}',
+    'duk_ret_t js_c(duk_context *ctx) {',
+    '    char msg[64];',
+    '    snprintf(msg, sizeof(msg), "pin %d", pin);',                  // seguro
+    '    duk_error(ctx, DUK_ERR_ERROR, msg);',
+    '}',
+    'duk_ret_t js_d(duk_context *ctx) {',
+    '    duk_error(ctx, DUK_ERR_RANGE_ERROR, "sem formato aqui");',    // seguro
+    '}',
+    '',
+  ].join('\n'));
+  const bad = linter.scanRuntimeDukErrors(tmp);
+  check('guard duk_error: 2 violacoes no fixture', bad.length === 2 && bad[0] === 'JsFake.cpp:2' && bad[1] === 'JsFake.cpp:5',
+    fmt(bad));
+  const real = linter.scanRuntimeDukErrors();
+  check('guard duk_error: Runtime do firmware limpo', real.length === 0, fmt(real));
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log('');
 if (failures) {
   console.log('FALHAS: ' + failures);

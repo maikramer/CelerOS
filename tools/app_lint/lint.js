@@ -260,6 +260,28 @@ function scanRuntimeBodies() {
   return bodies;
 }
 
+// Guard de regressao: duk_error com argumentos de conversao (%s/%d) a
+// partir de um lightfunc corrompe o heap do runtime (bancada 2026-10; o
+// padrao seguro, documentado no JsGpio.cpp, e snprintf pre-formatado +
+// duk_error SEM varargs). Varre os modulos do Runtime e devolve
+// "arquivo:linha" de cada violacao.
+function scanRuntimeDukErrors(dir) {
+  const root = dir || RUNTIME_DIR;
+  const bad = [];
+  const files = fs.readdirSync(root).filter((f) => /^Js.*\.cpp$/.test(f) || f === 'JSBindings.cpp').sort();
+  const re = /duk_error\s*\(\s*ctx\s*,\s*DUK_ERR_\w+\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*[^)\s]/;
+  for (const f of files) {
+    const lines = fs.readFileSync(path.join(root, f), 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].includes('duk_error')) continue;
+      // janela de 4 linhas: a string de formato pode estar na linha seguinte
+      const m = re.exec(lines.slice(i, i + 4).join(' '));
+      if (m && m[1].includes('%')) bad.push(f + ':' + (i + 1));
+    }
+  }
+  return bad;
+}
+
 // Aridade minima: prefixo contiguo de indices exigidos com duk_require_* que
 // NAO estejam protegidos por guarda (duk_is_*(ctx, N) ou duk_get_*_default
 // tornam o indice N opcional — padrao "if (duk_is_string(ctx, 1)) ... require").
@@ -865,6 +887,21 @@ function runLint(args, opts) {
       else totals.warnings++;
     }
   }
+  // Guard do firmware: duk_error variadico em lightfunc derruba o heap —
+  // entra como erro do proprio lint (o CI roda este modo em todo push).
+  const dukBad = scanRuntimeDukErrors();
+  if (dukBad.length) {
+    apps.push({
+      relDir: 'main/Runtime (firmware)',
+      diagnostics: dukBad.map((loc) => {
+        const c = loc.split(':');
+        return { file: 'main/Runtime/' + c[0], line: +c[1], col: 1, severity: 'erro', rule: 'duk-error-varargs',
+                 message: 'duk_error com argumentos de conversao corrompe o heap em lightfunc; use snprintf pre-formatado' };
+      }),
+    });
+    totals.apps += 1;
+    totals.errors += dukBad.length;
+  }
   return { manifest, apps, totals, ok: totals.errors === 0 && (!opts.strict || totals.warnings === 0) };
 }
 
@@ -1018,6 +1055,6 @@ function main() {
   process.exit(result.ok ? 0 : 1);
 }
 
-module.exports = { buildManifest, lintSource, lintAppJson, collectTargets, lintApp, runLint, runCheck, parseBindingsCpp, minArityFromBody };
+module.exports = { buildManifest, lintSource, lintAppJson, collectTargets, lintApp, runLint, runCheck, parseBindingsCpp, minArityFromBody, scanRuntimeDukErrors };
 
 if (require.main === module) main();

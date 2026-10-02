@@ -20,6 +20,7 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "JsFsJail.h"
+#include <stdio.h>
 #include <unistd.h>
 #include <dirent.h>
 
@@ -30,8 +31,12 @@
 // Operacoes de CONTEUDO em arquivo do sistema sem a capability "system":
 // erro legivel (o app ve a causa em vez de um null misterioso).
 static void fsDeny(duk_context *ctx, const char* path) {
-    duk_error(ctx, DUK_ERR_ERROR,
-              "FS: acesso negado a %s (arquivo do sistema, pasta de apps ou dados de outro app)", path);
+    // PRE-FORMATADO e duk_error SEM argumentos de conversao: throw com
+    // %s/%d a partir de um lightfunc corrompe o heap (ver JsGpio.cpp)
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "FS: acesso negado a %s (arquivo do sistema, pasta de apps ou dados de outro app)", path);
+    duk_error(ctx, DUK_ERR_ERROR, msg);
 }
 
 duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {

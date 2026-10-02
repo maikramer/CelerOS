@@ -1,5 +1,6 @@
 #include "JSBindings.h"
 #include <algorithm>
+#include <stdio.h>
 #include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
 #include "../USBDevice/LogSink.h"
@@ -670,13 +671,20 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
             duk_get_prop_index(ctx, 0, i * 2 + 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
         } else {
             duk_get_prop_index(ctx, 0, i);
-            if (!duk_is_array(ctx, -1)) { duk_pop(ctx); duk_error(ctx, DUK_ERR_TYPE_ERROR, "playTone: nota %d nao e [freq,ms]", i); }
+            if (!duk_is_array(ctx, -1)) {
+                duk_pop(ctx);
+                char msg[64];  // pre-formatado: duk_error com %d em lightfunc corrompe o heap
+                snprintf(msg, sizeof(msg), "playTone: nota %d nao e [freq,ms]", i);
+                duk_error(ctx, DUK_ERR_TYPE_ERROR, msg);
+            }
             duk_get_prop_index(ctx, -1, 0); f = duk_require_int(ctx, -1); duk_pop(ctx);
             duk_get_prop_index(ctx, -1, 1); ms = duk_require_int(ctx, -1); duk_pop(ctx);
             duk_pop(ctx);
         }
         if (f < 20 || f > 20000 || ms <= 0 || ms > 2000) {
-            duk_error(ctx, DUK_ERR_RANGE_ERROR, "playTone: nota %d fora da faixa (20-20kHz, 1-2000ms)", i);
+            char msg[96];  // pre-formatado: duk_error com %d em lightfunc corrompe o heap
+            snprintf(msg, sizeof(msg), "playTone: nota %d fora da faixa (20-20kHz, 1-2000ms)", i);
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
         }
         total += ms;
         if (total > 15000) {
@@ -754,7 +762,9 @@ duk_ret_t JSBindings::js_notificationsClear(duk_context *ctx) {
 duk_ret_t JSBindings::js_playWav(duk_context *ctx) {
     const char* path = duk_require_string(ctx, 0);
     if (!fsPathAllowed(path)) {
-        duk_error(ctx, DUK_ERR_ERROR, "System.playWav: %s e arquivo do sistema", path);
+        char msg[176];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
+        snprintf(msg, sizeof(msg), "System.playWav: %s e arquivo do sistema", path);
+        duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     present();
     duk_push_boolean(ctx, AudioPlayer::playWav(path) == AudioPlayer::WavError::None ? 1 : 0);
