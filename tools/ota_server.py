@@ -53,16 +53,32 @@ def read_version(repo_root: str, override: str | None) -> str:
     return "0.0.0"
 
 
+def read_api_level(repo_root: str) -> int:
+    # CELEROS_API_LEVEL=N no main/CMakeLists.txt — o manifest tem que
+    # declarar o nivel real (desde 2026-10 o aparelho recusa api_version
+    # ausente/lixo/menor que o atual)
+    try:
+        with open(os.path.join(repo_root, "main", "CMakeLists.txt")) as f:
+            for line in f:
+                m = re.search(r"CELEROS_API_LEVEL\s*=\s*(\d+)", line)
+                if m:
+                    return int(m.group(1))
+    except OSError:
+        pass
+    return 0
+
+
 class Handler(BaseHTTPRequestHandler):
     bin_path: str = ""
     version: str = "0.0.0"
+    api_level: int = 0
 
     def do_GET(self):  # noqa: N802
         path = urlparse(self.path).path
         if path in ("/", "/update.json"):
             doc = {
                 "version": self.version,
-                "api_version": 2,
+                "api_version": self.api_level,
                 "major_update": True,
                 "minor_update": False,
                 "security_update": False,
@@ -119,6 +135,8 @@ def main():
     version = read_version(repo_root, args.version)
     Handler.bin_path = bin_path
     Handler.version = version
+    Handler.api_level = read_api_level(repo_root)
+    print(f"[ota] api level: {Handler.api_level}")
 
     ip = lan_ip()
     print(f"[ota] firmware : {bin_path} ({os.path.getsize(bin_path)} bytes)")

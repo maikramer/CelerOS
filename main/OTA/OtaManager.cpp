@@ -121,6 +121,44 @@ bool OtaManager::checkForUpdates() {
         return false;
     }
 
+    // api_version (nivel de API do firmware ofertado): o manifest do hub
+    // sempre declara. Sem o campo — ou lixo no lugar — o manifest e
+    // suspeito (nao veio do publicador) e o update e recusado. Abaixo do
+    // nivel atual tambem recusa: OTA nao toca na LittleFS, os apps
+    // instalados que ja exigem API maior parariam de rodar.
+    {
+        std::string apiStr = FileSystem::parseJsonValue(payload, "api_version");
+        int api = 0;
+        bool apiOk = !apiStr.empty() && apiStr.length() <= 3;
+        for (size_t i = 0; i < apiStr.length(); i++) {
+            if (apiStr[i] < '0' || apiStr[i] > '9') apiOk = false;
+        }
+        if (apiOk) api = atoi(apiStr.c_str());
+        if (!apiOk || api <= 0) {
+            info.available = false;
+            info.hasFirmware = false;
+            info.type = "Manifest sem api_version valido";
+            info.changelog = "O update.json oferecido nao declara api_version "
+                             "(ou veio com valor ilegivel) e foi recusado.";
+            info.guide = "";
+            ESP_LOGW("celer.ota", "api_version ausente/invalido no manifest: update recusado");
+            return false;
+        }
+        if (api < CELEROS_API_LEVEL) {
+            info.available = false;
+            info.hasFirmware = false;
+            info.type = "Atualizacao com API menor que a atual";
+            info.changelog = "O firmware oferecido tem API " + std::to_string(api) +
+                             " e este aparelho roda API " + std::to_string(CELEROS_API_LEVEL) +
+                             ": apps instalados que exigem API maior parariam de rodar.";
+            info.guide = "";
+            ESP_LOGW("celer.ota", "api_version %d < atual %d: update recusado",
+                     api, (int)CELEROS_API_LEVEL);
+            return false;
+        }
+        info.apiVersion = api;
+    }
+
     if (celer::versionGreater(info.version, CELEROS_VERSION)) {
         info.available = true;
     }

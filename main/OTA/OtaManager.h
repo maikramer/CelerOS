@@ -7,10 +7,13 @@
 // Resultado de checkForUpdates(). "available" compara version com
 // CELEROS_VERSION; "hasFirmware" indica se o canal publica firmware_url
 // (update.json v2) — sem ele a UI cai no fluxo legado do guia manual.
+// "apiVersion" e o nivel de API do firmware ofertado (campo api_version
+// do manifest, obrigatorio desde a validacao de 2026-10).
 struct OtaUpdateInfo {
     bool fetchFailed = false;
     bool available = false;
     bool hasFirmware = false;
+    int apiVersion = 0;
     std::string version;
     std::string firmwareUrl;
     std::string changelog;

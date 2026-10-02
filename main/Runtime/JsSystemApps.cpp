@@ -307,6 +307,8 @@ duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "available");
     duk_push_boolean(ctx, info.hasFirmware ? 1 : 0);
     duk_put_prop_string(ctx, -2, "hasFirmware");
+    duk_push_int(ctx, info.apiVersion);
+    duk_put_prop_string(ctx, -2, "apiVersion");
     duk_push_string(ctx, info.version.c_str());
     duk_put_prop_string(ctx, -2, "version");
     duk_push_string(ctx, info.firmwareUrl.c_str());
