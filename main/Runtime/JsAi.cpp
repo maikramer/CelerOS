@@ -370,7 +370,7 @@ void JSBindings::aiTick(duk_context* ctx) {
     // Toma posse do resultado sob o lock e monta o objeto fora dele
     char errBuf[96];
     AiResult r{s.ok, s.status, s.body, s.bodyLen, errBuf};
-    snprintf(errBuf, sizeof(errBuf), "%s", s.error);
+    memcpy(errBuf, s.error, sizeof(errBuf));  // s.error sempre NUL-terminado
     s.body = nullptr;
     s.bodyLen = 0;
     s.state = 0;  // slot liberado para o proximo chat
