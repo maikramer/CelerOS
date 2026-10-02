@@ -35,6 +35,17 @@ void keepAwakeFor(uint32_t ms);  // variante com prazo (expira sozinho)
 // glance com o aviso no AOD; beep = bipe curto (vale em toda placa).
 void requestGlance(bool beep);
 
+// Bipe curto de notificacao (qualquer task), sem mexer nos estados: o alerta
+// em tela cheia (NotificationAlert) cuida do video; isto e so o som.
+void beep();
+
+// Placa tem estados de tela (perfil com hook screenSleep, ex.: watch).
+bool active();
+
+// Dorme de verdade agora (Backlight off + painel em SLPIN): o alerta de
+// notificacao usa ao expirar sem toque.
+void sleepNow();
+
 // Raise-to-wake ligado/desligado em runtime (persiste "raise_wake").
 void setRaiseWake(bool on);
 bool raiseWake();

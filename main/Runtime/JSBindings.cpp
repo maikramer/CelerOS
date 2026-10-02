@@ -26,6 +26,7 @@
 #include "JsInternal.h"
 #include "../Kernel/Alarms.h"
 #include "../Launcher/WatchPanels.h"
+#include "../Launcher/NotificationAlert.h"
 #include "../Hardware/PowerPolicy.h"
 #include "JsFsJail.h"
 #include "../Utils/CelerSettings.h"
@@ -454,6 +455,10 @@ void JSBindings::present() {
 #if CONFIG_CELEROS_PHONE_LINK
     PhoneLink::tick(true);    // notificacoes/hora do celular com app aberto
 #endif
+    // Alerta de notificacao (watch): com a tela dormindo/dim/AOD sai do app
+    // pelo caminho limpo para o celerLoop empilhar a tela cheia; com a tela
+    // acesa o usuario nao e interrompido (fica o toast do push).
+    NotificationAlert::service(true);
     // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD:
     // com a tela apagada/AOD (o normal no watchface) o alarme toca do mesmo
     // jeito. O toque e a AlarmScreen nativa: o app sai pelo caminho limpo

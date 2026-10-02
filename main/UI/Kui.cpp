@@ -1022,6 +1022,12 @@ void Navigator::tick() {
     uint32_t now = millis();
     uint32_t dt = s_lastTickMs == 0 ? 10 : now - s_lastTickMs;
     s_lastTickMs = now;
+    // Um app sincrono roda DENTRO de um tick (launchApp no onTouch): quando
+    // ele sai, o tick seguinte herda o tempo de vida inteiro do app como dt
+    // e estoira acumuladores de tela (anel da chamada, prazo do alerta de
+    // notificacao — expirava em um frame). dt nao representa mais que um
+    // intervalo de loop.
+    if (dt > 250) dt = 250;
 
     // pedidos de outras tasks (toast/push): aplicados aqui, na task da UI
     if (s_pendMux != nullptr) {

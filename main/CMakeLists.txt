@@ -50,6 +50,7 @@ set(CELEROS_SRCS
     "Launcher/Screens.cpp"
     "Launcher/AlarmScreen.cpp"
     "Launcher/WatchPanels.cpp"
+    "Launcher/NotificationAlert.cpp"
     "Hardware/Buttons.cpp"
     "Hardware/PowerPolicy.cpp"
     "Display/ScreenPower.cpp"

@@ -1,5 +1,6 @@
 #include "Notifications.h"
 #include "../FileSystem/FileSystem.h"
+#include "../Launcher/NotificationAlert.h"
 #include "../Utils/CelerSettings.h"
 #include "../Display/ScreenPower.h"
 #include "../Display/Theme.h"
@@ -112,13 +113,21 @@ void push(const std::string& title, const std::string& msg, const std::string& s
         s_notes.push_back(n);
         while ((int)s_notes.size() > MAX) s_notes.erase(s_notes.begin());
         saveLocked();
-        quiet = dnd();
+        // Nao Perturbe silencia tudo; chamada do celular tambem (a CallScreen
+        // toca por conta propria — toast/bipe/alerta competiriam com ela)
+        quiet = dnd() || n.src == "phone:call";
     }
-    kui::Navigator::toast(shown, THEME_ACCENT, 3000);  // fila cross-task
+    // Bipe + alerta aplicados no proximo tick (task da UI): push pode vir da
+    // task do BLE, que nao toca no vidro nem no I2S. No watch o alerta em
+    // tela cheia (NotificationAlert) substitui o toast; nas demais placas
+    // fica o toast de sempre.
     if (quiet) return;
-    // Glance + bipe aplicados no proximo tick do ScreenPower (task da UI):
-    // push pode vir da task do BLE, que nao toca no vidro nem no I2S
-    ScreenPower::requestGlance(true);
+    ScreenPower::beep();
+    if (ScreenPower::active()) {
+        NotificationAlert::request();
+    } else {
+        kui::Navigator::toast(shown, THEME_ACCENT, 3000);  // fila cross-task
+    }
 }
 
 std::vector<Note> list() {

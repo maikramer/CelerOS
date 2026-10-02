@@ -20,6 +20,7 @@
 #include "Launcher/LauncherUI.h"
 #include "Launcher/AlarmScreen.h"
 #include "Launcher/WatchPanels.h"
+#include "Launcher/NotificationAlert.h"
 #include "Hardware/PowerPolicy.h"
 #if CONFIG_CELEROS_PHONE_LINK
 #include "Bluetooth/PhoneLink.h"
@@ -250,6 +251,7 @@ static void celerLoop() {
     LauncherUI::idleHomeTick();  // launcher ocioso volta para a casa da placa
     AlarmScreen::service();      // alarme/timer tocando: tela cheia por cima
     WatchPanels::service();      // painel pedido por gesto de borda dentro de app
+    NotificationAlert::service(false);  // alerta de notificacao em tela cheia (watch)
     PowerPolicy::tick();         // locks de PM / WiFi ocioso (no-op sem PM)
 #if CONFIG_CELEROS_PHONE_LINK
     PhoneLink::tick();           // linhas do Gadgetbridge (notificacoes, hora...)

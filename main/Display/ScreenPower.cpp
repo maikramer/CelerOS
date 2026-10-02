@@ -94,6 +94,15 @@ void drawAod() {
         s_tft->drawString(title.c_str(), cx - tw / 2, y, 2);
     }
 
+    // Data por baixo da hora (cinza bem escuro; so um texto a mais no AOD)
+    static const char* const kDow[7] = {"DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"};
+    char db[16];
+    snprintf(db, sizeof(db), "%s %02d/%02d", kDow[t.tm_wday % 7], t.tm_mday, t.tm_mon + 1);
+    s_tft->setTextColor(0x2104);
+    int dw = s_tft->textWidth(db, 2);
+    s_tft->drawString(db, s_tft->width() / 2 - dw / 2 + shiftX, s_tft->height() / 2 + 22 + shiftY,
+                      2);
+
     int pct = BoardIO::batteryPct();
     if (pct >= 0) {
         const int st = BoardIO::chargeState();
@@ -116,15 +125,6 @@ void enterGlance(uint32_t now) {
     s_lastAodMin = -1;  // força o desenho
     drawAod();
     ESP_LOGI("celer.screen", "glance (raise)");
-}
-
-void sleepNow() {
-    const BoardProfile& bp = Board::profile();
-    Backlight::forceOff();
-    if (bp.screenSleep) bp.screenSleep();
-    s_state = 0;
-    s_glance = false;
-    ESP_LOGI("celer.screen", "tela off (painel em SLPIN)");
 }
 
 }  // namespace
@@ -159,7 +159,9 @@ void init() {
 void tick(bool inApp) {
     if (s_beepReq) {  // vale em toda placa (notificacao nova)
         s_beepReq = false;
-        BoardIO::tone(1400, 60);
+        BoardIO::tone(1700, 60);
+        delay(60);
+        BoardIO::tone(1200, 80);
     }
     if (!s_active) {
         s_glanceReq = false;
@@ -259,7 +261,7 @@ void tick(bool inApp) {
                 break;
             }
             if (s_glance && now - s_glanceAt >= s_glanceMs) {
-                sleepNow();  // glance expirou: dorme de verdade
+                ScreenPower::sleepNow();  // glance expirou: dorme de verdade
                 break;
             }
             drawAod();  // no-op ate o minuto virar
@@ -274,6 +276,19 @@ bool suppressAppFrame() { return s_active && s_state <= 1; }
 void requestGlance(bool beep) {
     if (beep) s_beepReq = true;
     s_glanceReq = true;
+}
+
+void beep() { s_beepReq = true; }
+
+bool active() { return s_active; }
+
+void sleepNow() {
+    if (!s_active) return;
+    Backlight::forceOff();
+    if (Board::profile().screenSleep) Board::profile().screenSleep();
+    s_state = 0;
+    s_glance = false;
+    ESP_LOGI("celer.screen", "tela off (painel em SLPIN)");
 }
 
 void setRaiseWake(bool on) {

@@ -27,8 +27,10 @@ struct Note {
     bool read = false;
 };
 
-// Nova notificacao: grava, toast, bipe curto e glance da tela (exceto em
-// Nao Perturbe). extId != 0 substitui a entrada com o mesmo id.
+// Nova notificacao: grava; no watch acorda a tela com o alerta em tela cheia
+// (NotificationAlert) e bipa; nas demais placas, toast + bipe. Em Nao
+// Perturbe (e na chamada do celular, que tem tela propria) so o historico.
+// extId != 0 substitui a entrada com o mesmo id.
 void push(const std::string& title, const std::string& msg, const std::string& src = "",
           uint32_t extId = 0);
 
