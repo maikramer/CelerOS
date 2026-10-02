@@ -37,6 +37,9 @@ StreamBufferHandle_t s_shellRx = nullptr;
 StreamBufferHandle_t s_linkRx = nullptr;
 SemaphoreHandle_t s_writeMutex = nullptr;
 
+// instancia do protocolo deste canal (criada no init; o parser e por canal)
+HostLink* s_link = nullptr;
+
 // ------------------------------------------------------------- escrita CDC
 
 void cdcWrite(tinyusb_cdcacm_itf_t itf, const uint8_t* data, size_t len) {
@@ -99,7 +102,8 @@ void usbShellTask(void*) {
 }
 
 void usbLinkTask(void*) {
-    HostLink::run(s_linkRx);
+    if (s_link != nullptr) s_link->run(s_linkRx);
+    vTaskDelete(nullptr);  // inalcancavel: run() nunca retorna
 }
 
 }  // namespace
@@ -148,7 +152,8 @@ bool USBDevice::init() {
         return false;
     }
 
-    HostLink::setWriter(&USBDevice::linkWrite);
+    static HostLink link(&USBDevice::linkWrite);  // CDC: sem hook de baud
+    s_link = &link;
 
     if (xTaskCreate(usbShellTask, "usb_shell", 8192, nullptr, 3, nullptr) != pdPASS ||
         xTaskCreate(usbLinkTask, "usb_link", 12288, nullptr, 4, nullptr) != pdPASS) {

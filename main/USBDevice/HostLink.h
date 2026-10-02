@@ -5,7 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 
-// Protocolo HostLink: canal binario da ferramenta celerctl sobre a CDC1.
+// Protocolo HostLink: canal binario da ferramenta celerctl sobre a CDC1
+// nativa ou a UART do CH340 (multiplexada com o console).
 //
 // Frame (little-endian):
 //   [0x43 'C'][cmd u8][len u16][payload de len bytes]
@@ -15,6 +16,12 @@
 //
 // ESTE ARQUIVO E A FONTE UNICA DOS OPCODES: tools/celerctl.py extrai os
 // valores por regex para manter os dois lados em sincronia.
+//
+// Cada transporte (UART0 do SerialLink, CDC1 do USBDevice) cria a SUA
+// instancia — a maquina de frames e por canal. A sessao de comandos e
+// unica no device: o frame HELLO define o canal ativo (o ultimo ganha) e
+// respostas, logs (KL_LOG_DATA) e demais frames de saida seguem sempre
+// pelo canal que abriu a sessao. Comandos por canal inativo recebem erro.
 
 class HostLink {
 public:
@@ -23,18 +30,43 @@ public:
     // Hook de troca de baud (so faz sentido em canais com baud, ex. UART)
     typedef void (*BaudFn)(uint32_t baud);
 
-    static void setWriter(WriteFn fn);
-    static void setBaudHook(BaudFn fn);
+    HostLink(WriteFn writer, BaudFn baudHook = nullptr);
 
     // Loop da task do canal CDC (USB nativo): consome o stream buffer e
     // alimenta a maquina de frames. Nunca retorna.
-    static void run(StreamBufferHandle_t rx);
+    void run(StreamBufferHandle_t rx);
 
     // Maquina de estados alimentada byte a byte (UART e outros canais).
     // Ao completar um frame, executa e responde.
-    static void feed(uint8_t byte);
+    void feed(uint8_t byte);
+
+    // Encerra a sessao se ela pertence a esta instancia (timeout de idle
+    // do canal UART, por exemplo). Retorna true se havia sessao.
+    bool endSession();
+
+    // Canal da sessao vigente (nullptr = nenhuma).
+    static HostLink* active();
+
+    // Envia um frame KL_LOG_DATA pelo canal ativo (false se nao ha
+    // sessao). Thread-safe: chamado pelo LogSink a partir de tasks
+    // arbitrarias; nao passa pelos locks do dispatch (sem deadlock).
+    static bool sendLogFrame(const char* line, size_t n);
 
     static constexpr uint16_t MAX_PAYLOAD = 4096;  // maior payload aceitado
+
+private:
+    // Valida o canal, abre/troca a sessao no HELLO e despacha o comando.
+    void process(uint8_t cmd, const uint8_t* payload, uint16_t len);
+
+    WriteFn m_writer;
+    BaudFn m_baudHook;
+
+    // parser de frames (estado por instancia)
+    uint8_t m_payload[MAX_PAYLOAD];
+    enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } m_state;
+    uint8_t m_cmd;
+    uint16_t m_need = 0, m_got = 0;
+    int64_t m_lastByteUs = 0;
 };
 
 // --- opcodes host -> device ---

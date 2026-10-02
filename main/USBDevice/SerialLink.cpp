@@ -31,6 +31,9 @@ vprintf_like_t s_defaultVprintf = nullptr;
 
 LineEditor* s_editor = nullptr;
 
+// instancia do protocolo deste canal (criada no init; o parser e por canal)
+HostLink* s_link = nullptr;
+
 // ---- ring de logs + logcat ------------------------------------------------
 constexpr size_t K_LOG_RING = 2048;  // era 8K: 6KB fazem falta no heap da CYD (sem PSRAM); logcat segue funcional (janela menor)
 char s_logRing[K_LOG_RING];
@@ -77,6 +80,7 @@ void enterLinkMode() {
 void exitLinkMode() {
     if (s_mode != MODE_LINK) return;
     s_mode = MODE_CONSOLE;
+    if (s_link != nullptr) s_link->endSession();  // libera a sessao para outro canal
     // sessao encerrada sem LOG_OFF (timeout/Crash da tool): para o stream
     if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
     s_logcat = false;
@@ -129,8 +133,8 @@ void linkTask(void*) {
                         // no modo link e entrega os dois bytes ao parser
                         enterLinkMode();
                         s_lastFrame = xTaskGetTickCount();
-                        HostLink::feed(hold);
-                        HostLink::feed(b);
+                        s_link->feed(hold);
+                        s_link->feed(b);
                         continue;
                     }
                     // nao era frame: o byte retido vira caractere normal
@@ -144,7 +148,7 @@ void linkTask(void*) {
                 feedConsole(b);
             } else {
                 s_lastFrame = xTaskGetTickCount();
-                HostLink::feed(b);
+                s_link->feed(b);
             }
         }
     }
@@ -176,8 +180,8 @@ bool SerialLink::init() {
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
 
-    HostLink::setWriter(&SerialLink::writeFrame);
-    HostLink::setBaudHook(&SerialLink::setBaud);
+    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud);
+    s_link = &link;
 
     if (xTaskCreate(linkTask, "dbg_link", 8192, nullptr, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task do console/link");
@@ -224,20 +228,6 @@ void ringPush(const char* s, size_t n) {
     }
 }
 
-void logFrameSend(const char* line, size_t n) {
-    // frame KL_LOG_DATA montado e escrito de uma vez (mutex do writeFrame)
-    if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
-    uint8_t frame[4 + 1 + HostLink::MAX_PAYLOAD];
-    uint16_t total = (uint16_t)(1 + n);
-    frame[0] = 0x43;
-    frame[1] = KL_LOG_DATA;
-    frame[2] = (uint8_t)total;
-    frame[3] = (uint8_t)(total >> 8);
-    frame[4] = 0;
-    memcpy(frame + 5, line, n);
-    SerialLink::writeFrame(frame, (size_t)(4 + total));
-}
-
 }  // namespace
 
 void celer_log_vprintf(const char* fmt, va_list args) {
@@ -252,7 +242,8 @@ void celer_log_vprintf(const char* fmt, va_list args) {
 
     if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
     if (s_logcat) {
-        logFrameSend(line, (size_t)n);
+        // KL_LOG_DATA sai pelo canal ATIVO da sessao (UART0 ou CDC1 nativa)
+        HostLink::sendLogFrame(line, (size_t)n);
     } else {
         ringPush(line, (size_t)n);
     }
@@ -283,7 +274,7 @@ void celer_logcat_set(bool on) {
                 chunk[n++] = s_logRing[s_logTail];
                 s_logTail = (s_logTail + 1) % K_LOG_RING;
             }
-            logFrameSend(chunk, n);
+            HostLink::sendLogFrame(chunk, n);
         }
     }
     s_logcat = on;

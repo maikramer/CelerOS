@@ -35,9 +35,21 @@
 
 namespace {
 
-// transporte injetado (default: CDC nativo do USBDevice)
-HostLink::WriteFn s_writer = nullptr;
-HostLink::BaudFn s_baudHook = nullptr;
+// Sessao unica: canal que recebeu o ultimo HELLO. O dispatch de comandos e
+// serializado por mutex (handlers usam estado global de escrita/OTA); o
+// contexto de escrita abaixo vale apenas dentro de um dispatch.
+HostLink* volatile s_active = nullptr;
+SemaphoreHandle_t s_dispatchMutex = nullptr;
+HostLink::WriteFn s_ctxWriter = nullptr;
+HostLink::BaudFn s_ctxBaud = nullptr;
+
+// Buffer do frame de logcat: chamado de tasks arbitrarias, nao pode ser
+// stack (MAX_PAYLOAD cresce no S3). Serializado pelo proprio sendLogFrame.
+SemaphoreHandle_t s_logFrameMutex = nullptr;
+uint8_t s_logFrame[4 + 1 + HostLink::MAX_PAYLOAD];
+
+HostLink::WriteFn linkWriter() { return s_ctxWriter; }
+HostLink::BaudFn linkBaud() { return s_ctxBaud; }
 
 // ---------------------------------------------------------------- utilidades
 
@@ -50,14 +62,15 @@ uint8_t s_txFrame[4 + 1 + HostLink::MAX_PAYLOAD];
 uint8_t* txPayload() { return s_txFrame + 5; }
 
 void sendFrame(uint8_t cmd, uint8_t status, uint16_t dataLen) {
-    if (s_writer == nullptr) return;  // nenhum transporte instalado
+    HostLink::WriteFn w = linkWriter();
+    if (w == nullptr) return;  // nenhum transporte no contexto
     uint16_t total = (uint16_t)(1 + dataLen);
     s_txFrame[0] = 0x43;
     s_txFrame[1] = cmd;
     s_txFrame[2] = (uint8_t)total;
     s_txFrame[3] = (uint8_t)(total >> 8);
     s_txFrame[4] = status;
-    s_writer(s_txFrame, (size_t)(4 + total));
+    w(s_txFrame, (size_t)(4 + total));
 }
 
 void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
@@ -256,7 +269,7 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     frame[5] = (uint8_t)count;
     frame[6] = (uint8_t)(count >> 8);
     memcpy(frame.data() + 7, out.data(), out.size());
-    if (s_writer != nullptr) s_writer((const uint8_t*)frame.data(), frame.size());
+    if (linkWriter() != nullptr) linkWriter()((const uint8_t*)frame.data(), frame.size());
 }
 
 void handleStat(const uint8_t* payload, uint16_t len) {
@@ -416,7 +429,7 @@ void handleReboot() {
 
 void handleSetBaud(const uint8_t* payload, uint16_t len) {
     uint32_t baud = 0;
-    if (!takeU32(payload, len, baud) || s_baudHook == nullptr) {
+    if (!takeU32(payload, len, baud) || linkBaud() == nullptr) {
         respondError(KL_SET_BAUD, "troca de baud nao suportada neste canal");
         return;
     }
@@ -425,7 +438,7 @@ void handleSetBaud(const uint8_t* payload, uint16_t len) {
     respond(KL_SET_BAUD, 0, rec, sizeof(rec));
     // da tempo do ACK sair da FIFO antes de mudar o baud
     vTaskDelay(pdMS_TO_TICKS(20));
-    s_baudHook(baud);
+    linkBaud()(baud);
 }
 
 // ------------------------------------------------------------------- logcat
@@ -532,7 +545,7 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
     // montados direto no frame de resposta (sem 4KB extras de heap).
     const size_t cap = (HostLink::MAX_PAYLOAD - 1) & ~(size_t)3;  // multiplo de 4
     ScreenCapture::stream(rle, txPayload(), cap, [](const uint8_t*, size_t n) {
-        if (s_writer == nullptr) return false;
+        if (linkWriter() == nullptr) return false;
         sendFrame(KL_SCR_DATA, 0, (uint16_t)n);
         return true;
     });
@@ -600,7 +613,7 @@ void handleCoredump() {
     const uint8_t* p = (const uint8_t*)mapped + (addr - part->address);
     size_t off = 0;
     bool sentAll = true;
-    while (off < size && s_writer != nullptr) {
+    while (off < size && linkWriter() != nullptr) {
         size_t rest = size - off;
         uint16_t chunk = (uint16_t)((rest > HostLink::MAX_PAYLOAD) ? HostLink::MAX_PAYLOAD : rest);
         respond(KL_COREDUMP_DATA, 0, p + off, chunk);
@@ -648,65 +661,120 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 
 }  // namespace
 
-void HostLink::setWriter(WriteFn fn) {
-    s_writer = fn;
+HostLink::HostLink(WriteFn writer, BaudFn baudHook)
+    : m_writer(writer), m_baudHook(baudHook), m_state(WANT_MAGIC), m_cmd(0) {
+    if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
+    if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
 }
 
-void HostLink::setBaudHook(BaudFn fn) {
-    s_baudHook = fn;
+void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
+    if (s_dispatchMutex != nullptr) xSemaphoreTake(s_dispatchMutex, portMAX_DELAY);
+    s_ctxWriter = m_writer;
+    s_ctxBaud = m_baudHook;
+    if (cmd == KL_HELLO) {
+        s_active = this;  // ultimo HELLO ganha a sessao
+    } else if (s_active != this) {
+        // frames de outro canal (ex. UART0 de uma board USB-nativa): a
+        // resposta de erro vai pelo canal de origem, sem tocar a sessao
+        respondError(cmd, "sessao ativa em outro canal");
+        s_ctxWriter = nullptr;
+        s_ctxBaud = nullptr;
+        if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
+        return;
+    }
+    dispatch(cmd, payload, len);
+    s_ctxWriter = nullptr;
+    s_ctxBaud = nullptr;
+    if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
+}
+
+HostLink* HostLink::active() {
+    return s_active;
+}
+
+bool HostLink::endSession() {
+    if (s_dispatchMutex != nullptr) xSemaphoreTake(s_dispatchMutex, portMAX_DELAY);
+    bool was = s_active == this;
+    if (was) s_active = nullptr;
+    if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
+    return was;
+}
+
+bool HostLink::sendLogFrame(const char* line, size_t n) {
+    HostLink* a = s_active;  // leitura simples: trocas de sessao sao raras
+    if (a == nullptr) return false;
+    // rota do LogSink: NAO toma o mutex do dispatch — handlers podem
+    // logar no meio do proprio dispatch (EXEC/shell) e travariam
+    if (s_logFrameMutex != nullptr) xSemaphoreTake(s_logFrameMutex, portMAX_DELAY);
+    if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
+    uint16_t total = (uint16_t)(1 + n);
+    s_logFrame[0] = 0x43;
+    s_logFrame[1] = KL_LOG_DATA;
+    s_logFrame[2] = (uint8_t)total;
+    s_logFrame[3] = (uint8_t)(total >> 8);
+    s_logFrame[4] = 0;
+    memcpy(s_logFrame + 5, line, n);
+    bool ok = a->m_writer != nullptr && a->m_writer(s_logFrame, (size_t)(4 + total));
+    if (s_logFrameMutex != nullptr) xSemaphoreGive(s_logFrameMutex);
+    return ok;
 }
 
 // Maquina de estados de frames alimentada byte a byte.
 void HostLink::feed(uint8_t byte) {
-    static uint8_t payload[MAX_PAYLOAD];
-    static enum { WANT_MAGIC, WANT_CMD, WANT_LEN_LO, WANT_LEN_HI, WANT_PAYLOAD } state = WANT_MAGIC;
-    static uint8_t cmd = 0;
-    static uint16_t need = 0, got = 0;
-    static int64_t lastByteUs = 0;
-
     // Ressincronia: o host escreve cada frame de uma vez, entao um silencio
     // no MEIO de um frame significa frame cortado (celerctl morto por
     // timeout, byte 0x43 solto do console no boot). Sem isto o parser ficava
     // esperando ate 4KB de "payload" e engolia os comandos seguintes — o
     // link parecia morto ate reiniciar a placa (medido).
     const int64_t now = esp_timer_get_time();
-    if (state != WANT_MAGIC && now - lastByteUs > 250000) {
-        state = WANT_MAGIC;
-        got = 0;
+    if (m_state != WANT_MAGIC && now - m_lastByteUs > 250000) {
+        m_state = WANT_MAGIC;
+        m_got = 0;
     }
-    lastByteUs = now;
+    m_lastByteUs = now;
 
-    switch (state) {
+    switch (m_state) {
         case WANT_MAGIC:
-            if (byte == 0x43) state = WANT_CMD;
+            if (byte == 0x43) m_state = WANT_CMD;
             break;
         case WANT_CMD:
-            cmd = byte;
-            state = WANT_LEN_LO;
+            m_cmd = byte;
+            m_state = WANT_LEN_LO;
             break;
         case WANT_LEN_LO:
-            need = byte;
-            state = WANT_LEN_HI;
+            m_need = byte;
+            m_state = WANT_LEN_HI;
             break;
         case WANT_LEN_HI:
-            need |= (uint16_t)byte << 8;
-            got = 0;
-            if (need == 0) {
-                dispatch(cmd, payload, 0);
-                state = WANT_MAGIC;
-            } else if (need <= MAX_PAYLOAD) {
-                state = WANT_PAYLOAD;
+            m_need |= (uint16_t)byte << 8;
+            m_got = 0;
+            if (m_need == 0) {
+                process(m_cmd, m_payload, 0);
+                m_state = WANT_MAGIC;
+            } else if (m_need <= MAX_PAYLOAD) {
+                m_state = WANT_PAYLOAD;
             } else {
-                respondError(cmd, "payload grande demais");
-                state = WANT_MAGIC;
+                // rejeicao no parser: resposta direta pelo canal desta
+                // instancia (ainda nao ha contexto de dispatch)
+                const char msg[] = "payload grande demais";
+                uint8_t frame[32];
+                uint16_t total = (uint16_t)(1 + sizeof(msg) - 1);
+                frame[0] = 0x43;
+                frame[1] = m_cmd;
+                frame[2] = (uint8_t)total;
+                frame[3] = (uint8_t)(total >> 8);
+                frame[4] = 1;  // status erro
+                memcpy(frame + 5, msg, sizeof(msg) - 1);
+                if (m_writer != nullptr) m_writer(frame, (size_t)(4 + total));
+                m_state = WANT_MAGIC;
             }
             break;
         case WANT_PAYLOAD:
-            payload[got++] = byte;
-            if (got >= need) {
-                dispatch(cmd, payload, need);
-                got = 0;
-                state = WANT_MAGIC;
+            m_payload[m_got++] = byte;
+            if (m_got >= m_need) {
+                process(m_cmd, m_payload, m_need);
+                m_got = 0;
+                m_state = WANT_MAGIC;
             }
             break;
     }
