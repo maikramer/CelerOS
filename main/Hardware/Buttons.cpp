@@ -104,6 +104,8 @@ void onShort1(bool inApp) {
         // Encerramento limpo pelo mecanismo do X da topbar: o app sai no
         // proximo ponto de espera (delay/getTouch) e o launcher volta.
         LauncherUI::requestAppExit();
+    } else if (kui::Navigator::depth() <= 1 && LauncherUI::launchHome()) {
+        // ja na raiz do launcher: BOOT leva para a casa (watchface no watch)
     } else {
         kui::Navigator::home();
     }

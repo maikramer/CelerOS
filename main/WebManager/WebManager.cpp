@@ -184,6 +184,19 @@ bool WebManager::enable() {
     return WebManager::init();
 }
 
+bool WebManager::enableAsync() {
+    CelerSettings::set("nowifi", "");
+    nm().setAutoReconnect(true);
+    return startAsync();  // init idempotente; a task de reconexao conecta
+}
+
+void WebManager::disablePersist() {
+    CelerSettings::set("nowifi", "1");
+    disable();
+}
+
+bool WebManager::wifiEnabled() { return !cfgFlag("nowifi"); }
+
 void WebManager::disable() {
     nm().setAutoReconnect(false);  // silencia a background task
     stopWebServer();

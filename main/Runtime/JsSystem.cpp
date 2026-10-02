@@ -2,6 +2,7 @@
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../Display/ScreenPower.h"
+#include "../Hardware/PowerPolicy.h"
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
 #include "../WebManager/WebManager.h"
@@ -193,6 +194,22 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "hasMic");
     duk_push_boolean(ctx, Board::profile().imuAccel != nullptr);  // API 13
     duk_put_prop_string(ctx, -2, "hasImu");
+    // API 15: bateria, placa e geometria do vidro (relogio: cantos mortos)
+    duk_push_boolean(ctx, BoardIO::batteryMv() >= 0);
+    duk_put_prop_string(ctx, -2, "hasBattery");
+    duk_push_string(ctx, Board::profile().id);
+    duk_put_prop_string(ctx, -2, "board");
+    // inset em coordenadas virtuais 240 (arredondado p/ cima: margem segura)
+    duk_push_int(ctx, (Board::profile().screenInset * 240 + UI::W - 1) / UI::W);
+    duk_put_prop_string(ctx, -2, "inset");
+    duk_push_string(ctx, Board::profile().screenInset > 0 ? "rounded" : "rect");
+    duk_put_prop_string(ctx, -2, "shape");
+    // vidro fisico: apps que desenham geometria (ponteiros) compensam a
+    // escala nao uniforme do 240x320
+    duk_push_int(ctx, UI::W);
+    duk_put_prop_string(ctx, -2, "screenW");
+    duk_push_int(ctx, UI::H);
+    duk_put_prop_string(ctx, -2, "screenH");
 
     // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
     duk_push_uint(ctx, ESP.getCpuFreqMHz());
@@ -328,7 +345,11 @@ duk_ret_t JSBindings::js_setting(duk_context *ctx) {
         if (strlen(val) > 63) {  // CelerSettings::get le ate 63: maior virava "ausente"
             duk_error(ctx, DUK_ERR_RANGE_ERROR, "System.setting: valor acima de 63 caracteres");
         }
-        duk_push_boolean(ctx, CelerSettings::set(key, val) ? 1 : 0);
+        bool ok = CelerSettings::set(key, val);
+        // ajustes de tela/energia valem na hora (sem reboot)
+        ScreenPower::reloadSettings();
+        PowerPolicy::reloadSettings();
+        duk_push_boolean(ctx, ok ? 1 : 0);
         return 1;
     }
     std::string v = CelerSettings::get(key);
@@ -398,6 +419,29 @@ duk_ret_t JSBindings::js_relayCount(duk_context *ctx) {
 // System.battery() -> tensao em mV; -1 sem divisor de bateria na placa
 duk_ret_t JSBindings::js_battery(duk_context *ctx) {
     duk_push_int(ctx, BoardIO::batteryMv());
+    return 1;
+}
+
+// System.batteryInfo() -> {mv, pct, charging, usb, full} (API 15); null sem
+// bateria. pct vem do fuel gauge do PMU ou da curva LiPo sobre mv.
+duk_ret_t JSBindings::js_batteryInfo(duk_context *ctx) {
+    const int mv = BoardIO::batteryMv();
+    if (mv < 0) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    const int st = BoardIO::chargeState();
+    duk_push_object(ctx);
+    duk_push_int(ctx, mv);
+    duk_put_prop_string(ctx, -2, "mv");
+    duk_push_int(ctx, BoardIO::batteryPct());
+    duk_put_prop_string(ctx, -2, "pct");
+    duk_push_boolean(ctx, st > 0 && (st & 1));
+    duk_put_prop_string(ctx, -2, "charging");
+    duk_push_boolean(ctx, st > 0 && (st & 2));
+    duk_put_prop_string(ctx, -2, "usb");
+    duk_push_boolean(ctx, st > 0 && (st & 4));
+    duk_put_prop_string(ctx, -2, "full");
     return 1;
 }
 

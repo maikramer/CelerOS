@@ -39,4 +39,38 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
-# CONFIG_BT_NIMBLE_NVS_PERSIST is not set
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# Energia (API 15, Hardware/PowerPolicy): DFS + light sleep automatico com a
+# tela apagada. O BLE dorme junto (modem sleep com o XTAL principal ligado:
+# o RTC do watch roda no RC interno, sem cristal de 32 kHz).
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
+CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP=y
+
+# WiFi cabendo na RAM interna: o watch gasta ~35 KB internos a mais que a
+# SmartDisplay (TinyUSB dual CDC + tasks do HostLink + IMU) e o esp_wifi_init
+# falhava com "esf_buf_setup_static: alloc eb fail" (16 RX + 16 TX estaticos
+# = ~50 KB). Com TRY_ALLOCATE_WIFI_LWIP o TX estatico ja vai para a PSRAM;
+# RX estatico precisa de DMA interno: 8 buffers e janela BA do mesmo tamanho.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_RX_BA_WIN=8
+
+# .bss marcado com EXT_RAM_BSS_ATTR (quadros de 8 KB do HostLink) vai para a
+# PSRAM: libera ~32 KB internos para o WiFi e o BLE do Phone Link.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Codigo do WiFi fora da IRAM: no S3 a IRAM sai da mesma DIRAM do heap
+# interno (~20 KB a mais para WiFi + BLE juntos; vazao um pouco menor).
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# Task de eventos do sistema: pico medido < 1 KB de 8 KB.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
+# Pools do host NimBLE (ACL/eventos/msys, ~11 KB) na PSRAM: com o celular
+# conectado a RAM interna caia a ~6 KB com WiFi + BLE juntos.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

@@ -18,6 +18,10 @@
 #include "Hardware/Buttons.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
+#include "Launcher/AlarmScreen.h"
+#include "Launcher/WatchPanels.h"
+#include "Hardware/PowerPolicy.h"
+#include "Kernel/Alarms.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
@@ -87,8 +91,14 @@ static void celerSetup() {
         delay(1000);
     }
 
-    // Console/shell + canal celerctl na UART do console (CH340 no PC)
+#if !CONFIG_CELEROS_USB_NATIVE
+    // Console/shell + canal celerctl na UART do console (CH340 no PC). Com
+    // USB nativo (watch) o celerctl vai pelo CDC e a UART0 nao tem conector:
+    // a task + o HostLink dela so comeriam RAM interna.
     SerialLink::init();
+#else
+    SerialLink::initLogOnly();  // logcat continua recebendo os ESP_LOG*
+#endif
 #if CONFIG_CELEROS_USB_NATIVE
     // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
     USBDevice::init();
@@ -102,9 +112,11 @@ static void celerSetup() {
 
     // Estados de tela do watch (dim/AOD/off; no-op sem hooks no perfil)
     ScreenPower::init();
+    PowerPolicy::init();  // DFS + light sleep guiados pela tela (watch)
     
     // Initialize Time Manager
     TimeManager::init();
+    Alarms::init();  // alarmes/timer/soneca do NVS (API 15)
     
     celer_log_printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
@@ -148,6 +160,7 @@ static void celerSetup() {
 
     // UI nova: launcher e a base da pilha do Navigator
     kui::Navigator::begin(tft);
+    WatchPanels::init();  // gestos de borda do relogio (no-op nas outras placas)
     kui::Navigator::push(&s_launcher);
     currentState = STATE_LAUNCHER;
 
@@ -197,7 +210,10 @@ static void celerSetup() {
 // OTA com rollback: o slot novo boota como PENDING_VERIFY; 30s de uptime sao
 // (primeiro tick apos a marca) confirmam com esp_ota_mark_app_valid. Crash ou
 // reset antes disso e o bootloader reverte para o slot anterior sozinho.
-static void confirmPendingOta() {
+// Tambem chamado pelo present() dos apps (JSBindings): com o app casa aberto
+// desde o boot (watchface) o celerLoop nao roda e o slot ficava pendente para
+// sempre — o OTA seguinte era recusado e um reboot desfazia a atualizacao.
+void confirmPendingOta() {
     static bool checked = false;
     if (checked || esp_timer_get_time() < 30LL * 1000000LL) return;
     checked = true;
@@ -224,9 +240,13 @@ static void celerLoop() {
     Buttons::tick(false);  // botoes fisicos (no-op sem pins no perfil); apps
                            // bombeiam pelo present() — aqui e a UI do sistema
     ScreenPower::tick(false);  // dim/AOD/off (apps bombeiam pelo present())
+    LauncherUI::idleHomeTick();  // launcher ocioso volta para a casa da placa
+    AlarmScreen::service();      // alarme/timer tocando: tela cheia por cima
+    WatchPanels::service();      // painel pedido por gesto de borda dentro de app
+    PowerPolicy::tick();         // locks de PM / WiFi ocioso (no-op sem PM)
     confirmPendingOta();
 
-    delay(5);
+    delay(PowerPolicy::loopDelayMs());  // tela apagada: loop lento, CPU dorme
 }
 
 // Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)

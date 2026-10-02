@@ -24,6 +24,8 @@ set(CELEROS_SRCS
     "Kernel/Core/CelerKernel.cpp"
     "Kernel/AppRunner.cpp"
     "Kernel/TimeManager.cpp"
+    "Kernel/Alarms.cpp"
+    "Kernel/Notifications.cpp"
     "Launcher/LauncherUI.cpp"
     "Runtime/JSBindings.cpp"
     "Runtime/JsGfx.cpp"
@@ -46,7 +48,10 @@ set(CELEROS_SRCS
     "UI/Kui.cpp"
     "UI/Keyboard.cpp"
     "Launcher/Screens.cpp"
+    "Launcher/AlarmScreen.cpp"
+    "Launcher/WatchPanels.cpp"
     "Hardware/Buttons.cpp"
+    "Hardware/PowerPolicy.cpp"
     "Display/ScreenPower.cpp"
 )
 if(CONFIG_CELEROS_JS_GPIO)
@@ -176,7 +181,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.4.1"
-    CELEROS_API_LEVEL=14
+    CELEROS_API_LEVEL=15
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

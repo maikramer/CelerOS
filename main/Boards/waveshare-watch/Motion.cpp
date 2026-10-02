@@ -120,6 +120,42 @@ void persist() {
     s_pendingPersist = 0;
 }
 
+// Historico diario (Sensors.stepHistory, API 15): ate HIST_MAX dias
+// fechados em "steps_hist" = "yyyymmdd:n,yyyymmdd:n,..." (mais recente 1o).
+constexpr int HIST_MAX = 7;
+
+void pushHistory(int32_t day, int32_t n) {
+    if (day <= 0) return;
+    std::string cur = CelerSettings::get("steps_hist", "");
+    char head[24];
+    snprintf(head, sizeof(head), "%ld:%ld", (long)day, (long)n);
+    std::string out = head;
+    int kept = 1;
+    size_t p = 0;
+    while (p < cur.size() && kept < HIST_MAX) {
+        size_t c = cur.find(',', p);
+        if (c == std::string::npos) c = cur.size();
+        if (c > p) {
+            out += ',';
+            out.append(cur, p, c - p);
+            kept++;
+        }
+        p = c + 1;
+    }
+    CelerSettings::set("steps_hist", out.c_str());  // 7 x ~15 = cabe nos 63
+}
+
+// Virada do dia: fecha o acumulado no historico e zera a contagem.
+void rollDay(int32_t today) {
+    pushHistory(s_dayKey, s_steps);
+    portENTER_CRITICAL(&s_mux);
+    s_steps = 0;
+    portEXIT_CRITICAL(&s_mux);
+    s_dayKey = today;
+    persist();
+    ESP_LOGI("celer.imu", "dia novo (%ld): passos zerados", (long)today);
+}
+
 void load() {
     // Chamado pela task depois de ~3 s (FS/NVS ja montados no boot).
     std::string sens = CelerSettings::get("raise_sens", "1");
@@ -129,7 +165,11 @@ void load() {
     if (!d.empty()) s_dayKey = atol(d.c_str());
     int32_t today = dayKey();
     if (s_dayKey != today) {
-        // dia novo (ou primeira leitura): recomeca a contagem
+        // dia novo (ou primeira leitura): fecha o anterior e recomeca
+        if (s_dayKey > 0 && TimeManager::isTimeValid()) {
+            std::string old = CelerSettings::get("steps", "");
+            pushHistory(s_dayKey, old.empty() ? 0 : atol(old.c_str()));
+        }
         s_dayKey = today;
         s_steps = 0;
         persist();
@@ -161,8 +201,25 @@ void motionTask(void*) {
 
     TickType_t last = xTaskGetTickCount();
     int32_t lastLoggedMilestone = (s_steps / 500) * 500;
+    uint32_t dayCheckMs = 0;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(33));
+        if (!s_imuOk) {  // powerDown (pre-deep-sleep): nada de I2C em NACK
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        // Virada da meia-noite com o relogio ligado (antes so no boot)
+        dayCheckMs += 33;
+        if (dayCheckMs >= 10000) {
+            dayCheckMs = 0;
+            if (TimeManager::isTimeValid()) {
+                const int32_t today = dayKey();
+                if (today != s_dayKey) rollDay(today);
+            }
+            // sensibilidade do raise mudada no Settings vale sem reboot
+            int sens = atoi(CelerSettings::get("raise_sens", "1").c_str());
+            if (sens >= 0 && sens <= 2) s_raiseSens = sens;
+        }
         uint32_t dtMs = (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
         last = xTaskGetTickCount();
 
@@ -218,6 +275,25 @@ int32_t steps() {
     return v;
 }
 
+int stepHistory(int32_t* days, int32_t* counts, int max) {
+    std::string cur = CelerSettings::get("steps_hist", "");
+    int n = 0;
+    size_t p = 0;
+    while (p < cur.size() && n < max) {
+        size_t c = cur.find(',', p);
+        if (c == std::string::npos) c = cur.size();
+        std::string item = cur.substr(p, c - p);
+        size_t sep = item.find(':');
+        if (sep != std::string::npos) {
+            days[n] = atol(item.c_str());
+            counts[n] = atol(item.c_str() + sep + 1);
+            n++;
+        }
+        p = c + 1;
+    }
+    return n;
+}
+
 bool accel(float* x, float* y, float* z) {
     portENTER_CRITICAL(&s_mux);
     bool ok = s_imuOk;
@@ -234,8 +310,16 @@ void prepareSleep() {
     s_imuOk = false;
     portEXIT_CRITICAL(&s_mux);
     if (!ok) return;
-    Qmi8658::powerDown();
     if (s_pendingPersist > 0) persist();
+    if (CelerSettings::get("imu_wake", "") == "1") {
+        // Wake por movimento: AnyMotion com threshold alto (so gesto firme)
+        // na INT1 ativo-baixo; o ScreenPower soma o pino ao EXT1.
+        Qmi8658::idleAccel30Hz(0x20);
+        Qmi8658::clearMotionIrq();
+        ESP_LOGI("celer.imu", "IMU em wake-on-motion p/ deep sleep (passos: %ld)", (long)s_steps);
+        return;
+    }
+    Qmi8658::powerDown();
     ESP_LOGI("celer.imu", "IMU desligado p/ deep sleep (passos: %ld)", (long)s_steps);
 }
 

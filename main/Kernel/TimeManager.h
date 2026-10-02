@@ -15,23 +15,22 @@ public:
     static bool isTimeValid();
     // false = campos fora da faixa (ano 2020..2099); hora nao muda
     static bool setManualTime(int year, int month, int day, int hour, int minute);
+    // Epoch UTC vindo de fora (celular via Phone Link): ajusta o relogio e
+    // grava no RTC externo. false = epoch antes de 2020.
+    static bool setEpoch(time_t epoch);
     // false = TZ vazio, longo (>48) ou com '|'/controle (o config_time.txt
     // separa campos por '|'); fuso nao muda
     static bool setTimezone(const std::string& tzOffset);
     static void setTimeFormat(bool use24h);
     static void setNTPEnabled(bool enabled);
 
-    // Alarme (API 12, em RAM — nao sobrevive a reboot): dispara na PROXIMA
-    // ocorrencia de hh:mm (hoje se ainda nao passou, senao amanha) e se
-    // desarma: toast no launcher, banner + bipe com app aberto (pollAlarm).
+    // Alarme da API 12 (compat): slot 0 do agendador persistente
+    // (Kernel/Alarms, API 15) — dispara uma vez na proxima ocorrencia de
+    // hh:mm e se desarma; o toque e a AlarmScreen.
     static bool setAlarm(int hour, int minute, const std::string& msg);
     static void clearAlarm();
     // false = desarmado; senao preenche hora/minuto/mensagem
     static bool getAlarm(int& hour, int& minute, std::string& msg);
-    // true UMA vez quando o alarme vence (desarma e preenche a mensagem).
-    // Chamado pelo tick do launcher e pelo present() dos apps JS — com app
-    // aberto o alarme tambem dispara (banner na faixa + bipe).
-    static bool pollAlarm(std::string& msg);
 
     // Getters
     static std::string getFormattedTime();

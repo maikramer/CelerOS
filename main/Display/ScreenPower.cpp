@@ -3,6 +3,8 @@
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
 #include "../Kernel/TimeManager.h"
+#include "../Kernel/Alarms.h"
+#include "../Kernel/Notifications.h"
 #include "../Utils/CelerSettings.h"
 #include "esp_log.h"
 #include <Arduino.h>
@@ -37,6 +39,9 @@ bool s_keepAwake = false;
 uint32_t s_keepAwakeUntil = 0;  // keepAwakeFor(ms): expira sozinho
 uint32_t s_glanceMs = 5000;   // 3/5/8 s
 bool s_raiseWake = true;
+bool s_aodOn = true;
+volatile bool s_glanceReq = false;  // requestGlance (qualquer task)
+volatile bool s_beepReq = false;
 
 // Tela presa acesa: flag latched (jogos) OU prazo corrente (keepAwakeFor)
 bool awakeHeld() {
@@ -70,11 +75,31 @@ void drawAod() {
     s_tft->drawString(buf, s_tft->width() / 2 - w / 2 + shiftX,
                       s_tft->height() / 2 - 40 + shiftY, 6);
 
-    int mv = BoardIO::batteryMv();
-    if (mv >= 3000 && mv <= 5000) {
-        char b[10];
-        snprintf(b, sizeof(b), "%d,%dV", mv / 1000, (mv % 1000) / 100);
-        s_tft->setTextColor(0x39E7);  // cinza escuro
+    // Notificacoes nao lidas: ponto + titulo da mais recente
+    const int unread = Notifications::unread();
+    if (unread > 0) {
+        std::string title;
+        for (const auto& n : Notifications::list()) {
+            if (!n.read) {
+                title = n.title;
+                break;
+            }
+        }
+        if (title.size() > 22) title = title.substr(0, 21) + "...";
+        s_tft->setTextColor(0x4A69);
+        int tw = s_tft->textWidth(title.c_str(), 2);
+        int cx = s_tft->width() / 2 + shiftX;
+        int y = s_tft->height() / 2 + 90 + shiftY;
+        s_tft->fillCircle(cx - tw / 2 - 12, y + 7, 4, 0x033F);  // ponto azul escuro
+        s_tft->drawString(title.c_str(), cx - tw / 2, y, 2);
+    }
+
+    int pct = BoardIO::batteryPct();
+    if (pct >= 0) {
+        const int st = BoardIO::chargeState();
+        char b[12];
+        snprintf(b, sizeof(b), (st > 0 && (st & 1)) ? "+%d%%" : "%d%%", pct);
+        s_tft->setTextColor(pct <= 15 ? 0x6000 : 0x39E7);  // vermelho escuro / cinza escuro
         int bw = s_tft->textWidth(b, 2);
         s_tft->drawString(b, s_tft->width() / 2 - bw / 2 + shiftX,
                           s_tft->height() / 2 + 50 + shiftY, 2);
@@ -106,12 +131,8 @@ void sleepNow() {
 
 namespace ScreenPower {
 
-void init() {
-    const BoardProfile& bp = Board::profile();
-    if (bp.screenSleep == nullptr) return;  // placa sem estados de tela
-    s_tft = &Board::display();
-    s_active = true;
-
+void reloadSettings() {
+    if (!s_active) return;
     int offMin = atoi(CelerSettings::get("screen_off_min", "3").c_str());
     if (offMin < 1) offMin = 1;
     if (offMin > 5) offMin = 5;
@@ -119,17 +140,41 @@ void init() {
     if (glance != 3 && glance != 8) glance = 5;
     s_glanceMs = glance * 1000UL;
     s_raiseWake = CelerSettings::get("raise_wake", "1") == "1";
+    s_aodOn = CelerSettings::get("aod", "1") == "1";
 
     // OFF logico continua no Backlight (timeout + wake consumido no touch)
     Backlight::setIdleTimeout((uint32_t)offMin * 60000UL, false);
-    ESP_LOGI("celer.screen", "estados de tela ativos (off %d min, glance %d s, raise %d)",
-             offMin, glance, (int)s_raiseWake);
+    ESP_LOGI("celer.screen", "estados de tela (off %d min, glance %d s, raise %d, aod %d)",
+             offMin, glance, (int)s_raiseWake, (int)s_aodOn);
+}
+
+void init() {
+    const BoardProfile& bp = Board::profile();
+    if (bp.screenSleep == nullptr) return;  // placa sem estados de tela
+    s_tft = &Board::display();
+    s_active = true;
+    reloadSettings();
 }
 
 void tick(bool inApp) {
-    if (!s_active) return;
+    if (s_beepReq) {  // vale em toda placa (notificacao nova)
+        s_beepReq = false;
+        BoardIO::tone(1400, 60);
+    }
+    if (!s_active) {
+        s_glanceReq = false;
+        return;
+    }
     const BoardProfile& bp = Board::profile();
     uint32_t now = millis();
+    if (s_glanceReq) {
+        s_glanceReq = false;
+        if (Backlight::isOff() || s_state <= 1) {
+            enterGlance(now);
+        } else {
+            s_lastAodMin = -1;  // AOD redesenha com o aviso
+        }
+    }
     uint32_t idle = now - Backlight::lastActivity();
 
     // Edges do Backlight (OFF logico): dormir/acordar o painel de verdade
@@ -154,9 +199,17 @@ void tick(bool inApp) {
         }
     }
 
-    // Raise -> glance (so com tela apagada/AOD, como no firmware Rust)
+    // Raise -> acorda de verdade (brilho pleno, conta como atividade). Antes
+    // virava "glance", que e o proprio AOD: com o AOD na tela (estado normal
+    // no watchface) levantar o pulso nao mudava nada. O glance fica para as
+    // notificacoes (requestGlance). As arestas acima / o case 1 abaixo
+    // acordam o painel e tiram o dim no proximo tick.
     if (s_raiseWake && bp.raisePoll && bp.raisePoll()) {
-        if (Backlight::isOff() || s_state <= 1) enterGlance(now);
+        if (Backlight::isOff() || s_state <= 2) {
+            ESP_LOGI("celer.screen", "raise: acordando (estado %d)", s_state);
+            s_glance = false;
+            Backlight::noteActivity();
+        }
     }
 
     // Tecla de power do PMU (watch: PEK do AXP2101): curto acorda a tela,
@@ -186,7 +239,7 @@ void tick(bool inApp) {
             if (awakeHeld() || idle < kDimAfterMs) {
                 Backlight::undim();
                 s_state = 3;
-            } else if (idle >= kAodAfterMs && inApp && watchfaceApp()) {
+            } else if (idle >= kAodAfterMs && inApp && s_aodOn && watchfaceApp()) {
                 // AOD so sobre o Watchface (ele redesenha a tela inteira por
                 // segundo; qualquer outro app segue dim ate o timeout)
                 Backlight::dim(kBrightAod);
@@ -218,6 +271,27 @@ void tick(bool inApp) {
 
 bool suppressAppFrame() { return s_active && s_state <= 1; }
 
+void requestGlance(bool beep) {
+    if (beep) s_beepReq = true;
+    s_glanceReq = true;
+}
+
+void setRaiseWake(bool on) {
+    s_raiseWake = on;
+    CelerSettings::set("raise_wake", on ? "1" : "0");
+}
+
+bool raiseWake() { return s_raiseWake; }
+
+void setAodEnabled(bool on) {
+    s_aodOn = on;
+    CelerSettings::set("aod", on ? "1" : "0");
+}
+
+bool aodEnabled() { return s_aodOn; }
+
+int state() { return s_active ? s_state : 3; }
+
 void keepAwake(bool on) { s_keepAwake = on && s_active; }
 
 void keepAwakeFor(uint32_t ms) {
@@ -238,9 +312,13 @@ void deepSleepNow() {
     // Radio fora (desconecta limpo; ao acordar e reboot, tudo re-sobe)
     esp_wifi_stop();
 
-    // Wake: EXT1 nivel BAIXO nos botoes do perfil (BOOT/PWR do watch)
+    // Wake: EXT1 nivel BAIXO nos botoes do perfil (BOOT do watch; o PWR
+    // fala com o AXP2101, sem IRQ ligado a GPIO — nao acorda do deep sleep)
     uint64_t mask = 0;
-    int pins[2] = {bp.buttonPin, bp.buttonPin2};
+    // INT do IMU (opt-in "imu_wake": cada movimento forte acorda = boot
+    // inteiro, entao fica desligado por padrao)
+    const int imuPin = CelerSettings::get("imu_wake", "") == "1" ? bp.imuWakePin : -1;
+    int pins[3] = {bp.buttonPin, bp.buttonPin2, imuPin};
     for (int p : pins) {
         if (p < 0) continue;
         if (rtc_gpio_is_valid_gpio((gpio_num_t)p)) {
@@ -260,6 +338,18 @@ void deepSleepNow() {
 #else
         esp_sleep_enable_ext1_wakeup_io(mask, ESP_EXT1_WAKEUP_ANY_LOW);
 #endif
+    }
+
+    // Proximo alarme/timer/soneca acorda o aparelho (reboot -> o Alarms
+    // confere 90 s para tras no boot e a AlarmScreen toca)
+    time_t next = Alarms::nextEvent();
+    if (next != 0) {
+        time_t now;
+        time(&now);
+        if (next > now) {
+            esp_sleep_enable_timer_wakeup((uint64_t)(next - now) * 1000000ULL);
+            ESP_LOGI("celer.power", "acorda por timer em %lld s (alarme)", (long long)(next - now));
+        }
     }
 
     // RTC externo segura a hora (PCF85063 no proprio oscilador) — nada a fazer

@@ -106,6 +106,14 @@ private:
     static duk_ret_t js_setAlarm(duk_context *ctx);
     static duk_ret_t js_clearAlarm(duk_context *ctx);
     static duk_ret_t js_getAlarm(duk_context *ctx);
+    static duk_ret_t js_alarms(duk_context *ctx);        // API 15: Kernel/Alarms
+    static duk_ret_t js_addAlarm(duk_context *ctx);
+    static duk_ret_t js_updateAlarm(duk_context *ctx);
+    static duk_ret_t js_removeAlarm(duk_context *ctx);
+    static duk_ret_t js_setTimer(duk_context *ctx);
+    static duk_ret_t js_getTimer(duk_context *ctx);
+    static duk_ret_t js_cancelTimer(duk_context *ctx);
+    static duk_ret_t js_unreadNotifications(duk_context *ctx);  // API 15
     static duk_ret_t js_playTone(duk_context *ctx);   // sequencia de notas
     static duk_ret_t js_playWav(duk_context *ctx);   // arquivo WAV (API 13)
 
@@ -113,6 +121,7 @@ private:
     static duk_ret_t js_sensorsAccel(duk_context *ctx);   // {x,y,z} em g
     static duk_ret_t js_sensorsSteps(duk_context *ctx);   // passos do dia
     static duk_ret_t js_sensorsTemp(duk_context *ctx);    // die do IMU, °C
+    static duk_ret_t js_sensorsStepHistory(duk_context *ctx);  // API 15: dias fechados
     static duk_ret_t js_getWeekday(duk_context *ctx);     // 0=dom..6=sab
     static duk_ret_t js_keepAwake(duk_context *ctx);      // jogos: tela acesa
     static duk_ret_t js_notify(duk_context *ctx);     // toast + historico
@@ -233,6 +242,7 @@ private:
     static duk_ret_t js_relayState(duk_context *ctx);
     static duk_ret_t js_relayCount(duk_context *ctx);
     static duk_ret_t js_battery(duk_context *ctx);
+    static duk_ret_t js_batteryInfo(duk_context *ctx);  // API 15
     static duk_ret_t js_micLevel(duk_context *ctx);
     static duk_ret_t js_touchPad(duk_context *ctx);
     static duk_ret_t js_neopixel(duk_context *ctx);
@@ -277,7 +287,6 @@ private:
     static duk_ret_t js_linkPoll(duk_context *ctx);
     static duk_ret_t js_linkStatus(duk_context *ctx);
     static duk_ret_t js_linkVerify(duk_context *ctx);
-    static duk_ret_t js_linkUnpair(duk_context *ctx);
-};
+    static duk_ret_t js_linkUnpair(duk_context *ctx);};
 
 #endif // JS_BINDINGS_H

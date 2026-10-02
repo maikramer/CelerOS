@@ -25,7 +25,7 @@ static const BoardProfile s_profile = {
     .hasPsram = true,        // 8MB octal embutida no S3R8
     .backlightPwm = true,    // brilho = WRDISBV do painel AMOLED (DCS 0x51)
     .capacitiveTouch = true, // FT3168, sem calibracao interativa
-    .speakerPin = -1,        // audio e ES8311+I2S0 (proxima leva)
+    .speakerPin = -1,        // audio e ES8311+I2S0 (campo i2s abaixo)
     .rotation = 0,           // painel ja e portrait 410x502
     .led = {-1, -1, -1, false},
     .lightSensorPin = -1,
@@ -42,15 +42,18 @@ static const BoardProfile s_profile = {
     .readRtc = Pcf85063::read,        // hora sobrevive a reboot sem rede
     .writeRtc = Pcf85063::write,      // gravado apos NTP/ajuste manual/fuso
     .readBatteryMv = Axp2101::readBatteryMv,
+    .readBatteryPct = Axp2101::readBatteryPct,
+    .readChargeState = Axp2101::readChargeState,
     .buttonPin = 0,     // BOOT: curto = home/encerra app; segurar = screenshot
     .buttonPin2 = -1,   // GPIO10 le LOW com pull-up nesta HW (nao e botao):
-                        // o PWR do watch fala com o AXP2101 direto (PEK via
-                        // IRQ do PMU fica como follow-up p/ acordar/dormir)
+                        // o PWR do watch fala com o AXP2101 direto (poll
+                        // da PEK pelo hook pmuKeyPoll abaixo)
     .raisePoll = Motion::raisePoll,   // raise-to-wake (consumido pelo ScreenPower)
     .screenSleep = []() { s_display.panelSleep(); },   // SLPIN do AMOLED
     .screenWake  = []() { s_display.panelWakeup(); },  // SLPOUT (GRAM intacta)
     .imuAccel = Motion::accel,   // Sensors.accel() — cache da task
     .imuSteps = Motion::steps,   // Sensors.steps() — pedometro do dia
+    .imuStepHistory = Motion::stepHistory,  // Sensors.stepHistory() (API 15)
     .imuTemp  = Motion::temp,    // Sensors.temp() — die do QMI8658
     .audioPaPin = 46,            // amp PA: alto so durante o beep
     .audioCodecWake = []() {
@@ -60,6 +63,11 @@ static const BoardProfile s_profile = {
     .sleepPrep = []() { Motion::prepareSleep(); },  // passos no NVS + IMU off
     .pmuKeyPoll = Axp2101::pollPowerKey,  // PWR fisico do watch (via PMU)
     .screenInset = 40,   // cantos arredondados: afasta relogio/X da zona morta
+    .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
+    .launcherList = true,   // apps em lista vertical (icone + nome)
+    .autoLightSleep = true,  // DFS + light sleep com a tela apagada (PowerPolicy)
+    .wifiSleepMin = 10,      // WiFi ocioso cai apos 10 min de tela apagada
+    .imuWakePin = 21,        // INT1 do QMI8658 (AnyMotion, ativo-baixo)
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
     .gpioDeniedMask = 0x3E0000000ULL | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8); 43/44: UART0 do SerialLink
 };
@@ -78,6 +86,7 @@ void init() {
     Motion::start();
     // Tecla de power (PEK do AXP2101): poll pelo ScreenPower
     Axp2101::initPek();
+    Axp2101::initGauge();  // percent da bateria (System.batteryInfo)
 }
 
 CelerDisplay& display() {

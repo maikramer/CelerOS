@@ -1,4 +1,5 @@
 #include "HostLink.h"
+#include "esp_attr.h"
 #include "../Display/ScreenCapture.h"
 #include "CelerShell.h"
 #include "LogSink.h"
@@ -47,7 +48,9 @@ HostLink::BaudFn s_ctxBaud = nullptr;
 // Buffer do frame de logcat: chamado de tasks arbitrarias, nao pode ser
 // stack (MAX_PAYLOAD cresce no S3). Serializado pelo proprio sendLogFrame.
 SemaphoreHandle_t s_logFrameMutex = nullptr;
-uint8_t s_logFrame[8 + 1 + HostLink::MAX_PAYLOAD];
+// EXT_RAM_BSS_ATTR: com CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY (watch) os
+// quadros de 8 KB vao para a PSRAM — a RAM interna fica para o WiFi/BLE.
+EXT_RAM_BSS_ATTR uint8_t s_logFrame[8 + 1 + HostLink::MAX_PAYLOAD];
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
@@ -61,7 +64,7 @@ HostLink* linkCtx() { return s_ctxLink; }
 // build() da o deslocamento final para o formato da sessao. Quem produz
 // dados grandes (READ) escreve direto em txData() e chama sendFrame: sem
 // um segundo buffer de 8KB estatico (RAM interna e o que sobra para apps).
-uint8_t s_txFrame[8 + 1 + HostLink::MAX_PAYLOAD];
+EXT_RAM_BSS_ATTR uint8_t s_txFrame[8 + 1 + HostLink::MAX_PAYLOAD];
 
 uint8_t* txData() { return s_txFrame + 9; }  // dados apos o byte de status
 

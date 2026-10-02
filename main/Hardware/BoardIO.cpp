@@ -305,6 +305,52 @@ int batteryMv() {
     return mv;
 }
 
+int batteryPct() {
+    const BoardProfile& bp = Board::profile();
+    static int64_t s_at = 0;
+    static int s_pct = -1;
+    const int64_t now = (int64_t)millis();
+    if (s_pct >= 0 && now - s_at < 2000) return s_pct;  // cache 2 s
+    int pct = -1;
+    if (bp.readBatteryPct) pct = bp.readBatteryPct();
+    if (pct < 0) {
+        // Curva LiPo 1S em repouso (aproximada): mV -> % por interpolacao
+        static const int16_t kMv[] = {3300, 3600, 3700, 3750, 3800, 3870, 3950, 4050, 4200};
+        static const int8_t kPct[] = {0, 5, 12, 25, 40, 55, 70, 85, 100};
+        const int mv = batteryMv();
+        if (mv < 0) return -1;
+        const int n = sizeof(kMv) / sizeof(kMv[0]);
+        if (mv <= kMv[0]) {
+            pct = 0;
+        } else if (mv >= kMv[n - 1]) {
+            pct = 100;
+        } else {
+            for (int i = 1; i < n; i++) {
+                if (mv <= kMv[i]) {
+                    pct = kPct[i - 1] + (mv - kMv[i - 1]) * (kPct[i] - kPct[i - 1]) /
+                                            (kMv[i] - kMv[i - 1]);
+                    break;
+                }
+            }
+        }
+    }
+    s_pct = pct;
+    s_at = now;
+    return pct;
+}
+
+int chargeState() {
+    const BoardProfile& bp = Board::profile();
+    if (!bp.readChargeState) return 0;
+    static int64_t s_at = -10000;
+    static int s_state = -1;
+    const int64_t now = (int64_t)millis();
+    if (now - s_at < 2000) return s_state;  // cache 2 s (bus I2C compartilhado)
+    s_state = bp.readChargeState();
+    s_at = now;
+    return s_state;
+}
+
 // ---- servos (PWM 50 Hz por LEDC) ----
 //
 // Canais escolhidos para NAO colidir com o resto do mapa LEDC (topo do

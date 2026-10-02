@@ -12,6 +12,9 @@
 #include "../Display/Icon.h"
 #include "../Boards/Board.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/CelerSettings.h"
+#include "../Display/Backlight.h"
+#include "../Kernel/Alarms.h"
 
 CelerDisplay *LauncherUI::tftInstance = nullptr;
 std::string LauncherUI::appPaths[50];
@@ -131,9 +134,9 @@ int LauncherUI::totalPages() {
 // Scan de apps (LittleFS + SD)
 // ---------------------------------------------------------------------------
 
-void LauncherUI::applyAutostart() {
+std::string LauncherUI::homeTarget() {
     // Precedencia: /local/autostart.txt (qualquer placa) > profile.homeApp
-    // (a casa nativa da placa — ex.: a cara do cao robotico).
+    // (a casa nativa da placa — ex.: a cara do cao robotico, o watchface).
     std::string who;
     if (FileSystem::exists("/local/autostart.txt")) {
         who = FileSystem::readTextFile("/local/autostart.txt");
@@ -142,9 +145,41 @@ void LauncherUI::applyAutostart() {
     } else if (Board::profile().homeApp) {
         who = Board::profile().homeApp;
     }
-    if (who.empty()) return;
-    if (findEntry(who) < 0) return;  // app sumiu: fica no launcher
+    return who;
+}
+
+bool LauncherUI::launchHome() {
+    const std::string who = homeTarget();
+    if (who.empty()) return false;
+    if (findEntry(who) < 0) return false;  // app sumiu: fica no launcher
     requestLaunch(who);
+    return true;
+}
+
+void LauncherUI::applyAutostart() {
+    launchHome();
+}
+
+void LauncherUI::idleHomeTick() {
+    // So placas com casa nativa (watch, cao): o launcher ocioso volta para
+    // ela — no watch e o que mantem o AOD (so existe com o watchface aberto).
+    if (Board::profile().homeApp == nullptr) return;
+    static uint32_t s_checkAt = 0;
+    static int s_idleS = -1;
+    const uint32_t now = millis();
+    if (now - s_checkAt < 1000) return;
+    s_checkAt = now;
+    if (s_idleS < 0 || (now / 1000) % 30 == 0) {  // releitura barata do ajuste
+        s_idleS = atoi(CelerSettings::get("home_idle_s", "30").c_str());
+    }
+    if (s_idleS <= 0) return;  // 0 = desligado
+    if (Alarms::ringing()) return;  // a AlarmScreen fica por cima ate parar
+    // telas que travam o voltar (alarme, codigo de pareamento, chamada)
+    kui::Screen* top = kui::Navigator::top();
+    if (top != nullptr && !top->allowsBackGesture()) return;
+    if (now - Backlight::lastActivity() < (uint32_t)s_idleS * 1000UL) return;
+    if (!launchHome()) return;
+    kui::Navigator::home();  // o app volta para a raiz do launcher ao sair
 }
 
 void LauncherUI::scanLocalApps() {

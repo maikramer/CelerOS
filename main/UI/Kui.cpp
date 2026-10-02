@@ -822,11 +822,12 @@ TouchPump s_pump;
 void drawToast(Canvas& c, const Toast& t) {
     const lgfx::IFont* f = type::body();
     int h = UI::sy(34);
-    int maxW = UI::W - UI::sx(32);
+    // inset: no vidro de cantos arredondados (watch) o toast sobe e estreita
+    int maxW = UI::W - UI::sx(32) - UI::inset;
     std::string msg = c.ellipsize(t.message, f, maxW - UI::sx(34));
     int w = c.textWidth(msg.c_str(), f) + UI::sx(40);
     if (w > maxW) w = maxW;
-    Rect r{(UI::W - w) / 2, UI::H - h - UI::sy(40), w, h};
+    Rect r{(UI::W - w) / 2, UI::H - h - UI::sy(40) - UI::inset / 2, w, h};
     c.fillRoundRect(r, h / 2, THEME_RAISED);
     c.drawRoundRect(r, h / 2, THEME_STROKE);
     c.fillCircle(r.x + UI::sx(16), r.y + h / 2, UI::sx(4), t.color);  // ponto de status
@@ -848,6 +849,8 @@ void drawFrame() {
         top->wantsDirectDraw());
 }
 
+bool (*s_gestureHook)(const TouchEvent&) = nullptr;
+
 bool isBackGesture(const TouchEvent& ev) {
     return ev.type == TouchEvent::Release && ev.startX < UI::sx(20) && ev.swipe() == TouchEvent::SwipeRight;
 }
@@ -864,6 +867,13 @@ void dispatchTouch(const TouchEvent& ev) {
     }
     if (s_stack.empty()) return;
     Screen* top = s_stack.back();
+
+    // Gestos de sistema (bordas do watch: quick settings/notificacoes).
+    // Telas que travam o voltar (alarme tocando, conexao) ficam de fora.
+    if (s_gestureHook != nullptr && top->allowsBackGesture() && s_gestureHook(ev)) {
+        s_repaint = true;
+        return;
+    }
 
     // Voltar: swipe para a direita a partir da borda esquerda
     if (isBackGesture(ev) && s_stack.size() > 1 && top->allowsBackGesture()) {
@@ -991,6 +1001,8 @@ void Navigator::toast(const std::string& message, uint32_t color, uint32_t durat
 }
 
 void Navigator::repaint() { s_repaint = true; }
+
+void Navigator::setGestureHook(bool (*hook)(const TouchEvent& ev)) { s_gestureHook = hook; }
 
 void Navigator::setInputSuspended(bool suspended) {
     s_inputSuspended = suspended;

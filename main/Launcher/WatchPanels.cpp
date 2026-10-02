@@ -1,0 +1,451 @@
+#include "WatchPanels.h"
+#include "LauncherUI.h"
+#include "../Boards/Board.h"
+#include "../Display/Backlight.h"
+#include "../Display/ScreenPower.h"
+#include "../Display/Theme.h"
+#include "../Hardware/BoardIO.h"
+#include "../Kernel/Notifications.h"
+#include "../Kernel/TimeManager.h"
+#include "../WebManager/WebManager.h"
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_PHONE_LINK
+#include "../Bluetooth/PhoneLink.h"
+#endif
+#include <Arduino.h>
+#include <stdio.h>
+#include <time.h>
+#include <string>
+#include <vector>
+
+namespace {
+
+// Borda de inicio do gesto (px fisicos derivados do design 240x320)
+int edgeTop() { return UI::sy(18); }
+int edgeLeft() { return UI::sx(14); }
+
+bool s_returnHome = false;          // painel aberto a partir do app casa
+portMUX_TYPE s_reqMux = portMUX_INITIALIZER_UNLOCKED;
+volatile WatchPanels::Panel s_req = WatchPanels::Panel::None;
+volatile bool s_reqHome = false;
+
+// Fecha o painel do topo; vindo do app casa, volta para ele.
+void closePanel() {
+    kui::Navigator::pop();
+    if (s_returnHome && kui::Navigator::depth() <= 1) LauncherUI::launchHome();
+    s_returnHome = false;
+}
+
+// Moldura comum: margem lateral que respeita os cantos do vidro
+int sideMargin() { return UI::sx(10) + UI::inset / 2; }
+
+// ---------------------------------------------------------------- Lanterna --
+class FlashlightScreen : public kui::Screen {
+public:
+    void onEnter() override {
+        m_prev = Backlight::get();
+        Backlight::set(100, false);
+    }
+    void onExit() override { Backlight::set(m_prev, false); }
+    void draw(kui::Canvas& c) override {
+        c.fill(0xFFFFFFu);
+        c.text("Toque para sair", UI::cx(), UI::H - UI::sy(24) - UI::inset / 2, kui::type::caption(),
+               0x909090u, MC_DATUM);
+    }
+    bool onTouch(const kui::TouchEvent& ev) override {
+        if (ev.isTap()) kui::Navigator::pop();
+        return true;
+    }
+    void onTick(uint32_t) override { ScreenPower::keepAwakeFor(2000); }
+
+private:
+    int m_prev = 80;
+};
+FlashlightScreen s_flash;
+
+// ------------------------------------------------------- Ajustes rapidos --
+class QuickSettingsScreen : public kui::Screen {
+public:
+    void onEnter() override {
+        m_bright.value = Backlight::get();
+        m_bright.onLiveChange = [](int v) { Backlight::set(v < 5 ? 5 : v, false); };
+        m_bright.onChange = [](int v) { Backlight::set(v < 5 ? 5 : v, true); };
+        m_vol.value = BoardIO::volumePct();
+        m_vol.onChange = [](int v) {
+            BoardIO::setVolumePct(v, true);
+            BoardIO::tone(1200, 40);  // amostra do volume novo
+        };
+        m_clockAccum = 0;
+    }
+
+    void draw(kui::Canvas& c) override {
+        c.fill(THEME_BG);
+        const int m = sideMargin();
+        // cabecalho: hora + bateria
+        const int hy = UI::sy(22) + UI::inset / 3;
+        c.text(TimeManager::getFormattedTime(), UI::cx(), hy, kui::type::title(), THEME_TEXT, MC_DATUM);
+        const int pct = BoardIO::batteryPct();
+        if (pct >= 0) {
+            const int st = BoardIO::chargeState();
+            char b[16];
+            snprintf(b, sizeof(b), (st > 0 && (st & 1)) ? "+%d%%" : "%d%%", pct);
+            c.text(b, UI::W - m, hy, kui::type::caption(), pct <= 15 ? THEME_ERR : THEME_TEXT_DIM,
+                   MR_DATUM);
+        }
+        // sliders
+        c.text("Brilho", m, UI::sy(46), kui::type::caption(), THEME_TEXT_DIM, ML_DATUM);
+        m_bright.rect = {m + UI::sx(8), UI::sy(52), UI::W - 2 * m - UI::sx(16), UI::sy(26)};
+        m_bright.draw(c);
+        c.text("Volume", m, UI::sy(88), kui::type::caption(), THEME_TEXT_DIM, ML_DATUM);
+        m_vol.rect = {m + UI::sx(8), UI::sy(94), UI::W - 2 * m - UI::sx(16), UI::sy(26)};
+        m_vol.draw(c);
+        // tiles 2 colunas x 3 linhas
+        for (int i = 0; i < kTiles; i++) drawTile(c, i);
+        c.text("arraste para cima para fechar", UI::cx(), UI::H - UI::sy(8) - UI::inset / 3,
+               kui::type::caption(), THEME_STROKE, MC_DATUM);
+    }
+
+    bool onTouch(const kui::TouchEvent& ev) override {
+        if (m_bright.onTouch(ev, m_bright.rect)) return true;
+        if (m_vol.onTouch(ev, m_vol.rect)) return true;
+        if (ev.type != kui::TouchEvent::Release) return true;
+        if (ev.swipe() == kui::TouchEvent::SwipeUp ||
+            (ev.swipe() == kui::TouchEvent::SwipeRight && ev.startX < edgeLeft())) {
+            closePanel();
+            return true;
+        }
+        if (!ev.isTap()) return true;
+        for (int i = 0; i < kTiles; i++) {
+            if (tileRect(i).contains(ev.x, ev.y)) {
+                tap(i);
+                break;
+            }
+        }
+        return true;
+    }
+
+    void onTick(uint32_t dtMs) override {
+        m_clockAccum += dtMs;
+        if (m_clockAccum >= 1000) {  // hora/bateria/wifi no cabecalho
+            m_clockAccum = 0;
+            markDirty();
+        }
+    }
+
+    bool allowsBackGesture() const override { return false; }  // borda = fechar (onTouch)
+
+private:
+#if CONFIG_CELEROS_PHONE_LINK
+    static constexpr int kTiles = 8;   // + Celular, Achar celular
+#else
+    static constexpr int kTiles = 6;
+#endif
+    kui::Slider m_bright;
+    kui::Slider m_vol;
+    uint32_t m_clockAccum = 0;
+
+    kui::Rect tileRect(int i) const {
+        const int m = sideMargin();
+        const int gap = UI::sx(8);
+        const int w = (UI::W - 2 * m - gap) / 2;
+        const int top = UI::sy(128);
+        const int h = kTiles > 6 ? UI::sy(38) : UI::sy(50);
+        const int row = i / 2, col = i % 2;
+        return {m + col * (w + gap), top + row * (h + UI::sy(6)), w, h};
+    }
+
+    // estado de cada tile: -1 = acao (sem on/off)
+    int tileState(int i) const {
+        switch (i) {
+            case 0: return WebManager::wifiEnabled() ? 1 : 0;
+            case 1: return Notifications::dnd() ? 1 : 0;
+            case 2: return ScreenPower::raiseWake() ? 1 : 0;
+            case 3: return ScreenPower::aodEnabled() ? 1 : 0;
+#if CONFIG_CELEROS_PHONE_LINK
+            case 6: return PhoneLink::enabled() ? 1 : 0;
+#endif
+            default: return -1;
+        }
+    }
+
+    void drawTile(kui::Canvas& c, int i) {
+        static const char* kNames[8] = {"WiFi",     "Não perturbe", "Levantar pulso", "Sempre ligada",
+                                        "Lanterna", "Ajustes",      "Celular",        "Achar celular"};
+        kui::Rect r = tileRect(i);
+        const int st = tileState(i);
+        uint32_t bg = st == 1 ? THEME_ACCENT : THEME_CARD;
+        if (kui::isPressed(r)) bg = st == 1 ? THEME_ACCENT_D : THEME_RAISED;
+        c.fillRoundRect(r, r.h / 3, bg);
+        const uint32_t fg = st == 1 ? THEME_ON_ACCENT : THEME_TEXT;
+        std::string name = kNames[i];
+        if (i == 0 && st == 1) name = WebManager::isActive() ? "WiFi ligado" : "WiFi...";
+#if CONFIG_CELEROS_PHONE_LINK
+        if (i == 6 && st == 1) {
+            const uint32_t pk = PhoneLink::passkey();
+            if (pk) {
+                char b[16];
+                snprintf(b, sizeof(b), "%06lu", (unsigned long)pk);
+                name = b;
+            } else {
+                name = PhoneLink::connected() ? "Conectado" : "Celular...";
+            }
+        }
+#endif
+        c.text(c.ellipsize(name, kui::type::body(), r.w - UI::sx(12)), r.x + r.w / 2, r.y + r.h / 2,
+               kui::type::body(), fg, MC_DATUM);
+    }
+
+    void tap(int i) {
+        switch (i) {
+            case 0:
+                if (WebManager::wifiEnabled()) {
+                    WebManager::disablePersist();
+                } else {
+                    WebManager::enableAsync();
+                }
+                break;
+            case 1: Notifications::setDnd(!Notifications::dnd()); break;
+            case 2: ScreenPower::setRaiseWake(!ScreenPower::raiseWake()); break;
+            case 3: ScreenPower::setAodEnabled(!ScreenPower::aodEnabled()); break;
+            case 4: kui::Navigator::push(&s_flash); break;
+#if CONFIG_CELEROS_PHONE_LINK
+            case 6: PhoneLink::setEnabled(!PhoneLink::enabled()); break;
+            case 7:
+                kui::Navigator::toast(PhoneLink::findPhone(true) ? "Tocando o celular" : "Celular desconectado",
+                                      THEME_ACCENT, 2000);
+                break;
+#endif
+            case 5:
+                s_returnHome = false;
+                kui::Navigator::home();
+                LauncherUI::requestLaunch("celeros.settings");
+                break;
+            default: break;
+        }
+        markDirty();
+    }
+};
+QuickSettingsScreen s_quick;
+
+// -------------------------------------------------- Central de notificacoes --
+class NotificationCenterScreen : public kui::Screen {
+public:
+    void onEnter() override {
+        m_notes = Notifications::list();
+        Notifications::markAllRead();
+        m_scroll = 0;
+        m_expanded = -1;
+    }
+
+    void draw(kui::Canvas& c) override {
+        c.fill(THEME_BG);
+        const int m = sideMargin();
+        const int top = headerH();
+        char hdr[32];
+        snprintf(hdr, sizeof(hdr), "Notificações (%d)", (int)m_notes.size());
+        c.text(hdr, UI::cx(), top / 2 + UI::inset / 4, kui::type::title(), THEME_TEXT, MC_DATUM);
+
+        if (m_notes.empty()) {
+            c.text("Nada por aqui", UI::cx(), UI::cy(), kui::type::body(), THEME_TEXT_DIM, MC_DATUM);
+            c.text("arraste para baixo para fechar", UI::cx(), UI::H - UI::sy(14) - UI::inset / 3,
+                   kui::type::caption(), THEME_STROKE, MC_DATUM);
+            return;
+        }
+        c.setClip({0, top, UI::W, listBottom() - top});
+        int y = top - m_scroll;
+        for (int i = 0; i < (int)m_notes.size(); i++) {
+            const int h = rowH(i);
+            if (y + h > top && y < listBottom()) drawRow(c, i, {m, y, UI::W - 2 * m, h - UI::sy(6)});
+            y += h;
+        }
+        c.clearClip();
+        kui::Rect clr = clearRect();
+        c.fillRoundRect(clr, clr.h / 2, kui::isPressed(clr) ? THEME_RAISED : THEME_CARD);
+        c.text("Limpar tudo", clr.x + clr.w / 2, clr.y + clr.h / 2, kui::type::body(), THEME_TEXT,
+               MC_DATUM);
+    }
+
+    bool onTouch(const kui::TouchEvent& ev) override {
+        if (ev.type == kui::TouchEvent::Drag) {
+            if (abs(ev.dy()) > abs(ev.dx())) {
+                m_scroll -= ev.y - ev.prevY;
+                clampScroll();
+            }
+            return true;
+        }
+        if (ev.type != kui::TouchEvent::Release) return true;
+        const kui::TouchEvent::Swipe sw = ev.swipe();
+        // fechar: arrastar para baixo a partir do topo da lista / borda esquerda
+        if ((sw == kui::TouchEvent::SwipeDown && (m_scroll == 0 || ev.startY < headerH())) ||
+            (sw == kui::TouchEvent::SwipeRight && ev.startX < edgeLeft())) {
+            closePanel();
+            return true;
+        }
+        if (!m_notes.empty() && ev.isTap() && clearRect().contains(ev.x, ev.y)) {
+            Notifications::clear();
+            m_notes.clear();
+            closePanel();
+            return true;
+        }
+        int idx = rowAt(ev.startY);
+        if (idx < 0) return true;
+        if (sw == kui::TouchEvent::SwipeLeft || sw == kui::TouchEvent::SwipeRight) {
+            Notifications::removeAt(idx);  // indice de list() == m_notes
+            m_notes.erase(m_notes.begin() + idx);
+            m_expanded = -1;
+            clampScroll();
+        } else if (ev.isTap()) {
+            m_expanded = (m_expanded == idx) ? -1 : idx;
+            clampScroll();
+        }
+        return true;
+    }
+
+    bool allowsBackGesture() const override { return false; }  // fechar e do onTouch
+
+private:
+    std::vector<Notifications::Note> m_notes;
+    int m_scroll = 0;
+    int m_expanded = -1;
+
+    int headerH() const { return UI::sy(40) + UI::inset / 3; }
+    int listBottom() const { return UI::H - UI::sy(54) - UI::inset / 3; }
+    kui::Rect clearRect() const {
+        const int w = UI::sx(140);
+        return {(UI::W - w) / 2, listBottom() + UI::sy(8), w, UI::sy(36)};
+    }
+    int rowH(int i) const { return i == m_expanded ? UI::sy(120) : UI::sy(56); }
+
+    int rowAt(int py) const {
+        int y = headerH() - m_scroll;
+        if (py < headerH() || py >= listBottom()) return -1;
+        for (int i = 0; i < (int)m_notes.size(); i++) {
+            if (py >= y && py < y + rowH(i)) return i;
+            y += rowH(i);
+        }
+        return -1;
+    }
+
+    void clampScroll() {
+        int total = 0;
+        for (int i = 0; i < (int)m_notes.size(); i++) total += rowH(i);
+        int maxS = total - (listBottom() - headerH());
+        if (maxS < 0) maxS = 0;
+        if (m_scroll > maxS) m_scroll = maxS;
+        if (m_scroll < 0) m_scroll = 0;
+    }
+
+    static std::string when(int64_t epoch) {
+        time_t now;
+        time(&now);
+        time_t e = (time_t)epoch;
+        struct tm t, n;
+        localtime_r(&e, &t);
+        localtime_r(&now, &n);
+        char b[16];
+        if (t.tm_yday == n.tm_yday && t.tm_year == n.tm_year) {
+            snprintf(b, sizeof(b), "%02d:%02d", t.tm_hour, t.tm_min);
+        } else {
+            snprintf(b, sizeof(b), "%02d/%02d", t.tm_mday, t.tm_mon + 1);
+        }
+        return b;
+    }
+
+    void drawRow(kui::Canvas& c, int i, kui::Rect r) {
+        const Notifications::Note& n = m_notes[i];
+        c.fillRoundRect(r, UI::sx(10), THEME_CARD);
+        const int pad = UI::sx(10);
+        const lgfx::IFont* fb = kui::type::body();
+        const lgfx::IFont* fc = kui::type::caption();
+        std::string w = when(n.epoch);
+        int ww = c.textWidth(w.c_str(), fc);
+        std::string src = n.src.rfind("phone:", 0) == 0 ? n.src.substr(6) : std::string();
+        int ty = r.y + UI::sy(14);
+        c.text(c.ellipsize(n.title, fb, r.w - 3 * pad - ww), r.x + pad, ty, fb, THEME_TEXT, ML_DATUM);
+        c.text(w, r.x + r.w - pad, ty, fc, THEME_TEXT_DIM, MR_DATUM);
+        if (i != m_expanded) {
+            std::string line = src.empty() ? n.msg : src + ": " + n.msg;
+            c.text(c.ellipsize(line, fc, r.w - 2 * pad), r.x + pad, r.y + UI::sy(36), fc,
+                   THEME_TEXT_DIM, ML_DATUM);
+            return;
+        }
+        // expandida: quebra simples por palavra, ate 5 linhas
+        std::string rest = src.empty() ? n.msg : src + ": " + n.msg;
+        int ly = r.y + UI::sy(34);
+        const int lh = UI::sy(16);
+        for (int ln = 0; ln < 5 && !rest.empty(); ln++) {
+            size_t cut = rest.size();
+            while (cut > 0 && c.textWidth(rest.substr(0, cut).c_str(), fc) > r.w - 2 * pad) {
+                size_t sp = rest.rfind(' ', cut - 1);
+                cut = (sp == std::string::npos || sp == 0) ? cut - 1 : sp;
+            }
+            if (cut == 0) cut = 1;
+            std::string line = rest.substr(0, cut);
+            rest = rest.substr(cut);
+            while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
+            if (ln == 4 && !rest.empty()) line = c.ellipsize(line + " " + rest, fc, r.w - 2 * pad);
+            c.text(line, r.x + pad, ly, fc, THEME_TEXT_DIM, ML_DATUM);
+            ly += lh;
+        }
+    }
+};
+NotificationCenterScreen s_notif;
+
+bool edgeGestureHook(const kui::TouchEvent& ev) {
+    if (ev.type != kui::TouchEvent::Release) return false;
+    const kui::TouchEvent::Swipe sw = ev.swipe();
+    kui::Screen* top = kui::Navigator::top();
+    if (top == &s_quick || top == &s_notif || top == &s_flash) return false;
+    const int edge = WatchPanels::edgeAt(ev.startX, ev.startY);
+    if (edge == 1 && sw == kui::TouchEvent::SwipeDown) {
+        s_returnHome = false;
+        kui::Navigator::push(&s_quick);
+        return true;
+    }
+    if (edge == 2 && sw == kui::TouchEvent::SwipeUp) {
+        s_returnHome = false;
+        kui::Navigator::push(&s_notif);
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+namespace WatchPanels {
+
+bool enabled() { return Board::profile().watchGestures; }
+
+void init() {
+    if (!enabled()) return;
+    kui::Navigator::setGestureHook(edgeGestureHook);
+}
+
+int edgeAt(int x, int y) {
+    if (y < edgeTop()) return 1;
+    if (y >= UI::H - edgeTop()) return 2;
+    if (x < edgeLeft()) return 3;
+    return 0;
+}
+
+void request(Panel p, bool returnHome) {
+    portENTER_CRITICAL(&s_reqMux);
+    s_req = p;
+    s_reqHome = returnHome;
+    portEXIT_CRITICAL(&s_reqMux);
+}
+
+void service() {
+    if (s_req == Panel::None) return;
+    portENTER_CRITICAL(&s_reqMux);
+    Panel p = s_req;
+    bool home = s_reqHome;
+    s_req = Panel::None;
+    portEXIT_CRITICAL(&s_reqMux);
+    kui::Screen* target = p == Panel::Quick ? (kui::Screen*)&s_quick : (kui::Screen*)&s_notif;
+    if (kui::Navigator::top() == target) return;
+    s_returnHome = home;
+    kui::Navigator::push(target);
+}
+
+}  // namespace WatchPanels

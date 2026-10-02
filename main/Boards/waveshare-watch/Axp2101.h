@@ -9,10 +9,10 @@
 //   DCDC1 = 3,3 V  (reg 0x82 = 18; bit0 do reg 0x80 liga)
 //   ALDO1 = 3,3 V  (reg 0x92 = 28; bit0 do reg 0x90 liga)
 //
-// A bateria (0x34/0x35 mV 14 bits, 0xA4 percent) e lida em runtime pelo bus
-// compartilhado do touch — ver WatchI2c.h — atraves do hook
-// BoardProfile::readBatteryMv. Percent/VBUS/estado de carga ficam para uma
-// API JS dedicada.
+// A bateria (0x34/0x35 mV 14 bits, 0xA4 percent do fuel gauge, 0x00/0x01
+// VBUS e estado de carga) e lida em runtime pelo bus compartilhado do touch
+// — ver WatchI2c.h — atraves dos hooks BoardProfile::readBatteryMv/Pct e
+// readChargeState (System.batteryInfo, API 15).
 
 #include "WatchI2c.h"
 #include "driver/i2c_master.h"
@@ -23,6 +23,10 @@
 namespace Axp2101 {
 
 static constexpr uint8_t kAddr         = 0x34;
+static constexpr uint8_t REG_STATUS1   = 0x00;  // bit5 VBUS good, bit3 bateria presente
+static constexpr uint8_t REG_STATUS2   = 0x01;  // bits6:5 sentido da corrente, 2:0 fase da carga
+static constexpr uint8_t REG_GAUGE_EN  = 0x18;  // bit3 = fuel gauge ligado
+static constexpr uint8_t REG_BAT_PCT   = 0xA4;  // percent do fuel gauge (0..100)
 static constexpr uint8_t REG_IRQ_EN0    = 0x40;  // IRQ enable 0 (PEK aqui)
 static constexpr uint8_t REG_IRQ_ST0    = 0x48;  // IRQ status 0 (leitura limpa)
 static constexpr uint8_t REG_IRQ_ST1    = 0x49;
@@ -86,15 +90,37 @@ inline int pollPowerKey() {
             ev = (esp_log_timestamp() - s_pressAt >= 700) ? 2 : 1;
         }
     }
-    if (ev != 0) {
-        FILE* f = fopen("/local/pek.txt", "a");
-        if (f) {
-            fprintf(f, "st0=%02X ev=%d dur=%lu\n", st0, ev,
-                    (unsigned long)(esp_log_timestamp() - s_pressAt));
-            fclose(f);
-        }
-    }
     return ev;
+}
+
+/// Liga o fuel gauge (percent no reg 0xA4). Idempotente; chamado no boot.
+inline bool initGauge() {
+    uint8_t v = 0;
+    if (rtDev() == nullptr || !rtRd(REG_GAUGE_EN, &v)) return false;
+    if (v & 0x08) return true;
+    return rtWr(REG_GAUGE_EN, v | 0x08);
+}
+
+/// Percent da bateria (0..100) pelo fuel gauge; -1 sem resposta/sem bateria.
+/// Hook BoardProfile::readBatteryPct.
+inline int readBatteryPct() {
+    uint8_t st = 0, pct = 0;
+    if (rtDev() == nullptr || !rtRd(REG_STATUS1, &st)) return -1;
+    if ((st & 0x08) == 0) return -1;  // sem celula conectada
+    if (!rtRd(REG_BAT_PCT, &pct) || pct > 100) return -1;
+    return pct;
+}
+
+/// Estado de energia: bit0 = carregando, bit1 = USB/VBUS presente,
+/// bit2 = carga completa; -1 sem resposta. Hook BoardProfile::readChargeState.
+inline int readChargeState() {
+    uint8_t s1 = 0, s2 = 0;
+    if (rtDev() == nullptr || !rtRd(REG_STATUS1, &s1) || !rtRd(REG_STATUS2, &s2)) return -1;
+    int r = 0;
+    if (((s2 >> 5) & 0x03) == 0x01) r |= 1;  // corrente entrando na celula
+    if (s1 & 0x20) r |= 2;                   // VBUS good
+    if ((s2 & 0x07) == 0x04) r |= 4;         // fase "charge done"
+    return r;
 }
 
 /// Liga os trilhos do display (DCDC1 + ALDO1 em 3,3 V).

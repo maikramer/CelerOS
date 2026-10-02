@@ -57,6 +57,12 @@ int relayState(int n);
 // batteryScalePct do perfil; media de leituras, cache ~2 s).
 // -1 = placa sem divisor (batteryPin < 0) ou ADC sem calibracao.
 int batteryMv();
+// Carga em % (0..100): fuel gauge do PMU quando a placa tem; senao estimada
+// pela curva de descarga LiPo a partir de batteryMv(). -1 = sem bateria.
+int batteryPct();
+// Estado de energia (cache ~2 s): bit0 carregando, bit1 USB/VBUS presente,
+// bit2 carga completa. 0 em placa sem PMU; -1 = leitura falhou.
+int chargeState();
 
 // ---- servos (PWM 50 Hz, LEDC) ----
 // Pulso em us (clamp 400..2600) no pino; o canal e alocado na primeira

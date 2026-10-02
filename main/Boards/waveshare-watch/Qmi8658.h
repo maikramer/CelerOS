@@ -12,8 +12,8 @@
 //   - leitura: 6 bytes a partir de 0x35 (AX_L), little-endian, escala
 //     ±8 g -> 8/32768 g por LSB;
 //   - INT (GPIO21) ativo-baixo; o nivel segura ate ler STATUS1 (0x2F).
-// Em F2 o servico le a 30 Hz por polling (regularidade ajuda o pedometro);
-// a INT entra de verdade no deep sleep (F5).
+// O servico le a 30 Hz por polling (regularidade ajuda o pedometro); a INT
+// so e usada no deep sleep com o ajuste "imu_wake" (Motion::prepareSleep).
 
 #include "WatchI2c.h"
 #include "esp_log.h"
@@ -116,7 +116,7 @@ inline void clearMotionIrq() {
     rd(REG_STATUS1, &st, 1);
 }
 
-/// Tudo off (pre-deep-sleep): a task continua polando e so ve NACK.
+/// Tudo off (pre-deep-sleep). A task do Motion para de polar (s_imuOk).
 inline void powerDown() {
     wr(REG_CTRL8, 0x00);
     wr(REG_CTRL7, 0x00);

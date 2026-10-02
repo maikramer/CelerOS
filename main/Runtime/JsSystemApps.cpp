@@ -1,4 +1,7 @@
 #include "JSBindings.h"
+#include <algorithm>
+#include "../Kernel/Alarms.h"
+#include "../Kernel/Notifications.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -519,6 +522,110 @@ duk_ret_t JSBindings::js_getAlarm(duk_context *ctx) {
     return 1;
 }
 
+// ---- Alarmes multiplos + timer (API 15, Kernel/Alarms) ----
+
+// {hour, minute, days?, enabled?, label?} -> AlarmSpec; erro de tipo se faltar hora
+static celer::AlarmSpec alarmFromObj(duk_context* ctx, duk_idx_t idx) {
+    if (!duk_is_object(ctx, idx)) duk_error(ctx, DUK_ERR_TYPE_ERROR, "alarme: esperado objeto");
+    celer::AlarmSpec a;
+    duk_get_prop_string(ctx, idx, "hour");
+    a.hour = duk_is_number(ctx, -1) ? duk_get_int(ctx, -1) : -1;
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, idx, "minute");
+    a.minute = duk_is_number(ctx, -1) ? duk_get_int(ctx, -1) : -1;
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, idx, "days");
+    a.days = duk_is_number(ctx, -1) ? (uint8_t)(duk_get_int(ctx, -1) & 0x7F) : 0;
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, idx, "enabled");
+    a.enabled = duk_is_undefined(ctx, -1) ? true : duk_to_boolean(ctx, -1);
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, idx, "label");
+    if (duk_is_string(ctx, -1)) a.label = duk_get_string(ctx, -1);
+    duk_pop(ctx);
+    return a;
+}
+
+// System.alarms() -> [{id, hour, minute, days, enabled, label, next}]
+// next = epoch (s) do proximo toque, 0 desligado/hora invalida
+duk_ret_t JSBindings::js_alarms(duk_context *ctx) {
+    duk_idx_t arr = duk_push_array(ctx);
+    duk_uarridx_t n = 0;
+    time_t now;
+    time(&now);
+    for (int i = 0; i < Alarms::MAX; i++) {
+        celer::AlarmSpec a;
+        if (!Alarms::get(i, a)) continue;
+        duk_push_object(ctx);
+        duk_push_int(ctx, i);
+        duk_put_prop_string(ctx, -2, "id");
+        duk_push_int(ctx, a.hour);
+        duk_put_prop_string(ctx, -2, "hour");
+        duk_push_int(ctx, a.minute);
+        duk_put_prop_string(ctx, -2, "minute");
+        duk_push_int(ctx, a.days);
+        duk_put_prop_string(ctx, -2, "days");
+        duk_push_boolean(ctx, a.enabled);
+        duk_put_prop_string(ctx, -2, "enabled");
+        duk_push_lstring(ctx, a.label.data(), a.label.size());
+        duk_put_prop_string(ctx, -2, "label");
+        time_t next = (a.enabled && TimeManager::isTimeValid()) ? celer::nextAlarmAfter(a, now) : 0;
+        duk_push_number(ctx, (double)next);
+        duk_put_prop_string(ctx, -2, "next");
+        duk_put_prop_index(ctx, arr, n++);
+    }
+    return 1;
+}
+
+// System.addAlarm({hour, minute, days, label}) -> id ou -1 (cheio/invalido)
+duk_ret_t JSBindings::js_addAlarm(duk_context *ctx) {
+    duk_push_int(ctx, Alarms::add(alarmFromObj(ctx, 0)));
+    return 1;
+}
+
+// System.updateAlarm(id, {...}) -> bool
+duk_ret_t JSBindings::js_updateAlarm(duk_context *ctx) {
+    int id = duk_require_int(ctx, 0);
+    duk_push_boolean(ctx, Alarms::set(id, alarmFromObj(ctx, 1)));
+    return 1;
+}
+
+// System.removeAlarm(id) -> bool
+duk_ret_t JSBindings::js_removeAlarm(duk_context *ctx) {
+    duk_push_boolean(ctx, Alarms::remove(duk_require_int(ctx, 0)));
+    return 1;
+}
+
+// System.setTimer(segundos, rotulo?) -> bool (1..86400; substitui o atual)
+duk_ret_t JSBindings::js_setTimer(duk_context *ctx) {
+    int sec = duk_require_int(ctx, 0);
+    const char* lbl = duk_is_string(ctx, 1) ? duk_get_string(ctx, 1) : "";
+    duk_push_boolean(ctx, sec > 0 && Alarms::setTimer((uint32_t)sec, lbl));
+    return 1;
+}
+
+// System.getTimer() -> {remaining, label} ou null
+duk_ret_t JSBindings::js_getTimer(duk_context *ctx) {
+    std::string lbl;
+    int32_t rem = Alarms::timerRemaining(&lbl);
+    if (rem < 0) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    duk_push_object(ctx);
+    duk_push_int(ctx, rem);
+    duk_put_prop_string(ctx, -2, "remaining");
+    duk_push_lstring(ctx, lbl.data(), lbl.size());
+    duk_put_prop_string(ctx, -2, "label");
+    return 1;
+}
+
+duk_ret_t JSBindings::js_cancelTimer(duk_context *ctx) {
+    (void)ctx;
+    Alarms::cancelTimer();
+    return 0;
+}
+
 // ---- Audio em sequencia e notificacoes (API 12) ----
 
 // System.playTone([[freq,ms],...]): melodia bloqueante — cada nota toca no
@@ -587,67 +694,45 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
 duk_ret_t JSBindings::js_notify(duk_context *ctx) {
     const char* title = duk_require_string(ctx, 0);
     const char* msg = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
-
-    kui::Navigator::toast(title, THEME_ACCENT, 3000);
-
-    // linha "epoch|titulo|msg" sem pipes/quebras dentro dos campos
-    std::string t = title, m = msg;
-    for (char& c : t) if (c == '|' || c == '\n') c = ' ';
-    for (char& c : m) if (c == '|' || c == '\n') c = ' ';
-    time_t now; time(&now);
-    char line[192];
-    snprintf(line, sizeof(line), "%lld|%s|%s", (long long)now, t.c_str(), m.c_str());
-
-    const char* NF = "/local/notifications.txt";
-    std::string hist = FileSystem::readTextFile(NF);
-    if (!hist.empty() && hist.back() != '\n') hist += '\n';
-    hist += line;
-    hist += '\n';
-    // cap 20: corta as mais antigas
-    int nl = 0;
-    for (char c : hist) if (c == '\n') nl++;
-    if (nl > 20) {
-        int skip = nl - 20;
-        size_t pos = 0;
-        while (skip > 0 && pos < hist.size()) {
-            if (hist[pos] == '\n') skip--;
-            pos++;
-        }
-        hist = hist.substr(pos);
-    }
-    FileSystem::writeTextFile(NF, hist.c_str());
+    // Kernel/Notifications (API 15): historico + toast + glance/bipe
+    // respeitando o Nao Perturbe
+    Notifications::push(title, msg, "");
     return 0;
 }
 
-// Notificacoes para o Settings: lista (array de {epoch,title,msg}) e limpeza
+// Notificacoes para o Settings: lista (array de {epoch,title,msg,src,read},
+// mais ANTIGA primeiro — ordem da API 12) e limpeza
 duk_ret_t JSBindings::js_notifications(duk_context *ctx) {
-    std::string hist = FileSystem::readTextFile("/local/notifications.txt");
+    std::vector<Notifications::Note> l = Notifications::list();
+    std::reverse(l.begin(), l.end());
     duk_push_array(ctx);
-    duk_idx_t i = 0;
-    size_t pos = 0;
-    while (pos < hist.size()) {
-        size_t eol = hist.find('\n', pos);
-        if (eol == std::string::npos) eol = hist.size();
-        std::string line = hist.substr(pos, eol - pos);
-        pos = eol + 1;
-        size_t p1 = line.find('|');
-        if (p1 == std::string::npos) continue;
-        size_t p2 = line.find('|', p1 + 1);
-        if (p2 == std::string::npos) continue;
+    for (size_t i = 0; i < l.size(); i++) {
         duk_push_object(ctx);
-        duk_push_number(ctx, (duk_double_t)atoll(line.substr(0, p1).c_str()));
+        duk_push_number(ctx, (duk_double_t)l[i].epoch);
         duk_put_prop_string(ctx, -2, "epoch");
-        duk_push_string(ctx, line.substr(p1 + 1, p2 - p1 - 1).c_str());
+        duk_push_string(ctx, l[i].title.c_str());
         duk_put_prop_string(ctx, -2, "title");
-        duk_push_string(ctx, line.substr(p2 + 1).c_str());
+        duk_push_string(ctx, l[i].msg.c_str());
         duk_put_prop_string(ctx, -2, "msg");
-        duk_put_prop_index(ctx, -2, (duk_idx_t)i++);
+        duk_push_string(ctx, l[i].src.c_str());
+        duk_put_prop_string(ctx, -2, "src");
+        duk_push_boolean(ctx, l[i].read);
+        duk_put_prop_string(ctx, -2, "read");
+        duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
 }
 
+// System.unreadNotifications() -> nao lidas (API 15; aberto: so a contagem,
+// o conteudo segue com a permissao "system")
+duk_ret_t JSBindings::js_unreadNotifications(duk_context *ctx) {
+    duk_push_int(ctx, Notifications::unread());
+    return 1;
+}
+
 duk_ret_t JSBindings::js_notificationsClear(duk_context *ctx) {
-    FileSystem::deleteFile("/local/notifications.txt");
+    (void)ctx;
+    Notifications::clear();
     return 0;
 }
 

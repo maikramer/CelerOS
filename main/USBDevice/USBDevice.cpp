@@ -20,6 +20,7 @@
 
 #include "CelerShell.h"
 #include "HostLink.h"
+#include "esp_attr.h"
 
 // Descritores de string do esp_tinyusb (usb_descriptors.c). Trocamos a string
 // de serial (indice 3) pela MAC do chip antes de instalar o driver, para o
@@ -154,11 +155,13 @@ bool USBDevice::init() {
 
     // CDC: sem hook de baud (USB nao tem baud); janela ampla — o flow
     // control do USB nao derruba bytes no caminho
-    static HostLink link(&USBDevice::linkWrite, nullptr, 8);
+    EXT_RAM_BSS_ATTR static HostLink link(&USBDevice::linkWrite, nullptr, 8);
     s_link = &link;
 
-    if (xTaskCreate(usbShellTask, "usb_shell", 8192, nullptr, 3, nullptr) != pdPASS ||
-        xTaskCreate(usbLinkTask, "usb_link", 12288, nullptr, 4, nullptr) != pdPASS) {
+    // Pilhas em RAM interna (o watch e apertado): pico medido ~1,7 KB no
+    // shell e ~2,7 KB no link (o payload de 8 KB vive no HostLink, PSRAM)
+    if (xTaskCreate(usbShellTask, "usb_shell", 6144, nullptr, 3, nullptr) != pdPASS ||
+        xTaskCreate(usbLinkTask, "usb_link", 8192, nullptr, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar tasks USB");
         return false;
     }

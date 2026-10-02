@@ -25,6 +25,13 @@ public:
     // /local/autostart.txt (ex.: a cara do cao robotico). Sem o arquivo,
     // nada acontece. O launcher continua acessivel pelo voltar do topbar.
     static void applyAutostart();
+    // Casa da placa: /local/autostart.txt > profile.homeApp ("" = nenhuma).
+    static std::string homeTarget();
+    // Pede o lancamento da casa; false = sem casa ou app ausente.
+    static bool launchHome();
+    // Chamar no loop da UI: launcher ocioso por home_idle_s (NVS, padrao
+    // 30 s; 0 desliga) volta para a casa. No-op sem profile.homeApp.
+    static void idleHomeTick();
     static bool needsRescan;
 
     // Acesso para o LauncherScreen (Kui) e telas novas. Telas de sistema

@@ -2,14 +2,14 @@
 #define CELER_HARDWARE_BUTTONS_H
 
 // Botoes fisicos da placa (BoardProfile::buttonPin/buttonPin2; -1 = nao ha,
-// tudo abaixo vira no-op). Padrao do watch Waveshare: BOOT (GPIO0) e PWR
-// (GPIO10), ativo-baixo com pull-up.
+// tudo abaixo vira no-op), ativo-baixo com pull-up. No watch Waveshare so
+// o BOOT (GPIO0) e GPIO; o PWR fala com o AXP2101 (pmuKeyPoll/ScreenPower).
 //
 //   botao 1 (BOOT): toque curto = home (no app: encerra para o launcher —
 //                   pelo mecanismo limpo do X da topbar; no sistema:
-//                   Navigator::home). segurar ~1,2 s = screenshot BMP.
-//   botao 2 (PWR):  acorda a tela (ScreenPower, F3). Por enquanto so
-//                   registra o evento.
+//                   Navigator::home; ja na raiz: abre a casa da placa).
+//                   segurar ~1,2 s = screenshot BMP.
+//   botao 2:        acorda a tela (ScreenPower).
 //
 // tick() e barato e roda em DOIS contextos: celerLoop (UI do sistema) e
 // present() dos apps JS — apps rodam sincronos no loop principal, entao o

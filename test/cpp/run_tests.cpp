@@ -8,6 +8,8 @@
 #include "../../main/Utils/AppPerms.h"
 #include "../../main/Utils/JsStrip.h"
 #include "../../main/USBDevice/HostFrame.h"
+#include "../../main/Utils/AlarmCalc.h"
+#include "../../main/Utils/GbProto.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -274,12 +276,89 @@ static void testFsJail() {
     s_perms = 0;
 }
 
+static void testAlarmCalc() {
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    // formato ida e volta
+    AlarmSpec a;
+    a.hour = 7; a.minute = 5; a.days = 0x3E; a.enabled = true; a.label = "Trab|alho\n";
+    std::string f = formatAlarm(a);
+    CHECK(f == "07:05|62|1|Trabalho");
+    AlarmSpec b;
+    CHECK(parseAlarm(f, b));
+    CHECK(b.hour == 7 && b.minute == 5 && b.days == 0x3E && b.enabled && b.label == "Trabalho");
+    CHECK(parseAlarm("23:59|0|0|", b) && !b.enabled && b.label.empty());
+    CHECK(!parseAlarm("24:00|0|1|x", b));
+    CHECK(!parseAlarm("lixo", b));
+    CHECK(f.size() <= 63 && formatAlarm(AlarmSpec{1, 2, 3, true, std::string(200, 'x')}).size() <= 63);
+
+    // 2026-10-02 (sexta) 10:00:00 UTC
+    const time_t fri10 = 1790935200;
+    struct tm chk;
+    gmtime_r(&fri10, &chk);
+    CHECK(chk.tm_wday == 5 && chk.tm_hour == 10);
+    AlarmSpec once{9, 0, 0, true, ""};
+    CHECK(nextAlarmAfter(once, fri10) == fri10 + 23 * 3600);       // amanha 09:00
+    AlarmSpec later{10, 30, 0, true, ""};
+    CHECK(nextAlarmAfter(later, fri10) == fri10 + 1800);            // hoje 10:30
+    AlarmSpec exact{10, 0, 0, true, ""};
+    CHECK(nextAlarmAfter(exact, fri10) == fri10 + 24 * 3600);       // estritamente depois
+    AlarmSpec weekdays{8, 0, 0x3E, true, ""};                       // seg..sex
+    CHECK(nextAlarmAfter(weekdays, fri10) == fri10 + 2 * 86400 + 22 * 3600);  // segunda 08:00
+    AlarmSpec sunday{8, 0, 0x01, true, ""};
+    CHECK(nextAlarmAfter(sunday, fri10) == fri10 + 86400 + 22 * 3600);        // domingo 08:00
+    AlarmSpec bad{25, 0, 0, true, ""};
+    CHECK(nextAlarmAfter(bad, fri10) == 0);
+}
+
+static void testGbProto() {
+    using namespace celer::gb;
+    // linhas quebradas em varios writes + DLE + \r
+    LineAssembler la(64);
+    std::vector<std::string> lines;
+    auto sink = [&](const std::string& l) { lines.push_back(l); };
+    const char* p1 = "\x10GB({\"t\":\"no";
+    const char* p2 = "tify\",\"id\":7})\r\nsetTime(1790935200);E.setTimeZone(-3.0);(s=>{})(1)\n";
+    la.feed((const uint8_t*)p1, strlen(p1), sink);
+    CHECK(lines.empty());
+    la.feed((const uint8_t*)p2, strlen(p2), sink);
+    CHECK(lines.size() == 2);
+    Line a = classify(lines[0]);
+    CHECK(a.kind == Kind::Gb && a.json == "{\"t\":\"notify\",\"id\":7}");
+    Line b = classify(lines[1]);
+    CHECK(b.kind == Kind::SetTime && b.epoch == 1790935200LL && b.hasTz && b.tzHours == -3.0f);
+    CHECK(classify("print(1)").kind == Kind::Unknown);
+    CHECK(classify("GB(nada)").kind == Kind::Unknown);
+    // linha longa demais e descartada inteira, a seguinte passa
+    lines.clear();
+    std::string big(100, 'x');
+    big += "\nGB({})\n";
+    la.feed((const uint8_t*)big.data(), big.size(), sink);
+    CHECK(lines.size() == 1 && lines[0] == "GB({})");
+    // fusos
+    CHECK(tzPosix(-3.0f) == "<-03>3");
+    CHECK(tzPosix(0.0f) == "<+00>0");
+    CHECK(tzPosix(5.5f) == "<+0530>-5:30");
+    CHECK(tzPosix(-9.5f) == "<-0930>9:30");
+    // texto do Android -> Latin-1 desenhavel
+    CHECK(latin1Safe("Olá, João!", 64) == "Olá, João!");
+    CHECK(latin1Safe("oi \xF0\x9F\x98\x80 tudo", 64) == "oi tudo");           // emoji some
+    CHECK(latin1Safe("\xE2\x80\x9C" "disse" "\xE2\x80\x9D \xE2\x80\x94 ok\xE2\x80\xA6", 64) == "\"disse\" - ok...");
+    CHECK(latin1Safe("linha1\nlinha2", 64) == "linha1 linha2");
+    CHECK(latin1Safe("ação", 4) == "aç");                                     // nao parte o UTF-8
+    CHECK(latin1Safe("\xC3", 8).empty());                                      // sequencia truncada
+    CHECK(latin1Safe("\x80" "abc", 8) == "abc");
+    CHECK(jsonStr("a\"b\\c\n") == "\"a\\\"b\\\\c\\u000a\"");
+}
+
 int main() {
     testSemVer();
     testFsJail();
     testPermissions();
     testJsStrip();
     testHostFrame();
+    testAlarmCalc();
+    testGbProto();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

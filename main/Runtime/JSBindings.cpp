@@ -24,6 +24,9 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "../Kernel/Alarms.h"
+#include "../Launcher/WatchPanels.h"
+#include "../Hardware/PowerPolicy.h"
 #include "JsFsJail.h"
 #include "../Utils/CelerSettings.h"
 #include "../Boards/Board.h"
@@ -31,6 +34,8 @@
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../Bluetooth/CelerLink.h"
 #endif
+
+void confirmPendingOta();  // main.cpp
 
 // ---------------------------------------------------------------------------
 // Camada de compatibilidade JS: canvas virtual 240x320 + cores RGB565.
@@ -240,8 +245,51 @@ static int tbButtonAt(int jx) {
 // arrasto para a area do app devolve o gesto a ele. Toque na faixa e
 // mascarado: o app nunca ve coordenadas do chrome. Chips (topbarButtons)
 // seguem o mesmo contrato e viram fila em System.topbarPop().
+// Gestos de borda do relogio (API 15, BoardProfile::watchGestures): o dedo
+// que nasce numa borda e cruza o limiar encerra o app pelo caminho do X —
+// cima pede os Ajustes rapidos, baixo a central de notificacoes, esquerda so
+// sai. Nao consome o toque (o X/topbar e os apps seguem vendo a borda); o
+// app so perde o gesto que virou sistema.
+static bool pollWatchEdges(bool touched, uint16_t x, uint16_t y) {
+    static int s_edge = 0;  // borda do gesto em curso (0 = nenhum)
+    static int s_x0 = 0, s_y0 = 0;
+    static bool s_prev = false;
+    const bool began = touched && !s_prev;
+    s_prev = touched;
+    if (began) {
+        s_edge = WatchPanels::edgeAt(x, y);
+        s_x0 = x;
+        s_y0 = y;
+    }
+    if (s_edge == 0) return false;
+    if (!touched) {
+        s_edge = 0;
+        return false;
+    }
+    const int dx = (int)x - s_x0, dy = (int)y - s_y0;
+    WatchPanels::Panel p = WatchPanels::Panel::None;
+    if (s_edge == 1 && dy >= UI::sy(60)) {
+        p = WatchPanels::Panel::Quick;
+    } else if (s_edge == 2 && dy <= -UI::sy(60)) {
+        p = WatchPanels::Panel::Notifications;
+    } else if (!(s_edge == 3 && dx >= UI::sx(70) && abs(dy) < UI::sy(50))) {
+        return false;
+    }
+    s_edge = 0;
+    if (p != WatchPanels::Panel::None) {
+        WatchPanels::request(p, s_appPkg == LauncherUI::homeTarget());
+    }
+    s_exitArmed = false;
+    return true;
+}
+
 bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
     const int slopX = UI::sx(18), slopY = UI::sy(18);
+
+    if (Board::profile().watchGestures && pollWatchEdges(touched, x, y)) {
+        touched = false;
+        return true;  // sai do app; o launcher empilha o painel pedido
+    }
 
     if (!s_topbarFixed) {
         // ---- modo retratil: gesto de revelar + faixa transitoria ----
@@ -398,27 +446,26 @@ void JSBindings::present() {
     Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
     Buttons::tick(true);  // app cedeu: bombeia botoes fisicos (BOOT/PWR do watch)
     ScreenPower::tick(true);  // estados de tela do watch (dim/AOD/off)
+    confirmPendingOta();      // main.cpp: app casa aberto desde o boot tambem confirma o OTA
+    PowerPolicy::tick();      // locks de PM seguem a tela com app aberto
+    // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD:
+    // com a tela apagada/AOD (o normal no watchface) o alarme toca do mesmo
+    // jeito. O toque e a AlarmScreen nativa: o app sai pelo caminho limpo
+    // do X e o launcher a empilha (AlarmScreen::service).
+    {
+        static uint32_t s_alarmCheckAt = 0;
+        const uint32_t nowA = millis();
+        if (nowA - s_alarmCheckAt >= 1000) {
+            s_alarmCheckAt = nowA;
+            if (Alarms::tick()) LauncherUI::requestAppExit();
+        }
+    }
     if (ScreenPower::suppressAppFrame()) return;  // AOD/off: quadro do app nao vai ao vidro
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
-    // Alarme vencendo com o app aberto (antes o toast so saia quando o app
-    // fechava): banner na faixa + bipe triplo. Conferido 1x/s.
+    // Banner da faixa (notificacoes) expira sozinho
     {
-        static uint32_t s_alarmCheckAt = 0;
         const uint32_t now = millis();
-        if (now - s_alarmCheckAt >= 1000) {
-            s_alarmCheckAt = now;
-            std::string msg;
-            if (TimeManager::pollAlarm(msg)) {
-                s_bannerText = "ALARME: " + msg;
-                s_bannerUntil = now + BANNER_MS;
-                s_tbDirty = true;
-                for (int i = 0; i < 3; i++) {
-                    BoardIO::tone(1800, 150);
-                    delay(90);
-                }
-            }
-        }
         if (bannerActive() && (int32_t)(now - s_bannerUntil) >= 0) {
             s_bannerText.clear();
             s_tbDirty = true;
@@ -945,6 +992,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"toast", js_toast, 1},
         {"beep", js_beep, 2},
         {"battery", js_battery, 0},
+        {"batteryInfo", js_batteryInfo, 0},  // API 15
         {"micLevel", js_micLevel, 0},
         {"touchPad", js_touchPad, 0},
         {"lightLevel", js_lightLevel, 0},
@@ -957,6 +1005,14 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setAlarm", js_setAlarm, 3},
         {"clearAlarm", js_clearAlarm, 0},
         {"getAlarm", js_getAlarm, 0},
+        {"alarms", js_alarms, 0},              // API 15: agendador persistente
+        {"addAlarm", js_addAlarm, 1},
+        {"updateAlarm", js_updateAlarm, 2},
+        {"removeAlarm", js_removeAlarm, 1},
+        {"setTimer", js_setTimer, 2},
+        {"getTimer", js_getTimer, 0},
+        {"cancelTimer", js_cancelTimer, 0},
+        {"unreadNotifications", js_unreadNotifications, 0},
         {"playTone", js_playTone, 1},
         {"playWav", js_playWav, 1},
         {"notify", js_notify, 2},
@@ -1046,6 +1102,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"accel", js_sensorsAccel, 0},   // {x,y,z} em g (ou null)
         {"steps", js_sensorsSteps, 0},   // passos do dia (-1 sem IMU)
         {"temp", js_sensorsTemp, 0},     // die do IMU em °C (-255 sem sensor)
+        {"stepHistory", js_sensorsStepHistory, 0},  // API 15: ate 7 dias fechados
     };
     putFns(ctx, kFnsSensors);
     duk_put_prop_string(ctx, -2, "Sensors");
@@ -1129,6 +1186,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFns19);
     duk_put_prop_string(ctx, -2, "CelerLink");
 #endif
+
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex

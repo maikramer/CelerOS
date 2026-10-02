@@ -19,6 +19,10 @@ bool raisePoll();
 // Passos do dia corrente (hook p/ Sensors JS do F4 / watchface).
 int32_t steps();
 
+// Hook BoardProfile::imuStepHistory — dias fechados (mais recente 1o):
+// days = yyyymmdd, counts = passos. Devolve quantos preencheu (<= max).
+int stepHistory(int32_t* days, int32_t* counts, int max);
+
 // Hook BoardProfile::imuAccel — ultima amostra da task (cache, sem I2C).
 bool accel(float* x, float* y, float* z);
 

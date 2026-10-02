@@ -20,6 +20,8 @@
 class SerialLink {
 public:
     static bool init();
+    // So o gancho de ESP_LOG -> LogSink (ring/logcat), sem a task da UART.
+    static bool initLogOnly();
 
     // Writer/baud-hook instalados no HostLink
     static bool writeFrame(const uint8_t* data, size_t len);

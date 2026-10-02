@@ -95,6 +95,10 @@ struct BoardProfile {
     bool (*writeRtc)(const struct tm&) = nullptr; // gravar apos NTP/manual
     bool (*readBatteryMv)(int* mv) = nullptr;     // bateria por PMU (AXP2101),
                                                   // antes do caminho ADC
+    int (*readBatteryPct)() = nullptr;            // fuel gauge 0..100 (-1 = falhou);
+                                                  // nullptr = estima pela curva LiPo
+    int (*readChargeState)() = nullptr;           // bit0 carregando, bit1 USB,
+                                                  // bit2 cheia (-1 = falhou)
     // Botoes fisicos (ativo-baixo, pull-up; -1 = nao ha). Botao 1: curto =
     // home/encerra app, segurar ~1,2 s = screenshot. Botao 2: acorda a tela.
     int buttonPin = -1;
@@ -109,6 +113,8 @@ struct BoardProfile {
     // "tem IMU" no getInfo().
     bool (*imuAccel)(float* x, float* y, float* z) = nullptr;  // cache, em g
     int32_t (*imuSteps)() = nullptr;                           // passos do dia
+    // dias fechados, mais recente 1o (yyyymmdd + passos); devolve quantos
+    int (*imuStepHistory)(int32_t* days, int32_t* counts, int max) = nullptr;
     bool (*imuTemp)(float* c) = nullptr;                       // die, °C
     // Audio com codec I2C (ES8311 do watch): wake/sleep em volta do tom
     // (o codec dorme de verdade entre beeps) + PA do amp.
@@ -124,6 +130,20 @@ struct BoardProfile {
     // afasta relogio/glyphs da barra de status e o X da topbar da zona morta
     // dos cantos arredondados (watch).
     int screenInset = 0;
+    // Gestos de relogio (API 15): borda de cima puxa os Ajustes rapidos,
+    // borda de baixo a central de notificacoes, borda esquerda sai do app JS.
+    bool watchGestures = false;
+    // Launcher em lista vertical (icone + nome, rolagem continua) em vez da
+    // grade paginada: telas pequenas/estreitas como o watch.
+    bool launcherList = false;
+    // Energia (API 15, Hardware/PowerPolicy): DFS + light sleep automatico
+    // com a tela apagada (exige CONFIG_PM_ENABLE no sdkconfig da placa) e
+    // minutos de tela apagada ate o WiFi ocioso desligar (0 = nunca).
+    bool autoLightSleep = false;
+    int wifiSleepMin = 0;
+    // INT do IMU ligada a um GPIO RTC (ativo-baixo): acorda do deep sleep
+    // com movimento quando o ajuste "imu_wake" = 1. -1 = nao ha.
+    int imuWakePin = -1;
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;

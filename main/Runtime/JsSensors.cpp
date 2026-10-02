@@ -47,3 +47,22 @@ duk_ret_t JSBindings::js_sensorsTemp(duk_context* ctx) {
     duk_push_number(ctx, c);
     return 1;
 }
+
+// Sensors.stepHistory() -> [{date: yyyymmdd, steps: n}, ...] (API 15): dias
+// FECHADOS, mais recente primeiro (ate 7); [] sem IMU ou sem historico.
+duk_ret_t JSBindings::js_sensorsStepHistory(duk_context* ctx) {
+    const BoardProfile& bp = Board::profile();
+    int32_t days[7];
+    int32_t counts[7];
+    int n = bp.imuStepHistory ? bp.imuStepHistory(days, counts, 7) : 0;
+    duk_idx_t arr = duk_push_array(ctx);
+    for (int i = 0; i < n; i++) {
+        duk_push_object(ctx);
+        duk_push_int(ctx, (duk_int_t)days[i]);
+        duk_put_prop_string(ctx, -2, "date");
+        duk_push_int(ctx, (duk_int_t)counts[i]);
+        duk_put_prop_string(ctx, -2, "steps");
+        duk_put_prop_index(ctx, arr, (duk_uarridx_t)i);
+    }
+    return 1;
+}

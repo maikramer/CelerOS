@@ -1,5 +1,6 @@
 #include "SerialLink.h"
 #include "HostLink.h"
+#include "esp_attr.h"
 #include "CelerShell.h"
 #include "LogSink.h"
 
@@ -216,6 +217,17 @@ void linkTask(void*) {
 
 // ------------------------------------------------------------------- API
 
+bool SerialLink::initLogOnly() {
+    // So o gancho de logs (ring + logcat pelo canal ativo), sem driver/task
+    // na UART: placas com USB nativo (watch) cuja UART0 nao tem conector.
+    s_writeMutex = xSemaphoreCreateMutex();
+    s_logMutex = xSemaphoreCreateMutex();
+    if (s_writeMutex == nullptr || s_logMutex == nullptr) return false;
+    s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
+    s_defaultVprintfSaved = true;
+    return true;
+}
+
 bool SerialLink::init() {
     // driver RX do canal (TX segue por escrita direta/polling)
     if (!chanInit()) {
@@ -238,11 +250,11 @@ bool SerialLink::init() {
     s_defaultVprintfSaved = true;
 
 #if CONFIG_IDF_TARGET_ESP32S3
-    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 4);
+    EXT_RAM_BSS_ATTR static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 4);
 #else
     // ESP32 classico (CYD): ring/heap curtos — stop-and-wait (janela 1);
     // o anel de 4KB nao segura dois chunks em voo
-    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 1);
+    EXT_RAM_BSS_ATTR static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 1);
 #endif
     s_link = &link;
 

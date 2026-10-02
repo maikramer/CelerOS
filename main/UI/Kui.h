@@ -426,6 +426,9 @@ public:
     // propria (F3) — o app le o touch (I2C) em System.getTouch e duas tasks
     // nao podem ler o mesmo barramento.
     static void setInputSuspended(bool suspended);
+    // Gestos de sistema (ex.: bordas do watch): chamado antes da tela do
+    // topo em todo evento; true = consumido. nullptr = nenhum.
+    static void setGestureHook(bool (*hook)(const TouchEvent& ev));
 
     // Redesenho forcado da tela do topo
     static void repaint();

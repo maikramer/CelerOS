@@ -29,6 +29,13 @@ public:
     // Liga o WiFi em tempo de execucao (mesmo efeito do init() no boot)
     static bool enable();
 
+    // Toggle persistente do radio (Ajustes rapidos do watch, API 15): grava
+    // a flag nowifi e liga sem bloquear (a task de reconexao conecta) ou
+    // desliga. wifiEnabled() = flag nowifi ausente.
+    static bool enableAsync();
+    static void disablePersist();
+    static bool wifiEnabled();
+
     // Encerra o servidor e desliga o WiFi em tempo de execucao (sem reboot).
     // O NetworkManager e dono do radio — nao ha esp_wifi_stop() aqui.
     static void disable();

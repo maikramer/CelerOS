@@ -8,6 +8,7 @@
 #include "../WebManager/WebManager.h"
 #include "../WebManager/WifiSetupPortal.h"
 #include "../Boards/Board.h"
+#include "../Hardware/BoardIO.h"
 #include "../Utils/StrUtils.h"
 
 #include <Arduino.h>
@@ -26,6 +27,12 @@ int gridCellW() { return UI::W / LauncherUI::gridCols(); }
 int gridCellH() { return gridAreaH() / LauncherUI::gridRows(); }
 int gridLeft() { return (UI::W - LauncherUI::gridCols() * gridCellW()) / 2; }
 int gridCellsPerPage() { return LauncherUI::gridCols() * LauncherUI::gridRows(); }
+
+// Modo lista (watch): uma coluna, linha = icone + nome, rolagem vertical
+bool listMode() { return Board::profile().launcherList; }
+int listRowH() { return Icon::SIZE + UI::sy(14); }
+int listMargin() { return UI::sx(10) + UI::inset / 2; }
+int listBottom() { return UI::H - UI::inset / 3; }
 
 // Area tocavel do status de rede (canto direito do header): abre o WiFi
 kui::Rect wifiStatusRect() {
@@ -59,6 +66,10 @@ void drawWifiGlyph(kui::Canvas& c, int cx, int by, bool on) {
 }  // namespace
 
 kui::Rect LauncherScreen::cellRect(int entryIndex) const {
+    if (listMode()) {
+        return {listMargin(), gridTop() + entryIndex * listRowH() - m_scroll,
+                UI::W - 2 * listMargin(), listRowH()};
+    }
     int cell = entryIndex % gridCellsPerPage();
     int col = cell % LauncherUI::gridCols();
     int row = cell / LauncherUI::gridCols();
@@ -82,6 +93,42 @@ void LauncherScreen::onEnter() {
     m_dragDx = 0;
 }
 
+// Bateria: corpo + polo + nivel (cor por faixa) e % ao lado; raio quando
+// carregando. Devolve a largura ocupada (0 sem bateria) — a pilula de rede
+// anda para a esquerda dela.
+static int drawBatteryGlyph(kui::Canvas& c, int right, int cy) {
+    const int pct = BoardIO::batteryPct();
+    if (pct < 0) return 0;
+    const int st = BoardIO::chargeState();
+    const bool chg = st > 0 && (st & 1);
+    const int bw = UI::sx(20), bh = UI::sx(10), tip = UI::sx(2) > 1 ? UI::sx(2) : 2;
+    const int x = right - bw - tip, y = cy - bh / 2;
+    c.drawRoundRect({x, y, bw, bh}, UI::sx(2), THEME_TEXT_DIM);
+    c.fillRect({x + bw, y + bh / 4, tip, bh / 2}, THEME_TEXT_DIM);
+    const uint32_t col = chg ? THEME_OK : pct <= 15 ? THEME_ERR : pct <= 30 ? THEME_WARN : THEME_TEXT;
+    const int inner = (bw - 4) * pct / 100;
+    if (inner > 0) c.fillRect({x + 2, y + 2, inner, bh - 4}, col);
+    if (chg) {  // raio por cima do nivel
+        const int mx = x + bw / 2;
+        c.fillTriangle(mx + UI::sx(2), y - 1, mx - UI::sx(4), cy + 1, mx, cy + 1, THEME_ON_ACCENT);
+        c.fillTriangle(mx - UI::sx(2), y + bh + 1, mx + UI::sx(4), cy - 1, mx, cy - 1, THEME_ON_ACCENT);
+    }
+    char b[16];
+    snprintf(b, sizeof(b), "%d%%", pct);
+    const lgfx::IFont* f = kui::type::caption();
+    const int tw = c.textWidth(b, f);
+    c.text(b, x - UI::sx(4), cy, f, chg ? THEME_OK : THEME_TEXT_DIM, MR_DATUM);
+    return bw + tip + UI::sx(4) + tw;
+}
+
+void LauncherScreen::clampScroll() {
+    int total = LauncherUI::gridTotalEntries() * listRowH();
+    int maxS = total - (listBottom() - gridTop());
+    if (maxS < 0) maxS = 0;
+    if (m_scroll > maxS) m_scroll = maxS;
+    if (m_scroll < 0) m_scroll = 0;
+}
+
 void LauncherScreen::drawStatusBar(kui::Canvas& c) {
     int hdr = gridHeaderH();
     c.fillGradient({0, 0, UI::W, hdr}, 0, THEME_CARD, THEME_BG);
@@ -102,6 +149,9 @@ void LauncherScreen::drawStatusBar(kui::Canvas& c) {
     if (kui::isPressed(st)) c.fillRoundRect({st.x + UI::sx(4), UI::sy(8), st.w - UI::sx(8), hdr - UI::sy(16)}, UI::sx(8), THEME_RAISED);
     int gx = UI::W - UI::sx(26) - UI::inset;
     drawWifiGlyph(c, gx, hdr / 2 + UI::sx(8), wifi);
+    // bateria a esquerda do glifo de rede; o resto anda junto
+    int bat = drawBatteryGlyph(c, gx - UI::sx(22), hdr / 2);
+    if (bat > 0) gx -= bat + UI::sx(10);
     if (!wifi && !m_noWifiPref) {
         const lgfx::IFont* f = kui::type::caption();
         const char* msg = "Sem WiFi";
@@ -124,6 +174,34 @@ void LauncherScreen::draw(kui::Canvas& c) {
     m_needClear = false;
     if (clearBg) c.fill(THEME_BG);
     if (c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
+
+    if (listMode()) {
+        // lista: fundo sempre limpo (a rolagem move tudo); o canvas do watch
+        // tem framebuffer, sem piscada
+        if (!clearBg) c.fillRect({0, gridHeaderH(), UI::W, UI::H - gridHeaderH()}, THEME_BG);
+        c.setClip({0, gridHeaderH(), UI::W, listBottom() - gridHeaderH()});
+        const lgfx::IFont* f = kui::type::body();
+        for (int entry = 0; entry < LauncherUI::gridTotalEntries(); entry++) {
+            kui::Rect r = cellRect(entry);
+            if (r.y + r.h <= gridHeaderH() || r.y >= listBottom()) continue;
+            kui::Rect card{r.x, r.y + UI::sy(3), r.w, r.h - UI::sy(6)};
+            c.fillRoundRect(card, card.h / 2, kui::isPressed(card) ? THEME_RAISED : THEME_CARD);
+            const int iconX = card.x + UI::sx(8);
+            const int iconY = card.y + (card.h - Icon::SIZE) / 2;
+            const std::string& label = LauncherUI::appEntryName(entry);
+            const std::string& icon = LauncherUI::appEntryIcon(entry);
+            if (!icon.empty() && Icon::available(icon.c_str())) {
+                c.drawIcon(icon.c_str(), iconX, iconY);
+            } else {
+                c.drawAppTile(label.c_str(), iconX, iconY);
+            }
+            const int tx = iconX + Icon::SIZE + UI::sx(10);
+            c.text(c.ellipsize(label, f, card.x + card.w - tx - UI::sx(12)), tx, card.y + card.h / 2, f,
+                   THEME_TEXT, ML_DATUM);
+        }
+        c.clearClip();
+        return;
+    }
 
     // grid: pagina atual deslocada pelo arrasto + vizinha entrando pela borda
     const lgfx::IFont* labelFont = kui::type::caption();
@@ -180,6 +258,13 @@ void LauncherScreen::draw(kui::Canvas& c) {
 }
 
 int LauncherScreen::entryAt(int x, int y) const {
+    if (listMode()) {
+        if (y < gridHeaderH() || y >= listBottom()) return -1;
+        for (int entry = 0; entry < LauncherUI::gridTotalEntries(); entry++) {
+            if (cellRect(entry).contains(x, y)) return entry;
+        }
+        return -1;
+    }
     for (int entry = page * gridCellsPerPage();
          entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
         if (cellRect(entry).contains(x, y)) return entry;
@@ -273,6 +358,25 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     if (ev.type == TouchEvent::Release) {
         m_pressEntry = -1;
         if (kui::canvasBuffered()) m_needClear = true;
+    }
+
+    if (listMode()) {
+        if (ev.type == TouchEvent::Drag) {
+            if (kui::touchState().moved && ev.startY > gridHeaderH()) {
+                m_scroll -= ev.y - ev.prevY;
+                clampScroll();
+                return true;
+            }
+            return false;
+        }
+        if (ev.type != TouchEvent::Release || !ev.isTap()) return ev.type == TouchEvent::Release;
+        if (wifiStatusRect().contains(ev.x, ev.y)) {
+            Navigator::push(WifiSetupScreen::instance());
+            return true;
+        }
+        int entry = entryAt(ev.x, ev.y);
+        if (entry >= 0) launchEntry(entry);
+        return entry >= 0;
     }
 
     // arrasto horizontal: a pagina acompanha o dedo
