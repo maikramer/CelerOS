@@ -7,6 +7,7 @@ module.exports.wire = function (env) {
         ok: true,
         status: 200,
         content: 'Ola! Sou o assistente do CelerOS.',
+        usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 },
         raw: '{"choices":[{"message":{"content":"Ola!"}}]}'
     });
     env.__harness.typeLine('oi');

@@ -1719,7 +1719,7 @@ hora da chamada (trocar a chave não pede reboot).
   - `content` — o texto da resposta (`choices[0].message.content`), `null` quando o corpo não pôde ser parseado;
   - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` quando presente;
   - `raw` — o corpo cru da resposta (teto de 32 KB; parseie você mesmo se precisar de mais);
-  - `error` — erro de transporte ou `"cancelado"` quando `ok` é `false`.
+  - `error` — erro de transporte ou `"cancelado"` quando `ok` é `false`; `detail` — a mensagem de erro da própria API (`error.message` do corpo da resposta, truncado em 120 caracteres) quando presente — ex.: chave inválida, saldo, rate limit.
 - Erro dentro do callback propaga como o erro de qualquer binding (o app morre com a tela de erro).
 
 ### Exemplo

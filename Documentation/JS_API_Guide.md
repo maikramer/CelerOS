@@ -1439,7 +1439,7 @@ at call time (replacing the key does not need a reboot).
   - `content` — the reply text (`choices[0].message.content`), `null` when the body could not be parsed;
   - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` when present;
   - `raw` — the raw response body (cap 32 KB; parse it yourself if you need more);
-  - `error` — transport error or `"cancelado"` when `ok` is `false`.
+  - `error` — transport error or `"cancelado"` when `ok` is `false`; `detail` — the API's own error message (`error.message` of the response body, truncated to 120 chars) when present — e.g. invalid key, insufficient balance, rate limit.
 - Errors inside the callback propagate like any binding error (the app dies with the error screen).
 
 ### Example

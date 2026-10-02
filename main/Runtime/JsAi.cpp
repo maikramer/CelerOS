@@ -325,6 +325,26 @@ static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
     if (!r->ok) {
         duk_push_string(ctx, r->error);
         duk_put_prop_string(ctx, -2, "error");
+        // Detalhe do erro da API (corpo {"error":{"message":...}}): chave
+        // invalida, saldo, rate limit — sem isso o app so ve "HTTP 401"
+        duk_push_lstring(ctx, r->body ? r->body : "", r->bodyLen);
+        if (duk_safe_call(ctx, aiDecodeJson, nullptr, 1, 1) == DUK_EXEC_SUCCESS &&
+            duk_is_object(ctx, -1)) {
+            duk_get_prop_string(ctx, -1, "error");        // [res, parsed, err]
+            if (duk_is_object(ctx, -1)) {
+                duk_get_prop_string(ctx, -1, "message");  // +message
+                if (duk_is_string(ctx, -1)) {
+                    duk_substring(ctx, -1, 0, 120);
+                    duk_put_prop_string(ctx, -4, "detail");  // res.detail
+                } else {
+                    duk_pop(ctx);
+                }
+                duk_pop(ctx);  // err
+            } else {
+                duk_pop(ctx);
+            }
+        }
+        duk_pop(ctx);  // parsed (ou string de parse quebrado)
         return 1;
     }
     // Envelope OpenAI: choices[0].message.content + usage. Falha de parse

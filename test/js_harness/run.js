@@ -1753,6 +1753,7 @@ function holdFrames(x, y, n) {
         env.__harness.setAiResponse({
             ok: true, status: 200,
             content: 'Ola! Sou o assistente do CelerOS.',
+            usage: { prompt_tokens: 10, completion_tokens: 32, total_tokens: 42 },
             raw: '{"choices":[{"message":{"content":"Ola! Sou o assistente do CelerOS."}}]}'
         });
         env.__harness.typeLine('oi');
@@ -1765,6 +1766,7 @@ function holdFrames(x, y, n) {
     check('header Chat IA', j.indexOf('Chat IA') >= 0, j);
     check('mensagem do usuario ecoada', j.indexOf('você: oi') >= 0, j);
     check('resposta da IA desenhada', j.indexOf('IA: Ola! Sou o assistente do') >= 0 && j.indexOf('CelerOS.') >= 0, j);
+    check('tokens da resposta', j.indexOf('(42 tokens)') >= 0, j);
     var req = r.env.__harness.aiChats[0] || '';
     check('payload vai ao DeepSeek', req.indexOf('deepseek-flash') >= 0 && req.indexOf('"stream":false') >= 0, req);
     check('system prompt e contexto', req.indexOf('assistente do CelerOS') >= 0 && req.indexOf('assistente do CelerOS', 10) >= 0, req);
@@ -1779,13 +1781,19 @@ function holdFrames(x, y, n) {
     console.log('Chat IA (erros):');
     var r = runApp('data/apps/Chat IA/main.js', function(env) {
         env.Net.isConnected = function() { return true; };
-        env.__harness.setAiResponse({ ok: false, status: 401, error: 'HTTP 401', raw: '' });
+        // corpo de erro da DeepSeek: o framework extrai error.message em detail
+        env.__harness.setAiResponse({
+            ok: false, status: 401, error: 'HTTP 401',
+            detail: 'Authentication Fails, Your api key is invalid',
+            raw: '{"error":{"message":"Authentication Fails, Your api key is invalid"}}'
+        });
         env.__harness.typeLine('oi');
         for (var i = 0; i < 30; i++) env.__harness.System.delay(20);
     });
     check('erro nao derruba o app', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('erro do HTTP mostrado', j.indexOf('IA: erro HTTP 401') >= 0, j);
+    check('detalhe da API mostrado', j.indexOf('detalhe: Authentication Fails') >= 0, j);
 
     var r2 = runApp('data/apps/Chat IA/main.js', function(env) {
         env.__aiConfigured = false;  // aparelho sem chave
@@ -1795,6 +1803,39 @@ function holdFrames(x, y, n) {
     });
     check('sem chave nao envia', r2.err === null &&
           joinLog(r2.log).indexOf('sem chave') >= 0, r2.err || joinLog(r2.log));
+})();
+
+// --- Chat IA: arrasto rever o transcript ---------------------------------------
+(function() {
+    console.log('Chat IA (arrasto):');
+    var r = runApp('data/apps/Chat IA/main.js', function(env) {
+        // historico pre-carregado: o boot renderiza a conversa anterior
+        // (transcript maior que a janela => maxBack > 0 sem digitar nada)
+        var hist = [];
+        for (var i = 0; i < 30; i++) {
+            hist.push({ r: i % 2 ? 'assistant' : 'user', s: 'mensagem numero ' + i });
+        }
+        env.FS.appData();  // cria a pasta privada no stub antes de gravar
+        env.FS.writeTextFile('/local/data/celeros.chatai/historico.json', JSON.stringify(hist));
+        // 4 arrastos pra cima (5 linhas cada) ate o comeco do transcript...
+        for (var d = 0; d < 4; d++) {
+            env.__harness.pushTouch([{ x: 120, y: 60, touched: 1 }, { x: 120, y: 10, touched: 1 }, { x: 0, y: 0, touched: 0 }]);
+            for (var m = 0; m < 4; m++) env.__harness.System.delay(20);
+        }
+        // ...e 4 de volta ao vivo
+        for (var d2 = 0; d2 < 4; d2++) {
+            env.__harness.pushTouch([{ x: 120, y: 10, touched: 1 }, { x: 120, y: 60, touched: 1 }, { x: 0, y: 0, touched: 0 }]);
+            for (var n = 0; n < 4; n++) env.__harness.System.delay(20);
+        }
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    // sem rolar, a janela mostra o FIM da conversa (as ultimas mensagens)
+    check('historico renderizado no boot', j.indexOf('mensagem numero 28') >= 0, j.slice(0, 400));
+    // so o arrasto revela o comeco do transcript
+    check('arrasto recua o transcript', j.indexOf('mensagem numero 0') >= 0, j.indexOf('mensagem numero 0'));
+    check('arrasto marcou recuo', (r.env.__harness.chatScrollMax || 0) > 0, r.env.__harness.chatScrollMax);
+    check('arrasto oposto volta ao vivo', r.env.__harness.chatScroll === 0, r.env.__harness.chatScroll);
 })();
 
 // resumo

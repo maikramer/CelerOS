@@ -35,6 +35,14 @@ var lastBlink = 0;
 var cursorOn = true;
 var hasChips = (typeof System.topbarButtons === "function");
 
+// Rolagem do transcript: 0 = ao vivo (segue o fim); >0 = linhas de recuo.
+// O teclado consome o touch dele via keypadPoll; acima de kbTop o touch
+// fica livre para o app (getTouch e keypadPoll leem o controlador de
+// forma independente).
+var scrollBack = 0;
+var dragY0 = -1;         // y do inicio do arrasto (-1 = sem arrasto)
+var dragScroll0 = 0;
+
 // ------------------------------------------------------------- historico ---
 (function loadHist() {
     if (!histFile || histFile === "historico.json") return;
@@ -52,7 +60,6 @@ function saveHist() {
         FS.writeTextFile(histFile, JSON.stringify(msgs.slice(-MAX_MSGS)));
     } catch (e) { /* historico e melhor esforco: nunca derruba o chat */ }
 }
-
 // ---------------------------------------------------------------- saida ----
 // As fonts so desenham Latin-1: emoji/simbolos da IA viram nada
 function fit(s) {
@@ -92,20 +99,35 @@ function wrapCols(s, cols) {
     return out;
 }
 
-function pushMsg(role, text) {
-    msgs.push({ r: role, s: text });
-    if (msgs.length > MAX_MSGS) msgs.shift();
+function appendMsgLines(role, text) {
     var prefix = role === "user" ? "você: " : "IA: ";
     var col = role === "user" ? T.accent : T.text;
     var wrapped = wrapCols(prefix + text, COLS);
     for (var i = 0; i < wrapped.length; i++) {
         pushLine(i === 0 ? wrapped[i] : "  " + wrapped[i], col);
     }
+}
+
+function pushMsg(role, text) {
+    msgs.push({ r: role, s: text });
+    if (msgs.length > MAX_MSGS) msgs.shift();
+    appendMsgLines(role, text);
     saveHist();
 }
 
-function pushHint(s) { pushLine(s, T.textDim); }
-function pushErr(s) { pushLine(s, T.err); }
+// A conversa anterior aparece no boot: sem isso o transcript abre vazio
+// mesmo com historico (e o arrasto nao tem o que rever)
+(function renderHist() {
+    for (var i = 0; i < msgs.length; i++) appendMsgLines(msgs[i].r, msgs[i].s);
+})();
+
+function pushWrapped(s, c) {
+    var ws = wrapCols(s, COLS);
+    for (var i = 0; i < ws.length; i++) pushLine(ws[i], c);
+}
+
+function pushHint(s) { pushWrapped(s, T.textDim); }
+function pushErr(s) { pushWrapped(s, T.err); }
 
 // ------------------------------------------------------------------ envio --
 function send(text) {
@@ -114,6 +136,7 @@ function send(text) {
     if (!AI.configured()) { pushErr("sem chave: rode tools/push_deepseek_key.py"); return; }
     if (!Net.isConnected()) { pushErr("sem WiFi"); return; }
 
+    scrollBack = 0;  // nova pergunta: volta ao vivo
     pushMsg("user", text);
     var payload = [{ role: "system", content: SYSTEM_PROMPT }];
     var start = Math.max(0, msgs.length - CTX_MSGS);
@@ -124,13 +147,19 @@ function send(text) {
     redrawAll = true;
     var started = AI.chat({ messages: payload }, function (r) {
         busy = false;
+        scrollBack = 0;  // resposta nova: segue o fim
         redrawAll = true;
+        try { if (typeof System.beep === "function") System.beep(1320, 60); } catch (e) {}
         if (r && r.ok && r.content) {
             pushMsg("assistant", fit(r.content));
+            if (r.usage && r.usage.total_tokens) {
+                pushHint("(" + r.usage.total_tokens + " tokens)");
+            }
         } else if (r && r.ok) {
             pushErr("IA: resposta vazia");
         } else {
             pushErr("IA: erro " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)));
+            if (r && r.detail) pushHint("detalhe: " + fit(r.detail));
         }
     });
     if (!started) {
@@ -143,12 +172,14 @@ function send(text) {
 function drawOut() {
     var bottom = kbTop - 16 - (busy ? 12 : 0);
     if (bottom <= 0) return;
+    var vis = Math.max(1, Math.floor(bottom / LINE_H));
+    var maxBack = Math.max(0, lines.length - vis);
+    if (scrollBack > maxBack) scrollBack = maxBack;
+    var end = lines.length - scrollBack;
+    var start = Math.max(0, end - vis);
     System.fillRect(0, 0, W, bottom, T.bg);
-    var n = Math.floor(bottom / LINE_H);
-    var start = lines.length - n;
-    if (start < 0) start = 0;
     var y = 0;
-    for (var i = start; i < lines.length; i++) {
+    for (var i = start; i < end; i++) {
         System.setTextColor(lines[i].c, T.bg);
         System.drawString(lines[i].s, 4, y, 1);
         y += LINE_H;
@@ -156,6 +187,12 @@ function drawOut() {
     if (!lines.length) {
         System.setTextColor(T.textDim, T.bg);
         System.drawString("Pergunte algo ao assistente...", 4, 4, 1);
+    }
+    if (maxBack > 0) {  // barra de posicao na borda direita
+        System.fillRect(W - 3, 0, 3, bottom, T.stroke);
+        var th = Math.max(8, Math.floor(bottom * vis / lines.length));
+        var ty = Math.floor((bottom - th) * (maxBack - scrollBack) / maxBack);
+        System.fillRect(W - 3, ty, 3, th, T.accent);
     }
 }
 
@@ -187,6 +224,12 @@ function drawAll() {
     drawOut();
     drawStatus();
     drawInput();
+    if (typeof __harness !== "undefined") {
+        __harness.chatScroll = scrollBack;
+        if (scrollBack > (__harness.chatScrollMax || 0)) {
+            __harness.chatScrollMax = scrollBack;
+        }
+    }
 }
 
 // ------------------------------------------------------------------ main ---
@@ -195,7 +238,7 @@ if (useKeypad) kbTop = System.keypadRect().y;
 
 pushLine("Chat IA " + VER, T.accent);
 if (hasAI) {
-    pushHint("conversa com DeepSeek; historico local");
+    pushHint("DeepSeek; historico local; arraste p/ rever");
 } else {
     pushErr("requer firmware com API >= 18");
 }
@@ -239,6 +282,27 @@ while (true) {
         } else if (chip !== null) {
             redrawAll = true;
         }
+    }
+
+    // Arrasto acima do teclado: rever o transcript (passo de 1 linha; novo
+    // toque comeca um arrasto novo). Toque no teclado (>= kbTop) e do teclado.
+    var t = System.getTouch();
+    if (t && t.touched && t.y < kbTop - 4) {
+        if (dragY0 < 0) {
+            dragY0 = t.y;
+            dragScroll0 = scrollBack;
+        }
+        var visD = Math.max(1, Math.floor((kbTop - 28) / LINE_H));
+        var maxBackD = Math.max(0, lines.length - visD);
+        var want = dragScroll0 + Math.floor((dragY0 - t.y) / LINE_H);
+        if (want < 0) want = 0;
+        if (want > maxBackD) want = maxBackD;
+        if (want !== scrollBack) {
+            scrollBack = want;
+            redrawAll = true;
+        }
+    } else {
+        dragY0 = -1;
     }
 
     if (redrawAll) {
