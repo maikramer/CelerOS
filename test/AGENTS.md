@@ -1,0 +1,22 @@
+# test/ - host test suites (what CI runs before any firmware build)
+
+## OVERVIEW
+Five suites, all host-side (Node/Python/g++), no hardware needed. They are the gate for every push: `.github/workflows/build.yml` runs them in the `JS harness + C++ host tests` job and a red job blocks the firmware matrix. `test/README` is a stale PlatformIO leftover — this file replaces it.
+
+## SUITES
+| Suite | Runs | Command |
+|-------|------|---------|
+| `js_harness/` | The REAL app JS (data/apps, hub_apps, boards/*/data/apps) against a stubbed device API: System/Net/FS/Storage/Sensors/Phone + harness channel. Smoke + behavior checks per app (App Store update flows, Dog Face gaits, Celer Remote, API 12 timers/Storage, API 15 watch apps...) | `node test/js_harness/run.js` |
+| `app_lint/` | Linter fixtures: syntax, unknown API members, arities (min inferred from C++ bodies), permissions/gates, globals, manifest self-test (>=100 fns parsed, every C++ body found) | `node test/app_lint/run.js` |
+| `sdk/` | The app-dev SDK: scaffold manifest, types coverage, renderer, emulator | `node test/sdk/run.js` |
+| `test_celerctl.py` | celerctl (HostLink client) against a FakeDevice — proto 2 framing, window/retry, no hardware | `python3 test/test_celerctl.py` (needs pyserial) |
+| `cpp/` | Pure C++ logic: `run_tests.cpp` includes `main/Utils/*` headers directly (AlarmCalc, GbProto, HostFrame framer...) | `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests` |
+
+## THE DRIFT CHECK (keeps code, docs, stubs and types honest)
+`node tools/sdk/celer.js check` cross-references the app_lint manifest (derived from `JSBindings.cpp` tables + `Js*.cpp` bodies + `main/CMakeLists.txt` API level) against `Documentation/JS_API_Guide.pt-BR.md`, the js_harness stubs and `tools/sdk/types/celer.d.ts`. When the JS API changes, regenerate and commit the types: `node tools/sdk/celer.js types`.
+
+## CONVENTIONS
+- Adding a JS API call: update `JSBindings` (source of truth), the pt-BR guide heading (`#### System.foo(a, b) (API N)`), the js_harness stub, and regen types — otherwise the drift check or the fixtures fail. The app_lint manifest has no file: it is rebuilt from firmware sources on every run, so never try to hand-edit it.
+- New app (anywhere under data/apps, hub_apps, boards/*/data/apps): give it harness coverage in `js_harness/run.js` — the repo lint (`node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`) runs automatically over it in CI.
+- Arity fixtures (`fixtures/aridade.js`): `min` comes from require-style calls in the C++ body — `duk_require_*` AND helpers shaped `requireXxx(ctx, i)` (requirePin, requireKey). If you rename such a helper, the manifest regresses silently: run the fixture suite.
+- Tests are deterministic and fast (<1 min total). If something only reproduces on hardware, it belongs on the bench, not here — but encode the pure logic (parsers, calculators, framing) in `cpp/` instead.

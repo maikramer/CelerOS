@@ -8,24 +8,26 @@ The single ESP-IDF app component (~50 files, 13 subdirs; score 17). It holds the
 main/
 ├── main.cpp          # app_main -> celerSetup() once, then celerLoop() forever
 ├── Boards/<board>/   # Board.cpp + BoardDisplay.h + BoardTraits.h (one board compiled in)
-├── Display/          # Layout.h (240x320 virtual -> physical), Theme.h, Icon (PNG->RGB565+A4 cache), Backlight
+├── Display/          # Layout.h (240x320 virtual -> physical), Theme.h, Icon (PNG->RGB565+A4 cache), Backlight, ScreenPower (dim/AOD/off ladder)
 ├── UI/               # Kui.{h,cpp}: kui:: Canvas/Screen/Widget/TouchPump/Navigator; Keyboard
-├── Launcher/         # LauncherUI (scans /local/apps/ + /sd/apps/), Screens.cpp (system screens)
-├── Kernel/Core/      # CelerKernel: Duktape heap, runs app main.js; Kernel/TimeManager (NTP/tz)
+├── Launcher/         # LauncherUI (scans /local/apps/ + /sd/apps/, home app), Screens.cpp (system screens), WatchPanels (edge-gesture quick settings + notification center), AlarmScreen (ring UI), PhoneScreens (pairing passkey / incoming call)
+├── Kernel/           # Core/CelerKernel (Duktape heap, runs app main.js), TimeManager (NTP/tz/epoch), Alarms (persistent scheduler, API 15), Notifications (system-wide center, /local/notifications.txt)
+├── Bluetooth/        # CelerLink (device-to-device NimBLE, API 9+) + PhoneLink (Gadgetbridge/Bangle.js, CONFIG_CELEROS_PHONE_LINK, API 15)
 ├── Runtime/          # JS API surface: JSBindings.cpp core + Js*.cpp modules (own AGENTS.md)
 ├── FileSystem/       # static FileSystem:: LittleFS(/local) + SD(/sd), atomic writes, MD5
-├── WebManager/       # WiFi boot/reconnect, httpd file manager + /update OTA upload (gzip pages), captive portal host
+├── WebManager/       # WiFi boot/reconnect (+async toggle), httpd file manager + /update OTA upload (gzip pages), captive portal host
 ├── OTA/              # OtaManager: update.json v2 check + direct esp_https_ota flash (the only OTA path)
-├── USBDevice/        # CelerShell, HostLink (celerctl protocol), SerialLink (UART), LogSink
+├── USBDevice/        # CelerShell, HostLink (celerctl protocol), SerialLink (UART/USJ), USBDevice (dual CDC), LogSink
+├── Hardware/         # BoardIO (IO + battery + tone + LEDC map), Buttons, PowerPolicy (DFS/light sleep, idle WiFi)
+├── Utils/            # CelerSettings (NVS), AlarmCalc (pure, host-tested), GbProto (Bangle.js protocol, pure, host-tested), AppGrants/AppPerms
 ├── Compat/           # Arduino.h shim (millis/delay/pinMode...) over IDF - include path root
-├── Hardware/         # BoardIO: LED RGB, sensor de luz, tom no alto-falante (pinos no BoardProfile; mapa de canais LEDC)
 ├── Settings/         # TouchCalibrator
-└── Assets/           # SplashLogo.h (GENERATED: 64-color PNG drawn with drawPng)
+└── Assets/           # SplashLogo.h (GENERATED: 64-color PNG drawn with drawPng), Fonts/CelerFonts (GENERATED)
 ```
 
 ## BOOT FLOW (main.cpp)
-Board::init -> UI::init(w,h) -> FileSystem::init -> SerialLink::init -> USBDevice::init -> Backlight -> TimeManager -> WebManager::startAsync -> CelerKernel::init -> LauncherUI/TouchCalibrator -> kui::Navigator::begin + push(launcher).
-Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA), `TimeManager::tick()`, `delay(5)`. Runs on the main task (32KB stack via sdkconfig).
+Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART; log-only hook when `CELEROS_USB_NATIVE`) -> USBDevice -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> WebManager::startAsync -> CelerKernel::init -> LauncherUI/TouchCalibrator -> kui::Navigator::begin + WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp / `/local/autostart.txt`).
+Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tick()`, `TimeManager::tick()`, `Backlight::tick()`, `Buttons::tick(false)`, `ScreenPower::tick(false)`, `LauncherUI::idleHomeTick()`, `AlarmScreen::service()`, `WatchPanels::service()`, `PowerPolicy::tick()` (+ `PhoneLink::tick()`/`PhoneScreens::service()` on the watch), `confirmPendingOta()` (also called from the apps' `present()` — a home-app boot never reaches celerLoop), `delay(PowerPolicy::loopDelayMs())`. JS apps pump the same ticks inside `present()`.
 
 ## WHERE TO LOOK
 | Task | Location |
@@ -36,6 +38,11 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 | Touch gestures / tap vs swipe | `UI/Kui.cpp` TouchPump; injected touches (celerctl tap) go through TouchInjector |
 | celerctl device side | `USBDevice/HostLink.cpp` (opcodes + handlers; framing in `HostFrame.h`, pure C++, unit-tested in `test/cpp/run_tests.cpp`), `SerialLink.cpp` (UART/USJ transport + console mux + LogSink), `USBDevice.cpp` (dual CDC, `CELEROS_USB_NATIVE`) |
 | App discovery / launch | `Launcher/LauncherUI.cpp` (appDirs, `main.js`) |
+| Alarms / timer / snooze scheduling | `Kernel/Alarms.*` + `Launcher/AlarmScreen.*` (pure date math in `Utils/AlarmCalc.h`, host-tested; API 12 `TimeManager::setAlarm` = slot 0) |
+| Notifications (history, dnd, toast, AOD dot) | `Kernel/Notifications.*` — consumed by System.notify JS, the notification center panel and PhoneLink |
+| Phone Link (Gadgetbridge) | `Bluetooth/PhoneLink.*` + `Launcher/PhoneScreens.*` + `Runtime/JsPhone.cpp`; protocol pure part in `Utils/GbProto.h`; Kconfig `CELEROS_PHONE_LINK` (watch) |
+| Screen states (dim/AOD/off), raise-to-wake | `Display/ScreenPower.*`; deep sleep wakes on the next alarm event |
+| Power (DFS, light sleep, idle WiFi) | `Hardware/PowerPolicy.*`; needs `CONFIG_PM_ENABLE` (watch sdkconfig) |
 | Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
 | Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |
 
@@ -57,4 +64,4 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 - The `DEBUG:` heap prints in `celerSetup` are always on. They are known noise; don't copy the pattern.
 
 ## HOTSPOTS
-`WebManager/WebManager.cpp` ~890, `Runtime/JSBindings.cpp` ~880 (core only), `UI/Kui.cpp` 820, `Launcher/Screens.cpp` 745, `FileSystem/FileSystem.cpp` 578.
+`Bluetooth/CelerLink.cpp` 1334, `Runtime/JSBindings.cpp` 1232, `UI/Kui.cpp` 1068, `WebManager/WebManager.cpp` 982, `Launcher/Screens.cpp` 938, `FileSystem/FileSystem.cpp` 674, `Bluetooth/PhoneLink.cpp` 578.
