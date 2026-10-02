@@ -266,7 +266,9 @@ function minArityFromBody(body) {
   const collect = (re, set) => {
     while ((m = re.exec(body)) !== null) set.add(+m[1]);
   };
-  collect(/duk_require_\w+\s*\(\s*ctx\s*,\s*(\d+)/g, required);
+  // duk_require_* e os helpers do Runtime no mesmo molde (requirePin do
+  // JsGpio, requireKey do JsStorage): todos throw sem o argumento.
+  collect(/(?:duk_)?require\w*\s*\(\s*ctx\s*,\s*(\d+)/g, required);
   collect(/duk_is_\w+\s*\(\s*ctx\s*,\s*(\d+)/g, guarded);
   collect(/duk_get_\w+_default\s*\(\s*ctx\s*,\s*(\d+)/g, guarded);
   let min = 0;
