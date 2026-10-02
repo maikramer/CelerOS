@@ -142,10 +142,10 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     // Grava no FS: mesma capability e mesmo jail do FS.writeFile. Antes so
     // "net" bastava e o destino era livre (ota_url.txt, main.js de app de
     // sistema...).
-    if (!perm(celer::PERM_FS)) {
+    if (!perm(celer::PERM_FS)) {  // lint-perm: fs
         duk_error(ctx, DUK_ERR_ERROR, "Net.download requer permissao \"fs\"");
     }
-    if (!fsPathAllowed(path)) {
+    if (!fsWriteAllowed(path)) {
         duk_error(ctx, DUK_ERR_ERROR, "Net.download: destino %s nao permitido", path);
     }
     const bool hasProgress = duk_is_function(ctx, 2);
@@ -216,14 +216,21 @@ struct NetAsyncSlot {
     bool ok = false;
     int status = 0;
     std::string url;                  // imutavel enquanto state==1
-    std::string body;                 // escritos SO pela task (transicao 1->2)
-    std::string error;
+    char* body = nullptr;             // malloc (NetBody), escrito SO pela task (1->2)
+    size_t bodyLen = 0;
+    char error[64] = {0};
 };
 static NetAsyncSlot s_netAsync[2];
 
 static bool netMuxTake(NetAsyncSlot& s) {
     if (s.mux == nullptr) s.mux = xSemaphoreCreateMutex();
     return s.mux != nullptr && xSemaphoreTake(s.mux, portMAX_DELAY) == pdTRUE;
+}
+
+static void netSlotFreeBody(NetAsyncSlot& s) {
+    free(s.body);
+    s.body = nullptr;
+    s.bodyLen = 0;
 }
 
 // Chamado no lancamento de cada app: zumbis do app anterior descartam,
@@ -234,8 +241,7 @@ void JSBindings::netAsyncReset() {
         s.discard = true;
         if (s.state == 2) {
             s.state = 0;
-            s.body.clear();
-            s.body.shrink_to_fit();
+            netSlotFreeBody(s);
         }
         xSemaphoreGive(s.mux);
     }
@@ -243,26 +249,41 @@ void JSBindings::netAsyncReset() {
 
 static void netAsyncTask(void* raw) {
     NetAsyncSlot* s = (NetAsyncSlot*)raw;
-    HttpClient http;
-    http.setTimeout(10000);
-    HttpResponse resp = http.get(s->url.c_str());
-    if (resp.body.size() > NET_MAX_BODY) resp.body.resize(NET_MAX_BODY);
+    // Corpo no mesmo sink do Net.get: teto de 32 KB APLICADO durante o
+    // download (antes o corpo inteiro crescia num std::string e so depois
+    // era cortado — uma resposta grande esgotava o heap)
+    NetBody got;
+    bool ok;
+    int status;
+    char err[64];
+    {
+        HttpClient http;
+        http.setTimeout(10000);
+        http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
+        HttpResponse resp = http.get(s->url.c_str());
+        ok = resp.isOk();
+        status = resp.statusCode;
+        snprintf(err, sizeof(err), "%s", resp.success ? "" : resp.errorMessage.c_str());
+    }  // TLS/cliente liberados antes de publicar o resultado
     if (netMuxTake(*s)) {
+        netSlotFreeBody(*s);
         if (s->discard) {
+            free(got.p);
             s->ok = false;
             s->status = 0;
-            s->body.clear();
-            s->body.shrink_to_fit();
-            s->error = "cancelado";
+            snprintf(s->error, sizeof(s->error), "cancelado");
         } else {
-            s->ok = resp.isOk();
-            s->status = resp.statusCode;
-            s->body = std::move(resp.body);
-            s->error = resp.success ? "" : resp.errorMessage;
+            s->ok = ok;
+            s->status = status;
+            s->body = got.p;  // posse transferida ao slot
+            s->bodyLen = got.n;
+            snprintf(s->error, sizeof(s->error), "%s", err);
         }
         s->discard = false;
         s->state = 2;
         xSemaphoreGive(s->mux);
+    } else {
+        free(got.p);
     }
     vTaskDelete(nullptr);
 }
@@ -282,14 +303,17 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         s.discard = false;
         s.ok = false;
         s.status = 0;
-        s.body.clear();
-        s.body.shrink_to_fit();
-        s.error.clear();
+        netSlotFreeBody(s);
+        s.error[0] = '\0';
         s.url = url;  // nenhuma task viva: seguro reescrever
         s.state = 1;
         xSemaphoreGive(s.mux);
 
-        if (xTaskCreate(netAsyncTask, "jsnet", 12288, &s, 3, nullptr) != pdPASS) {
+        // Stack de 32KB: o caminho assincrono roda o MESMO HttpClient/TLS do
+        // Net.get (que execute na main de ~27KB) — com 12KB o handshake
+        // estoura e o pollGet vinha "UNKNOWN ERROR" (bancada 2026-10-02).
+        // Boards sem PSRAM nao abrem apps com "net", o custo e so no S3.
+        if (xTaskCreate(netAsyncTask, "jsnet", 32768, &s, 3, nullptr) != pdPASS) {
             // task nao nasceu: nada escrevera o slot, devolve ao estado livre
             netMuxTake(s);
             if (s.state == 1) s.state = 0;
@@ -300,6 +324,32 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         return 1;
     }
     duk_push_int(ctx, -1);
+    return 1;
+}
+
+// Monta {done,ok,status,body,error} — em duk_safe_call: sem RAM o Duktape
+// lanca e o corpo (malloc) ainda precisa ser liberado pelo chamador
+struct NetPollResult {
+    bool ok;
+    int status;
+    const char* body;
+    size_t bodyLen;
+    const char* error;
+};
+
+static duk_ret_t netPushPoll(duk_context *ctx, void *udata) {
+    const NetPollResult* r = (const NetPollResult*)udata;
+    duk_push_object(ctx);
+    duk_push_boolean(ctx, 1);
+    duk_put_prop_string(ctx, -2, "done");
+    duk_push_boolean(ctx, r->ok ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "ok");
+    duk_push_int(ctx, r->status);
+    duk_put_prop_string(ctx, -2, "status");
+    duk_push_lstring(ctx, r->body ? r->body : "", r->bodyLen);  // corpo pode conter NUL
+    duk_put_prop_string(ctx, -2, "body");
+    duk_push_string(ctx, r->error);
+    duk_put_prop_string(ctx, -2, "error");
     return 1;
 }
 
@@ -314,36 +364,20 @@ duk_ret_t JSBindings::js_netPollGet(duk_context *ctx) {
         return 1;  // ainda rodando
     }
 
-    // Copia o resultado para fora do lock: montar o objeto no Duktape pode
-    // alocar/lanca (longjmp) e o mutex nao pode vazar nesse caminho
-    bool ok = s.ok;
-    int status = s.status;
-    size_t bodyLen = s.body.size();
-    char* bodyBuf = (char*)malloc(bodyLen > 0 ? bodyLen : 1);
-    if (bodyBuf != nullptr && bodyLen > 0) memcpy(bodyBuf, s.body.data(), bodyLen);
+    // Toma posse do resultado sob o lock (sem copia/malloc: antes um malloc
+    // falho virava {ok:true, body:""}) e monta o objeto fora dele
     char errBuf[64];
-    snprintf(errBuf, sizeof(errBuf), "%s", s.error.c_str());
+    NetPollResult r{s.ok, s.status, s.body, s.bodyLen, errBuf};
+    snprintf(errBuf, sizeof(errBuf), "%s", s.error);
+    s.body = nullptr;
+    s.bodyLen = 0;
     s.state = 0;  // slot liberado para o proximo beginGet
-    s.body.clear();
-    s.body.shrink_to_fit();
     xSemaphoreGive(s.mux);
 
-    duk_push_object(ctx);
-    duk_push_boolean(ctx, 1);
-    duk_put_prop_string(ctx, -2, "done");
-    duk_push_boolean(ctx, ok ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "ok");
-    duk_push_int(ctx, status);
-    duk_put_prop_string(ctx, -2, "status");
-    if (bodyBuf != nullptr) {
-        duk_push_lstring(ctx, bodyBuf, bodyLen);  // corpo pode conter NUL
-        free(bodyBuf);
-    } else {
-        duk_push_string(ctx, "");
-    }
-    duk_put_prop_string(ctx, -2, "body");
-    duk_push_string(ctx, errBuf);
-    duk_put_prop_string(ctx, -2, "error");
+    char* owned = (char*)r.body;
+    duk_int_t rc = duk_safe_call(ctx, netPushPoll, &r, 0, 1);
+    free(owned);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
     return 1;
 }
 
