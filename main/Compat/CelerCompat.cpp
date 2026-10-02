@@ -43,6 +43,7 @@ void delayMicroseconds(uint32_t us) {
 // --- GPIO -------------------------------------------------------------------
 
 void pinMode(int pin, uint8_t mode) {
+    if (!GPIO_IS_VALID_GPIO(pin)) return;  // 1ULL << pin com pin < 0 ou >= 64 e UB
     gpio_config_t cfg = {};
     cfg.pin_bit_mask = 1ULL << pin;
     switch (mode) {
@@ -120,7 +121,18 @@ int analogReadAtten(int pin, int atten) {
 // backlight (mapa em Hardware/BoardIO.h). Antes eram os 8 — um app com
 // PWM podia roubar o canal do beep ou reconfigurar o timer do backlight.
 #define CELER_LEDC_MAX_CH 3
-static int s_ledc_pin[CELER_LEDC_MAX_CH] = {-1, -1, -1};
+static int s_ledc_pin[CELER_LEDC_MAX_CH] = {-1, -1, -1};  // -1 livre, -2 reservado (servo)
+
+bool celerLedcClaim(int ch) {
+    if (ch < 0 || ch >= CELER_LEDC_MAX_CH) return true;  // fora da faixa do analogWrite
+    if (s_ledc_pin[ch] != -1) return false;
+    s_ledc_pin[ch] = -2;
+    return true;
+}
+
+void celerLedcRelease(int ch) {
+    if (ch >= 0 && ch < CELER_LEDC_MAX_CH && s_ledc_pin[ch] == -2) s_ledc_pin[ch] = -1;
+}
 
 void analogWrite(int pin, int val) {
     int ch = -1;

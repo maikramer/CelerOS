@@ -9,14 +9,15 @@
 //
 // Mapa de canais LEDC (baixa velocidade), unico no firmware:
 //   0..2  analogWrite dos apps (Compat)       timers 0/1
-//   0..2+7+3  servos do System.gpio.servo     timer 0 (50 Hz; 5 canais — o
-//            5o (LEDC 3) conflita com o R do LED RGB na CYD se ambos usados)
+//   servos do System.gpio.servo: ver abaixo (50 Hz; ate 5 canais)
 //   4..5  LED RGB                              timer 1 (5 kHz, 8 bits)
 //   6     tom (System.beep na CYD, LEDC)       timer 2
 //   7     backlight (LovyanGFX Light_PWM)      timer 3 (no ESP32 fica no
 //                                              bloco de alta velocidade)
-//   servos: os canais acima que a placa NAO usa (7, 6, 5..3), depois 0..2;
-//           timer 2 (timer 0 em placa com buzzer LEDC). Ver servoWrite.
+//   servos: os canais acima que a placa NAO usa (7, 6, 5..3), depois 0..2
+//           (reservados no Compat: celerLedcClaim); timer 2, ou timer 3 em
+//           placa com buzzer LEDC (ESP32: o backlight fica na alta
+//           velocidade). Ver servoWrite/servoTimer.
 // A SmartDisplay nao usa LEDC para som: o amplificador NS4168 e digital,
 // alimentado por I2S (canal alocado sob demanda durante o tom).
 // ============================================================================

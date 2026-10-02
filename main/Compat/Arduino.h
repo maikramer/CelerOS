@@ -52,6 +52,11 @@ int digitalRead(int pin);
 int analogRead(int pin);          // adc_oneshot, 12 bits
 int analogReadAtten(int pin, int atten);  // atenuacao adc_atten_t (0 = 0dB, sinais fracos)
 void analogWrite(int pin, int val); // LEDC 8 bits (0-255)
+// Canais LEDC 0..2 sao do analogWrite; os servos (BoardIO) os pegam como
+// ultimo recurso. Reserva/libera o canal para os dois nao brigarem
+// (analogWrite pula canal reservado; o servo so reserva canal livre).
+bool celerLedcClaim(int ch);    // false = canal ja usado pelo analogWrite
+void celerLedcRelease(int ch);
 unsigned long pulseIn(int pin, uint8_t state, unsigned long timeout_us);
 
 // --- Matematica / utilidades Arduino ---------------------------------------

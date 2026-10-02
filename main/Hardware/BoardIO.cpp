@@ -323,8 +323,18 @@ int s_servoChCount = -1;                    // -1 = lista ainda nao montada
 int8_t s_servoPin[kServoMax] = {-1, -1, -1, -1, -1};  // -1 = canal livre
 bool s_servoTimerOk = false;
 
+// Timer so dos servos (50 Hz/14 bits). O timer 0 de antes (placas com
+// buzzer LEDC, a CYD) e o do analogWrite: quem configurava por ultimo
+// mudava a frequencia do outro (servo a 5 kHz ou PWM a 50 Hz).
 ledc_timer_t servoTimer() {
-    return Board::profile().speakerPin < 0 ? LEDC_TIMER_2 : LEDC_TIMER_0;
+    const BoardProfile& bp = Board::profile();
+    if (bp.speakerPin < 0) return LEDC_TIMER_2;  // timer do tom LEDC sobra
+#if SOC_LEDC_SUPPORT_HS_MODE
+    return LEDC_TIMER_3;  // o backlight do LGFX vive no bloco de ALTA velocidade
+#else
+    if (!bp.backlightPwm) return LEDC_TIMER_3;
+    return LEDC_TIMER_0;  // sem timer livre: ultimo recurso (divide com analogWrite)
+#endif
 }
 
 void servoChannels() {
@@ -336,6 +346,10 @@ void servoChannels() {
     if (bp.speakerPin < 0) add(6);
     if (bp.led.r < 0) { add(5); add(4); add(3); }
     add(0); add(1); add(2);  // compartilhados com o analogWrite (ultimo recurso)
+    if (n > kServoMax) n = kServoMax;  // add() cerca o array, mas o COUNT nao:
+    // sem o clamp o servoWrite varre alem de s_servoCh/s_servoPin (le canal
+    // lixo no ledc_channel_config e escreve s_servoPin fora do array —
+    // corrupcao que derruba o heap do runtime JS depois)
     s_servoChCount = n;
 }
 }  // namespace
@@ -346,7 +360,13 @@ bool servoWrite(int pin, int us) {
     int slot = -1;
     for (int i = 0; i < s_servoChCount; i++) {
         if (s_servoPin[i] == pin) { slot = i; break; }  // ja esta neste pino
-        if (slot < 0 && s_servoPin[i] < 0) slot = i;    // primeiro livre
+    }
+    if (slot < 0) {
+        // primeiro canal livre que o analogWrite tambem nao esteja usando
+        // (0..2 sao dele; a reserva impede que ele os tome depois)
+        for (int i = 0; i < s_servoChCount && slot < 0; i++) {
+            if (s_servoPin[i] < 0 && celerLedcClaim((int)s_servoCh[i])) slot = i;
+        }
     }
     if (slot < 0) return false;  // canais esgotados: servoOff libera um
     if (us < 400) us = 400;
@@ -369,7 +389,10 @@ bool servoWrite(int pin, int us) {
         ch.timer_sel = servoTimer();
         ch.gpio_num = pin;
         ch.duty = duty;  // ja nasce no angulo pedido (sem pulso 0 no meio)
-        if (ledc_channel_config(&ch) != ESP_OK) return false;
+        if (ledc_channel_config(&ch) != ESP_OK) {
+            celerLedcRelease((int)s_servoCh[slot]);
+            return false;
+        }
         s_servoPin[slot] = (int8_t)pin;
         return true;
     }
@@ -383,6 +406,7 @@ bool servoOff(int pin) {
         if (s_servoPin[i] == pin) {
             ledc_stop(kMode, s_servoCh[i], 0);
             s_servoPin[i] = -1;
+            celerLedcRelease((int)s_servoCh[i]);
             return true;
         }
     }
@@ -394,6 +418,7 @@ void servosOff() {
         if (s_servoPin[i] >= 0) {
             ledc_stop(kMode, s_servoCh[i], 0);
             s_servoPin[i] = -1;
+            celerLedcRelease((int)s_servoCh[i]);
         }
     }
 }
