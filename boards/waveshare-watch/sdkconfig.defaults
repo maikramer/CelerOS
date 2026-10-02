@@ -39,6 +39,9 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+# Phone Link (API 15): Gadgetbridge fala com o relogio como Bangle.js; o
+# bond do celular (pareamento com codigo) persiste no NVS do NimBLE.
+CONFIG_CELEROS_PHONE_LINK=y
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
 
 # Energia (API 15, Hardware/PowerPolicy): DFS + light sleep automatico com a

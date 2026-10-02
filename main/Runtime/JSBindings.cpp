@@ -34,6 +34,9 @@
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../Bluetooth/CelerLink.h"
 #endif
+#if CONFIG_CELEROS_PHONE_LINK
+#include "../Bluetooth/PhoneLink.h"
+#endif
 
 void confirmPendingOta();  // main.cpp
 
@@ -448,6 +451,9 @@ void JSBindings::present() {
     ScreenPower::tick(true);  // estados de tela do watch (dim/AOD/off)
     confirmPendingOta();      // main.cpp: app casa aberto desde o boot tambem confirma o OTA
     PowerPolicy::tick();      // locks de PM seguem a tela com app aberto
+#if CONFIG_CELEROS_PHONE_LINK
+    PhoneLink::tick(true);    // notificacoes/hora do celular com app aberto
+#endif
     // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD:
     // com a tela apagada/AOD (o normal no watchface) o alarme toca do mesmo
     // jeito. O toque e a AlarmScreen nativa: o app sai pelo caminho limpo
@@ -1187,6 +1193,21 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_prop_string(ctx, -2, "CelerLink");
 #endif
 
+#if CONFIG_CELEROS_PHONE_LINK
+    // --- Phone Object (API 15): celular pareado pelo Gadgetbridge ---
+    duk_push_object(ctx);  // Phone
+    static const JsFn kFnsPhone[] = {
+        {"status", js_phoneStatus, 0},
+        {"setEnabled", js_phoneSetEnabled, 1},  // lint-perm: system
+        {"music", js_phoneMusic, 1},
+        {"musicInfo", js_phoneMusicInfo, 0},
+        {"weather", js_phoneWeather, 0},
+        {"find", js_phoneFind, 1},
+        {"forget", js_phoneForget, 0},  // lint-perm: system
+    };
+    putFns(ctx, kFnsPhone);
+    duk_put_prop_string(ctx, -2, "Phone");
+#endif
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex

@@ -50,7 +50,12 @@ const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage', 'Sensors'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage', 'Sensors', 'Phone'];
+// Objetos que so existem com o Kconfig da placa: uso sem typeof vira aviso
+const OPTIONAL_ROOTS = {
+  CelerLink: 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar',
+  Phone: 'Phone e opcional (so placas com Phone Link, ex.: watch): proteja com typeof Phone !== "undefined" antes de usar',
+};
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
 // declaracao vira diagnostico de variavel/funcao nao declarada.
@@ -480,7 +485,7 @@ function lintSource(manifest, src, appInfo) {
   const typeofTargets = new Set();    // alvos de typeof (feature-detect)
   const permUses = new Map();         // perm -> {node, what}
   const apiFnUses = [];               // {qualified, entry, node}
-  let celerLinkUse = null;            // node do primeiro uso de CelerLink
+  const optionalUse = {};             // raiz opcional -> node do primeiro uso
   const reported = new Set();         // chaves de diagnostico unicas
 
   const globalWhitelist = new Set(ES5_GLOBALS.concat(Object.keys(BANNED_GLOBALS)));
@@ -570,7 +575,7 @@ function lintSource(manifest, src, appInfo) {
         }
         const shadowed = scopeHas(scopeAt, name) || implicitGlobals.has(name);
         if (shadowed || globalWhitelist.has(name)) {
-          if (name === 'CelerLink' && !celerLinkUse && !shadowed) celerLinkUse = node;
+          if (OPTIONAL_ROOTS[name] && !optionalUse[name] && !shadowed) optionalUse[name] = node;
           break;
         }
         if (key === 'callee' || (parent && parent.type === 'NewExpression' && parent.callee === node)) {
@@ -588,7 +593,7 @@ function lintSource(manifest, src, appInfo) {
         const chain = memberChain(node);
         if (!chain || NAMESPACE_ROOTS.indexOf(chain.root) < 0) break;
         if (scopeHas(scopeAt, chain.root) || implicitGlobals.has(chain.root)) break; // shadow local
-        if (chain.root === 'CelerLink' && !celerLinkUse) celerLinkUse = node;
+        if (OPTIONAL_ROOTS[chain.root] && !optionalUse[chain.root]) optionalUse[chain.root] = node;
         checkMemberExistence(chain, node, node.property, true, true);
         break;
       }
@@ -695,8 +700,8 @@ function lintSource(manifest, src, appInfo) {
     }
   }
 
-  if (celerLinkUse && !typeofTargets.has('CelerLink')) {
-    d(celerLinkUse, 'aviso', 'feature', 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar');
+  for (const root of Object.keys(optionalUse)) {
+    if (!typeofTargets.has(root)) d(optionalUse[root], 'aviso', 'feature', OPTIONAL_ROOTS[root]);
   }
 
   diags.sort((a, b) => (a.line - b.line) || (a.col - b.col));

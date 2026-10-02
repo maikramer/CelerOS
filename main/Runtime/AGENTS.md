@@ -15,18 +15,20 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 | `JsKeypad.cpp` | `System.prompt` + docked keypad session |
 | `JsSystemApps.cpp` | System-app support (API 3+): brightness, PIN, web auth, OTA, WiFi, time settings |
 | `JsGpio.cpp` | `System.gpio`; compiled only with `CONFIG_CELEROS_JS_GPIO` |
+| `JsSensors.cpp` | `Sensors.*` (IMU hooks of the board profile) |
+| `JsPhone.cpp` | `Phone.*`; compiled only with `CONFIG_CELEROS_PHONE_LINK` |
 
 ## WHERE TO LOOK
 | Task | Location |
 |------|----------|
 | Add a binding | define `JSBindings::js_x` in the module file, declare it in `JSBindings.h`, add `{"name", js_x, nargs}` to the right `kFnsN[]` table in `init()` |
 | Per-app reset of all binding state | `JSBindings::init(ctx, tft, appTitle, topbarFixed)`, called by CelerKernel on each app launch |
-| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 14) |
+| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 15) |
 | Streaming download | `Net.download` in `JsNet.cpp` (API 6; older firmware truncated bodies at 32KB) |
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 
 ## API LEVEL HISTORY
-1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page, Latin-1 text in every font (apps with accented strings declare `api: 7`), `System.led`/`lightLevel`/auto-brightness and working `beep` on the CYD (`Hardware/BoardIO`). · 9 `CelerLink` BLE global · 10 `System.gpio.servo` (5 canais), `relay*`, `System.battery`/`micLevel`/`touchPad`/`neopixel` (onda robotica: board `spotpear-dog`) · 11 Celer Link pairing por codigo + teclado `{hint:"num"}` · 12 timers (`setTimeout`/`setInterval` no present), `Storage` NVS privado por packageName (+`clearFor` system-gated), sprites multiplos, `FS.readFile`/`writeFile` binario, `setTextDatum`, tempo de tela/deepSleep/alarme/hora persistente, `playTone`/`notify`+centro, widgets Kui · 13 `Sensors` (accel/steps/temp do QMI8658), `System.getWeekday`/`keepAwake`/`setVolume`/`getVolume`/`playWav` (onda watch: board `waveshare-watch`). · 14 consentimento de permissoes (launcher + `Utils/AppGrants`: runtime recebe declaradas & concedidas), `CelerLink.start` com pareamento por padrao + bond com chave (desafio-resposta), `System.prompt({nullOnCancel})`, alarme/banner com app aberto, `FS.listDir` sem teto.
+1 base (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps moved into LittleFS JS (W8) · 5 docked keypad (W9) · 6 custom topbar + streaming `Net.download` · 7 keypad/prompt `mask`, PT-BR accent keyboard page, Latin-1 text in every font (apps with accented strings declare `api: 7`), `System.led`/`lightLevel`/auto-brightness and working `beep` on the CYD (`Hardware/BoardIO`). · 9 `CelerLink` BLE global · 10 `System.gpio.servo` (5 canais), `relay*`, `System.battery`/`micLevel`/`touchPad`/`neopixel` (onda robotica: board `spotpear-dog`) · 11 Celer Link pairing por codigo + teclado `{hint:"num"}` · 12 timers (`setTimeout`/`setInterval` no present), `Storage` NVS privado por packageName (+`clearFor` system-gated), sprites multiplos, `FS.readFile`/`writeFile` binario, `setTextDatum`, tempo de tela/deepSleep/alarme/hora persistente, `playTone`/`notify`+centro, widgets Kui · 13 `Sensors` (accel/steps/temp do QMI8658), `System.getWeekday`/`keepAwake`/`setVolume`/`getVolume`/`playWav` (onda watch: board `waveshare-watch`). · 14 consentimento de permissoes (launcher + `Utils/AppGrants`: runtime recebe declaradas & concedidas), `CelerLink.start` com pareamento por padrao + bond com chave (desafio-resposta), `System.prompt({nullOnCancel})`, alarme/banner com app aberto, `FS.listDir` sem teto. · 15 onda relogio: `System.batteryInfo`, `getInfo().hasBattery/board/inset/shape/screenW/screenH`, `Sensors.stepHistory`, alarmes multiplos + timer (`Kernel/Alarms`), `System.unreadNotifications` (`Kernel/Notifications`), objeto `Phone` (`JsPhone.cpp`, CONFIG_CELEROS_PHONE_LINK).
 
 ## CONVENTIONS
 - JS works in virtual 240x320 coordinates. Every draw and touch conversion goes through `UI::sx/sy` (in) and the inverse (touch out). Don't expose physical pixels to JS.

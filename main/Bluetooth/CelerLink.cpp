@@ -26,6 +26,12 @@
 #include "host/ble_uuid.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_PHONE_LINK
+#include "PhoneLink.h"
+#include "host/ble_sm.h"
+extern "C" void ble_store_config_init(void);
+#endif
 
 // Servico "Celer Link v1": um servico primario UUID128 com UMA
 // caracteristica de mensagens (write + write-no-rsp + notify). Quem e
@@ -146,6 +152,11 @@ uint16_t s_peerPairVal = 0;            // char "pair" do peer (0 = peer v1)
 volatile uint8_t s_peerPairState = K_PAIR_OFF;  // ultimo estado lido (central)
 uint8_t s_peerAddr[6] = {0};
 volatile bool s_wantAdvertise = false;
+// Phone Link (Gadgetbridge): o advertising no ar e o do celular e a
+// conexao corrente veio dele — os eventos vao para o PhoneLink e o canal
+// do Celer Link segue "desconectado" para os apps.
+volatile bool s_advPhone = false;
+volatile bool s_phoneConn = false;
 char s_advName[CelerLink::MAX_NAME + 1] = {0};
 
 // Pareamento: s_pairVerified fecha/abre o canal de dados (default true —
@@ -359,7 +370,40 @@ int onGapEvent(ble_gap_event* event, void* arg);  // usado pelo advRestart
 // (Re)liga o advertising se o app pediu e o radio esta livre. Chamado
 // da task do host (eventos) e da do app (start).
 void advRestart() {
-    if (!s_wantAdvertise || s_connActive || s_connecting) return;
+    if (s_connActive || s_connecting) return;
+#if CONFIG_CELEROS_PHONE_LINK
+    // Sem app usando o Celer Link: o relogio anuncia o Phone Link
+    if (!s_wantAdvertise) {
+        if (!PhoneLink::wantAdvertise() || ble_gap_adv_active()) return;
+        struct ble_hs_adv_fields f;
+        memset(&f, 0, sizeof(f));
+        f.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+        f.uuids128 = (const ble_uuid128_t*)PhoneLink::advUuid128();
+        f.num_uuids128 = 1;
+        f.uuids128_is_complete = 1;
+        struct ble_hs_adv_fields r;
+        memset(&r, 0, sizeof(r));
+        const char* nm = PhoneLink::advName();
+        r.name = (const uint8_t*)nm;
+        r.name_len = (uint8_t)strlen(nm);
+        r.name_is_complete = 1;
+        struct ble_gap_adv_params p;
+        memset(&p, 0, sizeof(p));
+        p.conn_mode = BLE_GAP_CONN_MODE_UND;
+        p.disc_mode = BLE_GAP_DISC_MODE_GEN;
+        // intervalo longo (~1 s): economia; o Gadgetbridge reconecta sozinho
+        p.itvl_min = 1600;
+        p.itvl_max = 1760;
+        if (ble_gap_adv_set_fields(&f) != 0 || ble_gap_adv_rsp_set_fields(&r) != 0) return;
+        int rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, BLE_HS_FOREVER, &p, onGapEvent, nullptr);
+        if (rc == 0) s_advPhone = true;
+        return;
+    }
+    if (s_advPhone && ble_gap_adv_active()) ble_gap_adv_stop();  // app tem prioridade
+    s_advPhone = false;
+#else
+    if (!s_wantAdvertise) return;
+#endif
     if (ble_gap_adv_active()) return;
 
     struct ble_hs_adv_fields f;
@@ -625,6 +669,16 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             }
             s_conn = event->connect.conn_handle;
             s_connActive = true;
+#if CONFIG_CELEROS_PHONE_LINK
+            if (!s_isCentral && s_advPhone) {
+                // conexao veio do advertising do Phone Link: e do celular
+                s_advPhone = false;
+                s_phoneConn = true;
+                s_ready = false;  // canal do Celer Link segue fechado
+                PhoneLink::onConnect(s_conn);
+                return 0;
+            }
+#endif
             s_mtu = ble_att_mtu(s_conn);
             if (s_mtu == 0) s_mtu = K_MTU_DEFAULT;
             s_peerSubscribed = false;
@@ -662,6 +716,16 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             return 0;
         }
         case BLE_GAP_EVENT_DISCONNECT: {
+#if CONFIG_CELEROS_PHONE_LINK
+            if (s_phoneConn) {
+                s_phoneConn = false;
+                PhoneLink::onDisconnect();
+                clearConnState();
+                xEventGroupSetBits(s_evt, EV_DISC);
+                advRestart();
+                return 0;
+            }
+#endif
             ESP_LOGI(TAG, "desconectado (reason=0x%x)", event->disconnect.reason);
             clearConnState();
             // durante o connect() quem limpa o papel e o proprio connect
@@ -672,8 +736,23 @@ int onGapEvent(ble_gap_event* event, void* arg) {
         }
         case BLE_GAP_EVENT_MTU:
             s_mtu = event->mtu.value;
+#if CONFIG_CELEROS_PHONE_LINK
+            if (s_phoneConn) PhoneLink::onMtu(event->mtu.value);
+#endif
             return 0;
+#if CONFIG_CELEROS_PHONE_LINK
+        case BLE_GAP_EVENT_PASSKEY_ACTION:
+        case BLE_GAP_EVENT_ENC_CHANGE:
+        case BLE_GAP_EVENT_REPEAT_PAIRING:
+            return PhoneLink::onGapSecurity(event);
+#endif
         case BLE_GAP_EVENT_SUBSCRIBE:
+#if CONFIG_CELEROS_PHONE_LINK
+            if (s_phoneConn) {
+                PhoneLink::onSubscribe(event->subscribe.attr_handle, event->subscribe.cur_notify != 0);
+                return 0;
+            }
+#endif
             if (event->subscribe.attr_handle == s_chrValHandle) {
                 s_peerSubscribed = event->subscribe.cur_notify != 0;
             }
@@ -709,6 +788,13 @@ void onSync() {
 
 void onReset(int reason) {
     ESP_LOGW(TAG, "host NimBLE resetou (reason=%d)", reason);
+#if CONFIG_CELEROS_PHONE_LINK
+    if (s_phoneConn) {
+        s_phoneConn = false;
+        PhoneLink::onDisconnect();
+    }
+    s_advPhone = false;
+#endif
     // As conexoes morreram com o controlador; nenhum evento DISCONNECT vem.
     clearConnState();
     if (!s_connecting) s_isCentral = false;
@@ -817,6 +903,20 @@ bool CelerLink::ensureStarted() {
     ble_hs_cfg.reset_cb = onReset;
     int rc = ble_gatts_count_cfg(kSvcDefs);
     if (rc == 0) rc = ble_gatts_add_svcs(kSvcDefs);
+#if CONFIG_CELEROS_PHONE_LINK
+    // NUS do Phone Link na mesma tabela + seguranca: o celular pareia com
+    // codigo exibido no relogio (MITM) e o bond fica no NVS do NimBLE
+    if (rc == 0) rc = ble_gatts_count_cfg(PhoneLink::gattServices());
+    if (rc == 0) rc = ble_gatts_add_svcs(PhoneLink::gattServices());
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_DISP_ONLY;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_store_config_init();
+#endif
     if (rc != 0) {
         ESP_LOGE(TAG, "registro GATT falhou (rc=%d)", rc);
         s_initFail = true;
@@ -857,6 +957,9 @@ bool CelerLink::start(const char* name, bool requirePairing) {
     // como esta — o app chama start() uma vez, antes de conectar).
     s_pairRequired = requirePairing;
     s_wantAdvertise = true;
+    // App no Celer Link tem prioridade sobre o celular (1 conexao so): o
+    // Gadgetbridge reconecta quando o app sair (appReset re-anuncia)
+    if (s_phoneConn) dropConnection(K_DISC_WAIT_MS);
     // Nome novo so entra no ar reiniciando o advertising.
     if (rename && ble_gap_adv_active()) ble_gap_adv_stop();
     advRestart();
@@ -866,7 +969,19 @@ bool CelerLink::start(const char* name, bool requirePairing) {
 bool CelerLink::stop() {
     s_wantAdvertise = false;
     if (s_started && ble_gap_adv_active()) ble_gap_adv_stop();
+    if (s_started) advRestart();  // Phone Link volta ao ar (no-op sem ele)
     return true;
+}
+
+void CelerLink::refreshAdvertising() {
+    if (s_started) advRestart();
+}
+
+void CelerLink::dropPhone() {
+    if (!s_started) return;
+    if (s_advPhone && ble_gap_adv_active()) ble_gap_adv_stop();
+    s_advPhone = false;
+    if (s_phoneConn && s_connActive) ble_gap_terminate(s_conn, K_CONN_TERM);  // DISCONNECT limpa
 }
 
 bool CelerLink::listening() {
@@ -1205,13 +1320,15 @@ void CelerLink::appReset() {
     s_wantAdvertise = false;
     if (ble_gap_adv_active()) ble_gap_adv_stop();
     if (ble_gap_disc_active()) ble_gap_disc_cancel();
-    if (s_connActive) dropConnection(K_DISC_WAIT_MS);
+    // conexao do celular (Phone Link) sobrevive a saida do app
+    if (s_connActive && !s_phoneConn) dropConnection(K_DISC_WAIT_MS);
     s_isCentral = false;
-    clearConnState();
+    if (!s_phoneConn) clearConnState();
     s_pairRequired = true;   // padrao seguro: o proximo app decide no start()
     // O nome dado por um app (start("Celer-Dog")) nao vaza para o proximo.
     defaultName();
     ble_svc_gap_device_name_set(s_advName);
     s_rxDropped = 0;
     if (s_rxQueue != nullptr) xQueueReset(s_rxQueue);
+    advRestart();  // Phone Link volta ao ar (no-op sem ele)
 }

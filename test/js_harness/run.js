@@ -261,7 +261,7 @@ function makeEnv() {
         getAPILevel: function() { return 12; },
         getInfo: function() {
             return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true,
+                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', screenW: 240, screenH: 320,
                 totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
                 chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
@@ -297,6 +297,9 @@ function makeEnv() {
         relayState: function() { return 0; },
         relayCount: function() { return 0; },
         battery: function() { return 4100; },
+        setClip: function() {},
+        clearClip: function() {},
+        batteryInfo: function() { return { mv: 4100, pct: 85, charging: false, usb: false, full: false }; },
         micLevel: function() { return 12; },
         touchPad: function() { return 0; },
         print: function(s) { log.push('[print] ' + s); },
@@ -346,6 +349,38 @@ function makeEnv() {
         },
         clearAlarm: function() { env.__alarm = null; },
         getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; },
+        // API 15: agendador com 8 slots + timer (estado no env para os testes)
+        alarms: function() {
+            var out = [];
+            for (var i = 0; i < 8; i++) {
+                var a = env.__alarms[i];
+                if (a) out.push({ id: i, hour: a.hour, minute: a.minute, days: a.days || 0,
+                                  enabled: a.enabled !== false, label: a.label || '', next: 0 });
+            }
+            return out;
+        },
+        addAlarm: function(a) {
+            if (!a || a.hour < 0 || a.hour > 23 || a.minute < 0 || a.minute > 59) return -1;
+            for (var i = 1; i <= 8; i++) {
+                var id = i % 8;
+                if (!env.__alarms[id]) { env.__alarms[id] = JSON.parse(JSON.stringify(a)); return id; }
+            }
+            return -1;
+        },
+        updateAlarm: function(id, a) {
+            if (id < 0 || id > 7 || !a || a.hour < 0 || a.hour > 23) return false;
+            env.__alarms[id] = JSON.parse(JSON.stringify(a));
+            return true;
+        },
+        removeAlarm: function(id) { if (!env.__alarms[id]) return false; env.__alarms[id] = null; return true; },
+        setTimer: function(sec, label) {
+            if (!(sec > 0 && sec <= 86400)) return false;
+            env.__timer = { remaining: sec, label: label || '' };
+            return true;
+        },
+        getTimer: function() { return env.__timer ? { remaining: env.__timer.remaining, label: env.__timer.label } : null; },
+        cancelTimer: function() { env.__timer = null; },
+        unreadNotifications: function() { return 0; },
         // Onda 5: melodia + notificacoes
         playWav: function(p) { log.push('[wav] ' + p); return true; },
         playTone: function(seq) {
@@ -453,9 +488,23 @@ function makeEnv() {
     env.Sensors = {
         accel: function() { return { x: 0, y: 0, z: 1 }; },
         steps: function() { return 0; },
-        temp: function() { return 30; }
+        temp: function() { return 30; },
+        stepHistory: function() { return [{ date: 20261001, steps: 6543 }]; }
     };
     env.__storage = storageMap;
+    env.__alarms = [];
+    // Phone (API 15): celular do Gadgetbridge — host simula pareado
+    env.__phoneSent = [];
+    env.Phone = {
+        status: function() { return { enabled: true, connected: true, passkey: 0, name: 'Bangle.js ee0e' }; },
+        setEnabled: function() {},
+        forget: function() { env.__phoneSent.push('forget'); },
+        music: function(cmd) { env.__phoneSent.push('music:' + cmd); return true; },
+        musicInfo: function() { return { artist: 'Artista', track: 'Faixa', album: 'Disco', state: 'play' }; },
+        weather: function() { return { temp: 24.4, hum: 60, txt: 'Nublado', loc: 'Curitiba', age: 120 }; },
+        find: function(on) { env.__phoneSent.push('find:' + on); return true; }
+    };
+    env.__timer = null;
     env.setTimeout = function (fn, ms) { return timerAdd(fn, ms, false); };
     env.setInterval = function (fn, ms) { return timerAdd(fn, ms, true); };
     env.clearTimeout = timerDel;
@@ -468,10 +517,10 @@ function runApp(relPath, wire) {
     var env = makeEnv();
     wire && wire(env);
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
@@ -501,10 +550,10 @@ function joinLog(log) { return log.join('\n'); }
 
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
-    var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                           'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                           (env.__prelude || '') + '\n' + src);
-    fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
 }
 
@@ -872,10 +921,10 @@ function runInline(src, env) {
     env.__harness.pushLink(['{"ack":1}']);
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1322,10 +1371,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1346,10 +1395,10 @@ function holdFrames(x, y, n) {
     try {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
@@ -1372,10 +1421,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1399,10 +1448,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1440,10 +1489,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1466,10 +1515,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1527,6 +1576,49 @@ function holdFrames(x, y, n) {
 (function() {
     var r = runApp('data/apps/HTTP Demo/main.js');
     check('HTTP Demo roda', r.err === null, r.err || '');
+})();
+
+(function() {
+    // Watchface (API 15): 3 estilos — toque longo troca; complicacoes do env
+    var r = runApp('data/apps/Watchface/main.js', function(env) {
+        env.System.addAlarm({ hour: 7, minute: 30, days: 0 });
+        env.System.setTimer(90, 'cha');
+    });
+    check('Watchface roda', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('Watchface mostra bateria em %', j.indexOf('85%') >= 0);
+    check('Watchface mostra meta de passos', j.indexOf('/ 8000 passos') >= 0);
+    check('Watchface mostra timer', j.indexOf('Timer 1:30') >= 0);
+})();
+
+(function() {
+    // Apps do relogio (boards/waveshare-watch/data/apps, API 15)
+    var W = 'boards/waveshare-watch/data/apps/';
+    var r = runApp(W + 'Timer/main.js', function(env) { env.__harness.tap(120, 268); });
+    check('Timer roda', r.err === null, r.err || '');
+    check('Timer inicia contagem pelo agendador', r.env.__timer && r.env.__timer.remaining === 300);
+    r = runApp(W + 'Alarmes/main.js', function(env) {
+        env.System.addAlarm({ hour: 6, minute: 45, days: 62, label: 'Academia' });
+    });
+    check('Alarmes roda', r.err === null, r.err || '');
+    check('Alarmes lista o alarme', joinLog(r.log).indexOf('06:45') >= 0);
+    r = runApp(W + 'Atividade/main.js');
+    check('Atividade roda', r.err === null, r.err || '');
+    check('Atividade mostra meta', joinLog(r.log).indexOf('de 8000 passos') >= 0);
+    r = runApp(W + 'Musica/main.js', function(env) { env.__harness.tap(120, 178); });
+    check('Musica roda', r.err === null, r.err || '');
+    check('Musica manda playpause', r.env.__phoneSent.indexOf('music:playpause') >= 0);
+    r = runApp(W + 'Celular/main.js', function(env) {
+        env.__harness.tap(120, 230);   // achar celular
+        env.__harness.tap(120, 274);   // esquecer (1o toque arma)
+        env.__harness.tap(120, 274);   // confirma
+    });
+    check('Celular roda', r.err === null, r.err || '');
+    check('Celular acha o celular', r.env.__phoneSent.indexOf('find:true') >= 0);
+    check('Celular esquece com confirmacao', r.env.__phoneSent.indexOf('forget') >= 0);
+    r = runApp(W + 'Clima/main.js');
+    check('Clima roda', r.err === null, r.err || '');
+    check('Clima mostra temperatura', joinLog(r.log).indexOf('24 C') >= 0);
 })();
 
 // resumo

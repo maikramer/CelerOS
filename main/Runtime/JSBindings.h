@@ -287,6 +287,16 @@ private:
     static duk_ret_t js_linkPoll(duk_context *ctx);
     static duk_ret_t js_linkStatus(duk_context *ctx);
     static duk_ret_t js_linkVerify(duk_context *ctx);
-    static duk_ret_t js_linkUnpair(duk_context *ctx);};
+    static duk_ret_t js_linkUnpair(duk_context *ctx);
+
+    // Phone (API 15, CONFIG_CELEROS_PHONE_LINK): celular via Gadgetbridge
+    static duk_ret_t js_phoneStatus(duk_context *ctx);
+    static duk_ret_t js_phoneSetEnabled(duk_context *ctx);
+    static duk_ret_t js_phoneMusic(duk_context *ctx);
+    static duk_ret_t js_phoneMusicInfo(duk_context *ctx);
+    static duk_ret_t js_phoneWeather(duk_context *ctx);
+    static duk_ret_t js_phoneFind(duk_context *ctx);
+    static duk_ret_t js_phoneForget(duk_context *ctx);
+};
 
 #endif // JS_BINDINGS_H

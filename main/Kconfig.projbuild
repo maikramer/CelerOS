@@ -74,6 +74,16 @@ config CELEROS_SMARTDISPLAY_RELAYS
       alto-falante NS4168 por N reles expostos via System.relay(). Padrao 0
       mantem o alto-falante. Sem efeito nas outras placas.
 
+config CELEROS_PHONE_LINK
+    bool "Phone Link: notificacoes do celular via Gadgetbridge (Bangle.js)"
+    depends on CELEROS_BLUETOOTH
+    default n
+    help
+      Servico Nordic UART no host NimBLE do Celer Link falando o protocolo
+      Bangle.js do Gadgetbridge (Android): notificacoes, hora, musica,
+      clima e "encontrar". Exige BT_NIMBLE_NVS_PERSIST para guardar o bond
+      do celular. Ligado no watch (boards/waveshare-watch).
+
 config CELEROS_BLUETOOTH
     bool "Celer Link Bluetooth (BLE) para apps"
     depends on BT_ENABLED && BT_NIMBLE_ENABLED

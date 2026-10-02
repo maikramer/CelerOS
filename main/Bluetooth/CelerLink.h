@@ -58,6 +58,11 @@ public:
     // liga o gate de codigo (API 11; padrao desde a API 14); vale para as
     // conexoes seguintes.
     static bool start(const char* name, bool requirePairing = true);
+
+    // Phone Link (API 15): reavalia o advertising (sem app no Celer Link o
+    // relogio anuncia o NUS do Gadgetbridge) e derruba o celular.
+    static void refreshAdvertising();
+    static void dropPhone();
     static bool stop();
     static bool listening();
 

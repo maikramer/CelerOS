@@ -74,6 +74,9 @@ set(CELEROS_BT_REQUIRES)
 if(CONFIG_CELEROS_BLUETOOTH)
     list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Runtime/JsLink.cpp")
     list(APPEND CELEROS_BT_REQUIRES bt)
+    if(CONFIG_CELEROS_PHONE_LINK)
+        list(APPEND CELEROS_SRCS "Bluetooth/PhoneLink.cpp" "Runtime/JsPhone.cpp" "Launcher/PhoneScreens.cpp")
+    endif()
 endif()
 
 # ---- HAL de placas: exatamente um Boards/<placa>/Board.cpp entra no build,

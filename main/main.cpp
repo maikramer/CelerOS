@@ -21,6 +21,10 @@
 #include "Launcher/AlarmScreen.h"
 #include "Launcher/WatchPanels.h"
 #include "Hardware/PowerPolicy.h"
+#if CONFIG_CELEROS_PHONE_LINK
+#include "Bluetooth/PhoneLink.h"
+#include "Launcher/PhoneScreens.h"
+#endif
 #include "Kernel/Alarms.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
@@ -161,6 +165,9 @@ static void celerSetup() {
     // UI nova: launcher e a base da pilha do Navigator
     kui::Navigator::begin(tft);
     WatchPanels::init();  // gestos de borda do relogio (no-op nas outras placas)
+#if CONFIG_CELEROS_PHONE_LINK
+    PhoneLink::init();    // Gadgetbridge (Bangle.js) no ar se "phone_on"
+#endif
     kui::Navigator::push(&s_launcher);
     currentState = STATE_LAUNCHER;
 
@@ -244,6 +251,10 @@ static void celerLoop() {
     AlarmScreen::service();      // alarme/timer tocando: tela cheia por cima
     WatchPanels::service();      // painel pedido por gesto de borda dentro de app
     PowerPolicy::tick();         // locks de PM / WiFi ocioso (no-op sem PM)
+#if CONFIG_CELEROS_PHONE_LINK
+    PhoneLink::tick();           // linhas do Gadgetbridge (notificacoes, hora...)
+    PhoneScreens::service();     // codigo de pareamento / chamada em tela cheia
+#endif
     confirmPendingOta();
 
     delay(PowerPolicy::loopDelayMs());  // tela apagada: loop lento, CPU dorme
