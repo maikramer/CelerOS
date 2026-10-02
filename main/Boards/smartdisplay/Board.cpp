@@ -33,6 +33,7 @@ static const BoardProfile s_profile = {
     .lightSensorPin = -1,
     .i2s = {-1, -1, -1},
     .relay = {.count = CONFIG_CELEROS_SMARTDISPLAY_RELAYS, .pins = {40, 2, 1}},  // L1, L2, L3
+    .gpioDeniedMask = 0x3E0000000ULL | (1ULL << 43) | (1ULL << 44) | (1ULL << 19) | (1ULL << 45),  // 33..37: DQ4..7/DQS da PSRAM octal (N16R8); 43/44: UART0 (console/celerctl + conector); 19/45: I2C do touch GT911
 };
 #else
 static const BoardProfile s_profile = {
@@ -52,6 +53,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},  // variante sem rele (padrao)
+    .gpioDeniedMask = 0x3E0000000ULL | (1ULL << 43) | (1ULL << 44) | (1ULL << 19) | (1ULL << 45),  // 33..37: DQ4..7/DQS da PSRAM octal (N16R8); 43/44: UART0 (console/celerctl + conector); 19/45: I2C do touch GT911
 };
 #endif
 

@@ -61,6 +61,7 @@ static const BoardProfile s_profile = {
     .pmuKeyPoll = Axp2101::pollPowerKey,  // PWR fisico do watch (via PMU)
     .screenInset = 40,   // cantos arredondados: afasta relogio/X da zona morta
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
+    .gpioDeniedMask = 0x3E0000000ULL | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8); 43/44: UART0 do SerialLink
 };
 
 void init() {

@@ -38,6 +38,7 @@ static const BoardProfile s_profile = {
     .batteryScalePct = 200,  // System.battery() devolve a tensao da celula
     .touchPad = 10,    // pad capacitivo: 1 toque = tap, segurar = hold
     .homeApp = "celeros.dogface",  // a cara do cao e a casa do robô
+    .gpioDeniedMask = 0x3E0000000ULL,  // GPIO33..37: DQ4..7/DQS da PSRAM octal (S3R8)
 };
 
 void init() {

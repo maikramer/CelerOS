@@ -3,6 +3,7 @@
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
+#include "../Boards/Board.h"
 #include "../WebManager/WebManager.h"
 #include "../WebManager/WebAuth.h"
 #include "../Kernel/TimeManager.h"
@@ -21,48 +22,73 @@
 #include "JsInternal.h"
 #include "../Hardware/BoardIO.h"
 #include "esp_task_wdt.h"
+#include "driver/gpio.h"
+#include "esp_private/esp_gpio_reserve.h"
 
 // =====================================================
 // GPIO Bindings
 // =====================================================
 
+// Pino invalido ou reservado pelo sistema (flash/PSRAM — o IDF reserva no
+// boot): RangeError legivel. Antes pinMode(-1) era shift indefinido e
+// mexer num pino da flash/PSRAM derrubava o aparelho.
+static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
+    int pin = duk_require_int(ctx, idx);
+    const bool valid = output ? GPIO_IS_VALID_OUTPUT_GPIO(pin) : GPIO_IS_VALID_GPIO(pin);
+    // gpioDeniedMask do perfil cobre o que o esp_gpio_is_reserved nao sabe
+    // (linhas DQ4..7/DQS da PSRAM octal do S3: um PWM ali corrompe o heap
+    // que vive na PSRAM). Guarda do shift: pin fora de 0..63 e UB.
+    if (!valid || pin < 0 || pin >= 64 || esp_gpio_is_reserved(1ULL << pin) ||
+        (Board::profile().gpioDeniedMask & (1ULL << pin))) {
+        // Mensagem PRE-FORMATADA e duk_error SEM argumentos de conversao:
+        // throw com %d a partir de um lightfunc corrompe o heap do runtime
+        // (repro: try{pinMode(99,OUT)}catch(e){} derrubava o aparelho;
+        // throws sem args e os das macros duk_require_* sao estaveis —
+        // bancada 2026-10-02, ver memoria celeros-bancada-proto2)
+        char msg[64];
+        snprintf(msg, sizeof(msg), "GPIO %d invalido ou reservado pelo sistema", pin);
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+    }
+    return pin;
+}
+
 duk_ret_t JSBindings::js_pinMode(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, false);
     int mode = duk_require_int(ctx, 1);
     pinMode(pin, mode);
     return 0;
 }
 
 duk_ret_t JSBindings::js_digitalWrite(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, true);
     int val = duk_require_int(ctx, 1);
     digitalWrite(pin, val);
     return 0;
 }
 
 duk_ret_t JSBindings::js_digitalRead(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, false);
     int val = digitalRead(pin);
     duk_push_int(ctx, val);
     return 1;
 }
 
 duk_ret_t JSBindings::js_analogRead(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, false);
     int val = analogRead(pin);
     duk_push_int(ctx, val);
     return 1;
 }
 
 duk_ret_t JSBindings::js_analogWrite(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, true);
     int val = duk_require_int(ctx, 1);
     analogWrite(pin, val);
     return 0;
 }
 
 duk_ret_t JSBindings::js_pulseIn(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, false);
     int state = duk_require_int(ctx, 1);
     unsigned long timeout = 1000000L; // default 1 second timeout
     // lightfunc: arg omitido chega como undefined (duk_get_top e sempre 3 —
@@ -86,7 +112,7 @@ duk_ret_t JSBindings::js_pulseIn(duk_context *ctx) {
 // System.gpio.servo(pin, angulo) -> bool. Angulo 0..180 vira pulso de
 // 500..2500 us (convencao 9g/SG90); aceita fracao (rampas suaves).
 duk_ret_t JSBindings::js_servo(duk_context *ctx) {
-    int pin = duk_require_int(ctx, 0);
+    int pin = requirePin(ctx, 0, true);
     double angle = duk_require_number(ctx, 1);
     if (!(angle >= 0)) angle = 0;  // NaN tambem
     if (angle > 180) angle = 180;

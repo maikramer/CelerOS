@@ -127,6 +127,12 @@ struct BoardProfile {
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;
+    // GPIOs que o requirePin recusa alem dos strapping/USB (esp_gpio_is_reserved
+    // nao conhece o modo da PSRAM nem o console): no ESP32-S3 com PSRAM OCTAL
+    // (modulo N16R8, ex. 4848S040) GPIO33..37 sao as linhas DQ4..7/DQS — um PWM
+    // ali corrompe a PSRAM (onde vive o heap do runtime JS); os pinos da UART0
+    // (43/44 no S3, 1/3 no ESP32) matam o console/celerctl. Bit n = GPIO n.
+    uint64_t gpioDeniedMask = 0;
 };
 
 // Display concreto da placa (BoardDisplay, de Boards/<placa>/BoardDisplay.h).
