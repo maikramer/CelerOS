@@ -126,8 +126,14 @@ private:
 
 // Ponte sincrona: exibe o teclado modal e devolve o texto digitado
 // (string vazia se cancelado ou confirmado vazio). hint: 'n' = numerico.
+// tick (opcional) roda a cada volta do loop modal — quem chama bombeia o
+// que o loop nao conhece (botoes, estados de tela, captura); devolver
+// false aborta o teclado como cancelado.
+// cancelled (opcional) = true quando o usuario fechou no X (ou o tick
+// abortou) — distingue de "confirmou vazio".
 std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen = 64,
-                      bool mask = false, char hint = 0);
+                      bool mask = false, char hint = 0, const std::function<bool()>& tick = nullptr,
+                      bool* cancelled = nullptr);
 
 }  // namespace kui
 

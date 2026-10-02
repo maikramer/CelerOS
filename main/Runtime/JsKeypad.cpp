@@ -20,6 +20,9 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include <cstring>
 #include "JsInternal.h"
+#include "../Hardware/Buttons.h"
+#include "../Display/ScreenPower.h"
+#include "../Display/ScreenCapture.h"
 
 // =====================================================
 // Keyboard Bindings
@@ -56,12 +59,42 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
         duk_pop(ctx);
     }
     char hint = parseHint(ctx, 2);  // API 11: {hint:"num"}
+    // API 14: {nullOnCancel:true} — cancelar (X) devolve null em vez de ""
+    // (o "" de sempre nao distingue cancelar de confirmar vazio; opt-in para
+    // nao quebrar apps que fazem .length no resultado)
+    bool nullOnCancel = false;
+    if (duk_is_object(ctx, 2)) {
+        if (duk_get_prop_string(ctx, 2, "nullOnCancel") && duk_is_boolean(ctx, -1)) {
+            nullOnCancel = duk_get_boolean(ctx, -1) != 0;
+        }
+        duk_pop(ctx);
+    }
 
     present();
-    std::string result = kui::getString(initialText, promptMsg, 64, mask, hint);
+    // O loop modal e do kui: sem este tick, enquanto o teclado estava aberto
+    // o "exit" remoto era ignorado e os botoes/estados de tela do watch e a
+    // captura de tela paravam. Timers JS NAO rodam aqui (um erro de callback
+    // atravessaria o loop C++ do teclado) — retomam no proximo present.
+    bool exitReq = false;
+    bool cancelled = false;
+    std::string result = kui::getString(initialText, promptMsg, 64, mask, hint, [&exitReq]() {
+        Buttons::tick(true);
+        ScreenPower::tick(true);
+        ScreenCapture::service();
+        if (s_appExitPending || LauncherUI::consumeAppExitRequest()) {
+            exitReq = true;
+            return false;
+        }
+        return true;
+    }, &cancelled);
     // o teclado desenhou direto no display: o proximo present repoe o app
     s_frameDirty = true;
+    if (exitReq) throwAppExit(ctx);
 
+    if (cancelled && nullOnCancel) {
+        duk_push_null(ctx);
+        return 1;
+    }
     duk_push_string(ctx, result.c_str());
 
     return 1;

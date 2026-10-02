@@ -590,7 +590,7 @@ void KeyboardScreen::onTick(uint32_t dtMs) {
 // ============================================================ getString =====
 
 std::string getString(const std::string& initialText, const std::string& promptMsg, int maxLen, bool mask,
-                      char hint) {
+                      char hint, const std::function<bool()>& tick, bool* cancelled) {
     KeyboardScreen kb(promptMsg, initialText, maxLen);
     kb.setMask(mask);
     kb.setHint(hint);
@@ -610,6 +610,7 @@ std::string getString(const std::string& initialText, const std::string& promptM
     TouchPump pump;
     while (!done) {
         esp_task_wdt_reset();  // digitacao pode levar mais que o WDT (15s)
+        if (tick && !tick()) break;  // quem chamou pediu para encerrar (cancelado)
         pump.poll([&](const TouchEvent& ev) {
             kb.onTouch(ev);
             if (ev.type != TouchEvent::Drag) kb.markDirty();  // tecla "afunda"
@@ -618,6 +619,7 @@ std::string getString(const std::string& initialText, const std::string& promptM
         if (kb.consumeDirty()) canvas.render([&](Canvas& c) { kb.draw(c); });
         delay(5);
     }
+    if (cancelled) *cancelled = !ok;  // X, ou o tick abortou (done fica false)
     return ok ? result : std::string();
 }
 
