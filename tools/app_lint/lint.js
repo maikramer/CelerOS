@@ -778,6 +778,11 @@ function lintAppJson(dir, manifest) {
     else for (const pm of app.permissions) {
       if (VALID_PERMS.indexOf(pm) < 0) d('erro', 'appjson', 'permissao desconhecida: "' + pm + '" (validas: ' + VALID_PERMS.join(', ') + ')');
     }
+  } else {
+    // O firmware trata manifest sem permissions como PERM_ALL (compat) e o
+    // consentimento pede as 4 capabilities de uma vez: declarar o minimo
+    // encolhe o dialogo e a superficie concedida.
+    d('aviso', 'appjson', 'sem campo permissions: o firmware concede TODAS (fs/net/gpio/system) e o dialogo de consentimento pede as 4 — declare o minimo necessario');
   }
 
   const entry = typeof app.main === 'string' && app.main ? app.main : 'main.js';
