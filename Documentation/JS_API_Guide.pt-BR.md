@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 13
+### API Level: 15
 ### Nível de API: 13
 ---
 
@@ -1529,3 +1529,130 @@ fecha (antes o primeiro "vencia" antes de ser desenhado).
 ### 20.5 `FS.listDir` sem limite
 
 Devolve todas as entradas (antes cortava em 128 em silêncio).
+
+## 21. Nível de API 15 — Experiência de relógio: bateria, geometria da tela, histórico de passos
+
+Chegou com o trabalho do smartwatch (placa `waveshare-watch`); todas as
+chamadas degradam sem erro nas outras placas.
+
+### 21.1 `System.batteryInfo()` (API 15)
+
+- **Retorna:** `Object` -> `{ mv, pct, charging, usb, full }`, ou `null`
+  quando a placa não lê bateria.
+  - `mv`: tensão da célula (mesmo valor de `System.battery()`).
+  - `pct`: 0..100. Vem do fuel gauge do PMU (AXP2101 do relógio) ou é
+    estimado pela curva de descarga LiPo sobre `mv` nas placas com divisor
+    simples. `-1` se desconhecido.
+  - `charging` / `usb` / `full`: estado de carga; sempre `false` em placas
+    sem PMU.
+- **Descrição:** o firmware guarda em cache por ~2 s; pode chamar uma vez
+  por quadro.
+
+### 21.2 Campos novos em `System.getInfo()`
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `hasBattery` | Boolean | `System.batteryInfo()` devolve dados |
+| `board` | String | id do perfil da placa (ex.: `"waveshare-amoled206"`) |
+| `inset` | Integer | margem segura em px **virtuais** (espaço de 240 de largura) para manter o conteúdo longe dos cantos arredondados do vidro; `0` em tela retangular |
+| `shape` | String | `"rounded"` (vidro de cantos arredondados) ou `"rect"` |
+
+### 21.3 `Sensors.stepHistory()` (API 15)
+
+- **Retorna:** `Array` de `{ date, steps }` dos últimos dias fechados (até 7,
+  o mais recente primeiro). `date` é um inteiro `aaaammdd`. Vazio sem IMU ou
+  antes da primeira meia-noite.
+- **Descrição:** o pedômetro agora vira o dia à meia-noite com o relógio
+  ligado (antes, só no boot) e arquiva o dia encerrado.
+
+### 21.4 Comportamento do app casa
+
+Nas placas com app casa (relógio: o watchface), o botão BOOT na raiz do
+launcher abre a casa, e o launcher volta para ela depois de `home_idle_s`
+segundos ocioso (ajuste de sistema, padrão 30, `0` desliga).
+
+### 21.5 Alarmes múltiplos e timer
+
+#### `System.alarms()` / `System.addAlarm(alarm)` / `System.updateAlarm(id, alarm)` / `System.removeAlarm(id)` (API 15)
+
+#### `System.setTimer(seconds, label)` / `System.getTimer()` / `System.cancelTimer()` (API 15)
+
+Os alarmes agora vivem num agendador do sistema persistido no NVS (sobrevivem
+a reboot e deep sleep — o relógio acorda por timer para o próximo evento).
+Quando um dispara, o app aberto é fechado e uma tela de alarme em tela cheia
+toca (funciona com a tela apagada ou em AOD) com **Soneca 5 min** / **Parar**;
+sem resposta por 2 minutos, entra em soneca sozinho.
+
+| Chamada | Retorna | Notas |
+|---|---|---|
+| `System.alarms()` | `Array` de `{ id, hour, minute, days, enabled, label, next }` | `days` = máscara, bit0 domingo .. bit6 sábado, `0` = uma vez (desliga sozinho depois de tocar). `next` = epoch em segundos do próximo toque, `0` quando desligado |
+| `System.addAlarm({hour, minute, days?, enabled?, label?})` | `id` ou `-1` | até 8 alarmes; rótulo até 40 caracteres |
+| `System.updateAlarm(id, {...})` | `Boolean` | substitui o alarme daquele slot |
+| `System.removeAlarm(id)` | `Boolean` | |
+| `System.setTimer(segundos, rotulo?)` | `Boolean` | uma contagem regressiva (1..86400 s), roda em segundo plano, substitui a atual |
+| `System.getTimer()` | `{ remaining, label }` ou `null` | |
+| `System.cancelTimer()` | — | |
+
+`System.setAlarm/getAlarm/clearAlarm` (API 12) continuam funcionando: mapeiam
+para o slot `0` como alarme de uma vez, agora persistente.
+
+### 21.6 `System.unreadNotifications()` (API 15)
+
+- **Retorna:** `Integer` — notificações não lidas (sem permissão; o conteúdo
+  continua exigindo `"system"` via `System.notifications()`). Viram lidas
+  quando o usuário abre a central de notificações (relógio: arrastar para
+  cima a partir da borda de baixo).
+
+`System.getInfo()` também ganha `screenW` / `screenH`: o tamanho físico do
+vidro, para apps que desenham geometria (ex.: ponteiros analógicos) e
+precisam compensar a escala não uniforme do 240x320.
+
+### 21.7 `Phone` — o celular pareado (Gadgetbridge)
+
+Só existe nas placas compiladas com `CONFIG_CELEROS_PHONE_LINK` (o relógio):
+teste com `typeof Phone !== "undefined"`. O relógio aparece no
+**Gadgetbridge** (Android) como um **Bangle.js**; o pareamento pede o código
+de 6 dígitos mostrado no relógio. As notificações do celular caem na central
+de notificações do sistema, a hora é ajustada pelo celular e as chamadas
+abaixo expõem o resto.
+
+#### `Phone.status()` (API 15)
+
+- **Retorna:** `{ enabled, connected, passkey, name }` — `passkey` é o
+  código de pareamento na tela agora (`0` quando não há); `name` é o nome
+  Bluetooth que o celular vê (`Bangle.js xxxx`).
+
+#### `Phone.forget()` (API 15)
+
+- Apaga o pareamento (bonds do NimBLE) e derruba o celular; esqueça o
+  relógio no Android também antes de parear de novo. Exige `"system"`.
+
+O sistema cuida do resto sem código de app: código de pareamento em tela
+cheia, tela de chamada recebida (Recusar/Atender voltam ao celular),
+notificação dispensada no relógio some no celular, a versão do firmware
+aparece no Gadgetbridge, e bateria/passos são enviados quando mudam ou
+quando o Gadgetbridge pede. O texto do Android é reduzido ao que as fontes
+desenham (emoji some, aspas/travessões tipográficos viram ASCII).
+
+#### `Phone.music(cmd)` / `Phone.musicInfo()` (API 15)
+
+- `cmd`: `"play"`, `"pause"`, `"playpause"`, `"next"`, `"previous"`,
+  `"volumeup"`, `"volumedown"`. Retorna `false` sem conexão.
+- `musicInfo()` → `{ artist, track, album, state }` ou `null` antes de o
+  celular mandar algo.
+
+#### `Phone.weather()` (API 15)
+
+- **Retorna:** `{ temp, hum, txt, loc, age }` (temp em °C, `age` em segundos
+  desde que o celular mandou; guardado entre reboots) ou `null`.
+
+#### `Phone.find(on)` (API 15)
+
+- Faz o celular tocar (`true`) ou parar (`false`). O celular também pode
+  fazer o relógio bipar ("encontrar dispositivo" no Gadgetbridge); um toque
+  para.
+
+#### `Phone.setEnabled(on)` (API 15)
+
+- Liga/desliga o link com o celular (persistido). Exige `"system"`; o painel
+  de ajustes rápidos tem o mesmo botão.

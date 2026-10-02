@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 13
+### API Level: 15
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1260,3 +1260,129 @@ first one used to "expire" before it was ever drawn).
 ### 20.5 `FS.listDir` without a cap
 
 Returns every entry (it used to silently stop at 128).
+
+## 21. API Level 15 — Watch experience: battery, screen geometry, step history
+
+Added with the smartwatch work (board `waveshare-watch`); every call
+degrades gracefully on other boards.
+
+### 21.1 `System.batteryInfo()` (API 15)
+
+- **Returns:** `Object` -> `{ mv, pct, charging, usb, full }`, or `null` when
+  the board has no battery reading.
+  - `mv`: cell voltage (same value as `System.battery()`).
+  - `pct`: 0..100. From the PMU fuel gauge (watch AXP2101) or estimated
+    from a LiPo discharge curve over `mv` on boards with a plain divider.
+    `-1` if unknown.
+  - `charging` / `usb` / `full`: charge state; always `false` on boards
+    without a PMU.
+- **Description:** cached for ~2 s by the firmware, cheap to call once per
+  frame.
+
+### 21.2 `System.getInfo()` new fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hasBattery` | Boolean | `System.batteryInfo()` returns data |
+| `board` | String | board profile id (e.g. `"waveshare-amoled206"`) |
+| `inset` | Integer | safe margin in **virtual** px (240-wide space) to keep content off the rounded glass corners; `0` on rectangular screens |
+| `shape` | String | `"rounded"` (rounded-corner glass) or `"rect"` |
+
+### 21.3 `Sensors.stepHistory()` (API 15)
+
+- **Returns:** `Array` of `{ date, steps }` for the last closed days (up to 7,
+  most recent first). `date` is an integer `yyyymmdd`. Empty array without
+  an IMU or before the first midnight.
+- **Description:** the pedometer now rolls over at midnight while the watch
+  is running (before, only on boot) and archives the finished day.
+
+### 21.4 Home app behavior
+
+On boards with a home app (watch: the watchface) the BOOT button at the
+launcher root opens it, and the launcher returns to it after
+`home_idle_s` seconds idle (system setting, default 30, `0` disables).
+
+### 21.5 Multiple alarms and timer
+
+#### `System.alarms()` / `System.addAlarm(alarm)` / `System.updateAlarm(id, alarm)` / `System.removeAlarm(id)` (API 15)
+
+#### `System.setTimer(seconds, label)` / `System.getTimer()` / `System.cancelTimer()` (API 15)
+
+Alarms now live in a system scheduler persisted in NVS (survive reboot and
+deep sleep — the watch wakes up by timer for the next event). When one
+fires, any open app is closed and a full-screen alarm screen rings (works
+with the screen off or in AOD) with **Snooze 5 min** / **Stop**; no answer
+for 2 minutes snoozes automatically.
+
+| Call | Returns | Notes |
+|---|---|---|
+| `System.alarms()` | `Array` of `{ id, hour, minute, days, enabled, label, next }` | `days` = bitmask, bit0 Sunday .. bit6 Saturday, `0` = once (disables itself after ringing). `next` = epoch seconds of the next ring, `0` when off |
+| `System.addAlarm({hour, minute, days?, enabled?, label?})` | `id` or `-1` | up to 8 alarms; label up to 40 chars |
+| `System.updateAlarm(id, {...})` | `Boolean` | replaces the alarm in that slot |
+| `System.removeAlarm(id)` | `Boolean` | |
+| `System.setTimer(seconds, label?)` | `Boolean` | one countdown (1..86400 s), runs in background, replaces the current one |
+| `System.getTimer()` | `{ remaining, label }` or `null` | |
+| `System.cancelTimer()` | — | |
+
+`System.setAlarm/getAlarm/clearAlarm` (API 12) keep working: they map to
+slot `0` as a one-time alarm, now persistent.
+
+### 21.6 `System.unreadNotifications()` (API 15)
+
+- **Returns:** `Integer` — unread notifications (no permission needed; the
+  content itself still requires `"system"` via `System.notifications()`).
+  Notifications are marked read when the user opens the notification
+  center (watch: swipe up from the bottom edge).
+
+`System.getInfo()` also gains `screenW` / `screenH`: the physical glass size,
+for apps drawing geometry (e.g. analog hands) that must compensate the
+non-uniform 240x320 scaling.
+
+### 21.7 `Phone` — the paired phone (Gadgetbridge)
+
+Exists only on boards built with `CONFIG_CELEROS_PHONE_LINK` (the watch):
+feature-detect with `typeof Phone !== "undefined"`. The watch shows up in
+**Gadgetbridge** (Android) as a **Bangle.js**; pairing asks for the 6-digit
+code shown on the watch. Phone notifications land in the system
+notification center, the clock is set from the phone, and the calls below
+expose the rest.
+
+#### `Phone.status()` (API 15)
+
+- **Returns:** `{ enabled, connected, passkey, name }` — `passkey` is the
+  pairing code on screen right now (`0` when none); `name` is the Bluetooth
+  name the phone sees (`Bangle.js xxxx`).
+
+#### `Phone.forget()` (API 15)
+
+- Erases the pairing (NimBLE bonds) and drops the phone; forget the watch
+  on Android too before pairing again. Requires `"system"`.
+
+The system handles the rest without app code: a full-screen pairing code,
+an incoming-call screen (Decline/Answer go back to the phone), notifications
+dismissed on the watch disappear on the phone, the firmware version shows
+in Gadgetbridge, and battery/steps are reported when they change or when
+Gadgetbridge asks. Android text is reduced to what the fonts draw (emoji
+dropped, typographic quotes/dashes turned into ASCII).
+
+#### `Phone.music(cmd)` / `Phone.musicInfo()` (API 15)
+
+- `cmd`: `"play"`, `"pause"`, `"playpause"`, `"next"`, `"previous"`,
+  `"volumeup"`, `"volumedown"`. Returns `false` when not connected.
+- `musicInfo()` → `{ artist, track, album, state }` or `null` before the
+  phone sends anything.
+
+#### `Phone.weather()` (API 15)
+
+- **Returns:** `{ temp, hum, txt, loc, age }` (temp in °C, `age` in seconds
+  since the phone sent it; cached across reboots) or `null`.
+
+#### `Phone.find(on)` (API 15)
+
+- Makes the phone ring (`true`) or stop (`false`). The phone can also make
+  the watch beep ("find device" in Gadgetbridge); a touch stops it.
+
+#### `Phone.setEnabled(on)` (API 15)
+
+- Turns the phone link on/off (persisted). Requires `"system"`; the quick
+  settings panel has the same toggle.

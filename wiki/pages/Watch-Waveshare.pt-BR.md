@@ -3,7 +3,7 @@
 [English](/maikramer/CelerOS/wiki/Waveshare-Watch) | **Português (BR)**
 
 O primeiro wearable do CelerOS: o **Waveshare ESP32-S3-Touch-AMOLED-2.06**
-(id de board `waveshare-amoled206`), um smartwatch redondo de AMOLED 2.06"
+(id de board `waveshare-amoled206`), um smartwatch de AMOLED 2.06" com vidro retangular de cantos arredondados,
 sobre o ESP32-S3R8 — 32 MB de flash, 8 MB de PSRAM embutida, um PMU de
 hardware e um bom conjunto de sensores atrás do vidro. O mapa de pinos e as
 sequências de init do painel foram portados do firmware Rust
@@ -25,7 +25,7 @@ parede, passos, bateria) é a tela inicial; swipe pra cima abre o launcher.*
 | SoC | **ESP32-S3R8** — LX7 dual-core, 8 MB PSRAM octal **embutida** |
 | Flash | 32 MB, DIO @ 80 MHz — espaço de sobra, firmware compila com `-O2` |
 | USB | USB-Serial/JTAG nativo: console, esptool **e** `celerctl` (CDC dupla) no único conector USB |
-| Display | AMOLED redondo 2.06" 410x502, **CO5300 via QSPI** a 80 MHz (vidro visível no offset de coluna 22) |
+| Display | AMOLED 2.06" 410x502 (retangular, cantos arredondados), **CO5300 via QSPI** a 80 MHz (vidro visível no offset de coluna 22) |
 | Toque | FT3168 capacitivo no I²C |
 | PMU | AXP2101 — trilhos do display, medição de bateria e a tecla física de power (PEK) |
 | Sensores | IMU QMI8658 (pedômetro, raise-to-wake), RTC PCF85063, codec de áudio ES8311 — todos no mesmo barramento I²C0 |
@@ -42,26 +42,65 @@ parede, passos, bateria) é a tela inicial; swipe pra cima abre o launcher.*
 | Microfone — ADC do ES8311 | **ASDOUT 42** | I²S1 RX slave nos clocks do codec |
 | microSD — SPI3 | **CS 17, SCK 2, MOSI 1, MISO 3** | montado em `/sd` |
 | Botão BOOT | **0** | curto = home/encerra app, segurar = screenshot |
-| Tecla de power | via **PEK do AXP2101** | poll pelo ScreenPower; acorda do deep sleep |
+| Tecla de power | via **PEK do AXP2101** | poll pelo ScreenPower (curto = acende, segurar = deep sleep). O IRQ do PMU não chega a um GPIO: **não** acorda do deep sleep — o BOOT acorda |
+| INT1 do IMU | **21** | ativo-baixo; acorda do deep sleep com movimento se o ajuste `imu_wake` estiver ligado |
 
 O GPIO10 **não** é botão nesta HW: lê LOW com pull-up (armadilha herdada da
 família da placa do cachorro).
 
 ## A experiência de watch
 
-* O `homeApp` do perfil é o app **Watchface** (`celeros.watchface`): o
-  mostrador do relógio **é** a tela inicial; swipe pra cima abre o launcher.
-  O `screenInset` afasta relógio e botões X dos cantos arredondados.
-* **Escada de energia da tela** (ScreenPower): pleno → **dim** após 8 s →
-  **AOD** aos 15 s (mostrador de baixa frequência com deslocamento anti
-  burn-in, painel em SLPIN) → off → **deep sleep**, acordando por EXT1 nos
-  botões. Levantar o pulso acende um "glance" AOD pelo IMU.
-* A hora sobrevive a reboot sem rede (PCF85063 — gravado após sincronizar
-  NTP ou ajuste manual), a contagem de passos do dia vai para o NVS antes de
-  dormir, e a bateria vem do AXP2101 no `System.battery()`.
-* Superfície JS específica do watch: `Sensors.accel()/steps()/temp()` e
-  `System.setVolume()/getVolume()` (ambos API nível 13), além do
-  `System.micLevel()` pelo ES8311.
+* **Casa:** o `homeApp` do perfil é o **Watchface** (`celeros.watchface`).
+  O BOOT na raiz do launcher abre o mostrador e o launcher volta para ele
+  após `home_idle_s` segundos ocioso (padrão 30). O mostrador tem três
+  estilos — digital, analógico, mínimo — trocados com toque longo, e mostra
+  bateria em %, passos x meta, próximo alarme, timer rodando, não lidas e o
+  clima do celular.
+* **Gestos de borda** (`BoardProfile::watchGestures`): da borda de cima,
+  puxe para baixo os **ajustes rápidos** (brilho, volume, WiFi, Não
+  perturbe, levantar o pulso, sempre ligada, lanterna, ajustes, celular,
+  achar celular); da borda de baixo, puxe para cima a **central de
+  notificações** (toque expande, deslize de lado apaga, limpar tudo); da
+  borda esquerda, deslize para a direita para sair do app. Painel aberto a
+  partir do mostrador volta para ele.
+* **Launcher** em lista vertical (`launcherList`), com bateria em % e
+  carregando na barra de status.
+* **Escada de tela** (ScreenPower): pleno → **dim** em 8 s → **AOD** em
+  15 s no mostrador (face 1x por minuto com deslocamento anti burn-in,
+  bateria em % e a última notificação não lida; o painel segue acordado em
+  brilho baixo) → off (painel em SLPIN) → **deep sleep** segurando a tecla
+  de power. Levantar o pulso acende a tela no brilho normal; uma
+  notificação nova acende um "glance" de AOD.
+* **Energia** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle
+  — 240 MHz com a tela acesa, DFS até 40 MHz e light sleep automático com
+  ela dim/apagada (não com o USB plugado, para o `celerctl` seguir vivo). O
+  WiFi ocioso desliga após `wifi_sleep_min` minutos de tela apagada
+  (padrão 10) e volta quando ela acende.
+* **Alarmes e timer** vivem no agendador do sistema (`Kernel/Alarms`, NVS):
+  até 8 alarmes com dias da semana e um timer. Tocam em tela cheia mesmo
+  com a tela apagada ou em AOD, soneca de 5 min, e o relógio acorda do deep
+  sleep por timer para o próximo evento.
+* **Celular** (`CONFIG_CELEROS_PHONE_LINK`): adicione o relógio no
+  **Gadgetbridge** (Android) como **Bangle.js** e digite o código de 6
+  dígitos que aparece no relógio. As notificações do celular caem na
+  central (com glance + bipe, exceto em Não perturbe), hora e fuso vêm do
+  celular, e controle de música, clima e "encontrar dispositivo" funcionam
+  nos dois sentidos. O relógio informa bateria e passos.
+* **Ajustes → Relógio** expõe levantar o pulso, sensibilidade, duração do
+  glance, sempre ligada, tempo de tela, volta ao mostrador, meta de passos,
+  WiFi ocioso e acordar por movimento.
+* **Apps do relógio** (`boards/waveshare-watch/data/apps`): Alarmes, Timer,
+  Atividade (passos, meta, últimos 7 dias), Música e Clima.
+  `boards/waveshare-watch/data-exclude.txt` tira Terminal, HTTP Demo, Touch
+  Test e Web Server do relógio.
+* A hora sobrevive a reboot sem rede (PCF85063 — gravado após NTP,
+  celular ou ajuste manual). O pedômetro vira o dia à meia-noite e guarda 7
+  dias fechados.
+* Superfície JS do relógio: API 13 `Sensors.*`,
+  `System.setVolume()/getVolume()`, `System.micLevel()`; API 15
+  `System.batteryInfo()`, `getInfo().inset/shape/board/screenW/screenH`,
+  `Sensors.stepHistory()`, alarmes/timer, `System.unreadNotifications()` e o
+  objeto `Phone`.
 
 ## Armadilhas conhecidas
 
@@ -95,8 +134,13 @@ família da placa do cachorro).
   hardware: display + toque, RTC, bateria, IMU (pedômetro +
   raise-to-wake), escada de tela com AOD e deep sleep, beep + microfone
   pelo ES8311, volume, Celer Link BLE e `celerctl` pelo USB nativo.
-* **[em andamento]** Monitoramento de movimento por ULP-RISC-V durante o
-  deep sleep (raise-to-wake sem os núcleos principais).
+* **[feito, falta validar no hardware]** Experiência de relógio da API 15:
+  fuel gauge, gestos de borda + ajustes rápidos + central de notificações,
+  launcher em lista, alarmes/timer persistentes, PM + light sleep, celular
+  via Gadgetbridge, apps do relógio e a página Relógio nos Ajustes.
+* **[a fazer]** Medir o consumo em AOD / tela apagada com o PM ligado, e
+  monitoramento de movimento por ULP-RISC-V durante o deep sleep
+  (raise-to-wake sem os núcleos principais).
 
 Restaurar o firmware original da Waveshare é uma gravação comum do esptool
 pela mesma USB — o flash do CelerOS nunca toca no bootloader.

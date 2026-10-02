@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 14 — 185 funcoes.
+// API level 15 — 202 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -141,6 +141,7 @@ declare const System: {
     beep(arg0: number, arg1: number): any;
     /** leitura media de ADC com cache de ~2 s. No cão robótico SpotPear lê o divisor 2:1 da Li-ion no GPIO2 (~4100 mV na USB, ~3300 mV = vazia). (API 10) */
     battery(): any;
+    batteryInfo(): any;
     /** bloqueante curto (~100 ms); o desenho pendente aparece antes. A primeira chamada inicializa o canal RX (~300 ms). (API 10) */
     micLevel(): any;
     /** pad capacitivo avulso (a "cabeca" do cao robotico). A referencia e calibrada na primeira chamada — mantenha o pad solto nesse instante. (API 10) */
@@ -156,6 +157,14 @@ declare const System: {
     setAlarm(arg0: number, arg1: number, arg2?: number): any;
     clearAlarm(): void;
     getAlarm(): any;
+    alarms(): any;
+    addAlarm(arg0?: number): any;
+    updateAlarm(arg0: number, arg1?: number): any;
+    removeAlarm(arg0: number): any;
+    setTimer(seconds: number, label?: string): any;
+    getTimer(): any;
+    cancelTimer(): void;
+    unreadNotifications(): any;
     playTone(arg0?: number): any;
     playWav(arg0: number): any;
     notify(arg0: number, arg1?: number): void;
@@ -212,25 +221,25 @@ declare const System: {
     gpio: {
         /** define o estado elétrico físico de um pino (ex.: pino 2 como OUTPUT para acender um LED). */
         /** @permission "gpio" */
-        pinMode(pin?: number, mode?: number): void;
+        pinMode(pin: number, mode: number): void;
         /** aplica 3,3V (HIGH) ou 0V (LOW) num pino específico. */
         /** @permission "gpio" */
-        digitalWrite(pin?: number, state?: number): void;
+        digitalWrite(pin: number, state: number): void;
         /** lê o estado de tensão físico de um pino. */
         /** @permission "gpio" */
-        digitalRead(pin?: number): any;
+        digitalRead(pin: number): any;
         /** aciona o conversor analógico-digital de 12 bits do ESP32 para ler um nível de tensão contínuo. */
         /** @permission "gpio" */
-        analogRead(pin?: number): any;
+        analogRead(pin: number): any;
         /** inicia um sinal PWM (Pulse Width Modulation) automático de hardware num pino. Útil para controle de motores ou dimmer de LEDs. */
         /** @permission "gpio" */
-        analogWrite(pin?: number, pwmValue?: number): void;
+        analogWrite(pin: number, pwmValue: number): void;
         /** Medição Nativa de Pulsos por Hardware. Suspende o motor JS e delega ao kernel C++ a medição precisa da duração de um pulso de */
         /** @permission "gpio" */
-        pulseIn(pin?: number, state?: number, timeout?: number): any;
+        pulseIn(pin: number, state: number, timeout?: number): any;
         /** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: (API 10) */
         /** @permission "gpio" */
-        servo(pin?: number, angulo?: number): any;
+        servo(pin: number, angulo: number): any;
         /** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia (API 10) */
         /** @permission "gpio" */
         servoOff(pin: number): any;
@@ -248,9 +257,9 @@ declare const System: {
 };
 
 declare const Storage: {
-    get(arg0?: number, arg1?: number): any;
-    set(arg0?: number, arg1?: number): any;
-    remove(arg0?: number): void;
+    get(arg0: number, arg1?: number): any;
+    set(arg0: number, arg1?: number): any;
+    remove(arg0: number): void;
     clear(): any;
     /** @permission "system" */
     clearFor(arg0: number): any;
@@ -260,6 +269,7 @@ declare const Sensors: {
     accel(): any;
     steps(): any;
     temp(): any;
+    stepHistory(): any;
 };
 
 declare const Net: {
@@ -370,6 +380,16 @@ interface CelerLinkApi {
     verify(codigo: number): any;
     unpair(id?: string): any;
 }
+
+declare const Phone: {
+    status(): any;
+    setEnabled(on?: boolean): void;
+    music(cmd: number): any;
+    musicInfo(): any;
+    weather(): any;
+    find(on?: boolean): any;
+    forget(): void;
+};
 
 declare const BLACK: number;
 declare const WHITE: number;

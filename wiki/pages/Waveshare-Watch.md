@@ -3,7 +3,7 @@
 **English** | [Português (BR)](/maikramer/CelerOS/wiki/Watch-Waveshare)
 
 CelerOS's first wearable: the **Waveshare ESP32-S3-Touch-AMOLED-2.06**
-(board id `waveshare-amoled206`), a round 2.06" AMOLED smartwatch on the
+(board id `waveshare-amoled206`), a 2.06" AMOLED smartwatch with a rectangular, rounded-corner glass, on the
 ESP32-S3R8 — 32 MB of flash, 8 MB of embedded PSRAM, a hardware PMU and a
 proper sensor pack behind the glass. The pin map and the panel init sequences
 were ported from the Rust firmware **`waveshare-watch-rs`** (a standalone
@@ -25,9 +25,9 @@ required.
 | SoC | **ESP32-S3R8** — dual-core LX7, 8 MB **embedded** octal PSRAM |
 | Flash | 32 MB, DIO @ 80 MHz — plenty of room, firmware builds with `-O2` |
 | USB | Native USB-Serial/JTAG: console, esptool **and** `celerctl` (dual CDC) over the one USB connector |
-| Display | 2.06" round AMOLED 410x502, **CO5300 over QSPI** @ 80 MHz (visible glass at column offset 22) |
+| Display | 2.06" AMOLED 410x502 (rectangular, rounded corners), **CO5300 over QSPI** @ 80 MHz (visible glass at column offset 22) |
 | Touch | FT3168 capacitive on I²C |
-| PMU | AXP2101 — display rails, battery gauge and the physical power key (PEK) |
+| PMU | AXP2101 — display rails, battery voltage + fuel gauge (%), charge/USB state and the physical power key (PEK) |
 | Sensors | QMI8658 IMU (pedometer, raise-to-wake), PCF85063 RTC, ES8311 audio codec — all on the same I²C0 bus |
 
 ### Pinout
@@ -42,27 +42,63 @@ required.
 | Microphone — ES8311 ADC | **ASDOUT 42** | I²S1 RX slave on the codec's clocks |
 | microSD — SPI3 | **CS 17, SCK 2, MOSI 1, MISO 3** | mounted at `/sd` |
 | BOOT button | **0** | short = home/exit app, hold = screenshot |
-| Power key | via **AXP2101 PEK** | polled by ScreenPower; wakes from deep sleep |
+| Power key | via **AXP2101 PEK** | polled by ScreenPower (short = wake screen, hold = deep sleep). The PMU IRQ is not on a GPIO, so it **cannot** wake from deep sleep — BOOT does |
+| IMU INT1 | **21** | active low; wakes from deep sleep on motion when the `imu_wake` setting is on |
 
 GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
 (a trap inherited from the dog board family).
 
 ## The watch experience
 
-* The profile's `homeApp` is the bundled **Watchface** app
-  (`celeros.watchface`): the watch face **is** the home screen; swipe up
-  opens the launcher. `screenInset` keeps the clock and the X buttons away
-  from the rounded corners.
+* **Home:** the profile's `homeApp` is the bundled **Watchface**
+  (`celeros.watchface`). BOOT at the launcher root opens it and the launcher
+  returns to it after `home_idle_s` seconds idle (default 30). The face has
+  three styles — digital, analog, minimal — switched with a long press, and
+  shows battery %, steps against the goal, the next alarm, a running timer,
+  unread notifications and the phone's weather.
+* **Edge gestures** (`BoardProfile::watchGestures`): from the top edge pull
+  down for **quick settings** (brightness, volume, WiFi, Do Not Disturb,
+  raise-to-wake, always-on, flashlight, settings, phone link, find phone);
+  from the bottom edge pull up for the **notification center** (tap to
+  expand, swipe sideways to dismiss, clear all); from the left edge swipe
+  right to leave an app. Opening a panel from the watch face returns to it.
+* **Launcher** is a vertical list (`launcherList`) with the battery % and
+  charging state in the status bar.
 * **Screen power ladder** (ScreenPower): full → **dim** after 8 s →
-  **AOD** at 15 s (a low-frequency always-on face with anti burn-in
-  shifting, panel in SLPIN) → off → **deep sleep**, waking by EXT1 on the
-  buttons. Raising the wrist lights an AOD "glance" via the IMU.
-* Time survives reboots without network (PCF85063 — written after NTP sync
-  or manual adjust), the pedometer's daily count is persisted to NVS before
-  sleep, and the battery comes from the AXP2101 in `System.battery()`.
-* Watch-specific JS surface: `Sensors.accel()/steps()/temp()` and
-  `System.setVolume()/getVolume()` (both API level 13), plus
-  `System.micLevel()` through the ES8311.
+  **AOD** at 15 s on the watch face (once-a-minute face with anti burn-in
+  shifting, battery % and the latest unread notification; the panel stays
+  awake at low brightness) → off (panel in SLPIN) → **deep sleep** on a
+  long press of the power key. Raising the wrist wakes the screen at full
+  brightness; a new notification lights an AOD "glance".
+* **Power** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle —
+  240 MHz while the screen is lit, DFS down to 40 MHz with automatic light
+  sleep when dim/off (not while USB is plugged in, so `celerctl` keeps
+  working). Idle WiFi turns off after `wifi_sleep_min` minutes of dark
+  screen (default 10) and comes back when the screen lights up.
+* **Alarms & timer** live in the system scheduler (`Kernel/Alarms`, NVS):
+  up to 8 alarms with weekdays plus a countdown timer. They ring full
+  screen even with the screen off or in AOD, snooze 5 min, and the watch
+  wakes from deep sleep by timer for the next event.
+* **Phone link** (`CONFIG_CELEROS_PHONE_LINK`): add the watch in
+  **Gadgetbridge** (Android) as a **Bangle.js** and type the 6-digit code
+  the watch shows. Phone notifications go to the notification center (with
+  a glance + beep unless Do Not Disturb), the clock and time zone are set
+  from the phone, and music control, weather and "find device" work both
+  ways. The watch reports battery and steps.
+* **Settings → Watch** exposes raise-to-wake, sensitivity, glance length,
+  always-on, screen-off time, return-to-face time, step goal, WiFi sleep
+  and motion wake.
+* **Watch apps** (`boards/waveshare-watch/data/apps`): Alarms, Timer,
+  Activity (steps, goal, last 7 days), Music and Weather.
+  `boards/waveshare-watch/data-exclude.txt` keeps Terminal, HTTP Demo,
+  Touch Test and Web Server off the watch.
+* Time survives reboots without network (PCF85063 — written after NTP,
+  phone sync or manual adjust). The pedometer rolls over at midnight and
+  keeps 7 closed days.
+* Watch JS surface: API 13 `Sensors.*`, `System.setVolume()/getVolume()`,
+  `System.micLevel()`; API 15 `System.batteryInfo()`, `getInfo().inset/
+  shape/board/screenW/screenH`, `Sensors.stepHistory()`, alarms/timer
+  calls, `System.unreadNotifications()` and the `Phone` object.
 
 ## Known traps
 
@@ -97,8 +133,13 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   raise-to-wake), the screen ladder with AOD and deep sleep, beep + mic
   through the ES8311, volume, Celer Link BLE and `celerctl` over the
   native USB.
-* **[in progress]** ULP-RISC-V motion monitoring during deep sleep
-  (raise-to-wake without the main cores).
+* **[done, needs hardware validation]** API 15 watch experience: fuel
+  gauge, edge gestures + quick settings + notification center, list
+  launcher, persistent alarms/timer, PM + light sleep, Gadgetbridge phone
+  link, watch apps and the Watch settings page.
+* **[todo]** Measure current draw in AOD / screen off with PM on, and
+  ULP-RISC-V motion monitoring during deep sleep (raise-to-wake without the
+  main cores).
 
 Restoring the stock Waveshare firmware is a plain esptool write over the
 same USB — the CelerOS flash never touches the bootloader.
