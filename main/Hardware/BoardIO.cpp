@@ -128,6 +128,9 @@ bool toneI2s(int freqHz, int ms) {
     // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (BoardIO::micLevel
     // mantem um canal RX persistente la — NUM_AUTO podia rouba-lo).
     chanCfg.auto_clear = true;  // DMA manda silencio apos o ultimo bloco
+    // DMA enxuto: idem AudioPlayer — o default de 6 descritores falha em
+    // "allocate DMA buffer failed" com a RAM interna apertada (bancada)
+    chanCfg.dma_desc_num = 4;
     i2s_chan_handle_t tx = nullptr;
     if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) return false;
 

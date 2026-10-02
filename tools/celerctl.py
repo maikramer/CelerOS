@@ -62,6 +62,7 @@ USB_VIDS = (0x303A, 0x1A86, 0x10C4)
 CHUNK = 4096  # tamanho maximo de payload HostLink (proto 1)
 DEFAULT_BAUD = 115200
 FORCE_PROTO1 = False  # --proto 1: valida o caminho legado sem CRC/janela
+WIN_CAP = 0  # --win: teto manual da janela anunciada (OTA de firmware antigo)
 
 
 class CelerError(Exception):
@@ -211,6 +212,12 @@ class HostLink:
                 self.max_chunk = max(64, min(int(value), 0xFFFF))
             elif key == "win":
                 self.win = max(1, min(int(value), 64))
+        # --win: teto manual — para OTA de um firmware cuja janela anunciada
+        # transborda o buffer RX do proprio device (perda silenciosa no CDC:
+        # a ferramenta mandava rajada de 8x8190 num stream buffer de 16 KB e
+        # o parser via "payload grande demais"). Nao aumenta a janela, so corta.
+        if WIN_CAP > 0:
+            self.win = min(self.win, WIN_CAP)
         return ident
 
     def keepalive(self):
@@ -1315,6 +1322,10 @@ def main():
     parser.add_argument("--proto", type=int, choices=(1, 2), default=2,
                         help="forca o formato do protocolo (default 2 = CRC32 + janela;"
                              " 1 valida o caminho legado)")
+    parser.add_argument("--win", type=int, default=0,
+                        help="teta a janela de chunks anunciada pelo firmware (0 = usa a"
+                             " anunciada). Use 2 para OTA de firmware cuja janela"
+                             " transborda o buffer RX do proprio device")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="lista placas conectadas")
@@ -1434,6 +1445,8 @@ def main():
         args.local = os.path.basename(args.remote) or "celer_pull.bin"
     global FORCE_PROTO1
     FORCE_PROTO1 = args.proto == 1
+    global WIN_CAP
+    WIN_CAP = args.win if args.win > 0 else 0
 
     try:
         args.func(args)

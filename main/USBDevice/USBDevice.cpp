@@ -153,9 +153,12 @@ bool USBDevice::init() {
         return false;
     }
 
-    // CDC: sem hook de baud (USB nao tem baud); janela ampla — o flow
-    // control do USB nao derruba bytes no caminho
-    EXT_RAM_BSS_ATTR static HostLink link(&USBDevice::linkWrite, nullptr, 8);
+    // CDC: sem hook de baud (USB nao tem baud). Janela 2: o NAK do USB
+    // cobre o FIFO do periferico, mas o STREAM BUFFER acima (2x MAX_PAYLOAD)
+    // NAO — o driver CDC descarta pacote quando ele enche, e com janela 8
+    // (8x8190 em voo) a OTA de 2,4 MB perdia bytes e o parser respondia
+    // "payload grande demais" (bancada 2026-10-02). Janela = buffer/payload.
+    EXT_RAM_BSS_ATTR static HostLink link(&USBDevice::linkWrite, nullptr, 2);
     s_link = &link;
 
     // Pilhas em RAM interna (o watch e apertado): pico medido ~1,7 KB no

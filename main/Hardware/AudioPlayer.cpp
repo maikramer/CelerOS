@@ -91,6 +91,11 @@ WavError playWav(const char* path) {
     // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (mesma regra do
     // toneI2s — NUM_AUTO podia roubar o canal RX dele)
     chanCfg.auto_clear = true;
+    // DMA enxuto (4 descritores ~3,8 KB internos em vez dos 6 default):
+    // com a RAM interna apertada (sdkconfig regenerado + API 17) o default
+    // falhava em "allocate DMA buffer failed" e TODO playWav vinha false
+    // (bancada 2026-10-02). 4 descritores bastam para o stream de 16 kHz.
+    chanCfg.dma_desc_num = 4;
     i2s_chan_handle_t tx = nullptr;
     if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) { fclose(f); return WavError::NoAudio; }
 
