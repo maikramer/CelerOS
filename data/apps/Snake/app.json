@@ -1,11 +1,11 @@
 {
   "name": "Snake",
   "packageName": "celeros.snake",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "CelerOS",
   "description": "Classico da cobrinha: deslize o dedo para virar, coma as frutas, acelere e bata o recorde (salvo no littlefs).",
   "type": "Game",
   "category": "Arcade",
   "api": 7,
-  "changelog": "1.2.0 - pausa por toque (seguir/reiniciar), fruta dourada (+3, expira) a cada 5, nivel no placar, tamanho no fim, sons (firmware com API 12+) e tela sempre ligada\n1.1.1 - textos com acentos (API 7)\n1.1.0 - placar fino, contagem 3-2-1 e recorde destacado ao vivo; 1.0.0 - primeiro lancamento"
+  "changelog": "1.2.1 - corrige artefato de \"linha\" no lugar da fruta comida em telas de escala nao-inteira (4848) e o buraco de 1 passo na cabeca ao comer\n1.2.0 - pausa por toque (seguir/reiniciar), fruta dourada (+3, expira) a cada 5, nivel no placar, tamanho no fim, sons (firmware com API 12+) e tela sempre ligada\n1.1.1 - textos com acentos (API 7)\n1.1.0 - placar fino, contagem 3-2-1 e recorde destacado ao vivo; 1.0.0 - primeiro lancamento"
 }

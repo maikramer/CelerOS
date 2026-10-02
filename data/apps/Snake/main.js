@@ -116,6 +116,17 @@ function drawCell(x, y, col) {
     System.fillRect(r.x, r.y, r.w, r.h, col);
 }
 
+function clearCell(x, y) {
+    // Apaga a celula com 2 linhas de folga EMBAIXO: a fruta e um circulo e o
+    // firmware o desenha com raio medio (jsu) — em escala nao-inteira (4848:
+    // 2x horizontal, 1,5x vertical) ele passa 1px alem do retangulo da celula
+    // e a ultima linha do circulo vazava do apagamento (artefato de "linha"
+    // no lugar da fruta comida). Na ultima linha do campo a folga e cortada
+    // para nao comer o traco da borda.
+    System.fillRect(FX + x * CELL + 1, FY + y * CELL + 1, CELL - 2,
+                    y === ROWS - 1 ? CELL - 2 : CELL, T.bg);
+}
+
 function drawBoard() {
     System.fillRect(FX, FY, FW, FH, T.bg);
     System.drawRoundRect(FX, FY, FW, FH, 2, T.stroke);
@@ -132,9 +143,12 @@ function drawFood() {
 
 function drawGold(on) {
     if (!gold) return;
-    var r = cellRect(gold.x, gold.y);
-    if (on) System.fillCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 3) / 2, T.warn);
-    else System.fillRect(r.x, r.y, r.w, r.h, T.bg);
+    if (on) {
+        var r = cellRect(gold.x, gold.y);
+        System.fillCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 3) / 2, T.warn);
+    } else {
+        clearCell(gold.x, gold.y);
+    }
 }
 
 function level() {
@@ -215,22 +229,23 @@ function step() {
         if (!(growPending === 0 && tail.x === head.x && tail.y === head.y)) return die();
     }
 
+    // fruta na celula da cabeca: apaga ANTES de desenhar a cabeca (antes a
+    // ordem apagava a cabeca recem-desenhada e deixava um buraco por um passo)
+    var ate = 0;
+    if (food && head.x === food.x && head.y === food.y) {
+        ate = 1;
+    } else if (gold && head.x === gold.x && head.y === gold.y) {
+        ate = 3;
+    }
+    if (ate) clearCell(head.x, head.y);
+
     snake.unshift(head);
     drawCell(head.x, head.y, T.ok);
     if (snake.length > 1) drawCell(snake[1].x, snake[1].y, T.accent);
 
-    var ate = 0;
-    if (food && head.x === food.x && head.y === food.y) {
-        ate = 1;
-        drawCell(food.x, food.y, T.bg);  // limpa a fruta por baixo
-        fruits++;
-    } else if (gold && head.x === gold.x && head.y === gold.y) {
-        ate = 3;
-        gold = null;
-        fruits++;
-    }
-
     if (ate > 0) {
+        if (ate === 3) gold = null;
+        fruits++;
         score += ate;
         if (score > hi && !newRecord) {
             newRecord = true;

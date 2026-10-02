@@ -110,6 +110,9 @@ function collide() {
         if (ball.x + BALL_R < b.x || ball.x - BALL_R > b.x + BRICK_W ||
             ball.y + BALL_R < b.y || ball.y - BALL_R > b.y + BRICK_H) continue;
         b.alive = false;
+        // sai da tela na hora: antes ficava pintado (so "atravessavel") e a
+        // bola ia carimbando o rastro de fundo nele
+        System.fillRect(b.x, b.y, BRICK_W - 2, BRICK_H, T.bg);
         score += ROW_POINTS[b.r];
         if (score >= nextLife && lives < 5) {
             lives++;

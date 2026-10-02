@@ -55,9 +55,9 @@ var buttons = [
 
 var btnW = 52;
 var btnH = 38;
-var spacing = 5;
-var startX = 8;
-var startY = 118;
+var spacing = 4;
+var startX = 10;   // (240 - 4*52 - 3*4)/2
+var startY = 110;  // 5*38 + 4*4 = 206: ultima linha termina em 316 (< 320)
 
 function fmtNum(v) {
     if (typeof v !== "number" || isNaN(v) || !isFinite(v)) return String(v);
@@ -75,12 +75,12 @@ function btnRect(b) {
 
 // ---- desenho -------------------------------------------------------------------
 function drawDisplay() {
-    System.fillRoundRect(8, 34, SW - 16, 76, 10, T.card);
-    System.drawRoundRect(8, 34, SW - 16, 76, 10, T.stroke);
+    System.fillRoundRect(8, 30, SW - 16, 74, 10, T.card);
+    System.drawRoundRect(8, 30, SW - 16, 74, 10, T.stroke);
 
     // historico: ultimas contas em cima, apagando
     System.setTextColor(T.textDim, T.card);
-    var hy = 42;
+    var hy = 38;
     for (var i = Math.max(0, history.length - MAXHIST); i < history.length; i++) {
         System.drawString(history[i], 16, hy, 1);
         hy += 10;
@@ -90,7 +90,7 @@ function drawDisplay() {
     var e = expression;
     while (e.length > 0 && System.textWidth(e, 2) > SW - 40) e = e.substring(1);
     System.setTextColor(T.text, T.card);
-    System.drawString(e || "0", 16, 66, 2);
+    System.drawString(e || "0", 16, 62, 2);
 
     // resultado: previa viva (dim) ou fechado (accent, fonte grande)
     if (result !== "") {
@@ -98,14 +98,14 @@ function drawDisplay() {
         while (rTxt.length > 0 && System.textWidth(rTxt, 3) > SW - 40) rTxt = rTxt.substring(1);
         var isErr = result === "erro";
         System.setTextColor(isErr ? T.err : T.accent, T.card);
-        System.drawString(rTxt, 16, 84, 3);
+        System.drawString(rTxt, 16, 80, 3);
     } else {
         var prev = preview();
         if (prev !== null && expression !== "") {
             System.setTextColor(T.textDim, T.card);
             var p2 = "= " + fmtNum(prev);
             while (p2.length > 0 && System.textWidth(p2, 2) > SW - 40) p2 = p2.substring(1);
-            System.drawString(p2, 16, 90, 2);
+            System.drawString(p2, 16, 86, 2);
         }
     }
 }
