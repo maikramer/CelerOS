@@ -17,11 +17,20 @@
 // do console, do OpenOCD e do esptool ROM (o OTG/TinyUSB do
 // CELEROS_USB_NATIVE exigiria tirar o console daqui).
 #include "driver/usb_serial_jtag.h"
-constexpr size_t kRxRing = 8192;
+// Anel >= janela x chunk (4 x 8190) + folga: sem controle de fluxo no
+// canal, frames a mais que o anel nao segura sao DESCARTADOS pelo driver e
+// o push morre em "sem ACK" — inclusive os reenvios, que repetem a rajada
+// inteira. O CDC (TinyUSB) escapa disso por NAK de hardware.
+constexpr size_t kRxRing = 49152;
 bool chanInit() {
-    // IDF 6: install() pega a config sem const
+    // IDF 6: install() pega a config sem const. TX precisa de ringbuffer
+    // proprio (>0 e exigido pelo driver; 0 = "TX buffer is not prepared" e
+    // o canal inteiro morre). O anel TX precisa comportar UM FRAME MAXIMO
+    // inteiro (8 + 8192): com anel menor, write_bytes de um frame de
+    // resposta do READ espera espaco com timeout de 500 ms, devolve escrita
+    // CURTA e o host recebe o frame pela metade (timeout no pull/cat).
     usb_serial_jtag_driver_config_t cfg = {
-        .tx_buffer_size = 0,  // TX por polling, como na UART
+        .tx_buffer_size = 16384,
         .rx_buffer_size = kRxRing,
     };
     return usb_serial_jtag_driver_install(&cfg) == ESP_OK;
@@ -36,11 +45,13 @@ void chanSetBaud(uint32_t) {}  // USB nao tem baud
 #else
 #include "driver/uart.h"
 constexpr uart_port_t K_UART = UART_NUM_0;
-// Ring RX: segura os chunks em voo da janela do proto 2 enquanto a task
-// escreve no flash: S3 tem DRAM de sobra; CYD fica com 4KB (heap).
+// Ring RX: precisa segurar a janela de WRITE inteira (4 x 8190 = ~32KB no
+// S3) enquanto o task grava um chunk na flash — ver comentario do USJ acima.
 #if CONFIG_IDF_TARGET_ESP32S3
-constexpr int kRxRing = 16384;
+constexpr int kRxRing = 49152;
 #else
+// ESP32 classico (CYD): heap sem PSRAM nao da folga — janela cai para 1 no
+// ctor do HostLink e o anel segura um frame inteiro (4098 bytes).
 constexpr int kRxRing = 4096;
 #endif
 bool chanInit() {
@@ -229,8 +240,9 @@ bool SerialLink::init() {
 #if CONFIG_IDF_TARGET_ESP32S3
     static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 4);
 #else
-    // ESP32 classico (CYD): ring/heap curtos — janela menor de chunks em voo
-    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 2);
+    // ESP32 classico (CYD): ring/heap curtos — stop-and-wait (janela 1);
+    // o anel de 4KB nao segura dois chunks em voo
+    static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 1);
 #endif
     s_link = &link;
 

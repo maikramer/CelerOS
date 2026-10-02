@@ -105,12 +105,15 @@ troca com o firmware e reabre a porta mais rapida:
 python3 tools/celerctl.py -b 921600 push firmware.bin /sd/fw.bin
 ```
 
-Medido na SmartDisplay (CH340, proto 1, stop-and-wait): push ~57 KB/s,
-pull ~190 KB/s, OTA ~60 KB/s. O proto 2 mata o round-trip por chunk
-(janela anunciada pelo firmware: 4 chunks nas UARTs do S3, 2 na CYD, 8 na
-CDC) e soma o CRC32 — remedir com proto 2 e atualizar esta tabela. Portas
-USB nativas (CDC/USJ) nao tem baud: `-b` avisa e segue na velocidade do
-USB.
+Medido com proto 2 (janela deslizante + CRC32; firmware 1.4.1, arquivo de
+1 MB com conferencia de md5 na volta): push ~78 KB/s na UART do S3 a
+921600 baud (`-b 921600` — sem ele o push fica nos ~11 KB/s do baud
+padrao 115200), ~113 KB/s na USJ do dog e ~110 KB/s no CDC do watch; pull
+integro nas tres vias. Proto 1 (stop-and-wait, para comparar): push
+~57 KB/s, pull ~190 KB/s. Janela anunciada pelo firmware: 4 chunks nas
+UARTs/USJ do S3 (anel RX de 48 KB), 1 na CYD (heap sem PSRAM nao segura
+janela), 8 no CDC. Portas USB nativas (CDC/USJ) nao tem baud: `-b` avisa
+e segue na velocidade do USB.
 
 ## Como o canal convive com o console
 

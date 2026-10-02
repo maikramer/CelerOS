@@ -57,3 +57,9 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 # CONFIG_LWIP_IPV6 is not set
 # Tabela de nomes de esp_err_t (logs mostram o codigo numerico)
 # CONFIG_ESP_ERR_TO_NAME_LOOKUP is not set
+
+# ISR da UART em IRAM: durante erase/programa da flash (LittleFS em push/OTA) o
+# ISR em cache congela, o FIFO RX (128 B) transborda em ~1,4 ms a 921600 e o
+# stream de chunks do proto 2 perde bytes (framing destruido). O CDC/USJ tem
+# NAK de protocolo e nao perde; a UART precisa do ISR residente.
+CONFIG_UART_ISR_IN_IRAM=y

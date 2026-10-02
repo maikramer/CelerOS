@@ -354,7 +354,8 @@ class HostLink:
                 self.push_queue.append((cmd_r, payload_r))
                 last_ack = time.monotonic()
             elif cmd_r is not None:
-                raise CelerError(f"frame inesperado durante {label}")
+                raise CelerError(f"frame inesperado durante {label}: "
+                                 f"cmd=0x{cmd_r:02x} payload={payload_r[:24].hex() if payload_r else '-'}")
             elif time.monotonic() - last_ack > 1.5:
                 # sem ACK: reenvia a janela nao confirmada (max 3 rodadas)
                 tries += 1
@@ -1243,7 +1244,9 @@ def cmd_apps(args):
             for m in found:
                 where = "sd" if m["_base"].startswith("/sd") else "local"
                 tag = "sistema" if m.get("system") else where
-                pkg = m.get("packageName", m["_dir"])
+                # app.json sem packageName (meta do FS nao ganha _dir): mostar
+                # o nome em vez de quebrar a listagem inteira
+                pkg = m.get("packageName") or m.get("_dir") or m.get("name", "?")
                 print(f"{tag:<{tag_width}} {m.get('name', '?'):<16} v{m.get('version', '?'):<10} api {m.get('api', '?'):<3} {pkg}")
         elif args.action == "install":
             src = Path(args.folder).resolve()
