@@ -1,0 +1,12 @@
+{
+  "name": "Barebone",
+  "packageName": "celeros.barebone",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "App de referencia headless (API 17): LED como saida e botao BOOT como input, sem desenhar nada. E a casa natural de um devkit barebone via autostart.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 17,
+  "permissions": ["gpio"],
+  "changelog": "1.0.0 - primeira versao: padroes de LED (apagado/aceso/lento/rapido/heartbeat/SOS) alternados pelo botao BOOT, padrao persistido no Storage"
+}

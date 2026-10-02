@@ -128,7 +128,15 @@
     },
     {
       "page": "Plugins-de-Watchface",
-      "src": "wiki/pages/Watchface-Plugins.pt-BR.md"
+      "src": "wiki/pages/Plugins-de-Watchface.pt-BR.md"
+    },
+    {
+      "page": "Barebone-Devkit",
+      "src": "wiki/pages/Barebone-Devkit.md"
+    },
+    {
+      "page": "Devkit-Barebone",
+      "src": "wiki/pages/Devkit-Barebone.pt-BR.md"
     }
   ],
   "sidebar": [
@@ -175,6 +183,12 @@
       ]
     },
     {
+      "section": "Barebone",
+      "pages": [
+        "Barebone-Devkit"
+      ]
+    },
+    {
       "section": "JavaScript apps",
       "pages": [
         "App-Development-Guide",
@@ -206,6 +220,7 @@
         "Plugins-de-Watchface",
         "Robo-Cachorro",
         "Watch-Waveshare",
+        "Devkit-Barebone",
         "Contribuindo"
       ]
     }
