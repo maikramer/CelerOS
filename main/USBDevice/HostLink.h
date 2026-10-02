@@ -92,13 +92,13 @@ private:
 // --- opcodes host -> device ---
 constexpr uint8_t KL_HELLO = 0x01;        // payload "CELERCTL1" -> identificacao do device
 constexpr uint8_t KL_INFO = 0x02;         // -> JSON versao/board/heap/fs
-constexpr uint8_t KL_LS = 0x03;           // path -> u16 n + entradas {isDir,size,mtime,name}
 constexpr uint8_t KL_STAT = 0x04;         // path -> exists,isDir,u32 size,u32 mtime
 constexpr uint8_t KL_READ = 0x05;         // path\0 + u32 offset + u32 len -> dados
 constexpr uint8_t KL_WRITE_BEGIN = 0x06;  // path -> abre escrita (cria diretorios pais)
 constexpr uint8_t KL_WRITE_CHUNK = 0x07;  // dados brutos -> append
 constexpr uint8_t KL_WRITE_END = 0x08;    // -> fecha + u32 total escrito
-constexpr uint8_t KL_DELETE = 0x09;       // path
+constexpr uint8_t KL_WRITE_ABORT = 0x1C;  // descarta a escrita em curso (remove o parcial)
+constexpr uint8_t KL_DELETE = 0x09;       // path\0 [u8 flags: 1=recursivo em diretorios]
 constexpr uint8_t KL_MKDIR = 0x0A;        // path
 constexpr uint8_t KL_RENAME = 0x0B;       // from\0 + to\0
 constexpr uint8_t KL_EXEC = 0x0C;         // cmdline -> u8 exitCode + u32 len + saida
@@ -112,7 +112,8 @@ constexpr uint8_t KL_OTA_END = 0x15;      // -> fecha, valida e marca boot (sem 
 constexpr uint8_t KL_OTA_ABORT = 0x16;    // cancela escrita OTA
 constexpr uint8_t KL_SCREENSHOT = 0x17;   // [u8 fmt: 1=RLE] -> u16 w + u16 h + u8 fmt, depois chunks KL_SCR_DATA
 constexpr uint8_t KL_TOUCH = 0x19;        // u8 n + n × {u8 down,u16 x,u16 y,u16 delayMs}
-constexpr uint8_t KL_COREDUMP = 0x1A;     // -> u32 size, depois chunks KL_COREDUMP_DATA (ELF da particao)
+constexpr uint8_t KL_COREDUMP = 0x1A;     // [u8 flags: 1=nao apagar] -> u32 size, depois chunks KL_COREDUMP_DATA
+constexpr uint8_t KL_LS = 0x03;           // path\0 [u32 cursor] -> [u32 next] u16 n + entradas {isDir,size,mtime,name}
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

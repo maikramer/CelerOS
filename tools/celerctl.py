@@ -223,19 +223,34 @@ class HostLink:
         return json.loads(payload[1:].decode())
 
     def ls(self, path):
-        _, payload = self.xfer(KL["LS"], path.encode() + b"\0")
-        body = payload[1:]
-        (count,) = struct.unpack("<H", body[:2])
         entries = []
-        off = 2
-        for _ in range(count):
-            is_dir = body[off]
-            size, mtime = struct.unpack("<II", body[off + 1:off + 9])
-            name_len = body[off + 9]
-            name = body[off + 10:off + 10 + name_len].decode("utf-8", "replace")
-            entries.append({"dir": bool(is_dir), "size": size, "mtime": mtime, "name": name})
-            off += 10 + name_len
-        return entries
+        cursor = 0
+        while True:
+            req = path.encode() + b"\0"
+            if self.proto == 2:
+                req += struct.pack("<I", cursor)  # paginacao: dirs grandes de graça
+            _, payload = self.xfer(KL["LS"], req)
+            body = payload[1:]
+            if self.proto == 2:
+                (cursor,) = struct.unpack("<I", body[:4])
+                body = body[4:]
+            (count,) = struct.unpack("<H", body[:2])
+            off = 2
+            for _ in range(count):
+                is_dir = body[off]
+                size, mtime = struct.unpack("<II", body[off + 1:off + 9])
+                name_len = body[off + 9]
+                name = body[off + 10:off + 10 + name_len].decode("utf-8", "replace")
+                entries.append({"dir": bool(is_dir), "size": size, "mtime": mtime, "name": name})
+                off += 10 + name_len
+            if self.proto == 1 or cursor == 0:
+                return entries  # 0 = fim (ou v1: tudo num frame)
+
+    def delete(self, path, recursive=False):
+        payload = path.encode() + b"\0"
+        if recursive and self.proto == 2:
+            payload += b"\x01"  # device apaga a arvore em um comando
+        self.xfer(KL["DELETE"], payload)
 
     def stat(self, path):
         _, payload = self.xfer(KL["STAT"], path.encode() + b"\0")
@@ -361,9 +376,9 @@ class HostLink:
                 end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
                 _, payload = self.xfer(KL["WRITE_END"], end_payload, timeout=10.0)
             except (CelerError, serial.SerialException):
-                # fecha a escrita sem sucesso: o device remove o parcial
+                # aborta a escrita: o device remove o arquivo parcial
                 try:
-                    self.xfer(KL["WRITE_END"], b"", timeout=2.0, retries=0)
+                    self.xfer(KL["WRITE_ABORT"], b"", timeout=2.0, retries=0)
                 except (CelerError, serial.SerialException):
                     pass
                 raise
@@ -540,9 +555,9 @@ class HostLink:
         return w, h, bytes(data[:need])
 
 
-    def coredump(self):
+    def coredump(self, keep=False):
         """Baixa o coredump ELF da particao dedicada (b'' se vazio)."""
-        _, payload = self.xfer(KL["COREDUMP"], timeout=30.0)
+        _, payload = self.xfer(KL["COREDUMP"], b"\x01" if keep else b"", timeout=30.0)
         if len(payload) < 5:  # [0]=status, [1:5]=u32 tamanho
             raise CelerError("resposta de coredump sem cabecalho")
         (size,) = struct.unpack("<I", payload[1:5])
@@ -761,6 +776,14 @@ def cmd_pull(args):
         link.close()
 
 
+def cmd_rm(args):
+    link = open_link(args)
+    try:
+        link.delete(args.path, recursive=args.recursive)
+    finally:
+        link.close()
+
+
 def cmd_simple(op):
     def handler(args):
         payload = b""
@@ -841,7 +864,7 @@ def cmd_ota(args):
 def cmd_coredump(args):
     link = open_link(args)
     try:
-        data = link.coredump()
+        data = link.coredump(keep=args.keep)
     finally:
         link.close()
     if not data:
@@ -931,12 +954,15 @@ def _app_meta(link, base, dirname):
 
 
 def _rm_tree(link, path):
+    if link.proto == 2:
+        link.delete(path, recursive=True)  # um comando no device
+        return
     for e in link.ls(path):
-        child = f"{path}/{e['name']}"
+        rpath = f"{path}/{e['name']}"
         if e["dir"]:
-            _rm_tree(link, child)
+            _rm_tree(link, rpath)
         else:
-            link.simple("DELETE", child.encode() + b"\0")
+            link.simple("DELETE", rpath.encode() + b"\0")
     link.simple("DELETE", path.encode() + b"\0")
 
 
@@ -1300,9 +1326,11 @@ def main():
     p.add_argument("local", nargs="?", default=None)
     p.set_defaults(func=cmd_pull)
 
-    p = sub.add_parser("rm", help="apaga arquivo")
+    p = sub.add_parser("rm", help="apaga arquivo (ou pasta com -r)")
     p.add_argument("path")
-    p.set_defaults(func=cmd_simple("DELETE"))
+    p.add_argument("-r", "--recursive", action="store_true",
+                   help="apaga diretorio com todo o conteudo")
+    p.set_defaults(func=cmd_rm)
 
     p = sub.add_parser("mkdir", help="cria diretorio")
     p.add_argument("path")
@@ -1332,6 +1360,8 @@ def main():
 
     p = sub.add_parser("coredump", help="baixa o coredump do ultimo crash (ELF)")
     p.add_argument("--out", default="coredump.elf", help="arquivo de saida")
+    p.add_argument("--keep", action="store_true",
+                   help="nao apaga o dump apos baixar (reler depois)")
     p.set_defaults(func=cmd_coredump)
 
     p = sub.add_parser("screencap", help="captura da tela -> PNG")

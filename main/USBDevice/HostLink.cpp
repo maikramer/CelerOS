@@ -251,6 +251,10 @@ void handleLs(const uint8_t* payload, uint16_t len) {
         respondError(KL_LS, "caminho invalido");
         return;
     }
+    // cursor opcional (u32): entrada por onde continuar. Pedido sem cursor
+    // (hosts antigos) mantem a resposta inteira num frame, como sempre.
+    uint32_t cursor = 0;
+    const bool paged = len >= 4 && takeU32(payload, len, cursor);
     DIR* dir = opendir(path);
     if (dir == nullptr) {
         respondError(KL_LS, "nao e diretorio");
@@ -259,8 +263,12 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     std::string out;
     uint16_t count = 0;
     struct dirent* ent;
+    uint32_t served = 0;  // entradas validas ja vistas (cursor conta estas)
+    bool eof = true;
+    const size_t room = HostLink::MAX_PAYLOAD - 1 - (paged ? 6 : 2);
     while ((ent = readdir(dir)) != nullptr) {
-        if (ent->d_name[0] == '.') continue;
+        if (ent->d_name[0] == '.') continue;  // ocultos fora (como sempre)
+        if (served++ < cursor) continue;      // paginacao: pula o ja servido
         std::string full = std::string(path) + "/" + ent->d_name;
         struct stat st;
         memset(&st, 0, sizeof(st));
@@ -278,20 +286,29 @@ void handleLs(const uint8_t* payload, uint16_t len) {
         size_t nameLen = strlen(ent->d_name);
         rec[9] = (uint8_t)nameLen;
         memcpy(rec + 10, ent->d_name, nameLen);
+        if (out.size() + 10 + nameLen > room) {
+            eof = false;  // encheu o frame: o resto fica para o proximo cursor
+            break;
+        }
         out.append((const char*)rec, 10 + nameLen);
         count++;
     }
     closedir(dir);
 
-    // resposta num frame unico: u16 n + entradas (paginacao: ver KL_LS)
+    // resposta: [u32 next (0 = fim, so no modo paginado)] + u16 n + entradas
     std::string body;
-    body.resize(2 + out.size());
-    body[0] = (char)(uint8_t)count;
-    body[1] = (char)(uint8_t)(count >> 8);
-    memcpy(body.data() + 2, out.data(), out.size());
-    if (body.size() + 1 > HostLink::MAX_PAYLOAD) {
-        respondError(KL_LS, "diretorio grande demais");
-        return;
+    if (paged) {
+        uint32_t next = eof ? 0 : (cursor + count + 1);  // +1: a entrada que nao coube
+        body.resize(4 + 2 + out.size());
+        le32((uint8_t*)body.data(), next);
+        body[4] = (char)(uint8_t)count;
+        body[5] = (char)(uint8_t)(count >> 8);
+        memcpy(body.data() + 6, out.data(), out.size());
+    } else {
+        body.resize(2 + out.size());
+        body[0] = (char)(uint8_t)count;
+        body[1] = (char)(uint8_t)(count >> 8);
+        memcpy(body.data() + 2, out.data(), out.size());
     }
     respond(KL_LS, 0, body.data(), (uint16_t)body.size());
 }
@@ -439,10 +456,49 @@ void handleWriteEnd(const uint8_t* payload, uint16_t len) {
     respond(KL_WRITE_END, 0, rec, sizeof(rec));
 }
 
+// apaga diretorio com conteudo (depth limita a recursao: stack curta e
+// LittleFS raso — apps ficam em 2-3 niveis)
+bool removeTree(const char* path, int depth) {
+    if (depth <= 0 || !FileSystem::isDirectory(path)) return false;
+    DIR* d = opendir(path);
+    if (d == nullptr) return false;
+    struct dirent* ent;
+    bool ok = true;
+    while ((ent = readdir(d)) != nullptr) {
+        if (ent->d_name[0] == '.') continue;
+        char full[512];
+        snprintf(full, sizeof(full), "%s/%s", path, ent->d_name);
+        if (FileSystem::isDirectory(full)) {
+            if (!removeTree(full, depth - 1)) ok = false;
+        } else if (!FileSystem::deleteFile(full)) {
+            ok = false;
+        }
+    }
+    closedir(d);
+    return ok && FileSystem::rmdir(path);
+}
+
+void handleWriteAbort() {
+    // cancelamento explicito da ferramenta: sem isso a escrita ficava
+    // pendurada ate o proximo WRITE_BEGIN (que cancela por seguranca)
+    if (s_wrFile != nullptr) {
+        closeWrite(false);  // remove o parcial
+        celer_log_println("[HL] escrita cancelada pela ferramenta");
+    }
+    respond(KL_WRITE_ABORT, 0);
+}
+
 void handleDelete(const uint8_t* payload, uint16_t len) {
     char path[256];
     if (!takeString(payload, len, path, sizeof(path)) || !CelerShell::pathAllowed(path)) {
         respondError(KL_DELETE, "caminho invalido");
+        return;
+    }
+    // flag opcional: 1 = apaga diretorio com todo o conteudo (um comando
+    // no lugar do loop arquivo-a-arquivo que o `apps rm` fazia)
+    bool recursive = len >= 1 && payload[0] == 1;
+    if (recursive && FileSystem::isDirectory(path)) {
+        respond(KL_DELETE, removeTree(path, 6) ? 0 : 1, nullptr, 0);
         return;
     }
     // arquivo, ou diretorio VAZIO (o `apps rm` apaga o conteudo e depois a
@@ -705,7 +761,9 @@ void handleTouch(const uint8_t* payload, uint16_t len) {
 // Coredump da particao dedicada (ELF): u32 tamanho no primeiro frame,
 // binario em chunks KL_COREDUMP_DATA. Analisavel no PC com
 // `idf.py coredump-info -c <arquivo>` / `coredump-decode`.
-void handleCoredump() {
+// Flag opcional: 1 = nao apagar apos a leitura (reler/acompanhar).
+void handleCoredump(const uint8_t* payload, uint16_t len) {
+    const bool keep = len >= 1 && payload[0] == 1;
     size_t addr = 0, size = 0;
     if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
         respondError(KL_COREDUMP, "sem coredump gravado");
@@ -745,7 +803,7 @@ void handleCoredump() {
 
     // Dump consumido apaga a particao: sem isso o MESMO dump velho voltava a
     // ser reportado em todo reboot ate ser sobrescrito por um novo crash.
-    if (sentAll) {
+    if (sentAll && !keep) {
         esp_core_dump_image_erase();
         celer_log_println("[HL] coredump lido e apagado");
     }
@@ -761,6 +819,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_WRITE_BEGIN: handleWriteBegin(payload, len); break;
         case KL_WRITE_CHUNK: handleWriteChunk(payload, len); break;
         case KL_WRITE_END: handleWriteEnd(payload, len); break;
+        case KL_WRITE_ABORT: handleWriteAbort(); break;
         case KL_DELETE: handleDelete(payload, len); break;
         case KL_MKDIR: handleMkdir(payload, len); break;
         case KL_RENAME: handleRename(payload, len); break;
@@ -774,7 +833,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_OTA_END: handleOtaEnd(payload, len); break;
         case KL_OTA_ABORT: handleOtaAbort(); break;
         case KL_SCREENSHOT: handleScreenshot(payload, len); break;
-        case KL_COREDUMP: handleCoredump(); break;
+        case KL_COREDUMP: handleCoredump(payload, len); break;
         case KL_TOUCH: handleTouch(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }

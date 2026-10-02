@@ -52,6 +52,8 @@ class FakeDevice:
         self.chunk = chunk
         self.win = win
         self.files = {}           # path -> bytes (conteudo para READ)
+        self.dirs = {}            # path -> [nomes] (conteudo para LS)
+        self.page_size = 4096     # entradas por pagina de LS (forcar poucas no teste)
         self.wr_path = None
         self.wr_data = None
         self.wr_seq = 0
@@ -183,6 +185,41 @@ class FakeDevice:
         else:
             self.reply(KL["STAT"], struct.pack("<BBI", 1, 0, len(data)) + b"\0" * 4)
 
+    def op_03(self, p):  # LS: path\0 [u32 cursor] -> [u32 next] u16 n + entradas
+        z = p.index(b"\0")
+        path = p[:z].decode()
+        rest = p[z + 1:]
+        names = sorted(self.dirs.get(path, []))
+        if len(rest) >= 4:  # paginado
+            (cursor,) = struct.unpack("<I", rest[:4])
+            page = names[cursor:cursor + self.page_size]
+            nxt = 0 if cursor + len(page) >= len(names) else cursor + len(page)
+            head = struct.pack("<IH", nxt, len(page))
+        else:  # pedido antigo: tudo num frame
+            page = names
+            head = struct.pack("<H", len(page))
+        body = b""
+        for name in page:
+            data = self.files.get(f"{path}/{name}")
+            rec = struct.pack("<BIIB", 0 if data is not None else 1,
+                              len(data or b""), 0, len(name))
+            body += rec + name.encode()
+        self.reply(KL["LS"], head + body)
+
+    def op_09(self, p):  # DELETE: path\0 [u8 1=recursivo]
+        z = p.index(b"\0")
+        path = p[:z].decode()
+        recursive = p[z + 1:] == b"\x01"
+        if recursive:
+            for k in [k for k in self.files if k.startswith(path + "/")]:
+                del self.files[k]
+            for k in [k for k in self.dirs if k == path or k.startswith(path + "/")]:
+                del self.dirs[k]
+        else:
+            self.files.pop(path, None)
+            self.dirs.pop(path, None)
+        self.reply(KL["DELETE"])
+
 
 class FakeSerial:
     def __init__(self, device):
@@ -313,6 +350,23 @@ class TestProto2(unittest.TestCase):
                 os.unlink(path)
         finally:
             C.FORCE_PROTO1 = False
+
+
+    def test_ls_paginado_e_rm_recursivo(self):
+        link, dev = make_link()
+        link.hello()
+        dev.page_size = 5  # forca 3 paginas
+        names = [f"app{i:02d}" for i in range(12)]
+        dev.dirs["/local/apps"] = list(names)
+        for i, n in enumerate(names):
+            dev.files[f"/local/apps/{n}"] = b"x" * i
+        entries = link.ls("/local/apps")
+        self.assertEqual([e["name"] for e in entries], names)
+        self.assertTrue(all(not e["dir"] for e in entries))
+        # rm -r: um comando apaga a arvore inteira
+        link.delete("/local/apps", recursive=True)
+        self.assertNotIn("/local/apps", dev.dirs)
+        self.assertEqual([k for k in dev.files if k.startswith("/local/apps/")], [])
 
 
 if __name__ == "__main__":
