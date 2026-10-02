@@ -22,13 +22,16 @@ public:
     static void setNTPEnabled(bool enabled);
 
     // Alarme (API 12, em RAM — nao sobrevive a reboot): dispara na PROXIMA
-    // ocorrencia de hh:mm (hoje se ainda nao passou, senao amanha) com um
-    // toast e se desarma. Conferido no tick do launcher: com um app aberto
-    // (caminho sincrono) o toast sai quando o app devolve o controle.
+    // ocorrencia de hh:mm (hoje se ainda nao passou, senao amanha) e se
+    // desarma: toast no launcher, banner + bipe com app aberto (pollAlarm).
     static bool setAlarm(int hour, int minute, const std::string& msg);
     static void clearAlarm();
     // false = desarmado; senao preenche hora/minuto/mensagem
     static bool getAlarm(int& hour, int& minute, std::string& msg);
+    // true UMA vez quando o alarme vence (desarma e preenche a mensagem).
+    // Chamado pelo tick do launcher e pelo present() dos apps JS — com app
+    // aberto o alarme tambem dispara (banner na faixa + bipe).
+    static bool pollAlarm(std::string& msg);
 
     // Getters
     static std::string getFormattedTime();

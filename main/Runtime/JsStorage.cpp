@@ -5,6 +5,7 @@
 #include "nvs.h"
 #include <cstdio>
 #include "../Utils/AppPerms.h"
+#include "../Utils/AppGrants.h"
 
 // =====================================================
 // Storage (API 12): persistencia chave-valor PRIVADA do app
@@ -240,6 +241,15 @@ duk_ret_t JSBindings::js_storageClear(duk_context *ctx) {
     return 1;
 }
 
+bool JSBindings::storageClearPackage(const std::string& pkg) {
+    bool ok = eraseNamespace(pkgNamespace(pkg));
+    // Nome longo: o namespace legado (truncado) pode ser de OUTRO pacote de
+    // mesmo prefixo — nao apaga; so marca migrado para a reinstalacao nao
+    // ressuscitar os dados antigos.
+    if (usesHash(pkg)) markMigrated(pkg);
+    return ok;
+}
+
 // clearFor(pkg): apaga o Storage de OUTRO app (desinstalacao pela loja).
 // Capability "system": um app comum nao pode apagar o dado de terceiros.
 duk_ret_t JSBindings::js_storageClearFor(duk_context *ctx) {
@@ -247,11 +257,10 @@ duk_ret_t JSBindings::js_storageClearFor(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, "Storage.clearFor requer permissao \"system\"");
     }
     std::string pkg = duk_require_string(ctx, 0);
-    bool ok = eraseNamespace(pkgNamespace(pkg));
-    // Nome longo: o namespace legado (truncado) pode ser de OUTRO pacote de
-    // mesmo prefixo — nao apaga; so marca migrado para a reinstalacao nao
-    // ressuscitar os dados antigos.
-    if (usesHash(pkg)) markMigrated(pkg);
+    bool ok = storageClearPackage(pkg);
+    // a loja chama na desinstalacao: a concessao de permissoes vai junto
+    // (reinstalar pede consentimento de novo)
+    AppGrants::revoke(pkg);
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }

@@ -38,6 +38,7 @@ set(CELEROS_SRCS
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
+    "Utils/AppGrants.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
     "USBDevice/HostLink.cpp"
@@ -175,7 +176,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.4.1"
-    CELEROS_API_LEVEL=13
+    CELEROS_API_LEVEL=14
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

@@ -27,6 +27,7 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "JsFsJail.h"
+#include "../Kernel/AppRunner.h"
 
 // =====================================================
 // System nivel 3 — suporte aos apps de sistema em JS (W8)
@@ -92,7 +93,11 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     // Empilha a tela nativa de WiFi. Como o app JS roda sincrono, a tela
     // so entra em cena quando o script devolver o controle ao loop do Kui
     // (o app deve chamar System.exitApp() logo em seguida).
-    kui::Navigator::push(WifiSetupScreen::instance());
+    // App em task propria (CELEROS_APP_TASK): empilhar agora pintaria a
+    // tela nativa POR CIMA do app vivo — o pedido e atendido pelo
+    // AppHostScreen::finishApp quando o app sai (task da UI).
+    if (AppRunner::running()) AppRunner::requestWifiSetup();
+    else kui::Navigator::push(WifiSetupScreen::instance());
     return 0;
 }
 

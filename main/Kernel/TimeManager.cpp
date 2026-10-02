@@ -1,4 +1,5 @@
 #include "TimeManager.h"
+#include <mutex>
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
@@ -135,6 +136,9 @@ static bool s_alarmArmed = false;
 static int s_alarmH = 0, s_alarmM = 0;
 static std::string s_alarmMsg;
 static time_t s_alarmAt = 0;  // epoch do disparo; 0 = recalcular (hora invalida/fuso novo)
+// Estado do alarme e tocado pelo tick do launcher E pelo app (setAlarm/
+// present, na task "celerapp" com CELEROS_APP_TASK): um mutex para tudo
+static std::mutex s_alarmMux;
 
 // Proxima ocorrencia local de hh:mm estritamente depois de "agora". O teste
 // antigo (hora atual > hh:mm) disparava NA HORA um alarme de 08:00 ligado
@@ -161,6 +165,7 @@ static time_t nextOccurrence(int hour, int minute) {
 }
 
 bool TimeManager::setAlarm(int hour, int minute, const std::string& msg) {
+    std::lock_guard<std::mutex> lock(s_alarmMux);
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return false;
     s_alarmArmed = true;
     s_alarmH = hour;
@@ -171,12 +176,28 @@ bool TimeManager::setAlarm(int hour, int minute, const std::string& msg) {
 }
 
 void TimeManager::clearAlarm() {
+    std::lock_guard<std::mutex> lock(s_alarmMux);
     s_alarmArmed = false;
     s_alarmAt = 0;
     s_alarmMsg.clear();
 }
 
+bool TimeManager::pollAlarm(std::string& msg) {
+    std::lock_guard<std::mutex> lock(s_alarmMux);
+    if (!s_alarmArmed || !isTimeValid()) return false;
+    // hora ficou valida depois do setAlarm (NTP) ou o relogio mudou
+    if (s_alarmAt == 0) s_alarmAt = nextOccurrence(s_alarmH, s_alarmM);
+    time_t now;
+    time(&now);
+    if (now < s_alarmAt) return false;
+    s_alarmArmed = false;
+    s_alarmAt = 0;
+    msg = s_alarmMsg.empty() ? "Alarme" : s_alarmMsg;
+    return true;
+}
+
 bool TimeManager::getAlarm(int& hour, int& minute, std::string& msg) {
+    std::lock_guard<std::mutex> lock(s_alarmMux);
     if (!s_alarmArmed) return false;
     hour = s_alarmH;
     minute = s_alarmM;
@@ -214,18 +235,8 @@ void TimeManager::tick(bool networkUp) {
     }
 
     // Alarme do dia: relogio local passa de hh:mm -> toast e desarma
-    if (s_alarmArmed && isTimeValid()) {
-        // hora ficou valida depois do setAlarm (NTP) ou o relogio mudou
-        if (s_alarmAt == 0) s_alarmAt = nextOccurrence(s_alarmH, s_alarmM);
-        time_t now3;
-        time(&now3);
-        if (now3 >= s_alarmAt) {
-            s_alarmArmed = false;
-            s_alarmAt = 0;
-            std::string msg = s_alarmMsg.empty() ? "Alarme" : s_alarmMsg;
-            kui::Navigator::toast("ALARME: " + msg, THEME_WARN, 5000);
-        }
-    }
+    std::string alarmMsg;
+    if (pollAlarm(alarmMsg)) kui::Navigator::toast("ALARME: " + alarmMsg, THEME_WARN, 5000);
 }
 
 bool TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {
@@ -247,7 +258,10 @@ bool TimeManager::setManualTime(int year, int month, int day, int hour, int minu
     struct timeval now = { .tv_sec = epoch, .tv_usec = 0 };
     settimeofday(&now, NULL);
     syncExternalRtc("ajuste manual");
-    s_alarmAt = 0;  // "proxima hh:mm" relativa a hora nova
+    {
+        std::lock_guard<std::mutex> lock(s_alarmMux);
+        s_alarmAt = 0;  // "proxima hh:mm" relativa a hora nova
+    }
     return true;
 }
 
@@ -262,7 +276,10 @@ bool TimeManager::setTimezone(const std::string& tzOffset) {
     savePreferences();
     // A hora gravada no RTC e local: fuso novo = hora local nova.
     if (isTimeValid()) syncExternalRtc("fuso trocado");
-    s_alarmAt = 0;  // hh:mm e local: o epoch do disparo muda com o fuso
+    {
+        std::lock_guard<std::mutex> lock(s_alarmMux);
+        s_alarmAt = 0;  // hh:mm e local: o epoch do disparo muda com o fuso
+    }
     return true;
 }
 
