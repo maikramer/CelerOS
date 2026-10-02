@@ -136,7 +136,9 @@ static void aiTask(void* raw) {
             http.postJson(AI_URL, std::string(s->payload ? s->payload : "", s->payloadLen));
         ok = resp.isOk();
         status = resp.statusCode;
-        snprintf(err, sizeof(err), "%s", resp.success ? "" : resp.errorMessage.c_str());
+        // %.95s: a mensagem pode vir maior que err[96] — corta em vez de
+        // acionar o -Werror=format-truncation do GCC do IDF
+        snprintf(err, sizeof(err), "%.95s", resp.success ? "" : resp.errorMessage.c_str());
     }  // TLS/cliente liberados antes de publicar o resultado
     // Pedido consumido: a task e a unica que toca payload/key enquanto
     // state==1 (o begin so reescreve quando nenhuma task esta viva)
