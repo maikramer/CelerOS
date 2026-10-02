@@ -26,6 +26,7 @@ set(CELEROS_SRCS
     "Kernel/TimeManager.cpp"
     "Kernel/Alarms.cpp"
     "Kernel/Notifications.cpp"
+    "Kernel/Services.cpp"
     "Launcher/LauncherUI.cpp"
     "Runtime/JSBindings.cpp"
     "Runtime/JsGfx.cpp"

@@ -27,6 +27,7 @@
 #include "Launcher/PhoneScreens.h"
 #endif
 #include "Kernel/Alarms.h"
+#include "Kernel/Services.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
@@ -238,26 +239,12 @@ static void celerLoop() {
     esp_task_wdt_reset();  // coracao do watchdog: UI viva
 
     // UI (input + redraw)
-    kui::Navigator::tick();
-
-    // Reboot diferido do upload web de firmware (/update)
-    WebManager::tick();
-    TimeManager::tick(WebManager::isActive());
-    Backlight::tick();  // brilho automatico (so com sensor de luz e a opcao ligada)
-    ScreenCapture::service();  // tela no navegador / celerctl screencap (le aqui, na task da UI)
-    Buttons::tick(false);  // botoes fisicos (no-op sem pins no perfil); apps
-                           // bombeiam pelo present() — aqui e a UI do sistema
-    ScreenPower::tick(false);  // dim/AOD/off (apps bombeiam pelo present())
-    LauncherUI::idleHomeTick();  // launcher ocioso volta para a casa da placa
-    AlarmScreen::service();      // alarme/timer tocando: tela cheia por cima
-    WatchPanels::service();      // painel pedido por gesto de borda dentro de app
-    NotificationAlert::service(false);  // alerta de notificacao em tela cheia (watch)
-    PowerPolicy::tick();         // locks de PM / WiFi ocioso (no-op sem PM)
-#if CONFIG_CELEROS_PHONE_LINK
-    PhoneLink::tick();           // linhas do Gadgetbridge (notificacoes, hora...)
-    PhoneScreens::service();     // codigo de pareamento / chamada em tela cheia
-#endif
-    confirmPendingOta();
+    // Servicos do OS (WebManager, TimeManager, Backlight, ScreenCapture,
+    // Buttons, ScreenPower, launcher, alarmes, paineis, PowerPolicy,
+    // PhoneLink, alerta de notificacao, confirmacao de OTA): a lista
+    // ordenada vive em Kernel/Services.cpp e e a MESMA que o present()
+    // dos apps percorre — um lugar so, dois contextos.
+    CelerServices::tickLoop();
 
     delay(PowerPolicy::loopDelayMs());  // tela apagada: loop lento, CPU dorme
 }

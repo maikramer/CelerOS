@@ -1,6 +1,7 @@
 #include "JSBindings.h"
 #include <stdio.h>
 #include "../Kernel/Core/CelerKernel.h"
+#include "../Kernel/Services.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -452,30 +453,10 @@ void JSBindings::present() {
     // chamadores — o longjmp nao atravessa recurso C aberto).
     if (s_jsCtx != nullptr) timersTick(s_jsCtx);
     if (tftInstance == nullptr) return;
-    Backlight::tick();  // brilho automatico segue ajustando com o app aberto (1x/s)
-    Buttons::tick(true);  // app cedeu: bombeia botoes fisicos (BOOT/PWR do watch)
-    ScreenPower::tick(true);  // estados de tela do watch (dim/AOD/off)
-    confirmPendingOta();      // main.cpp: app casa aberto desde o boot tambem confirma o OTA
-    PowerPolicy::tick();      // locks de PM seguem a tela com app aberto
-#if CONFIG_CELEROS_PHONE_LINK
-    PhoneLink::tick(true);    // notificacoes/hora do celular com app aberto
-#endif
-    // Alerta de notificacao (watch): com a tela dormindo/dim/AOD sai do app
-    // pelo caminho limpo para o celerLoop empilhar a tela cheia; com a tela
-    // acesa o usuario nao e interrompido (fica o toast do push).
-    NotificationAlert::service(true);
-    // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD:
-    // com a tela apagada/AOD (o normal no watchface) o alarme toca do mesmo
-    // jeito. O toque e a AlarmScreen nativa: o app sai pelo caminho limpo
-    // do X e o launcher a empilha (AlarmScreen::service).
-    {
-        static uint32_t s_alarmCheckAt = 0;
-        const uint32_t nowA = millis();
-        if (nowA - s_alarmCheckAt >= 1000) {
-            s_alarmCheckAt = nowA;
-            if (Alarms::tick()) LauncherUI::requestAppExit();
-        }
-    }
+    // Servicos do OS (Backlight, Buttons, ScreenPower, PowerPolicy,
+    // PhoneLink, alerta de notificacao, confirmacao de OTA, alarmes 1x/s):
+    // a MESMA lista ordenada que o celerLoop percorre — ver Kernel/Services.
+    CelerServices::tickPresent();
     if (ScreenPower::suppressAppFrame()) return;  // AOD/off: quadro do app nao vai ao vidro
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
