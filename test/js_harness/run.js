@@ -179,6 +179,14 @@ function makeEnv() {
             return true;
         },
         getFileSize: function(p) { var e = files[norm(p)]; return e && e.data !== undefined ? e.data.length : 0; },
+        // pasta privada do app (F4): runApp deriva o packageName do app.json
+        appData: function() {
+            if (!env.__pkg) return '';
+            var dir = '/local/data/' + env.__pkg + '/';
+            files['/local/data'] = files['/local/data'] || { dir: true };
+            files['/local/data/' + env.__pkg] = { dir: true };
+            return dir;
+        },
         getTotalSpace: function() { return 384 * 1024; },
         getUsedSpace: function() { return 163 * 1024; },
         getFreeSpace: function() { return 221 * 1024; },
@@ -256,6 +264,8 @@ function makeEnv() {
         prompt: function() { return ''; },
         print: function(s) { log.push('[serial] ' + String(s)); },
         exitApp: function() { throw 'OS_EXIT'; },
+        // API 16: pedido ao launcher + saida limpa (igual ao firmware)
+        launchApp: function(pkg) { log.push('[launch] ' + pkg); throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
         getOSVersion: function() { return '1.2.0'; },
         getAPILevel: function() { return 12; },
@@ -515,6 +525,11 @@ function makeEnv() {
 function runApp(relPath, wire) {
     var src = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
     var env = makeEnv();
+    // packageName do app.json ao lado do main.js (FS.appData e Storage por pkg)
+    try {
+        var mf = JSON.parse(fs.readFileSync(path.join(path.dirname(path.join(ROOT, relPath)), 'app.json'), 'utf8'));
+        if (mf && mf.packageName) env.__pkg = mf.packageName;
+    } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
@@ -1619,6 +1634,59 @@ function holdFrames(x, y, n) {
     r = runApp(W + 'Clima/main.js');
     check('Clima roda', r.err === null, r.err || '');
     check('Clima mostra temperatura', joinLog(r.log).indexOf('24 C') >= 0);
+})();
+
+// --- Previsao (hub_apps, API 16): Open-Meteo + plugin de watchface ----------
+(function() {
+    console.log('Previsao:');
+    var FIX = JSON.stringify({
+        current: { temperature_2m: 24.6, relative_humidity_2m: 63, weather_code: 1 },
+        daily: { time: ['2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05'],
+                 weather_code: [1, 3, 61, 0],
+                 temperature_2m_max: [27.1, 25.0, 21.0, 28.0],
+                 temperature_2m_min: [17.8, 18.0, 15.0, 19.0] }
+    });
+    var r = runApp('hub_apps/Previsao/main.js', function(env) {
+        env.Net.getJSON = function(url) {
+            env.__wxUrl = String(url);
+            return JSON.parse(FIX);
+        };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('mostra temperatura', j.indexOf('25 C') >= 0, j);
+    check('mostra condicao e dias', j.indexOf('Sol') >= 0 && j.indexOf('Amanha') >= 0 && j.indexOf('Chuva') >= 0, j);
+    check('consulta Open-Meteo', (r.env.__wxUrl || '').indexOf('api.open-meteo.com') >= 0);
+    check('grava cache no appData', !!r.env.FS.readTextFile('/local/data/celeros.previsao/forecast.json'));
+    check('instala plugin watchface',
+          (r.env.FS.readTextFile('/local/data/celeros.previsao/watchface.js') || '').indexOf('celeros.previsao') >= 0);
+})();
+
+// --- Plugins do watchface (API 16) -------------------------------------------
+(function() {
+    console.log('Plugins do watchface:');
+    var r = runApp('data/apps/Watchface/main.js', function(env) {
+        // plugin de app instalado (pasta) + copia no appData (dedup por id)
+        env.FS.mkdir('/local/apps/celeros.previsao');
+        env.FS.writeTextFile('/local/apps/celeros.previsao/watchface.js',
+            'return { id: "t1", line: function() { return "25C Sol 18/28"; }, open: "celeros.previsao" };');
+        env.FS.mkdir('/local/data/celeros.previsao');
+        env.FS.writeTextFile('/local/data/celeros.previsao/watchface.js',
+            'return { id: "t1", line: function() { return "DUP"; } };');
+        // plugin quebrado: erro em voo e absorvido, sem derrubar o relogio
+        env.FS.mkdir('/local/apps/Quebrado');
+        env.FS.writeTextFile('/local/apps/Quebrado/watchface.js',
+            'return { id: "bad", line: function() { return nadaExiste(); } };');
+        env.__launched = '';
+        env.System.launchApp = function(pkg) { env.__launched = pkg; };
+        env.__harness.tap(120, 269);   // linha do plugin 1 (y 258..280)
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('plugin da pasta do app desenha', j.indexOf('25C Sol 18/28') >= 0, j);
+    check('dedup por id (appData nao duplica)', j.indexOf('DUP') < 0, j);
+    check('plugin quebrado nao derruba', r.err === null && j.indexOf('25C Sol 18/28') >= 0);
+    check('toque na linha abre o app', r.env.__launched === 'celeros.previsao', r.env.__launched);
 })();
 
 // resumo

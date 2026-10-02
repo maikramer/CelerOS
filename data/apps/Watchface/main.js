@@ -12,7 +12,22 @@
 // Complicacoes (feature-detect, firmware antigo segue funcionando): bateria
 // em % e carregando (batteryInfo), passos x meta (System.setting
 // "step_goal"), proximo alarme / timer (System.alarms/getTimer), nao lidas
-// (unreadNotifications) e clima do celular (Phone.weather, Gadgetbridge).
+// (unreadNotifications), clima do celular com temperatura (Phone.weather,
+// Gadgetbridge), musica tocando (Phone.musicInfo) e estado do link com o
+// celular (Phone.status). O rodape alterna: timer > musica > clima > "sem
+// celular". A trilha de segundos ganhou o numero do segundo. O analogico
+// ganhou arcos de bateria e de progresso de passos (sem plugin na banda).
+//
+// Plugins de watchface (API 16): apps instalados podem registrar um widget
+// — um arquivo watchface.js na pasta do app OU no appData dele
+// (/local/data/<pkg>/watchface.js; a loja instala so main.js/app.json, entao
+// o app escreve o plugin no proprio appData na primeira execucao). O
+// watchface reescaneia a cada 30 s, avalia cada arquivo dentro de funcao
+// (o plugin termina em "return {...}") e da a ele uma linha na banda de
+// widgets (estilos digital e analogico; o minimo fica limpo de proposito).
+// Plugin com erro de avaliacao/desenho e dispensado ate o proximo scan —
+// nunca derruba o relogio. Toque na linha com "open" abre o app do plugin
+// (System.launchApp). Com plugin ativo, o clima do celular sai da rodape.
 //
 // Wallpaper: com /sd/wallpaper.png o estilo digital desenha o PNG UMA vez e
 // redesenha so os elementos em "pills" opacas por cima.
@@ -35,6 +50,7 @@ var HAS_TIMER = typeof System.getTimer === "function";
 var HAS_UNREAD = typeof System.unreadNotifications === "function";
 var HAS_PHONE = typeof Phone !== "undefined" && Phone && typeof Phone.weather === "function";
 var HAS_STORE = typeof Storage !== "undefined" && Storage && typeof Storage.get === "function";
+var HAS_LAUNCH = typeof System.launchApp === "function";
 var hasImu = false;
 try { hasImu = (typeof Sensors !== "undefined") && Sensors && Sensors.steps() >= 0; } catch (e) { hasImu = false; }
 
@@ -56,6 +72,113 @@ function stepGoal() {
 var goal = stepGoal();
 
 function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+// ---- plugins de watchface (API 16) ------------------------------------------
+// Contrato do watchface.js do app (avaliado dentro de funcao):
+//   return {
+//     id: "celeros.previsao",               // unico; dedup entre as origens
+//     sig: function () { return "..."; },   // op.; string barata, muda=redesenha
+//     line: function () { return "..."; },  // texto simples (ou draw abaixo)
+//     draw: function (x, y, w, h, bg) {},   // desenha a linha; bg=pill ou null
+//     open: "celeros.previsao"              // op.; toque na linha abre o app
+//   };
+
+var PLUG_MAX = 2;                 // linhas na banda (digital: 258..280, 232..254)
+var plugins = [];                 // descritores ativos, na ordem desenhada
+var plugDead = {};                // ids que erraram nesta sessao (ate o proximo scan)
+var plugAt = 0;                   // ultimo scan
+var plugKey = "";                 // ids carregados; mudou = repaint cheio
+var plugDirty = false;            // plugin morto em voo: repaint na proxima volta
+
+function killPlugin(p) {
+    if (p.dead) return;
+    p.dead = true;
+    if (p.id) plugDead[p.id] = 1;
+    plugDirty = true;
+}
+
+function loadPluginFile(path) {
+    try {
+        if (!FS.exists(path) || FS.isDirectory(path)) return null;
+        var src = FS.readTextFile(path);
+        if (!src || src.length > 8192) return null;
+        // "return {...}" no topo do arquivo: eval dentro de funcao
+        var obj = eval("(function(){\n" + src + "\n})()");
+        if (!obj || !obj.id || (typeof obj.draw !== "function" && typeof obj.line !== "function"))
+            return null;
+        return obj;
+    } catch (e) { return null; }
+}
+
+function scanPlugins() {
+    plugins = [];
+    var seen = {};
+    var roots = ["/local/apps", "/sd/apps", "/local/data"];
+    for (var ri = 0; ri < roots.length && plugins.length < PLUG_MAX; ri++) {
+        var dirs = [];
+        try { dirs = FS.listDir(roots[ri]); } catch (e) { dirs = []; }
+        for (var i = 0; i < dirs.length && plugins.length < PLUG_MAX; i++) {
+            var d = loadPluginFile(dirs[i] + "/watchface.js");
+            if (d && !seen[d.id] && !plugDead[d.id]) {
+                seen[d.id] = 1;
+                plugins.push(d);
+            }
+        }
+    }
+    var key = "";
+    for (var k = 0; k < plugins.length; k++) key += plugins[k].id + "~";
+    var changed = key !== plugKey;
+    plugKey = key;
+    return changed;
+}
+
+function pluginRect(i) {
+    return { x: 36, y: BOTY - 52 - i * 26, w: 168, h: 22 };
+}
+
+function drawPlugin(p, i, bg) {
+    var r = pluginRect(i);
+    if (bg !== null) System.fillRoundRect(r.x, r.y, r.w, r.h, 8, bg);
+    if (typeof p.draw === "function") {
+        try { p.draw(r.x, r.y, r.w, r.h, bg); } catch (e) { killPlugin(p); }
+        return;
+    }
+    var s = "";
+    try { s = p.line() || ""; } catch (e) { killPlugin(p); s = ""; }
+    if (s) {
+        System.setTextColor(T.textDim);
+        System.drawString(s, Math.round((240 - System.textWidth(s, 2)) / 2), r.y + 3, 2);
+    }
+}
+
+function drawPlugins(bg) {
+    for (var i = 0; i < plugins.length; i++) drawPlugin(plugins[i], i, bg);
+}
+
+function tapPlugins(x, y) {
+    for (var i = 0; i < plugins.length; i++) {
+        var p = plugins[i];
+        var r = pluginRect(i);
+        if (p.open && HAS_LAUNCH && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
+            System.launchApp(p.open);  // sai pelo caminho limpo; launcher abre o alvo
+            return true;
+        }
+    }
+    return false;
+}
+
+// assinatura dos plugins para o sigOf (o plugin controla o custo do sig())
+function plugSig() {
+    var out = [];
+    for (var i = 0; i < plugins.length; i++) {
+        var v = "";
+        try {
+            if (typeof plugins[i].sig === "function") v = String(plugins[i].sig() || "");
+        } catch (e) { killPlugin(plugins[i]); v = "x"; }
+        out.push(v);
+    }
+    return out.join("~");
+}
 
 function ctext(s, y, font, color) {
     System.setTextColor(color);
@@ -98,12 +221,25 @@ function readState() {
         if (t && t.remaining > 0) n.timer = Math.floor(t.remaining / 60) + ":" + pad2(t.remaining % 60);
     }
     n.wx = "";
+    n.music = "";
+    n.link = "";
     if (HAS_PHONE) {
         try {
             var w = Phone.weather();
-            if (w && typeof w.temp === "number") n.wx = Math.round(w.temp) + "C " + (w.txt || "");
+            if (w && typeof w.temp === "number") n.wx = Math.round(w.temp) + "°C " + (w.txt || "");
         } catch (e) { n.wx = ""; }
+        try {
+            if (typeof Phone.musicInfo === "function") {
+                var mi = Phone.musicInfo();
+                if (mi && mi.state === "play" && mi.track) n.music = mi.track;
+            }
+            if (typeof Phone.status === "function") {
+                var st = Phone.status();
+                if (st && st.enabled && !st.connected) n.link = "sem celular";
+            }
+        } catch (e) { n.music = ""; n.link = ""; }
     }
+    n.plug = plugSig();
     return n;
 }
 
@@ -156,11 +292,23 @@ function drawSteps(n, y, bg) {
     if (w > 6) System.fillRoundRect(45, y + 14, w, 8, 4, n.steps >= goal ? T.ok : T.accent);
 }
 
-// Linha de baixo: timer > clima
+// Corta com ".." para caber em maxW (rodape com faixa/musica longas)
+function trunc(s, font, maxW) {
+    if (System.textWidth(s, font) <= maxW) return s;
+    while (s.length > 1 && System.textWidth(s + "..", font) > maxW) s = s.substring(0, s.length - 1);
+    return s + "..";
+}
+
+// Linha de baixo: timer > musica tocando > clima do celular > sem celular
+// (o clima sai quando ha plugin, que ocupa a banda de widgets logo acima)
 function drawFooter(n, bg) {
-    var s = n.timer ? "Timer " + n.timer : n.wx;
-    if (bg !== null) System.fillRoundRect(40, BOTY - 26, 160, 22, 8, bg);
-    if (s) ctext(s, BOTY - 22, 2, n.timer ? T.warn : T.textDim);
+    var s = "", col = T.textDim;
+    if (n.timer) { s = "Timer " + n.timer; col = T.warn; }
+    else if (n.music) { s = trunc(n.music, 2, 152); col = T.accent; }
+    else if (!plugins.length && n.wx) { s = n.wx; }
+    else if (n.link) { s = n.link; }
+    if (bg !== null && s) System.fillRoundRect(40, BOTY - 26, 160, 22, 8, bg);
+    if (s) ctext(s, BOTY - 22, 2, col);
 }
 
 // ---- estilo 0: digital ------------------------------------------------------
@@ -171,8 +319,9 @@ function digitalAll(n) {
     drawStatus(n, bg);
     digitalClock(n, bg);
     drawSteps(n, 206, bg);
-    digitalBar(n);
+    if (plugins.length < 2) digitalBar(n, bg);  // 2 plugins ocupam a faixa da trilha
     drawFooter(n, bg);
+    if (plugins.length) drawPlugins(bg);
 }
 function digitalClock(n, bg) {
     if (bg !== null) System.fillRoundRect(26, 70, 188, 110, 12, bg);
@@ -184,10 +333,15 @@ function digitalClock(n, bg) {
     var d = (n.wd >= 0 ? DIA[n.wd] + "  " : "") + n.date.substring(0, 5);
     ctext(d, 150, 2, T.accent);
 }
-function digitalBar(n) {
-    System.fillRoundRect(70, 248, 100, 10, 5, T.bg);
-    var prog = Math.round(96 * n.sec / 60);
-    if (prog > 0) System.fillRect(72, 250, prog, 6, T.accent);
+// Trilha de segundos virou pilula: progresso + o numero do segundo a direita
+function digitalBar(n, bg) {
+    System.fillRoundRect(46, 238, 148, 20, 10, bg !== null ? bg : T.card);
+    System.fillRoundRect(52, 244, 94, 8, 4, hasWall && bg !== null ? T.card : T.bg);
+    var prog = Math.round(94 * n.sec / 60);
+    if (prog > 0) System.fillRoundRect(52, 244, prog, 8, 4, T.accent);
+    var ss = pad2(n.sec);
+    System.setTextColor(T.textDim);
+    System.drawString(ss, Math.round(146 + (44 - System.textWidth(ss, 2)) / 2), 240, 2);
 }
 
 // ---- estilo 1: analogico ----------------------------------------------------
@@ -210,9 +364,22 @@ function hand(a, len, tail, wid, col) {
         Math.round(back[0] + dr[0]), Math.round(back[1] + dr[1]),
         Math.round(tip[0]), Math.round(tip[1]), col);
 }
+// Arco de pontos (0..1 a partir das 12h, sentido horario): bateria e
+// progresso de passos ao redor do mostrador
+function ringArc(frac, r, col) {
+    var total = 90, dots = Math.round(total * frac);
+    for (var i = 0; i <= dots; i++) {
+        var p = polar(-90 + (i / total) * 360, r);
+        System.fillCircle(Math.round(p[0]), Math.round(p[1]), 2, col);
+    }
+}
 function analogAll(n) {
     System.fillRect(0, 0, 240, 320, T.bg);
     drawStatus(n, null);
+    if (!plugins.length) {  // com plugin a banda pisca sobre o arco de baixo
+        if (n.steps >= 0) ringArc(Math.min(1, n.steps / goal), R + 9, T.accent);
+        if (n.pct >= 0) ringArc(n.pct / 100, R + 15, batteryColor(n));
+    }
     System.fillCircle(CX, CY, R + 6, T.card);
     for (var i = 0; i < 12; i++) {
         var o = polar(i * 30, R), p = polar(i * 30, i % 3 === 0 ? R - 14 : R - 7);
@@ -223,12 +390,14 @@ function analogAll(n) {
     System.setTextColor(T.accent);
     System.drawString(d, CX + 28, CY - 6, 1);
     if (n.steps >= 0) ctext(n.steps + " passos", CY + 40, 1, T.textDim);
+    if (n.unread > 0) ctext(n.unread + (n.unread === 1 ? " nova" : " novas"), CY + 56, 1, T.accent);
     var x = hm(n.time);
     hand((x[0] % 12) * 30 + x[1] * 0.5, R * 0.55, 10, 5, T.text);
     hand(x[1] * 6 + n.sec * 0.1, R * 0.82, 12, 3, T.text);
     hand(n.sec * 6, R * 0.88, 16, 1, T.accent);
     System.fillCircle(CX, CY, 5, T.accent);
     drawFooter(n, null);
+    if (plugins.length) drawPlugins(null);
 }
 
 // ---- estilo 2: minimo -------------------------------------------------------
@@ -240,7 +409,7 @@ function minimalAll(n) {
     ctext(t, 120, 7, T.textDim);
     var d = (n.wd >= 0 ? DIA[n.wd] + "  " : "") + n.date.substring(0, 5);
     ctext(d, 180, 2, T.stroke);
-    if (n.unread > 0) System.fillCircle(120, 210, 4, T.accent);
+    if (n.unread > 0) ctext(n.unread + (n.unread === 1 ? " nova" : " novas"), 208, 1, T.accent);
     var bt = batteryText(n);
     if (bt && (n.pct <= 20 || n.chg)) ctext(bt, BOTY - 18, 1, batteryColor(n));
 }
@@ -250,7 +419,7 @@ function minimalAll(n) {
 function sigOf(n) {
     // o que muda o desenho; analogico redesenha a cada segundo
     return [n.time, style === 2 ? "" : n.sec, n.date, n.pct, n.chg, n.steps, n.unread,
-        n.alarm, n.timer, n.wx].join("|");
+        n.alarm, n.timer, style === 2 ? "" : n.wx, n.music, n.link, n.plug].join("|");
 }
 
 function drawAll(n) {
@@ -270,13 +439,35 @@ function setStyle(s) {
     drawAll(S);
 }
 
+scanPlugins();
 setStyle(style);
 var lastSig = sigOf(S);
 var goalAt = System.millis();
 
-var touchStartX = -1, touchStartY = -1, touchLastY = -1, touchAt = 0, moved = false, longDone = false;
+var touchStartX = -1, touchStartY = -1, touchLastX = -1, touchLastY = -1, touchAt = 0, moved = false, longDone = false;
+
+// repaint cheio (papel de parede incluido): plugins entraram/sairam ou
+// algum morreu em voo
+function plugRepaint() {
+    setStyle(style);
+    S = readState();
+    lastSig = sigOf(S);
+}
 
 while (true) {
+    if (plugDirty) {
+        plugDirty = false;
+        for (var di = plugins.length - 1; di >= 0; di--)
+            if (plugins[di].dead) plugins.splice(di, 1);
+        plugKey = "";
+        for (var dk = 0; dk < plugins.length; dk++) plugKey += plugins[dk].id + "~";
+        plugRepaint();
+    }
+    if (System.millis() - plugAt > 30000) {  // apps instalam/desinstalam: reescaneia
+        plugAt = System.millis();
+        if (scanPlugins()) plugRepaint();
+    }
+
     var n = readState();
     if (System.millis() - goalAt > 30000) {  // meta mudada no Settings
         goalAt = System.millis();
@@ -287,10 +478,12 @@ while (true) {
         if (style === 0 && hasWall) {
             // com wallpaper: so o que mudou, em pills opacas
             if (n.time !== S.time || n.date !== S.date) digitalClock(n, T.bg);
-            if (n.sec !== S.sec) digitalBar(n);
+            if (n.sec !== S.sec && plugins.length < 2) digitalBar(n, T.bg);
             if (n.pct !== S.pct || n.chg !== S.chg || n.unread !== S.unread || n.alarm !== S.alarm) drawStatus(n, T.bg);
             if (n.steps !== S.steps) drawSteps(n, 206, T.bg);
-            if (n.timer !== S.timer || n.wx !== S.wx) drawFooter(n, T.bg);
+            if (n.timer !== S.timer || n.wx !== S.wx || n.music !== S.music || n.link !== S.link)
+                drawFooter(n, T.bg);
+            if (n.plug !== S.plug) drawPlugins(T.bg);
         } else {
             drawAll(n);
         }
@@ -305,7 +498,7 @@ while (true) {
             moved = false; longDone = false;
         }
         if (Math.abs(tp.x - touchStartX) > 12 || Math.abs(tp.y - touchStartY) > 12) moved = true;
-        touchLastY = tp.y;
+        touchLastX = tp.x; touchLastY = tp.y;
         // toque longo parado: proximo estilo
         if (!moved && !longDone && System.millis() - touchAt > 700) {
             longDone = true;
@@ -315,6 +508,7 @@ while (true) {
         }
     } else if (touchStartY >= 0) {
         if (!longDone && touchStartY - touchLastY > 25) System.exitApp();
+        else if (!longDone && !moved) tapPlugins(touchLastX, touchLastY);
         touchStartY = -1;
         touchLastY = -1;
     }

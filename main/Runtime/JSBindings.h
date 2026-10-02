@@ -222,6 +222,7 @@ private:
     static duk_ret_t js_backlightSupported(duk_context *ctx);
     static duk_ret_t js_openWifiSetup(duk_context *ctx);
     static duk_ret_t js_exitApp(duk_context *ctx);
+    static duk_ret_t js_launchApp(duk_context *ctx);  // API 16
     static duk_ret_t js_present(duk_context *ctx);
     static duk_ret_t js_setClip(duk_context *ctx);
     static duk_ret_t js_clearClip(duk_context *ctx);

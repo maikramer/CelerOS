@@ -13,6 +13,18 @@ Duktape JS engine running sandboxed apps from flash or SD, an App Store with
 over-the-air updates, and a USB companion tool (`celerctl`) for day-to-day
 development.
 
+## What's new in 1.5
+
+Highlights of the October 2026 releases (firmware 1.5, JS API level 16):
+
+* **Phone Link** — the watch talks to Android through [Gadgetbridge](https://gadgetbridge.org) over BLE (it poses as a Bangle.js): phone notifications land on the wrist with a full-screen alert, plus music info and controls, weather, incoming calls (accept/reject) and find-my-phone/watch. Pairing is a 6-digit code shown on the watch; the link is encrypted with MITM protection. JS API: `Phone.*` (API 15).
+* **Watchface plugins (API 16)** — any installed app can add widget lines to the watch face by shipping a `watchface.js` ([wiki](https://github.com/maikramer/CelerOS/wiki/Watchface-Plugins)); a faulty plugin is quarantined, never takes the clock down. First one in the store: **Previsao** (weather forecast).
+* **A real watch experience (API 15)** — a native notification center, persistent alarms with their own ringing screen, quick panels (flashlight, brightness, do-not-disturb, find phone) and six new watch apps: Timer, Weather, Music, Alarms, Phone and Activity.
+* **Runtime APIs 12–16** — timers, per-app `Storage`, multi-sprites, binary file I/O, screen timeout / deep sleep / alarms with persistent time, `playTone`/`playWav`, async HTTP (`Net.beginGet/pollGet/cancelGet`) and permission consent for what apps declare.
+* **Celer Link grows up** — pairing by 6-digit code plus a challenge-response key per bond; the old "no pairing in v1" disclaimer is retired.
+* **CelerOS Flasher** — every [GitHub release](https://github.com/maikramer/CelerOS/releases) ships per-board packages (firmware + LittleFS image + flash plan) and a no-toolchain GUI flasher for Linux/Windows with esptool embedded.
+* **App SDK** — `node tools/sdk/celer.js new|lint|types|test|emu|publish`: scaffold, editor typings, lint against the real firmware API, headless emulator with PNG snapshots and store publishing — zero npm dependencies.
+
 ## Screenshots
 
 | Launcher | App Store | Settings |
@@ -29,7 +41,7 @@ development.
 | :---: | :---: |
 | <img src="Documentation/assets/imgs/watch-watchface.png" width="220" alt="Watchface"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="220" alt="Watch launcher"/> |
 
-*The watch boots into its watch face (wallpaper, steps, battery); swipe up opens the launcher. Same `celerctl screencap`, over the native USB.*
+*The watch boots into its watch face (wallpaper, steps, battery); swipe up opens the launcher. Since 1.5 the face also carries phone notifications, weather, music and plugin widgets. Same `celerctl screencap`, over the native USB.*
 
 ### CYD (2.8" 320x240, no PSRAM)
 
@@ -61,7 +73,7 @@ noticeably simpler:
 
 ## Features
 
-* **JavaScript app runtime** — interactive apps written in ES5 run natively via Duktape (API level 13): canvas-style drawing, touch and coupled on-screen keyboard (`System.keypad*`), file system, HTTP/JSON networking.
+* **JavaScript app runtime** — interactive apps written in ES5 run natively via Duktape (API level 16): canvas-style drawing, touch and coupled on-screen keyboard (`System.keypad*`), file system with per-app storage, timers, HTTP/JSON networking (blocking and async).
 * **Immediate-mode UI** — adaptive layout (`main/Display/Layout.h`): the same apps scale from 240x320 up to 480x480, with PNG icons decoded to an RGB565+A4 cache.
 * **Pre-installed apps in JS** — Settings, App Store, Installer, Help, Web Server, Terminal, Snake and the demos (HTTP Demo, Touch Test) live in the LittleFS partition; the firmware carries only the core (that shaved ~330 KB off the CYD image).
 * **App Store & Installer** — browse and install apps from the [CelerOS Hub](https://os.celer.tec.br) over Wi-Fi, or sideload from the SD card.
@@ -70,7 +82,12 @@ noticeably simpler:
 * **Live screen from the browser** — `/screen` mirrors the display over Wi-Fi (RLE frames served row-block by row-block, so the device keeps running smoothly) and forwards your clicks as touches.
 * **Board hardware in JS** — RGB LED (`System.led`), light sensor with auto-brightness (`System.lightLevel`), speaker (`System.beep`), relay lines on the SmartDisplay "Y" SKUs (`System.relay`), servos (`System.gpio.servo`) and robot-board hardware — battery, microphone, capacitive touch pad, NeoPixel (`System.battery`/`micLevel`/`touchPad`/`neopixel`). The watch adds an IMU with pedometer and raise-to-wake (`Sensors.*`), battery, an RTC that keeps time without network and audio volume (`System.setVolume`).
 * **Watch-grade power management** — on the Waveshare watch the screen ladder dims after a few seconds, falls back to an always-on face with anti burn-in, then goes to deep sleep (EXT1 wake on the buttons); the device boots straight into its watch face.
-* **Celer Link (BLE)** — Bluetooth LE link between nearby CelerOS devices (API 9): put a board on a robot, drive it from another CelerOS app (`CelerLink.scan/connect/send` — the Celer Remote hub app does exactly that). No pairing in v1: toys and prototypes.
+* **Celer Link (BLE)** — Bluetooth LE link between nearby CelerOS devices (API 9): put a board on a robot, drive it from another CelerOS app (`CelerLink.scan/connect/send` — the Celer Remote hub app does exactly that). Since API 11 it pairs with a 6-digit code and a challenge-response key per bond.
+* **Phone Link (Gadgetbridge)** — the watch pairs with Android over BLE posing as a Bangle.js ([Gadgetbridge](https://gadgetbridge.org) app): notifications with a full-screen alert, music control, weather, incoming calls and find-my-phone (`Phone.*`, API 15).
+* **Notifications & alarms** — a system notification center (apps raise toasts/history via `System.notify`; on the watch an incoming notification wakes the screen with a full-screen alert) and persistent alarms with their own ringing screen (API 15).
+* **Watchface plugins** — installed apps can extend the watch face with widget lines (`watchface.js` + `System.launchApp`, API 16); see the [wiki](https://github.com/maikramer/CelerOS/wiki/Watchface-Plugins).
+* **Flash without a toolchain** — every [GitHub release](https://github.com/maikramer/CelerOS/releases) carries per-board packages (firmware + LittleFS image) and the **CelerOS Flasher**, a GUI flasher for Linux/Windows with esptool embedded.
+* **App SDK** — `tools/sdk/celer.js`: scaffold, lint against the firmware's real API, editor typings, headless emulator (PNG snapshots), on-device dev loop and publishing, with zero npm dependencies.
 * **`celerctl` USB companion** — adb-style tool over the serial link: interactive shell, file push/pull, live logcat, in-place firmware update and screencap. See [tools/README_USBTOOL.md](tools/README_USBTOOL.md).
 * **Settings PIN lock** — optional numeric PIN (salted SHA-256, handled natively) protects Settings, with a 60 s unlock session.
 * **Web file manager with authentication** — files, text editor and firmware upload over the browser, guarded by HTTP Basic Auth (password shown in the Web Server app or `celerctl info`).
@@ -153,7 +170,7 @@ in by the ESP-IDF component manager; LovyanGFX is a git submodule — clone with
 
 * [Wiki](https://github.com/maikramer/CelerOS/wiki) — architecture, build, boards, tools and guides (CI-generated from [`wiki/`](wiki/) in the repo).
 * [App Development Guide](Documentation/App_Development_Guide.md) ([em português](Documentation/App_Development_Guide.pt-BR.md)) — how to package a JS app (`app.json`, folder layout, icons).
-* [JavaScript API Guide](Documentation/JS_API_Guide.md) ([em português](Documentation/JS_API_Guide.pt-BR.md)) — full reference of the JS runtime and native bindings (API level 13).
+* [JavaScript API Guide](Documentation/JS_API_Guide.md) ([em português](Documentation/JS_API_Guide.pt-BR.md)) — full reference of the JS runtime and native bindings (API level 16).
 * [tools/README_USBTOOL.md](tools/README_USBTOOL.md) ([em português](tools/README_USBTOOL.pt-BR.md)) — `celerctl` command reference and the wire protocol.
 * [tools/README_OTA.md](tools/README_OTA.md) ([em português](tools/README_OTA.pt-BR.md)) — OTA manifest scheme (`update.json`) and update channels.
 * [components/README.md](components/README.md) — vendored helper components and local patches.
@@ -167,7 +184,7 @@ node test/js_harness/run.js
 ## Roadmap
 
 * More boards (help with a bring-up is welcome — board profiles are small and self-contained; the [SpotPear robot dog](https://github.com/maikramer/CelerOS/wiki/Robot-Dog) and the [Waveshare AMOLED 2.06 watch](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch) are the latest two to land).
-* More hardware APIs in the JS runtime (I2C/SPI sensors, ULP-assisted sensing during deep sleep, Celer Link security/pairing).
+* More hardware APIs in the JS runtime (I2C/SPI sensors, ULP-assisted sensing during deep sleep).
 
 ## History & Credits
 

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 15
+### API Level: 16
 ### Nível de API: 13
 ---
 
@@ -678,6 +678,14 @@ assim.
 #### `System.rescanApps()`
 Pede ao launcher para reescanear `/local/apps` e `/sd/apps`. Chame depois de
 instalar/remover apps.
+
+#### `System.launchApp(packageName)` (API 16)
+Pede ao launcher para abrir outro app pelo `packageName` (também aceita
+caminho ou nome da pasta) e encerra o app atual pela mesma saída limpa do
+`exitApp()` — o launcher consome o pedido quando o app sai. O consentimento
+de permissões do app de destino continua valendo. Caso de uso principal:
+**plugins do watchface** — a linha de widget que o app instala no relógio
+abre o app de origem ao toque (veja a página *Watchface-Plugins* da wiki).
 
 #### `System.openWifiSetup()`
 Empurra a tela nativa de configuração de WiFi. Como os apps JS rodam de
@@ -1631,8 +1639,12 @@ O sistema cuida do resto sem código de app: código de pareamento em tela
 cheia, tela de chamada recebida (Recusar/Atender voltam ao celular),
 notificação dispensada no relógio some no celular, a versão do firmware
 aparece no Gadgetbridge, e bateria/passos são enviados quando mudam ou
-quando o Gadgetbridge pede. O texto do Android é reduzido ao que as fontes
-desenham (emoji some, aspas/travessões tipográficos viram ASCII).
+quando o Gadgetbridge pede. Notificação nova **acorda o relógio com o
+alerta em tela cheia** (origem, título, corpo e hora; sem toque volta a
+dormir em ~8 s, toque abre a central; com a tela acesa em um app vale só o
+toast). Em Não perturbe só o histórico, sem som nem alerta. O texto do
+Android é reduzido ao que as fontes desenham (emoji some, aspas/travessões
+tipográficos viram ASCII).
 
 #### `Phone.music(cmd)` / `Phone.musicInfo()` (API 15)
 

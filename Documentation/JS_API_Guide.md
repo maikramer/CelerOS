@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 15
+### API Level: 16
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -498,6 +498,9 @@ Closes the app and returns to the launcher (same as touching the top-right corne
 
 #### `System.rescanApps()`
 Asks the launcher to rescan `/local/apps` and `/sd/apps`. Call after installing/removing apps.
+
+#### `System.launchApp(packageName)` (API 16)
+Asks the launcher to open another app by `packageName` (a path or folder name also works) and ends the current app through the same clean exit as `exitApp()` — the launcher consumes the request once the app exits. The target app's permission consent still applies. Main use case: **watchface plugins** — the widget line an app installs on the watch opens the source app when tapped (see the *Watchface-Plugins* wiki page).
 
 #### `System.openWifiSetup()`
 Pushes the native WiFi setup screen. Since JS apps run synchronously, call `System.exitApp()` right after — the setup screen takes over when the script yields.

@@ -1,0 +1,12 @@
+{
+  "name": "Previsao",
+  "packageName": "celeros.previsao",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Previsão do tempo (Open-Meteo): temperatura e umidade agora, 4 dias à frente, cidades prontas ou lat/lon própria. Instala um plugin no watchface com o resumo do clima — toque na linha do relógio abre este app.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 16,
+  "permissions": ["net", "fs"],
+  "changelog": "1.0.0 - primeira versao: Open-Meteo (current + 4 dias), cidades preset e lat/lon custom, cache no appData, fallback para o clima do celular (Gadgetbridge) e plugin de watchface auto-instalado (API 16)"
+}

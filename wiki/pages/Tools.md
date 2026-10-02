@@ -12,6 +12,7 @@ Pillow, which is not in the list).
 | [flash_data.sh](tools/flash_data.sh) | Builds the LittleFS image from `data/` and flashes the `littlefs` partition |
 | [ota_server.py](tools/ota_server.py) | Local server of `update.json` + firmware for OTA tests |
 | [celerhub.py](tools/celerhub.py) | Publishes/lists/removes apps on the hub (validates app folders; token via args/env; `--hub` or `CELER_HUB`, default `https://os.celer.tec.br`) |
+| [sdk/celer.js](tools/sdk/celer.js) | App SDK: scaffold, lint, editor typings, headless emulator and store publishing (Node, zero npm deps) |
 | [make_icons.py](tools/make_icons.py) | `icons.json` → `icons_src/*.png` (512 px) → `data/icons/*.png` (64 px, dithered RGB565) |
 | [make_splash.py](tools/make_splash.py) | PNG → `main/Assets/SplashLogo.h` (RGB565 over THEME_BG) |
 
@@ -44,6 +45,34 @@ one source of truth for both sides. Do not run `celerctl` while
 python3 tools/celerhub.py list               # local versions vs hub
 python3 tools/celerhub.py publish hub_apps/2048
 ```
+
+## celer.js — the app SDK
+
+```bash
+node tools/sdk/celer.js new MeuApp      # scaffold: app.json + main.js + icon + editor typings
+node tools/sdk/celer.js lint MeuApp     # ES5 + API check against the real firmware manifest (app_lint)
+node tools/sdk/celer.js test MeuApp     # runs the app in the Node harness (stubbed device APIs)
+node tools/sdk/celer.js emu MeuApp      # headless emulator: drives the app and snapshots the screen to PNG
+python3 tools/celerctl.py dev MeuApp    # live on the device (push + relaunch)
+node tools/sdk/celer.js publish MeuApp  # publishes to the hub store
+```
+
+`lint`/`check` delegate to `tools/app_lint` (the manifest is derived from the
+firmware source, so the linter knows the real API surface); `dev`/`publish`
+delegate to `celerctl`/`celerhub`. Zero npm dependencies — acorn is vendored
+and the PNG encoder uses Node's zlib.
+
+## Flashing without a toolchain — CelerOS Flasher
+
+Every `v*` tag publishes, on
+[GitHub Releases](https://github.com/maikramer/CelerOS/releases):
+
+* one zip per board — firmware + LittleFS image + `flash.json` (the flash
+  plan), plus a `README.txt` with the equivalent `esptool` command line if
+  you'd rather flash manually;
+* the **CelerOS Flasher**, a GUI flasher for Linux and Windows with esptool
+  embedded — download it plus your board's zip into the same folder, pick the
+  board, plug the device, flash. No ESP-IDF install needed.
 
 ## Asset generators
 

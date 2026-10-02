@@ -147,6 +147,18 @@ duk_ret_t JSBindings::js_exitApp(duk_context *ctx) {
     throwAppExit(ctx);
 }
 
+duk_ret_t JSBindings::js_launchApp(duk_context *ctx) {
+    // API 16: abre outro app pelo packageName (ou caminho/nome da pasta) e
+    // sai pela mesma porta do X: o launcher consome o pedido no tick seguinte
+    // a saida. O consentimento de permissoes do app de destino segue valendo.
+    const char* target = duk_require_string(ctx, 0);
+    if (!*target) duk_error(ctx, DUK_ERR_TYPE_ERROR, "launchApp: alvo vazio");
+    if (s_appExitPending) return 0;  // saida ja armada: nao empilha outro pedido
+    LauncherUI::requestLaunch(target);
+    throwAppExit(ctx);
+    return 0;
+}
+
 duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {
     duk_push_object(ctx);
     duk_push_boolean(ctx, WebManager::isActive() ? 1 : 0);

@@ -23,7 +23,19 @@ development.
 | :---: | :---: |
 | <img src="Documentation/assets/imgs/watch-watchface.png" width="200" alt="Watchface on the Waveshare watch"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="200" alt="Launcher on the watch"/> |
 
-*Captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
+*Captured from the real framebuffer of the Waveshare watch via `celerctl screencap` (over the native USB).*
+
+## What's new in 1.5
+
+Highlights of the October 2026 releases (firmware 1.5, JS API level 16):
+
+* **Phone Link** — the watch talks to Android through [Gadgetbridge](https://gadgetbridge.org) over BLE (it poses as a Bangle.js): notifications with a full-screen alert, music info/controls, weather, incoming calls and find-my-phone. Pairing by a 6-digit code; encrypted link with MITM protection (`Phone.*`, API 15 — [watch page](/maikramer/CelerOS/wiki/Waveshare-Watch)).
+* **Watchface plugins (API 16)** — installed apps add widget lines to the watch face by shipping a `watchface.js`; a faulty plugin is quarantined, never takes the clock down. First one in the store: **Previsao** (weather forecast) — [plugins page](/maikramer/CelerOS/wiki/Watchface-Plugins).
+* **A real watch experience (API 15)** — native notification center, persistent alarms with their own ringing screen, quick panels (flashlight, brightness, do-not-disturb, find phone) and six new watch apps: Timer, Weather, Music, Alarms, Phone and Activity.
+* **Runtime APIs 12–16** — timers, per-app `Storage`, multi-sprites, binary file I/O, screen timeout / deep sleep / alarms, `playTone`/`playWav`, async HTTP (`Net.beginGet/pollGet/cancelGet`) and permission consent for what apps declare.
+* **Celer Link grows up** — pairing by 6-digit code plus a challenge-response key per bond; the "no pairing in v1" disclaimer is retired.
+* **CelerOS Flasher** — per-board packages (firmware + LittleFS image + flash plan) and a no-toolchain GUI flasher for Linux/Windows on every [GitHub release](https://github.com/maikramer/CelerOS/releases) ([tools](/maikramer/CelerOS/wiki/Tools)).
+* **App SDK** — `node tools/sdk/celer.js new|lint|types|test|emu|publish`: scaffold, editor typings, lint against the real firmware API, headless emulator with PNG snapshots and store publishing ([tools](/maikramer/CelerOS/wiki/Tools)).
 
 ## Wiki map
 
@@ -41,6 +53,7 @@ development.
 | [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) | Command reference and the HostLink wire protocol |
 | [OTA updates](/maikramer/CelerOS/wiki/OTA-Updates) | The `update.json` manifest, channels and web upload |
 | [App development guide](/maikramer/CelerOS/wiki/App-Development-Guide) | How to package a JS app: `app.json`, folders, icons |
+| [Watchface plugins](/maikramer/CelerOS/wiki/Watchface-Plugins) | How installed apps add widget lines to the watch face (`watchface.js`, API 16) |
 | [JS API](/maikramer/CelerOS/wiki/JS-API) | Full reference of the runtime (`System`, `Net`, `FS` globals) |
 | [Contributing](/maikramer/CelerOS/wiki/Contributing) | Conventions, tests, CI and how to send a PR |
 
@@ -75,7 +88,22 @@ the sidebar has the Portuguese translations.
   (API 9): a board on a robot runs `CelerLink.start()`, another one drives it
   with `scan()`/`connect()`/`send()` — see the
   [robot dog](/maikramer/CelerOS/wiki/Robot-Dog) page and the Celer Remote
-  app in the hub. No pairing in v1: toys and prototypes, nothing sensitive.
+  app in the hub. Since API 11 it pairs with a 6-digit code and a
+  challenge-response key per bond.
+* **Phone Link (Gadgetbridge)** — the watch pairs with Android over BLE
+  posing as a Bangle.js: notifications with a full-screen alert, music
+  control, weather, incoming calls and find-my-phone (`Phone.*`, API 15 —
+  [watch page](/maikramer/CelerOS/wiki/Waveshare-Watch)).
+* **Notifications & alarms** — a system notification center (`System.notify`;
+  on the watch an incoming notification wakes the screen) and persistent
+  alarms with their own ringing screen (API 15).
+* **Watchface plugins** — installed apps extend the watch face with widget
+  lines (`watchface.js` + `System.launchApp`, API 16 —
+  [plugins page](/maikramer/CelerOS/wiki/Watchface-Plugins)).
+* **CelerOS Flasher & App SDK** — no-toolchain GUI flashing from
+  [GitHub releases](https://github.com/maikramer/CelerOS/releases), and
+  `tools/sdk/celer.js` for scaffolding, linting, emulating and publishing
+  apps ([tools](/maikramer/CelerOS/wiki/Tools)).
 * **Wi-Fi via captive portal** — a `CelerOS-Setup-XXXX` access point to
   configure it from your phone.
 * **`celerctl`** — an adb-style USB companion: shell, push/pull, logcat,

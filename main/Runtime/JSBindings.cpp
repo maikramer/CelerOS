@@ -991,6 +991,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"setAutoBrightness", js_setAutoBrightness, 1},
         {"getAutoBrightness", js_getAutoBrightness, 0},
         {"exitApp", js_exitApp, 0},
+        {"launchApp", js_launchApp, 1},  // API 16: abre outro app e sai
         {"setClip", js_setClip, 4},
         {"clearClip", js_clearClip, 0},
         {"present", js_present, 0},

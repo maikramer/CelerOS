@@ -22,7 +22,19 @@ desenvolvimento.
 
 | Watchface no watch Waveshare | Launcher no watch |
 | :---: | :---: |
-| <img src="Documentation/assets/imgs/watch-watchface.png" width="200" alt="Mostrador no watch Waveshare"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="200" alt="Launcher no watch"/> |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="200" alt="Mostrador no watch Waveshare"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="200" alt="Launcher do watch"/> |
+
+## Novidades da 1.5
+
+Destaques dos lançamentos de outubro de 2026 (firmware 1.5, API JS nível 16):
+
+* **Phone Link** — o relógio conversa com o Android pelo [Gadgetbridge](https://gadgetbridge.org) via BLE (ele se passa por um Bangle.js): notificações com alerta em tela cheia, informações e controles de música, clima, chamadas recebidas e achar celular. Pareamento por código de 6 dígitos; enlace criptografado com proteção MITM (`Phone.*`, API 15 — [página do watch](/maikramer/CelerOS/wiki/Watch-Waveshare)).
+* **Plugins de watchface (API 16)** — apps instalados acrescentam linhas de widget ao mostrador embarcando um `watchface.js`; plugin com defeito entra em quarentena, sem derrubar o relógio. O primeiro da loja: **Previsao** (previsão do tempo) — [página de plugins](/maikramer/CelerOS/wiki/Plugins-de-Watchface).
+* **Experiência de relógio de verdade (API 15)** — central de notificações nativa, alarmes persistentes com tela de disparo própria, painéis rápidos (lanterna, brilho, não perturbe, achar celular) e seis apps novos de relógio: Timer, Clima, Música, Alarmes, Celular e Atividade.
+* **APIs de runtime 12–16** — timers, `Storage` privado por app, sprites múltiplos, E/S binária de arquivos, timeout de tela / deep sleep / alarmes, `playTone`/`playWav`, HTTP assíncrono (`Net.beginGet/pollGet/cancelGet`) e consentimento de permissões para o que os apps declaram.
+* **Celer Link amadurece** — pareamento por código de 6 dígitos e desafio-resposta com chave por bond; o aviso "sem pareamento na v1" se aposenta.
+* **CelerOS Flasher** — pacotes por placa (firmware + imagem LittleFS + plano de gravação) e um flasher gráfico sem toolchain para Linux/Windows em todo [release do GitHub](https://github.com/maikramer/CelerOS/releases) ([ferramentas](/maikramer/CelerOS/wiki/Ferramentas)).
+* **SDK de apps** — `node tools/sdk/celer.js new|lint|types|test|emu|publish`: scaffold, types para o editor, lint contra a API real do firmware, emulador headless com snapshots PNG e publicação na loja ([ferramentas](/maikramer/CelerOS/wiki/Ferramentas)).
 
 ## Mapa da wiki
 
@@ -40,6 +52,7 @@ desenvolvimento.
 | [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB-(Português)) | Referência de comandos e protocolo HostLink |
 | [Atualização OTA](/maikramer/CelerOS/wiki/Atualizacao-OTA) | Manifest `update.json`, canais e upload web |
 | [Guia de apps](/maikramer/CelerOS/wiki/Guia-de-Apps) | Como empacotar um app JS: `app.json`, pastas, ícones |
+| [Plugins de watchface](/maikramer/CelerOS/wiki/Plugins-de-Watchface) | Como apps instalados acrescentam widgets ao mostrador do relógio (`watchface.js`, API 16) |
 | [API JS](/maikramer/CelerOS/wiki/API-JS) | Referência completa do runtime (globals `System`, `Net`, `FS`) |
 | [Contribuindo](/maikramer/CelerOS/wiki/Contribuindo) | Convenções, testes, CI e como enviar um PR |
 
@@ -74,8 +87,22 @@ traduções ficam na seção **Português (BR)**.
   a placa do robô roda `CelerLink.start()`, a outra dirige com
   `scan()`/`connect()`/`send()` — veja a página do
   [robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) e o app Celer
-  Remote no hub. Sem pareamento na v1: brinquedos e protótipos, nada
-  sensível.
+  Remote no hub. Desde a API 11 o link pareia com código de 6 dígitos e
+  desafio-resposta com chave por bond.
+* **Phone Link (Gadgetbridge)** — o relógio pareia com o Android via BLE se
+  passando por um Bangle.js: notificações com alerta em tela cheia, controle
+  de música, clima, chamadas recebidas e achar celular (`Phone.*`, API 15 —
+  [página do watch](/maikramer/CelerOS/wiki/Watch-Waveshare)).
+* **Notificações e alarmes** — central de notificações do sistema
+  (`System.notify`; no watch uma notificação nova acorda a tela) e alarmes
+  persistentes com tela de disparo própria (API 15).
+* **Plugins de watchface** — apps instalados estendem o mostrador do relógio
+  com linhas de widget (`watchface.js` + `System.launchApp`, API 16 —
+  [página de plugins](/maikramer/CelerOS/wiki/Plugins-de-Watchface)).
+* **CelerOS Flasher e SDK de apps** — flash gráfico sem toolchain pelos
+  [releases do GitHub](https://github.com/maikramer/CelerOS/releases), e o
+  `tools/sdk/celer.js` para criar, lintar, emular e publicar apps
+  ([ferramentas](/maikramer/CelerOS/wiki/Ferramentas)).
 * **Wi-Fi por portal cativo** — access point `CelerOS-Setup-XXXX` para
   configurar pelo celular.
 * **`celerctl`** — companheiro USB estilo adb: shell, push/pull, logcat,

@@ -12,6 +12,7 @@ precisa de Pillow, fora da lista).
 | [flash_data.sh](tools/flash_data.sh) | Constrói a imagem LittleFS de `data/` e grava a partição `littlefs` |
 | [ota_server.py](tools/ota_server.py) | Servidor local de `update.json` + firmware para testes de OTA |
 | [celerhub.py](tools/celerhub.py) | Publica/lista/remove apps no hub (valida as pastas de app; token por args/env; `--hub` ou `CELER_HUB`, default `https://os.celer.tec.br`) |
+| [sdk/celer.js](tools/sdk/celer.js) | SDK de apps: scaffold, lint, types para o editor, emulador headless e publicação na loja (Node, zero deps npm) |
 | [make_icons.py](tools/make_icons.py) | `icons.json` → `icons_src/*.png` (512 px) → `data/icons/*.png` (64 px, RGB565 ditherizado) |
 | [make_splash.py](tools/make_splash.py) | PNG → `main/Assets/SplashLogo.h` (RGB565 sobre o THEME_BG) |
 
@@ -39,6 +40,34 @@ uma fonte da verdade para os dois lados. Não rode `celerctl` com o
 python3 tools/celerhub.py list               # versões locais vs hub
 python3 tools/celerhub.py publish hub_apps/2048
 ```
+
+## celer.js — o SDK de apps
+
+```bash
+node tools/sdk/celer.js new MeuApp      # scaffold: app.json + main.js + ícone + types para o editor
+node tools/sdk/celer.js lint MeuApp     # checa ES5 + API contra o manifest real do firmware (app_lint)
+node tools/sdk/celer.js test MeuApp     # roda o app no harness Node (APIs do aparelho stubadas)
+node tools/sdk/celer.js emu MeuApp      # emulador headless: dirige o app e tira snapshot PNG da tela
+python3 tools/celerctl.py dev MeuApp    # ao vivo no dispositivo (push + relançamento)
+node tools/sdk/celer.js publish MeuApp  # publica na loja do hub
+```
+
+`lint`/`check` delegam ao `tools/app_lint` (o manifest é derivado do código do
+firmware, então o linter conhece a superfície real da API); `dev`/`publish`
+delegam ao celerctl/celerhub. Zero dependências npm — o acorn é vendorado e o
+codificador PNG usa o zlib do Node.
+
+## Flash sem toolchain — CelerOS Flasher
+
+Toda tag `v*` publica, nos
+[releases do GitHub](https://github.com/maikramer/CelerOS/releases):
+
+* um zip por placa — firmware + imagem LittleFS + `flash.json` (o plano de
+  gravação), e um `README.txt` com a linha `esptool` equivalente para quem
+  preferir gravar na mão;
+* o **CelerOS Flasher**, um flasher gráfico para Linux e Windows com o
+  esptool embutido — baixe ele e o zip da sua placa na mesma pasta, escolha a
+  placa, conecte o aparelho e grave. Sem instalar o ESP-IDF.
 
 ## Geradores de assets
 

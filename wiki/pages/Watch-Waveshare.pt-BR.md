@@ -67,10 +67,12 @@ família da placa do cachorro).
   carregando na barra de status.
 * **Escada de tela** (ScreenPower): pleno → **dim** em 8 s → **AOD** em
   15 s no mostrador (face 1x por minuto com deslocamento anti burn-in,
-  bateria em % e a última notificação não lida; o painel segue acordado em
-  brilho baixo) → off (painel em SLPIN) → **deep sleep** segurando a tecla
-  de power. Levantar o pulso acende a tela no brilho normal; uma
-  notificação nova acende um "glance" de AOD.
+  data, bateria em % e a última notificação não lida; o painel segue
+  acordado em brilho baixo) → off (painel em SLPIN) → **deep sleep**
+  segurando a tecla de power. Levantar o pulso acende a tela no brilho
+  normal; notificação nova **acorda o relógio com o alerta em tela cheia**
+  (origem, título, corpo e hora; sem toque volta a dormir em ~8 s, toque
+  abre a central) e dá dois bipes.
 * **Energia** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle
   — 240 MHz com a tela acesa, DFS até 40 MHz e light sleep automático com
   ela dim/apagada (não com o USB plugado, para o `celerctl` seguir vivo). O
@@ -82,10 +84,12 @@ família da placa do cachorro).
   sleep por timer para o próximo evento.
 * **Celular** (`CONFIG_CELEROS_PHONE_LINK`): adicione o relógio no
   **Gadgetbridge** (Android) como **Bangle.js** e digite o código de 6
-  dígitos que aparece no relógio. As notificações do celular caem na
-  central (com glance + bipe, exceto em Não perturbe), hora e fuso vêm do
-  celular, e controle de música, clima e "encontrar dispositivo" funcionam
-  nos dois sentidos. O relógio informa bateria e passos.
+  dígitos que aparece no relógio. As notificações do celular acordam o
+  relógio com o alerta em tela cheia (título, corpo e origem; sem toque
+  volta a dormir) e caem na central — em Não perturbe, só o histórico, sem
+  som. Chamada tem tela própria (Recusar/Atender voltam ao celular), hora e
+  fuso vêm do celular, e controle de música, clima e "encontrar dispositivo"
+  funcionam nos dois sentidos. O relógio informa bateria e passos.
 * **Ajustes → Relógio** expõe levantar o pulso, sensibilidade, duração do
   glance, sempre ligada, tempo de tela, volta ao mostrador, meta de passos,
   WiFi ocioso e acordar por movimento.

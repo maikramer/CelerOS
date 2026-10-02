@@ -66,10 +66,12 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   charging state in the status bar.
 * **Screen power ladder** (ScreenPower): full → **dim** after 8 s →
   **AOD** at 15 s on the watch face (once-a-minute face with anti burn-in
-  shifting, battery % and the latest unread notification; the panel stays
-  awake at low brightness) → off (panel in SLPIN) → **deep sleep** on a
-  long press of the power key. Raising the wrist wakes the screen at full
-  brightness; a new notification lights an AOD "glance".
+  shifting, date, battery % and the latest unread notification; the panel
+  stays awake at low brightness) → off (panel in SLPIN) → **deep sleep** on
+  a long press of the power key. Raising the wrist wakes the screen at full
+  brightness; a new notification **wakes the watch with a full-screen
+  alert** (source, title, body and time; no touch falls back asleep in ~8 s,
+  tapping opens the center) plus a double beep.
 * **Power** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle —
   240 MHz while the screen is lit, DFS down to 40 MHz with automatic light
   sleep when dim/off (not while USB is plugged in, so `celerctl` keeps
@@ -81,10 +83,12 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   wakes from deep sleep by timer for the next event.
 * **Phone link** (`CONFIG_CELEROS_PHONE_LINK`): add the watch in
   **Gadgetbridge** (Android) as a **Bangle.js** and type the 6-digit code
-  the watch shows. Phone notifications go to the notification center (with
-  a glance + beep unless Do Not Disturb), the clock and time zone are set
-  from the phone, and music control, weather and "find device" work both
-  ways. The watch reports battery and steps.
+  the watch shows. Phone notifications wake the watch with a full-screen
+  alert (title, body and source; no touch falls back asleep) and land in
+  the notification center — under Do Not Disturb, history only, no sound.
+  Calls get their own screen (Reject/Answer go back to the phone), the
+  clock and time zone are set from the phone, and music control, weather
+  and "find device" work both ways. The watch reports battery and steps.
 * **Settings → Watch** exposes raise-to-wake, sensitivity, glance length,
   always-on, screen-off time, return-to-face time, step goal, WiFi sleep
   and motion wake.

@@ -121,6 +121,14 @@
     {
       "page": "Watch-Waveshare",
       "src": "wiki/pages/Watch-Waveshare.pt-BR.md"
+    },
+    {
+      "page": "Watchface-Plugins",
+      "src": "wiki/pages/Watchface-Plugins.md"
+    },
+    {
+      "page": "Plugins-de-Watchface",
+      "src": "wiki/pages/Watchface-Plugins.pt-BR.md"
     }
   ],
   "sidebar": [
@@ -170,7 +178,8 @@
       "section": "JavaScript apps",
       "pages": [
         "App-Development-Guide",
-        "JS-API"
+        "JS-API",
+        "Watchface-Plugins"
       ]
     },
     {
@@ -194,6 +203,7 @@
         "Atualizacao-OTA",
         "Guia-de-Apps",
         "API-JS",
+        "Plugins-de-Watchface",
         "Robo-Cachorro",
         "Watch-Waveshare",
         "Contribuindo"
