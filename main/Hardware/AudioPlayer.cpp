@@ -24,33 +24,49 @@ struct WavInfo {
 
 // Percorre os chunks RIFF ate achar fmt (obrigatorio) e data. Sem parser de
 // JSON/strings gigante: cabecalho WAV sao blocos de 8 bytes (id + tamanho).
+// Arquivo nao confiavel: todo salto e para FRENTE e dentro do arquivo. Antes
+// um tamanho >= 2^31 virava long negativo no fseek, o parser voltava ao
+// mesmo cabecalho e o loop nunca terminava (watchdog reiniciava o aparelho).
 bool parseHeader(FILE* f, WavInfo& out) {
+    if (fseek(f, 0, SEEK_END) != 0) return false;
+    const long fileSize = ftell(f);
+    if (fileSize < 12 || fseek(f, 0, SEEK_SET) != 0) return false;
+
     uint8_t h[12];
     if (fread(h, 1, 12, f) != 12) return false;
     if (memcmp(h, "RIFF", 4) != 0 || memcmp(h + 8, "WAVE", 4) != 0) return false;
 
-    bool haveFmt = false;
+    bool haveFmt = false, haveData = false;
     uint8_t ch[8];
-    while (fread(ch, 1, 8, f) == 8) {
-        uint32_t sz = rdU32(ch + 4);
+    for (;;) {
+        const long pos = ftell(f);
+        if (pos < 0 || fileSize - pos < 8 || fread(ch, 1, 8, f) != 8) break;
+        const uint64_t sz = rdU32(ch + 4);
+        const long body = pos + 8;                       // inicio do conteudo
+        const uint64_t avail = (uint64_t)(fileSize - body);
         if (memcmp(ch, "fmt ", 4) == 0) {
             uint8_t fmt[16];
-            if (sz < 16 || fread(fmt, 1, 16, f) != 16) return false;
+            if (sz < 16 || sz > avail || fread(fmt, 1, 16, f) != 16) return false;
             if (rdU16(fmt) != 1) return false;             // so PCM linear
             out.channels = rdU16(fmt + 2);
             out.sampleRate = rdU32(fmt + 4);
             if (rdU16(fmt + 14) != 16) return false;       // 16 bits
-            if (sz > 16) fseek(f, sz - 16, SEEK_CUR);
             haveFmt = true;
         } else if (memcmp(ch, "data", 4) == 0) {
-            out.dataBytes = sz;
-            out.dataOffset = ftell(f);
-            if (haveFmt) return true;                      // fmt veio antes (o normal)
-        } else {
-            if (fseek(f, sz + (sz & 1), SEEK_CUR) != 0) return false;  // chunk ignorado (padding par)
+            // data truncado (download pela metade): toca o que existe
+            out.dataBytes = (uint32_t)(sz < avail ? sz : avail);
+            out.dataOffset = body;
+            haveData = true;
         }
+        if (haveFmt && haveData) break;
+        // proximo chunk: conteudo + padding par, sempre adiante
+        const uint64_t next = (uint64_t)body + sz + (sz & 1);
+        if (next >= (uint64_t)fileSize) break;
+        if (fseek(f, (long)next, SEEK_SET) != 0) return false;
     }
-    return false;
+    if (!haveFmt || !haveData) return false;
+    // "data" pode vir antes de "fmt ": volta ao inicio das amostras
+    return fseek(f, out.dataOffset, SEEK_SET) == 0;
 }
 
 }  // namespace
