@@ -34,7 +34,7 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 | Bump firmware version / API level | `main/CMakeLists.txt` `CELEROS_VERSION`, `CELEROS_API_LEVEL`, plus root `project(VERSION)` |
 | New board | `Boards/<b>/` (3 files) + `elseif` in `main/CMakeLists.txt` + `boards/<b>/sdkconfig.defaults` + `updates/<channel>/update.json` |
 | Touch gestures / tap vs swipe | `UI/Kui.cpp` TouchPump; injected touches (celerctl tap) go through TouchInjector |
-| celerctl device side | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART transport) |
+| celerctl device side | `USBDevice/HostLink.cpp` (opcodes + handlers; framing in `HostFrame.h`, pure C++, unit-tested in `test/cpp/run_tests.cpp`), `SerialLink.cpp` (UART/USJ transport + console mux + LogSink), `USBDevice.cpp` (dual CDC, `CELEROS_USB_NATIVE`) |
 | App discovery / launch | `Launcher/LauncherUI.cpp` (appDirs, `main.js`) |
 | Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
 | Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |
@@ -47,7 +47,8 @@ Loop: `Navigator::tick()`, `WebManager::tick()` (deferred reboot after web OTA),
 - Use `FileSystem::writeTextFile` for persistent state (tmp + rename; power-loss safe).
 - Comments and log strings are Portuguese without accents. Match that style.
 - Feature code behind a Kconfig flag uses `#if CONFIG_CELEROS_<X>` with a no-op `#else` stub for the public entry point, so callers never need `#if`.
-- `CONFIG_CELEROS_USB_NATIVE` (Kconfig.projbuild, S3 only, default n) swaps SerialLink for TinyUSB dual CDC. **Keep it off on SmartDisplay 4848S040**: GPIO19/20 are the GT911 touch SDA and an RGB data line. Enabling it also needs `CONFIG_TINYUSB_CDC_COUNT=2`.
+- `CONFIG_CELEROS_USB_NATIVE` (Kconfig.projbuild, S3 only, default n) swaps SerialLink for TinyUSB dual CDC. **Keep it off on SmartDisplay 4848S040**: GPIO19/20 are the GT911 touch SDA and an RGB data line. Enabling it also needs `CONFIG_TINYUSB_CDC_COUNT=2`. `CONFIG_CELEROS_LINK_ON_USJ` instead multiplexes console+link on the USB-Serial/JTAG itself (dog) — the two flags are mutually exclusive (OTG owns GPIO19/20).
+- HostLink protocol: each transport owns a `HostLink` instance (parser per channel); the session is unique and follows the last HELLO. Proto 2 (CRC32 + window) is negotiated per session in the HELLO — proto 1 stays byte-identical for old tools. Opcode values are the single source parsed by `tools/celerctl.py`: edit `HostLink.h`, never the tool.
 
 ## ANTI-PATTERNS
 - Hand-editing `Assets/SplashLogo.h`: regenerate it with `tools/make_splash.py`.

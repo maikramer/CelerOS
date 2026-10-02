@@ -6,7 +6,7 @@ Host utilities: device control over serial (`celerctl`), the JS app linter (`app
 ## WHERE TO LOOK
 | Tool | Role | Key usage |
 |------|------|-----------|
-| `celerctl.py` (822) | HostLink client (device side: `main/USBDevice/`) | `devices [-l]`, `info`, `shell [cmd]`, `ls/cat/rm/mkdir/mv`, `push LOCAL REMOTE`, `pull`, `reboot`, `logcat [--dump]`, `ota push FW.bin [--no-reboot]`, `screencap out.png`, `tap X Y [ms]`, `swipe X0 Y0 X1 Y1 [ms]`, `apps list/install <dir>/rm` |
+| `celerctl.py` (1447) | HostLink client (device side: `main/USBDevice/`). Two wire formats negotiated in the HELLO: proto 1 (legacy, byte-identical to the old days) and proto 2 (CRC32 on every frame, sliding window on WRITE/OTA chunks, offset-tagged pipelined READ, paginated LS, recursive DELETE); `--proto 1` forces legacy. Own tests: `python3 test/test_celerctl.py` (FakeDevice, no hardware; runs in CI) | `devices [-l]` (shows USB serial), `-p PORT\|SERIAL-PREFIX`, `info`, `shell [cmd]`, `ls/cat/rm [-r]/mkdir/mv`, `push`, `pull`, `reboot`, `logcat [--dump]`, `ota push FW.bin [--no-reboot]`, `coredump [--keep]`, `screencap out.png`, `tap X Y [ms]`, `swipe X0 Y0 X1 Y1 [ms]`, `apps list/install <dir>/rm` |
 | `app_lint/` | static "compiler" for JS apps: acorn (ES5, same profile as the device Duktape) + checks against the firmware API. The manifest is DERIVED from source on every run (`JSBindings.cpp` tables, `Js*.cpp` bodies for min arity, `main/CMakeLists.txt` for API level, pt-BR guide for per-fn levels) — never hand-maintained | `node tools/app_lint/lint.js [paths]` (default `data/apps hub_apps`; `--json`, `--strict`, `--dump-manifest`), `... check` = drift code/docs/harness-stubs; wired into CI, `celerhub publish` (errors block) and `celerctl apps install` (`--pula-lint` to force); own tests: `node test/app_lint/run.js` |
 | `flash_data.sh` | build the LittleFS image of `data/` and write the `littlefs` partition | `tools/flash_data.sh [smartdisplay\|cyd\|spotpear-dog] [PORT]` (PORT default: `/dev/ttyACM0` on the dog, `/dev/ttyUSB0` elsewhere; needs `IDF_PATH` exported; uses `bin/mklittlefs.bin` + IDF `parttool.py`) |
 | `ota_server.py` | local update.json + firmware server | `--board smartdisplay\|cyd`, `--bin`, `--port` (default 10234), `--version`; the device picks it up through `/local/ota_url.txt` |
@@ -18,7 +18,7 @@ Host utilities: device control over serial (`celerctl`), the JS app linter (`app
 
 ## CONVENTIONS
 - The generators are manual steps, not part of `idf.py build`. Commit their outputs (`data/icons/`, `SplashLogo.h`).
-- `celerctl` defaults to the UART (CH340, `/dev/ttyUSB0`) through SerialLink. On boards built with `CELEROS_USB_NATIVE` it talks to CDC1 instead. `-b` sets the baud.
+- `celerctl` defaults to the UART (CH340, `/dev/ttyUSB0`) through SerialLink. On boards built with `CELEROS_USB_NATIVE` (watch) it talks to CDC1 instead; on `CELEROS_LINK_ON_USJ` boards (dog) it shares the USB-Serial/JTAG with the console. `-b` sets the baud (warning-only on USB-native ports).
 - The littlefs size is read from `partitions_{16MB,4MB}.csv`, which is the single source of truth. Never duplicate it in scripts.
 - CLI help and output text are Portuguese.
 

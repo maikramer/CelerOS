@@ -21,7 +21,7 @@ firmware analysis, dump/restore tools and the bring-up firmware.
 |---|---|
 | SoC | **ESP32-S3R8** — dual-core LX7, 8 MB **embedded** octal PSRAM (listing wrongly says S3R2) |
 | Flash | 16 MB (Boya), DIO @ 80 MHz — same class as the SmartDisplay |
-| USB | Native USB-Serial/JTAG: console, esptool **and** OpenOCD debugging without any adapter |
+| USB | Native USB-Serial/JTAG: console, esptool, OpenOCD debugging **and** `celerctl` (console+link multiplexed on the same port via `CELEROS_LINK_ON_USJ`) — no adapter needed |
 | Stock firmware | XiaoZhi AI chatbot v1.9.2 (ESP-IDF 5.5.1) — closed-source board fork of [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) |
 
 ### Pinout (hardware truth)

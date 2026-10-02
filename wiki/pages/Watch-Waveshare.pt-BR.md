@@ -83,6 +83,11 @@ família da placa do cachorro).
    USB nativo precisa de `CONFIG_TINYUSB_CDC_COUNT=2` (shell +
    `celerctl`), e um comentário nessa linha quebra o init do USB em
    silêncio.
+7. Os frames de log (`celerctl logcat`) saem pelo **canal ativo da
+   sessão** — antes do rework do HostLink eles iam fixos para a UART0
+   (sem conector nesta placa) e o logcat ficava morto em silêncio. No
+   proto 2 os frames de log ao vivo também carregam o CRC32 como
+   qualquer outro frame.
 
 ## Situação no CelerOS
 

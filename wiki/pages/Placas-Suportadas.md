@@ -11,8 +11,8 @@
 | **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | IPS 4" 480x480 RGB (ST7701) | Capacitivo GT911 | 16 MB flash / 8 MB PSRAM, microSD, alto-falante I2S (NS4168); SKUs "Y" com relés |
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | ILI9341 2.8" 320x240 SPI | Resistivo XPT2046 | Sem PSRAM; serial CH340; pede calibração de toque no primeiro boot; UI mais simples ([veja abaixo](#cyd-esp32-clássico)) |
 | **CYD-VSPI** (variante não testada) | ESP32 | ILI9341 2.8" 320x240 SPI | Resistivo XPT2046 | Pinout legado (TFT no VSPI 18/23/19, barramento de toque compartilhado, backlight GPIO22) mantido para placas cabladas assim — **nunca testada no hardware**; build com `-DCELEROS_BOARD=cyd-vspi` |
-| **Cão robô** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB PSRAM embutida) | OLED SH1106 128x64 de 1,3" (cara) | Pad capacitivo (GPIO10) | 4 servos (pernas), microfone + alto-falante I²S, 2x WS2812, bateria no ADC; abre o app Dog Face no boot (`homeApp` do perfil); controlado pelo app Celer Remote via Celer Link BLE; build com `-DCELEROS_BOARD=spotpear-dog` — veja [Robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) |
-| **Watch Waveshare AMOLED 2.06** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB PSRAM embutida) | AMOLED redondo 2.06" 410x502 QSPI (CO5300) | Capacitivo FT3168 | 32 MB flash, PMU AXP2101, RTC PCF85063 + IMU QMI8658 (pedômetro) + codec de áudio ES8311 no I²C, microSD no SPI3; abre o app Watchface no boot (`homeApp` do perfil); escada de tela com AOD + deep sleep; Celer Link BLE; console no USB-Serial/JTAG nativo; build com `-DCELEROS_BOARD=waveshare-watch` — veja [Watch Waveshare](/maikramer/CelerOS/wiki/Watch-Waveshare) |
+| **Cão robô** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB PSRAM embutida) | OLED SH1106 128x64 de 1,3" (cara) | Pad capacitivo (GPIO10) | 4 servos (pernas), microfone + alto-falante I²S, 2x WS2812, bateria no ADC; abre o app Dog Face no boot (`homeApp` do perfil); controlado pelo app Celer Remote via Celer Link BLE; `celerctl` pela USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`); build com `-DCELEROS_BOARD=spotpear-dog` — veja [Robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) |
+| **Watch Waveshare AMOLED 2.06** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB PSRAM embutida) | AMOLED redondo 2.06" 410x502 QSPI (CO5300) | Capacitivo FT3168 | 32 MB flash, PMU AXP2101, RTC PCF85063 + IMU QMI8658 (pedômetro) + codec de áudio ES8311 no I²C, microSD no SPI3; abre o app Watchface no boot (`homeApp` do perfil); escada de tela com AOD + deep sleep; Celer Link BLE; `celerctl` no USB nativo (CDC dupla — `CELEROS_USB_NATIVE`), logs via `celerctl logcat`; build com `-DCELEROS_BOARD=waveshare-watch` — veja [Watch Waveshare](/maikramer/CelerOS/wiki/Watch-Waveshare) |
 
 ## Onde a placa é definida
 
@@ -114,8 +114,9 @@ no `Board::init()`.
 
 * Build: `idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/waveshare-watch/sdkconfig.defaults" -DCELEROS_BOARD=waveshare-watch set-target esp32s3`.
 * Dados com `tools/flash_data.sh waveshare-watch` (default `/dev/ttyACM0` —
-  o watch só expõe o USB-Serial/JTAG nativo; o `celerctl` fala UART0, que
-  não tem porta física — o dia a dia é WebManager e Celer Link BLE).
+  o USB nativo em modo OTG: flash pela ROM, shell na CDC0 e `celerctl` na
+  CDC1; o console do IDF fica na UART0 sem conector, então os logs ao vivo
+  vêm pelo `celerctl logcat`).
 * Toque FT3168 no I²C (SDA=15, SCL=14, addr 0x38, RST=9, INT=38), pelo
   driver `i2c_master` do IDF em `main/Display/Touch_FT3168_IDF.h` (mesmo
   padrão do GT911 — a camada I²C do LovyanGFX falha no IDF 6.1, e o chip

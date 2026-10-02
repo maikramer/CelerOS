@@ -28,8 +28,13 @@ python3 tools/celerctl.py tap 120 160        # inject a touch
 ```
 
 It talks over the console UART (CH340, `/dev/ttyUSB0`; `-b` changes the
-baud) — or over CDC1 on boards with `CELEROS_USB_NATIVE`. The opcodes live
-in `main/USBDevice/HostLink.h` and the tool parses that file with a regex:
+baud) — over CDC1 on boards with `CELEROS_USB_NATIVE` (watch) and over the
+USB-Serial/JTAG itself on `CELEROS_LINK_ON_USJ` boards (dog). With a
+proto-2 firmware every frame carries a CRC32 and transfers use a sliding
+window (negotiated in the HELLO; old firmware stays on the legacy path —
+see `tools/README_USBTOOL.md`). Multiple boards: `-p` accepts the USB
+serial prefix shown by `devices`. The opcodes live in
+`main/USBDevice/HostLink.h` and the tool parses that file with a regex:
 one source of truth for both sides. Do not run `celerctl` while
 `idf.py monitor` holds the same port.
 

@@ -84,6 +84,11 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
 6. `sdkconfig.defaults` files **don't accept inline comments** — the native
    USB needs `CONFIG_TINYUSB_CDC_COUNT=2` (shell + `celerctl`), and a
    comment on that line silently breaks the USB init.
+7. Log frames (`celerctl logcat`) go out on the **active session channel**
+   — before the HostLink rework they were hard-wired to UART0 (which has
+   no connector on this board), so logcat was silently dead here. With
+   proto 2 the live log frames also carry the CRC32 like every other
+   frame.
 
 ## Status in CelerOS
 

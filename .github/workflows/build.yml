@@ -33,10 +33,14 @@ jobs:
         run: node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
       - name: Drift check (codigo x docs x stubs do harness + types do SDK)
         run: node tools/sdk/celer.js check
-      - name: C++ host tests (lógica pura de main/Utils)
+      - name: C++ host tests (lógica pura de main/Utils + framer HostLink)
         run: |
           g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp
           ./celeros_tests
+      - name: celerctl tests (protocolo HostLink contra device simulado)
+        run: |
+          pip install pyserial
+          python3 test/test_celerctl.py
 
   firmware:
     name: firmware (${{ matrix.board }})

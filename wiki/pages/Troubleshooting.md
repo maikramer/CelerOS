@@ -88,6 +88,11 @@ Common problems, in rough order of "you will hit this".
   (`/dev/ttyUSB*`); make sure no monitor holds it. The tool only speaks
   HostLink — a board running raw ESP-IDF firmware won't answer.
 * **Push/pull is slow.** Negotiate a higher baud: `celerctl -b 921600
-  push ...`.
+  push ...` (no-op on USB-native ports, which run at USB speed). With a
+  proto-2 firmware the sliding window already removes the per-chunk round
+  trip; `--proto 1` forces the legacy path when comparing.
 * **Weird/garbled frames after a disconnect.** The parser resynchronizes
-  after a cut frame; if it persists, unplug/replug and retry.
+  after a cut frame; with proto 2 the CRC32 also discards corrupted
+  frames and the transfer retries on its own. A session left at a high
+  baud (< 8 s ago) is found automatically on the next open — no more
+  unplug/replug for that.

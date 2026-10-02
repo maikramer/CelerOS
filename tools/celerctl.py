@@ -634,7 +634,8 @@ def find_devices(verbose=False):
             found.append((port, ident))
             if verbose:
                 desc = port.description or "-"
-                print(f"{port.device:<14} {desc}")
+                serial = port.serial_number or "-"
+                print(f"{port.device:<14} {serial:<14} {desc}")
                 print(f'{"":14} {ident}')
     return found
 
@@ -659,7 +660,8 @@ def open_link(args):
             return None
 
     if args.port:
-        link = try_open(args.port)
+        port = resolve_port(args.port)
+        link = try_open(port)
         if link is None:
             die(f"{args.port} nao responde ao protocolo HostLink")
     else:
@@ -681,13 +683,27 @@ def die(msg, code=1):
 
 # ------------------------------------------------------------------- comandos
 
+def resolve_port(selector):
+    """-p aceita caminho de porta OU prefixo do serial number USB (a MAC
+    "K..." que o firmware S3 define) — varias placas na mesma maquina."""
+    if selector.startswith("/") or ":" in selector:
+        return selector  # caminho (ou COM3: estilo windows)
+    for port in list_ports.comports():
+        sn = port.serial_number or ""
+        if sn.upper().startswith(selector.upper()):
+            return port.device
+    die(f"nenhuma placa com serial comecando por {selector!r} "
+        f"(celerctl devices lista os seriais)")
+
+
 def cmd_devices(args):
     found = find_devices(verbose=True)
     if not found and not args.long:
         print("nenhum dispositivo encontrado")
     elif found and not args.long:
         for port, ident in found:
-            print(f"{port.device}  {ident}")
+            serial = port.serial_number or "-"
+            print(f"{port.device}  {serial:<14} {ident}")
 
 
 def cmd_info(args):
@@ -1288,7 +1304,9 @@ def cmd_apps(args):
 
 def main():
     parser = argparse.ArgumentParser(prog="celerctl", description="ferramenta USB do CelerOS (estilo adb)")
-    parser.add_argument("-p", "--port", help="porta serial do canal celerctl (ex: /dev/ttyUSB0)")
+    parser.add_argument("-p", "--port",
+                        help="porta serial do canal celerctl (ex: /dev/ttyUSB0) ou "
+                             "prefixo do serial USB da placa (celerctl devices lista)")
     parser.add_argument("-b", "--baud", type=int, default=DEFAULT_BAUD,
                         help="negocia este baud com o firmware (ex: 921600 acelera push/pull)")
     parser.add_argument("--proto", type=int, choices=(1, 2), default=2,

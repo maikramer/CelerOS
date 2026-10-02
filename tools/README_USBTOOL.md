@@ -3,12 +3,41 @@
 **English** | [Português (BR)](README_USBTOOL.pt-BR.md)
 
 `celerctl.py` talks to the firmware over the **HostLink** channel: a light
-binary protocol (`[0x43 'C'][cmd][len u16 LE][payload]`) that runs on the
-console UART — in practice, the CH340 that the PC sees as `/dev/ttyUSB*`
-(or CDC1 of native USB, on boards with `CONFIG_CELEROS_USB_NATIVE`).
+binary protocol that runs on the console UART — in practice, the CH340 that
+the PC sees as `/dev/ttyUSB*` — on CDC1 of native USB (`CONFIG_CELEROS_USB_NATIVE`,
+e.g. the Waveshare watch) or on the S3 USB-Serial/JTAG itself
+(`CONFIG_CELEROS_LINK_ON_USJ`, e.g. the SpotPear dog). One tool, every board.
 
-The opcodes live in `main/USBDevice/HostLink.h` and the tool parses that
-file with a regex: there is a single source of truth for both sides.
+## Wire protocol (proto 1 and 2)
+
+```
+proto 1: [0x43 'C'][cmd u8][len u16 LE][payload]
+proto 2: [0x43 'C'][cmd u8][len u16 LE][crc32 u32][payload]
+```
+
+The session format is negotiated in the HELLO: the tool sends payload
+`"CELERCTL2"` and a proto-2 firmware answers `...|proto 2|chunk W|win K`,
+activating CRC32 on every frame plus the sliding window for chunks. Old
+firmware answers `proto 1` and the session stays exactly as before — new
+tool works with old firmware and vice versa (`--proto 1` forces the legacy
+path on purpose). CRC32 is the classic 0xEDB88320 (same value as Python's
+`zlib.crc32`).
+
+Proto 2 extras on the wire:
+
+- `WRITE_CHUNK`/`OTA_CHUNK` payload is `[seq u16][data]`; the ACK is
+  `[next seq u16][total applied u32]` — a re-sent chunk whose ACK was lost
+  is **not** written twice, and the final CRC/size check covers the whole
+  file/image end-to-end (a corrupted OTA never reaches the boot slot).
+- `READ` responses are prefixed with the offset, so pulls are pipelined.
+- `LS` accepts a cursor (huge directories paginate), `DELETE` accepts a
+  recursive flag, `COREDUMP` accepts a keep flag.
+
+The opcodes live in `main/USBDevice/HostLink.h` (framing itself in
+`HostFrame.h`, unit-tested on the host) and the tool parses that file with
+a regex: single source of truth for both sides. `test/test_celerctl.py`
+exercises the tool against a simulated device (lost chunk, corrupted byte,
+legacy mode).
 
 ## Install
 
@@ -19,7 +48,7 @@ pip install -r tools/requirements.txt   # pyserial (screencap needs Pillow)
 ## Commands
 
 ```bash
-python3 tools/celerctl.py devices            # list connected boards
+python3 tools/celerctl.py devices            # list connected boards (+ USB serial)
 python3 tools/celerctl.py info               # version/board/heap/network/FS
 python3 tools/celerctl.py shell              # interactive shell (help)
 python3 tools/celerctl.py shell "ls /local"  # run and print
@@ -28,11 +57,13 @@ python3 tools/celerctl.py cat /local/wifi.txt
 python3 tools/celerctl.py push app.zip /local/tmp_download/app.zip
 python3 tools/celerctl.py pull /local/apps/HTTP\ Demo/app.json .
 python3 tools/celerctl.py rm /local/old.txt
+python3 tools/celerctl.py rm -r /local/apps/OldApp   # recursive delete
 python3 tools/celerctl.py reboot
 python3 tools/celerctl.py logcat             # live logs (Ctrl-C to exit)
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware without esptool
 python3 tools/celerctl.py screencap shot.png # display capture -> PNG (RLE: ~10x faster)
 python3 tools/celerctl.py coredump            # last crash dump (ELF) -> coredump.elf
+python3 tools/celerctl.py coredump --keep     # download without erasing the dump
 python3 tools/celerctl.py shell "run Snake"  # open an app (folder, name or package)
 python3 tools/celerctl.py tap 120 160        # inject a tap (navigate over USB)
 python3 tools/celerctl.py swipe 120 400 120 40  # inject a drag (scroll)
@@ -40,6 +71,16 @@ python3 tools/celerctl.py apps list             # installed apps (local + sd)
 python3 tools/celerctl.py apps install "data/apps/Web Server"  # install folder
 python3 tools/celerctl.py apps install myapp --sd              # to the SD card
 python3 tools/celerctl.py apps rm "Touch Test"                 # uninstall
+```
+
+### Multiple boards on the same machine
+
+`-p` accepts a port path **or the prefix of the board's USB serial** (the
+`K...` MAC-derived serial that S3 firmwares expose). `devices` lists them:
+
+```bash
+python3 tools/celerctl.py devices          # shows serial per board
+python3 tools/celerctl.py -p K7B4 screencap dog.png
 ```
 
 ### Iterating on the UI without touching the board
@@ -55,28 +96,37 @@ python3 tools/celerctl.py tap 360 88 && python3 tools/celerctl.py screencap s.pn
 
 ## Speeding up transfers (-b)
 
-The channel starts at 115200 baud. With `-b 921600` the tool negotiates the
+The UART channel starts at 115200 baud. With `-b 921600` the tool negotiates the
 switch with the firmware and reopens the port faster:
 
 ```bash
 python3 tools/celerctl.py -b 921600 push firmware.bin /sd/fw.bin
 ```
 
-Measured on the SmartDisplay (CH340): push ~57 KB/s, pull ~190 KB/s, OTA ~60 KB/s.
+Measured on the SmartDisplay (CH340, proto 1, stop-and-wait): push ~57 KB/s,
+pull ~190 KB/s, OTA ~60 KB/s. Proto 2 removes the per-chunk round trip
+(sliding window announced by the firmware: 4 chunks on S3 UARTs, 2 on the
+CYD, 8 on CDC) and adds CRC32 — re-measure with proto 2 and update this
+table. USB-native ports (CDC/USJ) have no baud: `-b` prints a warning and
+continues at USB speed.
 
 ## How the channel coexists with the console
 
-The console UART multiplexes two modes (`main/USBDevice/SerialLink.cpp`):
+The console UART multiplexes two modes (`main/USBDevice/SerialLink.cpp`) —
+the same scheme runs on the USB-Serial/JTAG when `CELEROS_LINK_ON_USJ` is
+on:
 
 - **console** — human interactive shell (echo, `celer> ` prompt) and
   visible ESP_LOG/Serial logs. Open minicom/monitor and use it.
 - **link** — triggered by the arrival of a HELLO frame (`0x43 0x01 ...`);
   human typing never produces that sequence. Logs are suspended on the UART
-  (keystrokes go into an 8 KB ring) and the session returns to console mode
-  after ~8 s without frames, restoring the baud rate.
+  (keystrokes go into a ring) and the session returns to console mode
+  after ~8 s without frames, restoring the baud rate. Opening a session in
+  another channel (e.g. CDC1) takes over as the active one.
 
 With `logcat`, the ring is drained (history since boot) and logs keep
-flowing as live frames inside the tool itself.
+flowing as live frames inside the tool itself — on the active channel
+(UART or CDC).
 
 ## Note on native USB / Mass Storage
 
@@ -86,6 +136,8 @@ display G1 line) and the USB connector is CH340 only. That is why HostLink
 runs on the UART and USB Mass Storage is not possible on these boards.
 
 The native USB code (dual CDC via TinyUSB, `main/USBDevice/USBDevice.cpp`)
-stays in the repository, dormant behind `CONFIG_CELEROS_USB_NATIVE`
-(CelerOS menu), ready for boards whose GPIO19/20 are free — in that
-scenario HostLink migrates to CDC1 with no protocol changes.
+is live on the Waveshare watch (`CONFIG_CELEROS_USB_NATIVE`: CDC0 shell +
+CDC1 celerctl) and dormant for boards whose GPIO19/20 become free. The
+SpotPear dog takes the third road: its only USB is the USB-Serial/JTAG, so
+`CONFIG_CELEROS_LINK_ON_USJ` multiplexes console+link on that same port —
+no console/OpenOCD/esptool sacrifice.
