@@ -12,10 +12,12 @@
 //
 // Pareamento por codigo (API 11): start(nome, true) exige que o central
 // digite um codigo de 6 digitos gerado por conexao (exposto so ao app
-// LOCAL via status().code) antes de liberar o canal de dados. Acertos
-// ficam memorizados no NVS (bond por MAC, ate 4 controles) e as proximas
-// conexoes do mesmo controle entram direto. Nao ha criptografia no ar:
-// o codigo protege contra o vizinho casual, nao contra sniffer.
+// LOCAL via status().code) antes de liberar o canal de dados. Desde a API
+// 14 o gate e o PADRAO (start(nome) = pareamento; link aberto so com
+// requirePairing=false explicito). Acertos viram bond no NVS (ate 4 peers):
+// chave derivada do codigo + desafio; nas conexoes seguintes o central
+// responde a um desafio novo e entra direto — MAC falsificado nao passa.
+// Nao ha criptografia no ar: quem farejou o PAREAMENTO conhece o codigo.
 //
 // O nome CelerLink e deste link; o protocola do celerctl e o HostLink
 // (main/USBDevice/HostLink.h).
@@ -53,8 +55,9 @@ public:
 
     // Papel peripheral: advertising + servidor GATT. name nullptr mantem o
     // atual (default "Celer-XXXX", XXXX = fim da MAC BT). requirePairing
-    // liga o gate de codigo (API 11); vale para as conexoes seguintes.
-    static bool start(const char* name, bool requirePairing = false);
+    // liga o gate de codigo (API 11; padrao desde a API 14); vale para as
+    // conexoes seguintes.
+    static bool start(const char* name, bool requirePairing = true);
     static bool stop();
     static bool listening();
 

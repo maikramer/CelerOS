@@ -13,6 +13,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
+#include "psa/crypto.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -84,10 +85,18 @@ constexpr uint8_t K_PAIR_OK = 0x02;    // verificado
 constexpr int K_PAIR_MAX_FAILS = 3;            // erros antes de derrubar
 constexpr uint32_t K_PAIR_TIMEOUT_MS = 60000;  // sem digitar = derruba
 constexpr uint32_t K_VERIFY_MS = 3000;         // orcamento do verify()
+constexpr uint32_t K_BOND_GRACE_MS = 3000;     // peer com bond: prazo p/ responder o desafio
 // Bonds no NVS: ate K_BOND_MAX MACs, mais recente primeiro (LRU).
 constexpr int K_BOND_MAX = 4;
 const char* K_NVS_NS = "celer";
-const char* K_NVS_BONDS = "link_bonds";
+const char* K_NVS_BONDS = "link_bonds2";   // {mac[6], chave[16]} por peer
+const char* K_NVS_BONDS_V1 = "link_bonds";  // v1: so MAC (falsificavel) — apagado
+constexpr size_t K_BOND_KEY = 16;
+constexpr size_t K_CHAL = 8;               // desafio por conexao (periferico)
+struct Bond {
+    uint8_t mac[6];
+    uint8_t key[K_BOND_KEY];
+};
 
 struct Msg {
     uint16_t len;
@@ -147,6 +156,9 @@ volatile bool s_pairRequired = false;  // app pediu pareamento via start()
 volatile bool s_pairPending = false;   // conexao ativa aguardando codigo
 volatile bool s_pairVerified = true;   // canal autorizado
 char s_pairCode[7] = {0};
+uint8_t s_challenge[K_CHAL] = {0};      // periferico: desafio desta conexao
+uint8_t s_peerChallenge[K_CHAL] = {0};  // central: desafio lido do peer
+volatile bool s_peerHasChallenge = false;  // peer v2 (le 1+8 bytes)
 uint8_t s_pairFails = 0;
 TickType_t s_pairDeadline = 0;
 
@@ -210,6 +222,7 @@ void clearConnState() {
     s_pairVerified = true;
     s_pairFails = 0;
     s_pairCode[0] = '\0';
+    s_peerHasChallenge = false;
 }
 
 // ---------------------------------------------------- pareamento / bonds ----
@@ -219,79 +232,126 @@ void genPairCode() {
     snprintf(s_pairCode, sizeof(s_pairCode), "%u", (unsigned)(100000 + esp_random() % 900000));
 }
 
-// Bonds: blob "link_bonds" no NVS, K_BOND_MAX MACs de 6 bytes, mais
-// recente primeiro. Chamado da task do host (CONNECT, write do codigo) e
-// da task do app (unpair); o NVS e thread-safe.
-int bondLoad(uint8_t out[][6]) {
+// Bonds v2: blob "link_bonds2" no NVS, ate K_BOND_MAX {mac, chave}, mais
+// recente primeiro. A chave nasce no pareamento por codigo:
+//   K = SHA256("CLK2" || codigo || desafio)[0:16]
+// (os dois lados conhecem o codigo e o desafio daquela conexao). Na volta
+// o periferico manda um desafio NOVO e o central responde
+//   R = SHA256(K || desafio)[0:8]
+// — antes bastava o MAC estar na lista, e MAC BLE e falsificavel. Limite
+// honesto: sem criptografia de enlace, quem FAREJOU o pareamento conhece o
+// codigo; o que fecha e o spoofing por quem nao estava la.
+// Chamado da task do host (CONNECT, write do codigo) e da task do app
+// (unpair/verify); o NVS e thread-safe.
+int bondLoad(Bond* out) {
     nvs_handle_t h;
     if (nvs_open(K_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
     int n = 0;
     size_t len = 0;
-    if (nvs_get_blob(h, K_NVS_BONDS, nullptr, &len) == ESP_OK && len >= 6) {
-        n = (int)(len / 6);
+    if (nvs_get_blob(h, K_NVS_BONDS, nullptr, &len) == ESP_OK && len >= sizeof(Bond)) {
+        n = (int)(len / sizeof(Bond));
         if (n > K_BOND_MAX) n = K_BOND_MAX;
-        size_t cap = (size_t)n * 6;
-        if (nvs_get_blob(h, K_NVS_BONDS, out[0], &cap) != ESP_OK) n = 0;
+        size_t cap = (size_t)n * sizeof(Bond);
+        if (nvs_get_blob(h, K_NVS_BONDS, out, &cap) != ESP_OK) n = 0;
     }
     nvs_close(h);
     return n;
 }
 
-bool bondSave(uint8_t list[][6], int n) {
+bool bondSave(const Bond* list, int n) {
     nvs_handle_t h;
     if (nvs_open(K_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_erase_key(h, K_NVS_BONDS_V1);  // bonds so-MAC nao valem mais
     bool ok;
     if (n <= 0) {
         esp_err_t rc = nvs_erase_key(h, K_NVS_BONDS);
         ok = rc == ESP_OK || rc == ESP_ERR_NVS_NOT_FOUND;  // ausente = limpo
     } else {
-        ok = nvs_set_blob(h, K_NVS_BONDS, list[0], (size_t)n * 6) == ESP_OK;
+        ok = nvs_set_blob(h, K_NVS_BONDS, list, (size_t)n * sizeof(Bond)) == ESP_OK;
     }
     if (ok) ok = nvs_commit(h) == ESP_OK;
     nvs_close(h);
     return ok;
 }
 
-bool bondHas(const uint8_t mac[6]) {
-    uint8_t list[K_BOND_MAX][6];
+bool bondFind(const uint8_t mac[6], uint8_t key[K_BOND_KEY]) {
+    Bond list[K_BOND_MAX];
     int n = bondLoad(list);
     for (int i = 0; i < n; i++) {
-        if (memcmp(list[i], mac, 6) == 0) return true;
+        if (memcmp(list[i].mac, mac, 6) == 0) {
+            if (key) memcpy(key, list[i].key, K_BOND_KEY);
+            return true;
+        }
     }
     return false;
 }
 
-void bondAdd(const uint8_t mac[6]) {
-    uint8_t list[K_BOND_MAX][6];
+void bondAdd(const uint8_t mac[6], const uint8_t key[K_BOND_KEY]) {
+    Bond list[K_BOND_MAX];
     int n = bondLoad(list);
     // tira o mac da posicao atual (vai pro topo; LRU no fim)
     int keep = 0;
     for (int i = 0; i < n; i++) {
-        if (memcmp(list[i], mac, 6) == 0) continue;
-        if (keep != i) memcpy(list[keep], list[i], 6);
+        if (memcmp(list[i].mac, mac, 6) == 0) continue;
+        if (keep != i) list[keep] = list[i];
         keep++;
     }
     int total = keep < K_BOND_MAX ? keep + 1 : K_BOND_MAX;
-    for (int i = total - 1; i > 0; i--) memcpy(list[i], list[i - 1], 6);
-    memcpy(list[0], mac, 6);
+    for (int i = total - 1; i > 0; i--) list[i] = list[i - 1];
+    memcpy(list[0].mac, mac, 6);
+    memcpy(list[0].key, key, K_BOND_KEY);
     if (bondSave(list, total)) {
         char id[18];
         formatAddr(mac, id);
-        ESP_LOGI(TAG, "controle pareado e memorizado (%s)", id);
+        ESP_LOGI(TAG, "peer pareado e memorizado (%s)", id);
     }
 }
 
 bool bondRemove(const uint8_t mac[6]) {
-    uint8_t list[K_BOND_MAX][6];
+    Bond list[K_BOND_MAX];
     int n = bondLoad(list);
     int out = 0;
     bool found = false;
     for (int i = 0; i < n; i++) {
-        if (memcmp(list[i], mac, 6) == 0) { found = true; continue; }
-        memcpy(list[out++], list[i], 6);
+        if (memcmp(list[i].mac, mac, 6) == 0) { found = true; continue; }
+        list[out++] = list[i];
     }
     if (!found) return false;
     return bondSave(list, out);
+}
+
+void sha256(const uint8_t* in, size_t n, uint8_t out[32]) {
+    size_t olen = 0;
+    psa_crypto_init();  // idempotente
+    psa_hash_compute(PSA_ALG_SHA_256, in, n, out, 32, &olen);
+}
+
+// K a partir do codigo de 6 digitos e do desafio da conexao do pareamento
+void bondKeyFromCode(const char* code, const uint8_t chal[K_CHAL], uint8_t key[K_BOND_KEY]) {
+    uint8_t buf[4 + 6 + K_CHAL];
+    memcpy(buf, "CLK2", 4);
+    memcpy(buf + 4, code, 6);
+    memcpy(buf + 10, chal, K_CHAL);
+    uint8_t h[32];
+    sha256(buf, sizeof(buf), h);
+    memcpy(key, h, K_BOND_KEY);
+}
+
+// Resposta ao desafio: prova que conhece K sem manda-la pelo ar
+void bondResponse(const uint8_t key[K_BOND_KEY], const uint8_t chal[K_CHAL], uint8_t out[K_CHAL]) {
+    uint8_t buf[K_BOND_KEY + K_CHAL];
+    memcpy(buf, key, K_BOND_KEY);
+    memcpy(buf + K_BOND_KEY, chal, K_CHAL);
+    uint8_t h[32];
+    sha256(buf, sizeof(buf), h);
+    memcpy(out, h, K_CHAL);
+}
+
+// comparacao em tempo constante (resposta/codigo)
+bool ctEqual(const uint8_t* a, const uint8_t* b, size_t n) {
+    uint8_t d = 0;
+    for (size_t i = 0; i < n; i++) d |= a[i] ^ b[i];
+    return d == 0;
 }
 
 int onGapEvent(ble_gap_event* event, void* arg);  // usado pelo advRestart
@@ -354,25 +414,54 @@ int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void*
     (void)attr;
     (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        // [estado] + desafio de 8 bytes (v2). Central antigo le so o 1o byte.
         uint8_t st = !s_pairRequired ? K_PAIR_OFF : (s_pairVerified ? K_PAIR_OK : K_PAIR_WAIT);
-        return os_mbuf_append(ctxt->om, &st, 1) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        if (os_mbuf_append(ctxt->om, &st, 1) != 0) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        if (st == K_PAIR_WAIT && os_mbuf_append(ctxt->om, s_challenge, K_CHAL) != 0) {
+            return BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        return 0;
     }
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
-    if (OS_MBUF_PKTLEN(ctxt->om) != 6) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    char code[7] = {0};
+    const uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len != 6 && len != K_CHAL) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    uint8_t in[8] = {0};
     uint16_t got = 0;
-    if (ble_hs_mbuf_to_flat(ctxt->om, code, 6, &got) != 0 || got != 6) return BLE_ATT_ERR_UNLIKELY;
+    if (ble_hs_mbuf_to_flat(ctxt->om, in, len, &got) != 0 || got != len) return BLE_ATT_ERR_UNLIKELY;
     if (!s_pairRequired || s_pairVerified) return 0;  // nada a fazer
-    if (strcmp(code, s_pairCode) == 0) {
+
+    bool ok = false;
+    if (len == 6) {
+        // codigo digitado no central: abre e cria/renova o bond com chave
+        ok = s_pairCode[0] != '\0' && ctEqual(in, (const uint8_t*)s_pairCode, 6);
+        if (ok) {
+            uint8_t key[K_BOND_KEY];
+            bondKeyFromCode(s_pairCode, s_challenge, key);
+            bondAdd(s_peerAddr, key);
+        }
+    } else {
+        // resposta ao desafio de um central que ja pareou (bond v2)
+        uint8_t key[K_BOND_KEY], expect[K_CHAL];
+        if (bondFind(s_peerAddr, key)) {
+            bondResponse(key, s_challenge, expect);
+            ok = ctEqual(in, expect, K_CHAL);
+        }
+    }
+    if (ok) {
         s_pairVerified = true;
         s_pairPending = false;
         s_ready = true;  // o gate segurava o ready do peripheral
-        bondAdd(s_peerAddr);
-        ESP_LOGI(TAG, "pareamento aceito");
+        ESP_LOGI(TAG, "%s", len == 6 ? "pareamento aceito" : "peer pareado voltou (desafio ok)");
         return 0;
     }
     s_pairFails = s_pairFails + 1;
-    ESP_LOGW(TAG, "codigo de pareamento errado (%d/%d)", s_pairFails, K_PAIR_MAX_FAILS);
+    ESP_LOGW(TAG, "%s errado (%d/%d)", len == 6 ? "codigo de pareamento" : "desafio do bond",
+             s_pairFails, K_PAIR_MAX_FAILS);
+    if (!s_pairPending) {
+        // desafio falhou: cai no pareamento por codigo (mostra na tela)
+        s_pairPending = true;
+        s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
+    }
     if (s_pairFails >= K_PAIR_MAX_FAILS && s_connActive) {
         ble_gap_terminate(s_conn, K_CONN_TERM);  // async: o DISCONNECT limpa
     }
@@ -461,10 +550,23 @@ int onPairRead(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt_
     (void)conn;
     (void)arg;
     uint8_t v = K_PAIR_WAIT;
+    bool hasChal = false;
     if (err->status == 0 && attr != nullptr && OS_MBUF_PKTLEN(attr->om) >= 1) {
+        uint8_t buf[1 + K_CHAL];
         uint16_t got = 0;
-        if (ble_hs_mbuf_to_flat(attr->om, &v, 1, &got) != 0) v = K_PAIR_WAIT;
+        if (ble_hs_mbuf_to_flat(attr->om, buf, sizeof(buf), &got) != 0 || got < 1) {
+            v = K_PAIR_WAIT;
+        } else {
+            v = buf[0];
+            // peer v2: estado + desafio da conexao (base da resposta e da chave)
+            if (got == 1 + K_CHAL) {
+                memcpy(s_peerChallenge, buf + 1, K_CHAL);
+                hasChal = true;
+            }
+        }
     }
+    // releitura pos-verify volta so [OK]: nao apaga o desafio da conexao
+    if (hasChal) s_peerHasChallenge = true;
     s_peerPairState = v;
     xEventGroupSetBits(s_evt, EV_PAIRR);
     return 0;
@@ -535,15 +637,24 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             s_pairPending = false;
             s_pairVerified = true;
             if (!s_isCentral) {
-                if (s_pairRequired && !bondHas(s_peerAddr)) {
-                    // gate fechado: codigo novo por conexao, expira sozinho
+                if (s_pairRequired) {
+                    // gate SEMPRE fechado: codigo e desafio novos por conexao.
+                    // Peer com bond tem K_BOND_GRACE_MS para responder ao
+                    // desafio antes do codigo aparecer na tela; sem bond, o
+                    // codigo ja vale (expira sozinho).
                     genPairCode();
+                    esp_fill_random(s_challenge, K_CHAL);
                     s_pairVerified = false;
-                    s_pairPending = true;
-                    s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
-                    ESP_LOGI(TAG, "peer conectou, aguardando codigo (conn=%u)", s_conn);
+                    if (bondFind(s_peerAddr, nullptr)) {
+                        s_pairPending = false;
+                        s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_BOND_GRACE_MS);
+                        ESP_LOGI(TAG, "peer com bond conectou, desafio enviado (conn=%u)", s_conn);
+                    } else {
+                        s_pairPending = true;
+                        s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
+                        ESP_LOGI(TAG, "peer conectou, aguardando codigo (conn=%u)", s_conn);
+                    }
                 } else {
-                    if (s_pairRequired) ESP_LOGI(TAG, "peer pareado voltou (conn=%u)", s_conn);
                     s_ready = true;
                 }
             }
@@ -824,6 +935,7 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
     s_peerChrVal = 0;
     s_peerPairVal = 0;
     s_peerPairState = K_PAIR_OFF;
+    s_peerHasChallenge = false;
     s_pairPending = false;
     s_pairVerified = false;  // o passo 5 decide (peer sem gate = true)
     if (ble_gap_adv_active()) ble_gap_adv_stop();  // volta no fail/disconnect
@@ -894,6 +1006,21 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
             if (ble_gattc_read(s_conn, s_peerPairVal, onPairRead, nullptr) != 0) goto fail;
             if (!(waitBits(EV_PAIRR | EV_FAIL, deadline) & EV_PAIRR)) goto fail;
         }
+        // Bond v2: ja pareamos com este peer — responde ao desafio e re-le
+        // o estado (sem pedir codigo ao usuario de novo)
+        uint8_t key[K_BOND_KEY];
+        if (s_peerPairState == K_PAIR_WAIT && s_peerPairVal != 0 && s_peerHasChallenge &&
+            bondFind(s_peerAddr, key)) {
+            uint8_t resp[K_CHAL];
+            bondResponse(key, s_peerChallenge, resp);
+            xEventGroupClearBits(s_evt, EV_PAIRW | EV_PAIRR);
+            if (ble_gattc_write_flat(s_conn, s_peerPairVal, resp, K_CHAL, onPairWrite, nullptr) == 0 &&
+                (waitBits(EV_PAIRW | EV_FAIL, deadline) & EV_PAIRW) &&
+                ble_gattc_read(s_conn, s_peerPairVal, onPairRead, nullptr) == 0) {
+                waitBits(EV_PAIRR | EV_FAIL, deadline);
+            }
+            if (s_peerPairState != K_PAIR_OK) ESP_LOGW(TAG, "bond recusado pelo peer: pede codigo");
+        }
         if (s_peerPairState == K_PAIR_WAIT && s_peerPairVal != 0) {
             s_pairVerified = false;
             s_pairPending = true;
@@ -959,6 +1086,13 @@ bool CelerLink::verify(const char* code) {
     if (!(waitBits(EV_PAIRR | EV_FAIL, deadline) & EV_PAIRR)) return false;
     if (s_peerPairState != K_PAIR_OK) return false;
 
+    // peer v2: memoriza a chave (proximas conexoes respondem ao desafio
+    // sem codigo). A chave usa o desafio lido no connect desta conexao.
+    if (s_peerHasChallenge) {
+        uint8_t key[K_BOND_KEY];
+        bondKeyFromCode(code, s_peerChallenge, key);
+        bondAdd(s_peerAddr, key);
+    }
     s_pairVerified = true;
     s_pairPending = false;
     return true;
@@ -1033,6 +1167,14 @@ void CelerLink::info(Info* out) {
     // Timeout do pareamento pendente e conferido aqui: o app periferico
     // faz polling do status a cada volta e o canal expira sozinho mesmo
     // sem ninguem digitando.
+    // Carencia do bond venceu sem resposta valida (central antigo, ou
+    // alguem so com o MAC): cai no codigo, que aparece na tela.
+    if (s_pairRequired && !s_isCentral && s_connActive && !s_pairVerified && !s_pairPending &&
+        (int32_t)(xTaskGetTickCount() - s_pairDeadline) >= 0) {
+        s_pairPending = true;
+        s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
+        ESP_LOGI(TAG, "sem resposta ao desafio: aguardando codigo");
+    }
     if (s_pairPending && s_connActive &&
         (int32_t)(xTaskGetTickCount() - s_pairDeadline) >= 0) {
         s_pairPending = false;
@@ -1066,7 +1208,7 @@ void CelerLink::appReset() {
     if (s_connActive) dropConnection(K_DISC_WAIT_MS);
     s_isCentral = false;
     clearConnState();
-    s_pairRequired = false;  // o proximo app comeca de link aberto
+    s_pairRequired = true;   // padrao seguro: o proximo app decide no start()
     // O nome dado por um app (start("Celer-Dog")) nao vaza para o proximo.
     defaultName();
     ble_svc_gap_device_name_set(s_advName);

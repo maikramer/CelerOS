@@ -20,10 +20,12 @@ duk_ret_t JSBindings::js_linkStart(duk_context *ctx) {
     if (!duk_is_null_or_undefined(ctx, 0)) {
         name = duk_require_string(ctx, 0);
     }
-    bool pairing = false;
+    // API 14: pareamento por codigo e o PADRAO (link aberto deixava qualquer
+    // aparelho BLE por perto mandar comandos). Abrir exige {pairing:false}.
+    bool pairing = true;
     if (duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
         duk_get_prop_string(ctx, 1, "pairing");
-        pairing = duk_get_boolean_default(ctx, -1, 0) != 0;
+        if (duk_is_boolean(ctx, -1)) pairing = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
     }
     present();  // a 1a chamada inicializa o NimBLE (~300ms)
@@ -93,6 +95,15 @@ duk_ret_t JSBindings::js_linkUnpair(duk_context *ctx) {
     return 1;
 }
 
+// Erro de tamanho com mensagem pre-formatada e duk_error SEM argumentos de
+// conversao — throw com %d a partir de lightfunc corrompe o heap do runtime
+// (mesma razao do requirePin; bancada 2026-10-02).
+static void throwLinkSize(duk_context* ctx) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "mensagem deve ter 1 a %d bytes", (int)CelerLink::MAX_MSG);
+    duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+}
+
 duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
     // String vai crua (bytes UTF-8); objeto e serializado como JSON —
     // comunicacao estruturada sem parser no firmware (quem le decide).
@@ -106,8 +117,7 @@ duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
         }
         len = strlen(json);
         if (len == 0 || len > CelerLink::MAX_MSG) {
-            duk_error(ctx, DUK_ERR_RANGE_ERROR, "mensagem deve ter 1 a %d bytes",
-                      (int)CelerLink::MAX_MSG);
+            throwLinkSize(ctx);
             return 0;
         }
         char buf[CelerLink::MAX_MSG];
@@ -117,8 +127,7 @@ duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
     }
     data = duk_require_lstring(ctx, 0, &len);
     if (len == 0 || len > CelerLink::MAX_MSG) {
-        duk_error(ctx, DUK_ERR_RANGE_ERROR, "mensagem deve ter 1 a %d bytes",
-                  (int)CelerLink::MAX_MSG);
+        throwLinkSize(ctx);
         return 0;
     }
     duk_push_boolean(ctx, CelerLink::send(data, len) ? 1 : 0);
