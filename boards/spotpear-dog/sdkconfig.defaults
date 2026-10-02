@@ -13,12 +13,14 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Console pelo USB-Serial/JTAG nativo (303a:1001): logs + OpenOCD. O SerialLink
-# (celerctl) fala UART0, sem porta fisica nesta placa — o dia a dia e WebManager
-# (WiFi) e, depois, o Celer Link BLE. GPIO19/20 livres: TinyUSB nativo
-# (CELEROS_USB_NATIVE) fica como opcao futura (exige console fora do USJ).
+# Console pelo USB-Serial/JTAG nativo (303a:1001): logs + OpenOCD. O
+# SerialLink (celerctl) fala na MESMA porta USJ, multiplexado com o console
+# como na UART: push/pull/dev/logcat/OTA pela unica USB da placa, sem abrir
+# mao do console e do esptool ROM. Os pinos 19/20 pertencem a USJ —
+# CELEROS_USB_NATIVE (OTG/CDC dupla) nao combina com esta board.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_CELEROS_LINK_ON_USJ=y
 
 # Sem slot de cartao.
 # CONFIG_CELEROS_SD_CARD is not set

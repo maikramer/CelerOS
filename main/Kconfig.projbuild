@@ -17,6 +17,21 @@ config CELEROS_USB_NATIVE
         CONFIG_TINYUSB_CDC_ENABLED=y
         CONFIG_TINYUSB_CDC_COUNT=2
 
+config CELEROS_LINK_ON_USJ
+    bool "SerialLink (celerctl) pela USB-Serial/JTAG nativa"
+    depends on IDF_TARGET_ESP32S3 && !CELEROS_USB_NATIVE
+    default n
+    help
+      Faz o canal console/celerctl (SerialLink) falar na porta
+      USB-Serial/JTAG do S3 em vez da UART0 — para placas cuja unica USB e
+      a USJ e a UART0 nao tem conector (ex.: spotpear-dog). O console de
+      logs segue NA MESMA porta: mesma multiplexacao da UART (logs
+      suprimidos durante a sessao celerctl, restaurados apos ~8s), sem
+      abrir mao do console, do OpenOCD e do esptool ROM.
+
+      Incompativel com CELEROS_USB_NATIVE (o OTG tomaria os pinos 19/20
+      da USJ): o Kconfig do board escolhe um dos dois.
+
 config CELEROS_WEB_SERVER
     bool "Servidor web (file manager + /update pelo navegador)"
     default y

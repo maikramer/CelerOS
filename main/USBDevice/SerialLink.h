@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 // Transporte do HostLink sobre a UART do console (UART0, o mesmo canal que
-// o CH340 expoe como USB no PC). Multiplexa dois modos no mesmo canal:
+// o CH340 expoe como USB no PC) — ou, com CELEROS_LINK_ON_USJ, sobre a
+// USB-Serial/JTAG nativa do S3 (placas cuja unica USB e a USJ, ex.: dog).
+// Multiplexa dois modos no mesmo canal:
 //
 //   CONSOLE - shell interativo humano (minicom/idf.py monitor): eco, prompt
 //             "celer> ", logs ESP_LOG/Serial visiveis

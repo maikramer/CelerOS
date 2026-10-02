@@ -51,13 +51,14 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
-set(CELEROS_PRIV_REQUIRES esp_driver_uart)
+# esp_driver_usb_serial_jtag: so e puxado pelo SerialLink com
+# CELEROS_LINK_ON_USJ (dog); nas demais boards o linker descarta o driver
+set(CELEROS_PRIV_REQUIRES esp_driver_uart esp_driver_usb_serial_jtag)
 if(CONFIG_CELEROS_USB_NATIVE)
     list(APPEND CELEROS_PRIV_REQUIRES esp_tinyusb)
 else()
     list(REMOVE_ITEM CELEROS_SRCS "USBDevice/USBDevice.cpp")
 endif()
-
 # Celer Link (Bluetooth BLE entre CelerOS): NimBLE C API do IDF, sem
 # wrapper. As fontes somem do build quando o board nao liga o BT —
 # o objeto JS CelerLink simplesmente nao existe. O bt vai no REQUIRES

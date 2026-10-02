@@ -7,9 +7,60 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#if CONFIG_CELEROS_LINK_ON_USJ
+// Canal do SerialLink sobre a USB-Serial/JTAG nativa do S3 (ex.: dog, cuja
+// unica USB e a USJ e a UART0 nao tem conector): MESMA multiplexacao
+// console/link da UART, na mesma porta dos logs de console — sem abrir mao
+// do console, do OpenOCD e do esptool ROM (o OTG/TinyUSB do
+// CELEROS_USB_NATIVE exigiria tirar o console daqui).
+#include "driver/usb_serial_jtag.h"
+constexpr size_t kRxRing = 8192;
+bool chanInit() {
+    // IDF 6: install() pega a config sem const
+    usb_serial_jtag_driver_config_t cfg = {
+        .tx_buffer_size = 0,  // TX por polling, como na UART
+        .rx_buffer_size = kRxRing,
+    };
+    return usb_serial_jtag_driver_install(&cfg) == ESP_OK;
+}
+int chanRead(uint8_t* buf, size_t len, TickType_t ticks) {
+    return usb_serial_jtag_read_bytes(buf, len, ticks);
+}
+void chanWrite(const void* data, size_t len) {
+    usb_serial_jtag_write_bytes(data, len, pdMS_TO_TICKS(500));
+}
+void chanSetBaud(uint32_t) {}  // USB nao tem baud
+#else
+#include "driver/uart.h"
+constexpr uart_port_t K_UART = UART_NUM_0;
+// Ring RX: segura os chunks em voo da janela do proto 2 enquanto a task
+// escreve no flash: S3 tem DRAM de sobra; CYD fica com 4KB (heap).
+#if CONFIG_IDF_TARGET_ESP32S3
+constexpr int kRxRing = 16384;
+#else
+constexpr int kRxRing = 4096;
+#endif
+bool chanInit() {
+    esp_err_t err = uart_driver_install(K_UART, kRxRing, 0, 0, nullptr, 0);
+    return err == ESP_OK || err == ESP_ERR_INVALID_STATE;
+}
+int chanRead(uint8_t* buf, size_t len, TickType_t ticks) {
+    return uart_read_bytes(K_UART, buf, len, ticks);
+}
+void chanWrite(const void* data, size_t len) {
+    uart_write_bytes(K_UART, data, len);
+}
+void chanSetBaud(uint32_t baud) {
+    uart_flush_input(K_UART);  // descarta lixo que chegou no baud antigo
+    uart_set_baudrate(K_UART, baud);
+}
+#endif
+
+constexpr uint32_t K_BAUD_DEFAULT = 115200;
+constexpr TickType_t K_LINK_IDLE = pdMS_TO_TICKS(8000);  // sem frames -> sai do modo link
 
 namespace {
 
@@ -18,10 +69,6 @@ const char* TAG = "celer.dbg";
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
 #endif
-
-constexpr uart_port_t K_UART = UART_NUM_0;
-constexpr uint32_t K_BAUD_DEFAULT = 115200;
-constexpr TickType_t K_LINK_IDLE = pdMS_TO_TICKS(8000);  // sem frames -> sai do modo link
 
 enum Mode { MODE_CONSOLE, MODE_LINK };
 volatile Mode s_mode = MODE_CONSOLE;
@@ -46,7 +93,7 @@ bool s_logcat = false;
 // ------------------------------------------------------------ saida UART
 
 void uartPrintRaw(const char* s) {
-    uart_write_bytes(K_UART, s, strlen(s));
+    chanWrite(s, strlen(s));
 }
 
 void consolePrint(void* ctx, const char* fmt, ...) {
@@ -58,7 +105,7 @@ void consolePrint(void* ctx, const char* fmt, ...) {
     va_end(args);
     if (n > 0) {
         if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
-        uart_write_bytes(K_UART, buf, (size_t)n);
+        chanWrite(buf, (size_t)n);
     }
 }
 
@@ -85,7 +132,7 @@ void exitLinkMode() {
     if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
     s_logcat = false;
     if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
-    uart_set_baudrate(K_UART, K_BAUD_DEFAULT);
+    chanSetBaud(K_BAUD_DEFAULT);  // restaura o console (no-op na USJ)
     uartPrintRaw("\r\n[celerctl desconectado]\r\nceler> ");
 }
 
@@ -118,9 +165,9 @@ void linkTask(void*) {
         // Espera 1 byte (bloqueante) e drena o restante sem bloquear: pedir N
         // bytes de uma vez faz o driver esperar o timeout inteiro ate completa-los.
         uint8_t buf[64];
-        int n = uart_read_bytes(K_UART, buf, 1, pdMS_TO_TICKS(250));
+        int n = chanRead(buf, 1, pdMS_TO_TICKS(250));
         if (n > 0) {
-            int more = uart_read_bytes(K_UART, buf + 1, sizeof(buf) - 1, 0);
+            int more = chanRead(buf + 1, sizeof(buf) - 1, 0);
             if (more > 0) n += more;
         }
         for (int i = 0; i < n; i++) {
@@ -159,17 +206,9 @@ void linkTask(void*) {
 // ------------------------------------------------------------------- API
 
 bool SerialLink::init() {
-    // driver RX na UART do console (TX segue por escrita direta/polling).
-    // O ring segura os chunks em voo da janela do proto 2 enquanto a task
-    // escreve no flash: S3 tem DRAM de sobra; CYD fica com 4KB (heap).
-#if CONFIG_IDF_TARGET_ESP32S3
-    constexpr int kRxRing = 16384;
-#else
-    constexpr int kRxRing = 4096;
-#endif
-    esp_err_t err = uart_driver_install(K_UART, kRxRing, 0, 0, nullptr, 0);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "uart_driver_install: %s", esp_err_to_name(err));
+    // driver RX do canal (TX segue por escrita direta/polling)
+    if (!chanInit()) {
+        ESP_LOGE(TAG, "falha ao instalar o driver do canal console/link");
         return false;
     }
 
@@ -199,7 +238,11 @@ bool SerialLink::init() {
         ESP_LOGE(TAG, "falha ao criar task do console/link");
         return false;
     }
+#if CONFIG_CELEROS_LINK_ON_USJ
+    ESP_LOGI(TAG, "console/shell + celerctl ativos na USB-Serial/JTAG");
+#else
     ESP_LOGI(TAG, "console/shell + celerctl ativos na UART0");
+#endif
     return true;
 }
 
@@ -209,15 +252,13 @@ bool SerialLink::writeFrame(const uint8_t* data, size_t len) {
     if (s_writeMutex != nullptr && xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return false;
     }
-    uart_write_bytes(K_UART, (const char*)data, len);
+    chanWrite(data, len);
     if (s_writeMutex != nullptr) xSemaphoreGive(s_writeMutex);
     return true;
 }
 
 void SerialLink::setBaud(uint32_t baud) {
-    // descarta lixo que chegou no baud antigo
-    uart_flush_input(K_UART);
-    uart_set_baudrate(K_UART, baud);
+    chanSetBaud(baud);  // no-op na USJ (USB nao tem baud)
 }
 
 bool SerialLink::linkActive() {
