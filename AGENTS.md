@@ -45,8 +45,9 @@ CelerOS/
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
 | `app_main` | fn | `main/main.cpp` | calls `celerSetup()` once, then `celerLoop()` forever |
-| `celerLoop` | fn | `main/main.cpp` | Navigator/WebManager/TimeManager/Backlight/Buttons/ScreenPower/AlarmScreen/WatchPanels/PowerPolicy ticks, then `delay(PowerPolicy::loopDelayMs())` |
-| `CelerKernel` | class | `main/Kernel/` | app/runtime kernel (Duktape heap, runs main.js) |
+| `celerLoop` | fn | `main/main.cpp` | `CelerServices::tickLoop()` + `delay(PowerPolicy::loopDelayMs())` |
+| `CelerServices` | registry | `main/Kernel/Services.{h,cpp}` | ordered service list (LOOP/PRESENT/ALWAYS) driven by BOTH pumps: `celerLoop` (inApp=false) and `JSBindings::present()` (inApp=true); new services = one line in the table |
+| `CelerKernel` | class | `main/Kernel/` | app/runtime kernel (Duktape heap, runs main.js); exec-timeout hook `celer_exec_timeout_check` (loop JS puro vira RangeError, nao reboot) |
 | `TimeManager`, `Alarms`, `Notifications` | classes | `main/Kernel/` | NTP/tz; persistent alarms+timer+snooze; notification center (/local/notifications.txt) |
 | `PowerPolicy` | class | `main/Hardware/` | DFS + light sleep when screen is off, idle WiFi off |
 | `ScreenPower` | class | `main/Display/` | dim/AOD/off state ladder, raise-to-wake, glance on notification |
