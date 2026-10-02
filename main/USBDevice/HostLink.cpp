@@ -772,8 +772,10 @@ void handleCoredump(const uint8_t* payload, uint16_t len) {
         respondError(KL_COREDUMP, "sem coredump gravado");
         return;
     }
-    // IDF 6: image_get devolve endereco FISICO na flash — mapeia a particao
-    // inteira (64 KB, alinhada) e envia o range do dump
+    // IDF 6: image_get devolve endereco FISICO na flash. Leitura vai de
+    // esp_partition_read: o mmap da particao de coredump falha no watch
+    // (32 MB, particao alta 0x1ff0000 — sem slot/page de MMU livre para ela)
+    // e os chunks cabem no payload do HostLink do mesmo jeito.
     const esp_partition_t* part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
     if (part == nullptr || addr < part->address ||
@@ -781,28 +783,24 @@ void handleCoredump(const uint8_t* payload, uint16_t len) {
         respondError(KL_COREDUMP, "coredump fora da particao");
         return;
     }
-    const void* mapped = nullptr;
-    esp_partition_mmap_handle_t mh;
-    if (esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA,
-                           &mapped, &mh) != ESP_OK) {
-        respondError(KL_COREDUMP, "falha ao mapear a particao");
-        return;
-    }
     uint8_t head[4] = {(uint8_t)size, (uint8_t)(size >> 8),
                        (uint8_t)(size >> 16), (uint8_t)(size >> 24)};
     respond(KL_COREDUMP, 0, head, sizeof(head));
 
-    const uint8_t* p = (const uint8_t*)mapped + (addr - part->address);
+    static uint8_t buf[HostLink::MAX_PAYLOAD];
     size_t off = 0;
     bool sentAll = true;
     while (off < size && linkWriter() != nullptr) {
         size_t rest = size - off;
-        uint16_t chunk = (uint16_t)((rest > HostLink::MAX_PAYLOAD) ? HostLink::MAX_PAYLOAD : rest);
-        respond(KL_COREDUMP_DATA, 0, p + off, chunk);
+        uint16_t chunk = (uint16_t)((rest > sizeof(buf)) ? sizeof(buf) : rest);
+        if (esp_partition_read(part, (addr - part->address) + off, buf, chunk) != ESP_OK) {
+            sentAll = false;
+            break;
+        }
+        respond(KL_COREDUMP_DATA, 0, buf, chunk);
         off += chunk;
     }
     if (off < size) sentAll = false;  // leitor desconectou no meio
-    esp_partition_munmap(mh);
 
     // Dump consumido apaga a particao: sem isso o MESMO dump velho voltava a
     // ser reportado em todo reboot ate ser sobrescrito por um novo crash.
