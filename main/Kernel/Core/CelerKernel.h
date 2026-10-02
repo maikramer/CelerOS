@@ -23,6 +23,10 @@ public:
     // Mensagem do fatal do Duktape que reiniciou o aparelho (uma vez; nullptr
     // se o ultimo reset nao foi um fatal JS)
     static const char* takeLastFatal();
+    // O app cedeu (passou por JSBindings::present()): reinicia a janela de
+    // cortesia do interrupt do executor (loop JS puro sem ceder -> erro em
+    // vez de TWDT/reboot)
+    static void noteAppYield();
 
 private:
     static void checkJSError(duk_context *ctx, duk_int_t result);

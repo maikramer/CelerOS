@@ -442,6 +442,9 @@ void JSBindings::present() {
     // puro sem NENHUMA chamada continua no WDT — conter esse exige o
     // interrupt do executor do Duktape (proximo degrau, ver ENGINE_NOTES).
     esp_task_wdt_reset();
+    // Cedida universal: alem do WDT, reinicia a janela do interrupt do
+    // executor (loop JS puro sem passar AQUI virava reboot do aparelho)
+    CelerKernel::noteAppYield();
     // Timers (API 12) disparam aqui: present() roda no inicio de delay/
     // getTouch/keypadPoll e das chamadas bloqueantes — os pontos onde o app
     // cede. Callback que desenha marca o quadro sujo e o push abaixo o leva
@@ -782,6 +785,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
 
+    // Evento de botao fisico pendente de um app anterior nao atravessa
+    // (placas buttonToApp: o longo que encerrou o app anterior ficaria aqui)
+    Buttons::buttonEvents();
+
     // Sessao Celer Link de um app anterior (saiu sem stop/disconnect)
 #if CONFIG_CELEROS_BLUETOOTH
     CelerLink::appReset();
@@ -921,6 +928,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // --- Touch Input ---
     static const JsFn kFns7[] = {
         {"getTouch", js_getTouch, 0},
+        {"button", js_button, 0},  // API 17: botao fisico como input (placas buttonToApp)
         {"millis", js_millis, 0},
         {"micros", js_micros, 0},
         {"delay", js_delay, 1},

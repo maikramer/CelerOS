@@ -2906,9 +2906,11 @@ typedef struct duk_hthread duk_context;
 #undef DUK_USE_ENCODING_BUILTINS
 #undef DUK_USE_ES6_PROXY
 #undef DUK_USE_ES7_EXP_OPERATOR
+#define DUK_USE_EXEC_TIMEOUT_CHECK celer_exec_timeout_check
 #undef DUK_USE_FUNC_FILENAME_PROPERTY
 #define DUK_USE_HOBJECT_HASH_PROP_LIMIT 32
 #undef DUK_USE_HSTRING_ARRIDX
+#define DUK_USE_INTERRUPT_COUNTER
 #undef DUK_USE_JC
 #undef DUK_USE_JX
 #undef DUK_USE_PERFORMANCE_BUILTIN
@@ -2980,7 +2982,6 @@ typedef struct duk_hthread duk_context;
 #undef DUK_USE_EXEC_INDIRECT_BOUND_CHECK
 #undef DUK_USE_EXEC_PREFER_SIZE
 #define DUK_USE_EXEC_REGCONST_OPTIMIZE
-#undef DUK_USE_EXEC_TIMEOUT_CHECK
 #undef DUK_USE_EXPLICIT_NULL_INIT
 #undef DUK_USE_EXTSTR_FREE
 #undef DUK_USE_EXTSTR_INTERN_CHECK
@@ -3019,7 +3020,6 @@ typedef struct duk_hthread duk_context;
 #define DUK_USE_HTML_COMMENTS
 #define DUK_USE_IDCHAR_FASTPATH
 #undef DUK_USE_INJECT_HEAP_ALLOC_ERROR
-#undef DUK_USE_INTERRUPT_COUNTER
 #undef DUK_USE_INTERRUPT_DEBUG_FIXUP
 #define DUK_USE_JSON_BUILTIN
 #define DUK_USE_JSON_DECNUMBER_FASTPATH
@@ -3093,6 +3093,24 @@ typedef struct duk_hthread duk_context;
 #define DUK_USE_VERBOSE_EXECUTOR_ERRORS
 #define DUK_USE_VOLUNTARY_GC
 #define DUK_USE_ZERO_BUFFER_DATA
+
+/*
+ *  Fixups
+ */
+
+/* Fixup do duk_config.h (gerado com --fixup-header-file): declara o hook de
+ * timeout de execucao (DUK_USE_EXEC_TIMEOUT_CHECK) no escopo do duktape.c.
+ * O guarda extern "C" e essencial: duktape.c e C, o CelerKernel.cpp e C++.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern duk_bool_t celer_exec_timeout_check(void *udata);
+
+#ifdef __cplusplus
+}
+#endif
 
 /*
  *  You may add overriding #define/#undef directives below for

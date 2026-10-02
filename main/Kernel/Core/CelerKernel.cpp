@@ -1,4 +1,5 @@
 #include "CelerKernel.h"
+#include "../../Boards/Board.h"  // perfil (buttonPin dispensa erro de runtime no headless)
 #include "../../USBDevice/LogSink.h"
 #include "../../Display/Layout.h"
 #include "../../Runtime/JSBindings.h"
@@ -21,6 +22,42 @@
 duk_context *CelerKernel::ctx = nullptr;
 CelerDisplay *CelerKernel::tftInstance = nullptr;
 size_t CelerKernel::appLaunchFreeHeap = 0;
+
+// ---------------------------------------------------------------------------
+// Timeout de execucao do Duktape (DUK_USE_EXEC_TIMEOUT_CHECK, disparado pelo
+// interrupt counter a cada ~256K instrucoes): trecho de JS puro sem NENHUMA
+// chamada a bindings nunca passa por present(), e ate 2026-10 o TWDT derrubava
+// o aparelho inteiro. Aqui o WDT e alimentado durante uma janela de cortesia
+// (1s); um trecho que nao cede faz o executor levantar RangeError ("execution
+// timeout") — erro legivel do app em vez de reboot. "Ceder" = qualquer
+// chamada que passe por JSBindings::present() (delay, getTouch, net, fs...):
+// ela reinicia a janela via noteAppYield(). O timeout e travado (retorna 1
+// ate sair do duk_pcall) para o app nao engolir o erro num catch e continuar.
+// Chamado do duktape.c (C): extern "C". Tudo na task do app: sem lock.
+// ---------------------------------------------------------------------------
+static uint32_t s_jsSliceStart = 0;
+static bool s_jsTimedOut = false;
+
+void CelerKernel::noteAppYield() {
+    s_jsSliceStart = millis();
+    s_jsTimedOut = false;
+}
+
+extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
+    (void)udata;
+    esp_task_wdt_reset();
+    const uint32_t now = millis();
+    if (s_jsTimedOut) return 1;
+    if (s_jsSliceStart == 0) {
+        s_jsSliceStart = now;  // primeira fatia desde a cedida
+        return 0;
+    }
+    if (now - s_jsSliceStart > 1000) {
+        s_jsTimedOut = true;
+        return 1;  // o executor levanta RangeError "execution timeout"
+    }
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Tela de erro do runtime (tema do OS): titulo, texto quebrado em linhas e
@@ -98,11 +135,18 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     tft->endWrite();
 
     // espera soltar (o toque que causou o erro), depois um tap completo —
-    // usuario pode demorar: alimenta o watchdog da main task enquanto espera
-    uint16_t tx, ty;
-    while (kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
-    while (!kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
-    while (kui::readTouch(&tx, &ty)) { esp_task_wdt_reset(); delay(20); }
+    // usuario pode demorar: alimenta o watchdog da main task enquanto espera.
+    // Placas headless (devkit) nao tem touch: o botao fisico (buttonPin)
+    // tambem dispensa — sem isso o erro ficava preso para sempre no devkit.
+    auto dismissHeld = []() {
+        uint16_t tx, ty;
+        if (kui::readTouch(&tx, &ty)) return true;
+        const int pin = Board::profile().buttonPin;
+        return pin >= 0 && digitalRead(pin) == LOW;  // ativo-baixo (pull-up do Buttons::init)
+    };
+    while (dismissHeld()) { esp_task_wdt_reset(); delay(20); }
+    while (!dismissHeld()) { esp_task_wdt_reset(); delay(20); }
+    while (dismissHeld()) { esp_task_wdt_reset(); delay(20); }
 }
 
 // dica de OOM no idioma configurado (primeiro uso trava o idioma)
@@ -479,6 +523,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
+    s_jsSliceStart = 0;
+    s_jsTimedOut = false;
 
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
     celer_log_printf("[duk] heap base+API: %u B (livre %u, iram %u)\n",
@@ -502,6 +548,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     }
 
     duk_int_t rc = duk_pcall(ctx, 0);
+    s_jsSliceStart = 0;  // fora do app: a janela do timeout recomeca no proximo
+    s_jsTimedOut = false;
     // o recorte do display e do app (faixa/System.setClip): o launcher e as
     // telas de erro desenham na tela inteira
     if (tftInstance) tftInstance->clearClipRect();

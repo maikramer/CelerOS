@@ -8,7 +8,8 @@
 #   python3 tools/duk_rom_strings.py   (nomes da API JS -> celeros_rom_strings.yaml)
 #   python2 duktape-2.7.0/tools/configure.py --output-directory /tmp/duk --rom-support \
 #       --option-file components/duktape/celeros_duk_config.yaml \
-#       --builtin-file components/duktape/celeros_rom_strings.yaml
+#       --builtin-file components/duktape/celeros_rom_strings.yaml \
+#       --fixup-file components/duktape/celeros_fixup.h
 #   cp /tmp/duk/duktape.c /tmp/duk/duktape.h /tmp/duk/duk_config.h components/duktape/
 DUK_USE_ES6_PROXY: false
 DUK_USE_REFLECT_BUILTIN: false
@@ -42,3 +43,13 @@ DUK_USE_CACHE_CATCHER: false
 DUK_USE_FUNC_FILENAME_PROPERTY: false
 # Indice de array cacheado na string: incompativel com builtins em ROM
 DUK_USE_HSTRING_ARRIDX: false
+
+# ---- Executor (2026-10) ----
+# Timeout de execucao: o interrupt counter (~256K instrucoes, DUK_HTHREAD_
+# INTCTR_DEFAULT) chama celer_exec_timeout_check (CelerKernel.cpp) que
+# alimenta o TWDT em trecho de JS puro e converte loop infinito sem ceder
+# em RangeError do app (antes o WDT derrubava o aparelho inteiro). A
+# declaracao da funcao entra no duk_config.h via --fixup-line (receita
+# abaixo). Custo: um decremento+branch por dispatch de bytecode.
+DUK_USE_INTERRUPT_COUNTER: true
+DUK_USE_EXEC_TIMEOUT_CHECK: celer_exec_timeout_check
