@@ -31,11 +31,12 @@ desenvolvimento.
 
 | Página | O que cobre |
 |---|---|
-| [Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas) | SmartDisplay 4" e a família CYD, e como adicionar uma placa nova |
+| [Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas) | SmartDisplay 4", família CYD, robô cachorro e watch Waveshare — e como adicionar uma placa nova |
 | [Compilando e gravando](/maikramer/CelerOS/wiki/Compilando-e-Gravando) | ESP-IDF 6.1, build por placa, partição LittleFS e o harness de testes |
 | [Solução de problemas](/maikramer/CelerOS/wiki/Solução-de-Problemas) | Problemas comuns de build, flash, toque, Wi-Fi e web — e os consertos |
 | [Arquitetura](/maikramer/CelerOS/wiki/Arquitetura) | Boot flow, camadas do firmware, runtime JS e convenções do código |
 | [Robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) | O cachorro robô SpotPear/ZZPET: pinout completo de engenharia reversa, firmware de bring-up e o board CelerOS + controle "Celer Link" BLE |
+| [Watch Waveshare](/maikramer/CelerOS/wiki/Watch-Waveshare) | A placa de smartwatch AMOLED 2.06: pinout portado do firmware Rust, app Watchface como casa, escada de tela AOD/deep sleep e a API `Sensors` |
 | [Apps de sistema](/maikramer/CelerOS/wiki/Apps-de-Sistema) | O que mora em `data/`, regras do `app.json` e como apps chegam ao dispositivo |
 | [Interface web](/maikramer/CelerOS/wiki/Interface-Web) | File manager, upload de firmware e o espelho de tela ao vivo no navegador |
 | [Ferramentas](/maikramer/CelerOS/wiki/Ferramentas) | `celerctl`, `celerhub`, servidor OTA local e geradores de assets |
@@ -66,7 +67,12 @@ traduções ficam na seção **Português (BR)**.
   automático, alto-falante (`System.beep`), linhas de relé e servos
   (`System.gpio.servo`) nas placas que têm; placas de robô acrescentam
   bateria, microfone, pad capacitivo e NeoPixel
-  (`System.battery`/`micLevel`/`touchPad`/`neopixel`).
+  (`System.battery`/`micLevel`/`touchPad`/`neopixel`); o watch acrescenta
+  IMU com pedômetro e raise-to-wake (`Sensors.accel/steps/temp`), bateria,
+  RTC que segura a hora sem rede e volume de áudio (`System.setVolume`).
+* **Energia de smartwatch** — a escada de tela dim depois de alguns
+  segundos, cai para um mostrador always-on com anti burn-in e então vai a
+  deep sleep (acorda por EXT1); o watch boota direto no mostrador.
 * **Celer Link (BLE)** — link Bluetooth LE entre CelerOS próximos (API 9):
   a placa do robô roda `CelerLink.start()`, a outra dirige com
   `scan()`/`connect()`/`send()` — veja a página do

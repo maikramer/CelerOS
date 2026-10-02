@@ -68,14 +68,15 @@ noticeably simpler:
 
 ## Features
 
-* **JavaScript app runtime** — interactive apps written in ES5 run natively via Duktape (API level 10): canvas-style drawing, touch and coupled on-screen keyboard (`System.keypad*`), file system, HTTP/JSON networking.
+* **JavaScript app runtime** — interactive apps written in ES5 run natively via Duktape (API level 13): canvas-style drawing, touch and coupled on-screen keyboard (`System.keypad*`), file system, HTTP/JSON networking.
 * **Immediate-mode UI** — adaptive layout (`main/Display/Layout.h`): the same apps scale from 240x320 up to 480x480, with PNG icons decoded to an RGB565+A4 cache.
 * **Pre-installed apps in JS** — Settings, App Store, Installer, Help, Web Server, Terminal, Snake and the demos (HTTP Demo, Touch Test) live in the LittleFS partition; the firmware carries only the core (that shaved ~330 KB off the CYD image).
 * **App Store & Installer** — browse and install apps from the [CelerOS Hub](https://os.celer.tec.br) over Wi-Fi, or sideload from the SD card.
 * **Over-the-air updates** — firmware updates from the device (Settings → System Updates), from the browser (`/update` upload page), or via `celerctl ota push`. See [tools/README_OTA.md](tools/README_OTA.md).
 * **Captive portal Wi-Fi setup** — no credentials stored? The device opens a `CelerOS-Setup-XXXX` access point; you configure Wi-Fi from your phone. Wi-Fi auto-reconnects on router drops.
 * **Live screen from the browser** — `/screen` mirrors the display over Wi-Fi (RLE frames served row-block by row-block, so the device keeps running smoothly) and forwards your clicks as touches.
-* **Board hardware in JS** — RGB LED (`System.led`), light sensor with auto-brightness (`System.lightLevel`), speaker (`System.beep`), relay lines on the SmartDisplay "Y" SKUs (`System.relay`), servos (`System.gpio.servo`) and robot-board hardware — battery, microphone, capacitive touch pad, NeoPixel (`System.battery`/`micLevel`/`touchPad`/`neopixel`).
+* **Board hardware in JS** — RGB LED (`System.led`), light sensor with auto-brightness (`System.lightLevel`), speaker (`System.beep`), relay lines on the SmartDisplay "Y" SKUs (`System.relay`), servos (`System.gpio.servo`) and robot-board hardware — battery, microphone, capacitive touch pad, NeoPixel (`System.battery`/`micLevel`/`touchPad`/`neopixel`). The watch adds an IMU with pedometer and raise-to-wake (`Sensors.*`), battery, an RTC that keeps time without network and audio volume (`System.setVolume`).
+* **Watch-grade power management** — on the Waveshare watch the screen ladder dims after a few seconds, falls back to an always-on face with anti burn-in, then goes to deep sleep (EXT1 wake on the buttons); the device boots straight into its watch face.
 * **Celer Link (BLE)** — Bluetooth LE link between nearby CelerOS devices (API 9): put a board on a robot, drive it from another CelerOS app (`CelerLink.scan/connect/send` — the Celer Remote hub app does exactly that). No pairing in v1: toys and prototypes.
 * **`celerctl` USB companion** — adb-style tool over the serial link: interactive shell, file push/pull, live logcat, in-place firmware update and screencap. See [tools/README_USBTOOL.md](tools/README_USBTOOL.md).
 * **Settings PIN lock** — optional numeric PIN (salted SHA-256, handled natively) protects Settings, with a 60 s unlock session.
@@ -93,11 +94,13 @@ noticeably simpler:
 | **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | 4" IPS 480x480 RGB (ST7701) | Capacitive GT911 | 16 MB flash / 8 MB PSRAM, microSD (`/sd`), I2S speaker (NS4168 — `System.beep`); "Y" wall-switch SKUs with 1 or 3 relays (`System.relay`) |
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | 2.8" ILI9341 240x320 SPI | Resistive XPT2046 | Classic witnessmenow variant (TFT on HSPI 14/13/12, touch on dedicated pins, backlight GPIO21); RGB LED, light sensor and speaker (GPIO26) in JS; SD slot off for now; touch calibration on first boot |
 | **CYD-VSPI** (untested variant) | ESP32 | 2.8" ILI9341 240x320 SPI | Resistive XPT2046 | Legacy pinout (TFT on VSPI 18/23/19, shared touch bus, backlight GPIO22) kept for boards wired that way — **never tested on hardware**; build with `-DCELEROS_BOARD=cyd-vspi` |
+| **Robot dog** (SpotPear ESP32-S3 AI Robot Dog, ZZPET `zzpet-s3`) | ESP32-S3R8 | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 16 MB flash / 8 MB PSRAM (embedded), 4 leg servos, I²S mic + speaker, 2x WS2812, battery ADC; boots into the **Dog Face** app (expressive eyes, ramped gaits with a dead-man keepalive); driven from another CelerOS board over Celer Link BLE ([wiki](https://github.com/maikramer/CelerOS/wiki/Robot-Dog)) |
+| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash / 8 MB PSRAM (embedded), AXP2101 PMU, PCF85063 RTC + QMI8658 IMU (pedometer) + ES8311 audio codec on I²C, microSD; boots into the **Watchface** app; screen ladder with always-on display and deep sleep; `celerctl` over native USB ([wiki](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch)) |
 
 Board definitions live in `boards/<board>/` (sdkconfig defaults) and
 `main/Boards/<board>/` (pin map and display driver). Select the target with
-`-DCELEROS_BOARD=smartdisplay|cyd`. The UI is resolution-adaptive, so adding
-a panel is mostly a new board profile.
+`-DCELEROS_BOARD=<board>` (the ids in the table). The UI is
+resolution-adaptive, so adding a panel is mostly a new board profile.
 
 ## Building & Flashing
 
@@ -120,8 +123,20 @@ idf.py -B build-cyd -DSDKCONFIG=build-cyd/sdkconfig \
   -DCELEROS_BOARD=cyd set-target esp32
 idf.py -B build-cyd build flash -p /dev/ttyUSB0 monitor
 
+# Waveshare AMOLED 2.06 watch (ESP32-S3, native USB-Serial/JTAG)
+idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/waveshare-watch/sdkconfig.defaults" \
+  -DCELEROS_BOARD=waveshare-watch set-target esp32s3
+idf.py -B build-watch build flash -p /dev/ttyACM0 monitor
+
+# SpotPear robot dog (ESP32-S3, native USB-Serial/JTAG)
+idf.py -B build-dog -DSDKCONFIG=build-dog/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/spotpear-dog/sdkconfig.defaults" \
+  -DCELEROS_BOARD=spotpear-dog set-target esp32s3
+idf.py -B build-dog build flash -p /dev/ttyACM0 monitor
+
 # LittleFS image from data/ (system apps + icons + demos)
-tools/flash_data.sh smartdisplay /dev/ttyUSB0    # or: cyd <port>
+tools/flash_data.sh smartdisplay /dev/ttyUSB0    # or: cyd|spotpear-dog|waveshare-watch <port>
 
 # Local OTA test server
 python3 tools/ota_server.py --board smartdisplay
@@ -145,7 +160,7 @@ in by the ESP-IDF component manager; LovyanGFX is a git submodule — clone with
 
 * [Wiki](https://github.com/maikramer/CelerOS/wiki) — architecture, build, boards, tools and guides (CI-generated from [`wiki/`](wiki/) in the repo).
 * [App Development Guide](Documentation/App_Development_Guide.md) ([em português](Documentation/App_Development_Guide.pt-BR.md)) — how to package a JS app (`app.json`, folder layout, icons).
-* [JavaScript API Guide](Documentation/JS_API_Guide.md) ([em português](Documentation/JS_API_Guide.pt-BR.md)) — full reference of the JS runtime and native bindings (API level 10).
+* [JavaScript API Guide](Documentation/JS_API_Guide.md) ([em português](Documentation/JS_API_Guide.pt-BR.md)) — full reference of the JS runtime and native bindings (API level 13).
 * [tools/README_USBTOOL.md](tools/README_USBTOOL.md) ([em português](tools/README_USBTOOL.pt-BR.md)) — `celerctl` command reference and the wire protocol.
 * [tools/README_OTA.md](tools/README_OTA.md) ([em português](tools/README_OTA.pt-BR.md)) — OTA manifest scheme (`update.json`) and update channels.
 * [components/README.md](components/README.md) — vendored helper components and local patches.
@@ -158,8 +173,8 @@ node test/js_harness/run.js
 
 ## Roadmap
 
-* More boards (help with a bring-up is welcome — board profiles are small and self-contained; the [SpotPear robot dog](https://github.com/maikramer/CelerOS/wiki/Robot-Dog) is the current one).
-* More hardware APIs in the JS runtime (I2C/SPI sensors, deeper power management, Celer Link security/pairing).
+* More boards (help with a bring-up is welcome — board profiles are small and self-contained; the [SpotPear robot dog](https://github.com/maikramer/CelerOS/wiki/Robot-Dog) and the [Waveshare AMOLED 2.06 watch](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch) are the latest two to land).
+* More hardware APIs in the JS runtime (I2C/SPI sensors, ULP-assisted sensing during deep sleep, Celer Link security/pairing).
 
 ## History & Credits
 

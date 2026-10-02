@@ -64,9 +64,13 @@ implementation in the bring-up firmware's `oled_px()`/`glyph_px()`.
   the **Celer Remote** hub app — D-pad commands and telemetry (battery,
   state) over the link. Robot-board hardware (battery, mic, touch pad,
   NeoPixel) joined the JS API at level 10 as well.
-* **[in progress]** Board port `main/Boards/spotpear-dog/`: S3R8 + SH1106
-  face + the Dog Face / Dog Remote apps (bring-up running, riding with the
-  board files).
+* **[done]** Board port `main/Boards/spotpear-dog/`: boots into the
+  launcher and opens the **Dog Face** app by itself (the profile's
+  `homeApp`; board-exclusive app via the `boards/<board>/data/` overlay).
+  Dog Face: expressive eyes, reactions to touch and sound, battery, sleep
+  on idle, and ramped gaits (walk/back/turn/sit/lie/stretch) with a
+  dead-man keepalive — the dog stops by itself if the remote lets go of
+  the arrow or the link drops.
 
 Restoring the stock firmware at any time is a single command from a full dump
 (`tools/flash_backup_restore.sh` in the dog repo) — the CelerOS port never

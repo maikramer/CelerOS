@@ -111,8 +111,16 @@
       "src": "wiki/pages/Robot-Dog.md"
     },
     {
+      "page": "Waveshare-Watch",
+      "src": "wiki/pages/Waveshare-Watch.md"
+    },
+    {
       "page": "Robo-Cachorro",
       "src": "wiki/pages/Robo-Cachorro.pt-BR.md"
+    },
+    {
+      "page": "Watch-Waveshare",
+      "src": "wiki/pages/Watch-Waveshare.pt-BR.md"
     }
   ],
   "sidebar": [
@@ -153,6 +161,12 @@
       ]
     },
     {
+      "section": "Wearables",
+      "pages": [
+        "Waveshare-Watch"
+      ]
+    },
+    {
       "section": "JavaScript apps",
       "pages": [
         "App-Development-Guide",
@@ -181,6 +195,7 @@
         "Guia-de-Apps",
         "API-JS",
         "Robo-Cachorro",
+        "Watch-Waveshare",
         "Contribuindo"
       ]
     }

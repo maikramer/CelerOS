@@ -38,10 +38,17 @@ idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/waveshare-watch/sdkconfig.defaults" \
   -DCELEROS_BOARD=waveshare-watch set-target esp32s3
 idf.py -B build-watch build flash -p /dev/ttyACM0 monitor
+
+# Cão robô SpotPear (ESP32-S3, USB-Serial/JTAG)
+idf.py -B build-dog -DSDKCONFIG=build-dog/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/spotpear-dog/sdkconfig.defaults" \
+  -DCELEROS_BOARD=spotpear-dog set-target esp32s3
+idf.py -B build-dog build flash -p /dev/ttyACM0 monitor
 ```
 
-Cada placa usa um diretório de build próprio (`build/`, `build-cyd/`) com o
-seu `sdkconfig` em cache — assim dá para alternar alvos sem reconfigurar.
+Cada placa usa um diretório de build próprio (`build/`, `build-cyd/`,
+`build-watch/`, `build-dog/`) com o seu `sdkconfig` em cache — assim dá
+para alternar alvos sem reconfigurar.
 
 ## Partição de dados (LittleFS)
 
@@ -49,12 +56,14 @@ seu `sdkconfig` em cache — assim dá para alternar alvos sem reconfigurar.
 `littlefs`, montada em `/local`:
 
 ```bash
-tools/flash_data.sh smartdisplay /dev/ttyUSB0   # ou: cyd <porta>
+tools/flash_data.sh smartdisplay /dev/ttyUSB0   # ou: cyd|spotpear-dog|waveshare-watch <porta>
 ```
 
 O script precisa do ambiente IDF exportado (`IDF_PATH`) e usa o
 `bin/mklittlefs.bin` + o `parttool.py` do IDF. O tamanho da partição é lido
-dos `partitions_{16MB,4MB}.csv` — fonte única de verdade.
+dos `partitions_{4,16,32}MB.csv` — fonte única de verdade — e o overlay
+`boards/<placa>/data/` soma por cima de `data/` quando existe (é assim que
+o Dog Face entra no cachorro).
 
 Dica: para empurrar um app único sem regravar a partição inteira,
 

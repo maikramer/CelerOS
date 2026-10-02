@@ -12,15 +12,15 @@
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | No PSRAM; CH340 serial; asks for touch calibration on first boot; simpler UI ([see below](#cyd-classic-esp32)) |
 | **CYD-VSPI** (untested variant) | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | Legacy pinout (TFT on VSPI 18/23/19, shared touch bus, backlight GPIO22) kept for boards wired that way — **never tested on hardware**; build with `-DCELEROS_BOARD=cyd-vspi` |
 | **Robot dog** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB embedded PSRAM) | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 4 servos (legs), mic + speaker I²S, 2x WS2812, battery ADC; boots into the Dog Face app (profile `homeApp`); driven by the Celer Remote app over Celer Link BLE; build with `-DCELEROS_BOARD=spotpear-dog` — see [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) |
-| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB embedded PSRAM) | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash, AXP2101 PMU, RTC PCF85063 + IMU QMI8658 (pedometer) + audio ES8311 codec on I²C, microSD on SPI3; boots into the Watchface app (profile `homeApp`); Celer Link BLE; console on the native USB-Serial/JTAG; build with `-DCELEROS_BOARD=waveshare-watch` |
+| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB embedded PSRAM) | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash, AXP2101 PMU, RTC PCF85063 + IMU QMI8658 (pedometer) + audio ES8311 codec on I²C, microSD on SPI3; boots into the Watchface app (profile `homeApp`); screen ladder with AOD + deep sleep; Celer Link BLE; console on the native USB-Serial/JTAG; build with `-DCELEROS_BOARD=waveshare-watch` — see [Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) |
 
 ## Where a board is defined
 
 * `boards/<board>/sdkconfig.defaults` — per-target sdkconfig defaults.
 * `main/Boards/<board>/` — pin map, display driver and `BoardTraits.h`
   (compile-time differences, e.g. `largeUi`, `hasPsram`).
-* Selection happens at build time with `-DCELEROS_BOARD=smartdisplay|cyd`
-  (any other value is a fatal CMake error). See
+* Selection happens at build time with `-DCELEROS_BOARD=<board>` (one of
+  the ids above; any other value is a fatal CMake error). See
   [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing).
 
 The UI is resolution-adaptive — everything is drawn on a virtual 240x320
@@ -142,10 +142,11 @@ configured before the panel init — the board HAL does it in `Board::init()`.
 
 **Board peripherals used by the system:** microSD on SPI3 (CS=17, SCK=2,
 MOSI=1, MISO=3, mounted at `/sd`), Celer Link BLE (NimBLE), ES8311 codec +
-PA (GPIO46) for `System.beep` (16 kHz, MCLK 4,096 MHz on GPIO16), QMI8658
-IMU (pedometer + raise-to-wake, `Sensors.*` API 13), PCF85063 RTC (time
-survives reboots), AXP2101 battery in `System.battery()`, BOOT/PWR buttons
-(short = home, hold = screenshot / deep sleep) and the ScreenPower ladder
-(dim 8 s → AOD 15 s with anti burn-in → off → deep sleep by EXT1 on the
-buttons). Planned: ULP-RISC-V motion monitoring during deep sleep and the
-ES8311 mic.
+PA (GPIO46) for `System.beep` and `System.micLevel()` (16 kHz, MCLK 4,096 MHz
+on GPIO16), QMI8658 IMU (pedometer + raise-to-wake, `Sensors.*` API 13),
+PCF85063 RTC (time survives reboots), AXP2101 battery in `System.battery()`,
+BOOT/PWR buttons (short = home, hold = screenshot / deep sleep) and the
+ScreenPower ladder (dim 8 s → AOD 15 s with anti burn-in → off → deep sleep
+by EXT1 on the buttons). Planned: ULP-RISC-V motion monitoring during deep
+sleep. The full pinout and the watch experience live in the
+[Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) page.
