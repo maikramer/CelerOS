@@ -9,6 +9,15 @@
 #include "../../main/Utils/JsStrip.h"
 #include "../../main/USBDevice/HostFrame.h"
 
+// Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
+#include <cstdint>
+#include <string>
+static uint32_t s_perms = 0;
+static std::string s_appPkg;
+inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
+#define CELER_HOST_TEST 1
+#include "../../main/Runtime/JsFsJail.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -49,13 +58,13 @@ static void testPermissions() {
     CHECK(parsePermissions("{\"permissions\":[\"system\"]}") == PERM_SYSTEM);
     CHECK(parsePermissions("{\"permissions\":[\"fs\",\"gpio\",\"system\",\"net\"]}") ==
           (PERM_FS | PERM_NET | PERM_GPIO | PERM_SYSTEM));
-    CHECK(parsePermissions("{\"permissions\":[]}") == PERM_ALL);                  // vazio = nao tranca
+    CHECK(parsePermissions("{\"permissions\":[]}") == 0);                         // vazio = nenhuma
     CHECK(parsePermissions("{\"permissions\":[}") == PERM_ALL);                   // invalido = nao tranca
     // campo vizinho nao confunde (ordem no JSON nao importa)
     CHECK(parsePermissions("{\"api\":6,\"permissions\":[\"fs\"],\"topbar\":true}") == PERM_FS);
-    // token desconhecido nao concede nada — e array sem concessao valida
-    // volta PERM_ALL (nao tranca app por engano de formatacao)
+    // token desconhecido nao concede nada
     CHECK((parsePermissions("{\"permissions\":[\"fs\",\"netfs\"]}") & (PERM_NET | PERM_GPIO | PERM_SYSTEM)) == 0);
+    CHECK(parsePermissions("{\"permissions\":[\"camera\"]}") == 0);
 }
 
 // Enxuga em chunks de 3 bytes (estado atravessa a fronteira dos pedacos)
@@ -221,8 +230,53 @@ static void testHostFrame() {
     CHECK(p2b.v2());  // sessao permanece em proto 2
 }
 
+static void testFsJail() {
+    s_perms = celer::PERM_FS;
+    s_appPkg = "celeros.snake";
+    // forma canonica: segmento inteiro, sem "//", "." ou ".."
+    CHECK(fsPathCanonical("/local/x.txt"));
+    CHECK(fsPathCanonical("/sd/"));
+    CHECK(fsPathCanonical("/local"));
+    CHECK(!fsPathCanonical("/local/./wifi.txt"));
+    CHECK(!fsPathCanonical("/local//wifi.txt"));
+    CHECK(!fsPathCanonical("/local/data/../wifi.txt"));
+    CHECK(!fsPathCanonical("/local/.."));
+    CHECK(!fsPathCanonical("/sdcard/x"));
+    CHECK(!fsPathCanonical("/dev/uart/0"));
+    // arquivos do sistema (e o .tmp da escrita atomica)
+    CHECK(!fsPathAllowed("/local/wifi.txt"));
+    CHECK(!fsPathAllowed("/local/settings_pin2.bin"));
+    CHECK(!fsPathAllowed("/local/ota_url.txt.tmp"));
+    CHECK(fsPathAllowed("/local/x.txt"));
+    // pastas de apps: leitura sim, escrita so "system"
+    CHECK(fsPathAllowed("/local/apps/Settings/main.js"));
+    CHECK(!fsWriteAllowed("/local/apps/Settings/main.js"));
+    CHECK(!fsWriteAllowed("/sd/apps"));
+    CHECK(fsWriteAllowed("/sd/appsX/a"));
+    // appData: so a do proprio pacote
+    CHECK(fsWriteAllowed("/local/data/celeros.snake/s.txt"));
+    CHECK(!fsPathAllowed("/local/data/celeros.snak/x"));
+    CHECK(!fsPathAllowed("/local/data/other/x"));
+    // arvores: raizes e pastas de apps
+    CHECK(!fsTreeAllowed("/local"));
+    CHECK(!fsTreeAllowed("/local/"));
+    CHECK(!fsTreeAllowed("/local/data"));
+    CHECK(fsTreeAllowed("/sd"));
+    CHECK(!fsTreeWriteAllowed("/sd"));
+    CHECK(!fsTreeWriteAllowed("/local/apps/X"));
+    CHECK(fsTreeWriteAllowed("/sd/music"));
+    // "system" passa nas regras de dono, nunca na forma canonica
+    s_perms = celer::PERM_SYSTEM;
+    CHECK(fsPathAllowed("/local/wifi.txt"));
+    CHECK(fsWriteAllowed("/local/apps/Settings/main.js"));
+    CHECK(fsTreeWriteAllowed("/local"));
+    CHECK(!fsPathAllowed("/local/./wifi.txt"));
+    s_perms = 0;
+}
+
 int main() {
     testSemVer();
+    testFsJail();
     testPermissions();
     testJsStrip();
     testHostFrame();

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 13 — 185 funcoes.
+// API level 14 — 185 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -75,10 +75,10 @@ declare const System: {
     micros(): number;
     /** pausa a execução do JavaScript. CRÍTICO: essa função comanda o kernel C++ para executar Garbage Collection em background. Se */
     delay(ms: number): void;
-    /** delays sub-milissegundo de alta precisão, nativamente. Bloqueia a CPU de forma limpa, sem disparar Garbage Collection. */
+    /** delays sub-milissegundo de alta precisão, nativamente. Bloqueia a CPU de forma limpa, sem disparar Garbage Collection. Espera */
     delayMicroseconds(us: number): void;
     /** imprime uma mensagem no monitor serial USB físico num computador conectado (baud 115200). Útil para depurar variáveis enquanto a */
-    print(str: string): void;
+    print(str?: string): void;
     /** lê o sensor de temperatura interno do ESP32 e devolve o valor em Celsius. */
     getTemperature(): any;
     /** verifica se a revisão do hardware ESP32 instalada suporta o sensor de temperatura interno (alguns chips novos removeram). Devolve */
@@ -100,7 +100,7 @@ declare const System: {
     /** devolve o offset/fuso horário configurado pelo usuário. */
     getTimezone(): any;
     getWeekday(): any;
-    keepAwake(arg0: number): void;
+    keepAwake(arg0?: number): void;
     /** devolve a string da versão atual do SO. */
     getOSVersion(): any;
     /** devolve o inteiro do Nível de API do SO. */
@@ -134,9 +134,6 @@ declare const System: {
     isBuffered(): any;
     wifiStatus(): any;
     md5(str: string): any;
-    setPin(pin: number): any;
-    verifyPin(arg0: number): any;
-    pinClear(): void;
     pinState(): any;
     rescanApps(): void;
     setting(key: string, arg1?: number): any;
@@ -149,11 +146,7 @@ declare const System: {
     /** pad capacitivo avulso (a "cabeca" do cao robotico). A referencia e calibrada na primeira chamada — mantenha o pad solto nesse instante. (API 10) */
     touchPad(): any;
     lightLevel(): any;
-    setTimezone(tz: number): void;
-    setManualTime(arg0: number, arg1: number, arg2: number, arg3: number, arg4: number): void;
-    set24hFormat(arg0: number): void;
     get24hFormat(): any;
-    setNtpEnabled(arg0: number): void;
     getNtpEnabled(): any;
     theme(): CelerTheme;
     /** desenha um ícone 64x64 de /local/icons/<name>.png com mesclagem de alpha (`.bin` legado aceito). */
@@ -199,31 +192,45 @@ declare const System: {
     /** @permission "system" */
     deepSleep(arg0: number, arg1?: number): void;
     /** @permission "system" */
+    setPin(pin: number): any;
+    /** @permission "system" */
+    verifyPin(arg0: number): any;
+    /** @permission "system" */
+    pinClear(): void;
+    /** @permission "system" */
+    setTimezone(tz: number): any;
+    /** @permission "system" */
+    setManualTime(arg0: number, arg1: number, arg2: number, arg3: number, arg4: number): any;
+    /** @permission "system" */
+    set24hFormat(arg0: number): void;
+    /** @permission "system" */
+    setNtpEnabled(arg0: number): void;
+    /** @permission "system" */
     notifications(): any;
     /** @permission "system" */
     notificationsClear(): void;
     gpio: {
         /** define o estado elétrico físico de um pino (ex.: pino 2 como OUTPUT para acender um LED). */
         /** @permission "gpio" */
-        pinMode(pin: number, mode: number): void;
+        pinMode(pin?: number, mode?: number): void;
         /** aplica 3,3V (HIGH) ou 0V (LOW) num pino específico. */
         /** @permission "gpio" */
-        digitalWrite(pin: number, state: number): void;
+        digitalWrite(pin?: number, state?: number): void;
         /** lê o estado de tensão físico de um pino. */
         /** @permission "gpio" */
-        digitalRead(pin: number): any;
+        digitalRead(pin?: number): any;
         /** aciona o conversor analógico-digital de 12 bits do ESP32 para ler um nível de tensão contínuo. */
         /** @permission "gpio" */
-        analogRead(pin: number): any;
+        analogRead(pin?: number): any;
         /** inicia um sinal PWM (Pulse Width Modulation) automático de hardware num pino. Útil para controle de motores ou dimmer de LEDs. */
         /** @permission "gpio" */
-        analogWrite(pin: number, pwmValue: number): void;
+        analogWrite(pin?: number, pwmValue?: number): void;
         /** Medição Nativa de Pulsos por Hardware. Suspende o motor JS e delega ao kernel C++ a medição precisa da duração de um pulso de */
         /** @permission "gpio" */
-        pulseIn(pin: number, state: number, timeout: number): any;
+        pulseIn(pin?: number, state?: number, timeout?: number): any;
         /** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: (API 10) */
         /** @permission "gpio" */
-        servo(pin: number, angulo: number): any;
+        servo(pin?: number, angulo?: number): any;
         /** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia (API 10) */
         /** @permission "gpio" */
         servoOff(pin: number): any;
@@ -265,8 +272,7 @@ declare const Net: {
     /** executa um HTTP POST. Lança erro se o WiFi não estiver conectado. */
     /** @permission "net" */
     post(url?: string, body?: string, contentType?: number): any;
-    /** baixa direto para um arquivo em modo streaming — o corpo nunca passa pela heap do JS, então **não sofre o teto de 32 KB** (é (API 6) */
-    /** @permission "net" */
+    /** @permission "net+fs" */
     download(url: string, caminho: number, onProgress?: number): any;
     /** @permission "net" */
     beginGet(url: string): any;
@@ -355,8 +361,8 @@ declare const CelerLink: CelerLinkApi | undefined
 interface CelerLinkApi {
     start(nome?: string, opcoes?: number): any;
     stop(): any;
-    scan(timeoutMs: number): any;
-    connect(idOuNome: number, timeoutMs: number): any;
+    scan(timeoutMs?: number): any;
+    connect(idOuNome: number, timeoutMs?: number): any;
     disconnect(): any;
     send(mensagem?: number): any;
     poll(): any;

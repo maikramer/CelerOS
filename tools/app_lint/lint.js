@@ -319,6 +319,13 @@ function buildManifest() {
         // `return N` (N>0) no corpo = a funcao JS devolve valor (usado pelo
         // gerador de types do SDK para distinguir void de retorno)
         fn.returns = /\breturn\s+[1-9]/.test(body);
+        // Permissao checada DENTRO do binding (nao na tabela de registro):
+        // o corpo anota com "// lint-perm: fs" (ex.: Net.download grava no FS)
+        const lp = /lint-perm:\s*(\w+)/.exec(body);
+        if (lp) {
+          const base = fn.perm || obj.perm;
+          fn.perm = base ? base + '+' + lp[1] : lp[1];
+        }
       }
     }
   }

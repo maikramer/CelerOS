@@ -60,12 +60,12 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Description:** Returns the OS API Level integer.
 
 #### `System.millis()`
-- **Returns:** `Integer`
-- **Description:** Returns the total uptime of the ESP32 hardware in milliseconds since the device booted. Used for delta-time physics and loop timing.
+- **Returns:** `Number`
+- **Description:** Returns the total uptime of the ESP32 hardware in milliseconds since the device booted. Used for delta-time physics and loop timing. 64-bit clock: never wraps (it used to be a `uint32` that rolled over after ~49 days).
 
 #### `System.micros()`
-- **Returns:** `Integer`
-- **Description:** Returns the total uptime of the ESP32 hardware in microseconds since the device booted. Essential for extreme high-resolution timing (e.g., custom bit-banged protocols). Note that the 32-bit integer rolls over every ~71 minutes.
+- **Returns:** `Number`
+- **Description:** Returns the total uptime of the ESP32 hardware in microseconds since the device booted. Essential for extreme high-resolution timing (e.g., custom bit-banged protocols). 64-bit clock, exact up to 2^53: `now - t0` never goes negative (the old `uint32` rolled over every ~71 minutes).
 
 #### `System.getTemperature()`
 - **Returns:** `Float`
@@ -78,12 +78,12 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 #### `System.delay(ms)`
 - **Parameters:** `ms` (Integer) - The amount of milliseconds to pause execution.
 - **Returns:** `undefined`
-- **Description:** Pauses JavaScript execution. **CRITICAL:** This function commands the C++ kernel to perform Garbage Collection in the background. If you have an infinite `while(true)` loop, you MUST include a `System.delay(10)` call to prevent the OS from crashing due to heap exhaustion.
+- **Description:** Pauses JavaScript execution. **CRITICAL:** This function commands the C++ kernel to perform Garbage Collection in the background. If you have an infinite `while(true)` loop, you MUST include a `System.delay(10)` call to prevent the OS from crashing due to heap exhaustion. Capped at 30 s per call (`delay(60000)` waits 30 s; it used to return immediately).
 
 #### `System.delayMicroseconds(us)`
 - **Parameters:** `us` (Integer) - The amount of microseconds to pause execution.
 - **Returns:** `undefined`
-- **Description:** Provides highly accurate sub-millisecond delays natively. This blocks the CPU execution cleanly, without triggering Garbage Collection.
+- **Description:** Provides highly accurate sub-millisecond delays natively. This blocks the CPU execution cleanly, without triggering Garbage Collection. Busy wait capped at 1 s (1,000,000 µs) — use `System.delay` for longer waits.
 
 #### `System.print(str)`
 - **Parameters:** `str` (String)
@@ -285,6 +285,7 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 #### `System.gpio.pinMode(pin, mode)`
 - **Parameters:** `pin` (Integer hardware pin number), `mode` (GPIO Constant)
 - **Description:** Sets the physical electrical state of an ESP32 pin (e.g. setting pin 2 to OUTPUT to drive an LED).
+- Every `System.gpio` function throws `RangeError` for a pin that does not exist or is reserved by the system (flash/PSRAM) — touching those crashed the device.
 
 #### `System.gpio.digitalWrite(pin, state)`
 - **Parameters:** `pin` (Integer), `state` (HIGH or LOW)
@@ -305,7 +306,7 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Description:** Initiates an automatic hardware PWM (Pulse Width Modulation) signal on a pin. Useful for motor control or dimming LEDs.
 
 #### `System.gpio.pulseIn(pin, state, [timeout])`
-- **Parameters:** `pin` (Integer), `state` (HIGH or LOW), `timeout` (Optional Integer in microseconds, defaults to 1,000,000)
+- **Parameters:** `pin` (Integer), `state` (HIGH or LOW), `timeout` (Optional Integer in microseconds, default and cap 1,000,000)
 - **Returns:** `Integer` (Length of the pulse in microseconds, or 0 if timeout occurred)
 - **Description:** **Native Hardware Pulse Measurement.** Suspends the JS engine and delegates to the C++ Kernel to accurately measure the duration of an incoming hardware pulse. This bypasses the JavaScript execution overhead entirely, giving you absolute microsecond precision (crucial for reading HC-SR04 ultrasonic sensors).
 
@@ -455,7 +456,8 @@ than 32 KB are truncated.
   - `url` (String, `http://` or `https://`)
   - `filePath` (String) — destination VFS path (e.g. `"/local/apps/<pkg>/main.js.new"`)
   - `onProgress` (Function, optional) — called per chunk with `(bytesSoFar, totalBytes)`; `totalBytes` is `-1` when the server sends no `Content-Length`
-- **Returns:** Boolean — `true` on success; on failure the partial file is removed
+- **Returns:** Boolean — `true` on success; on failure the partial file is removed and any existing file at `filePath` is left **intact** (the download goes to `filePath + ".part"` and only replaces the destination on success)
+- **Permission:** requires `"fs"` in addition to `"net"`; the destination follows the `FS` rules (canonical path under `/local` or `/sd`, no system files).
 - **Description:** Downloads straight to a file in **streaming** mode — the body never goes through the JS heap, so there is **no 32 KB cap** (this is how the App Store updates apps; the hub enforces the size limits). Errors inside `onProgress` don't abort the download. This is what the App Store uses to install/updates apps: it writes to a `*.new` staging file, validates `FS.getFileMD5()` against the catalog checksum, then `FS.renameFile()`s it over the old code (atomic within the same filesystem — never rename across `/local` ↔ `/sd`).
 
 ### Example
@@ -492,7 +494,7 @@ app package format.
 ### 12.2 App Lifecycle
 
 #### `System.exitApp()`
-Closes the app and returns to the launcher (same as touching the top-right corner).
+Closes the app and returns to the launcher (same as touching the top-right corner). The exit is "sticky": if an app `try/catch` swallows the exit error, the next `System.delay`/`getTouch`/`keypadPoll` rethrows it, so the app still closes.
 
 #### `System.rescanApps()`
 Asks the launcher to rescan `/local/apps` and `/sd/apps`. Call after installing/removing apps.
@@ -515,7 +517,9 @@ Returns `true` when the board has the automatic frame buffer (PSRAM boards).
 ### 12.3 Hardware & System
 
 #### `System.setBrightness(level)` / `System.getBrightness()` / `System.backlightSupported()`
-Backlight control (5–100). `setBrightness` persists to `/local/brightness.txt`. On boards without PWM backlight `backlightSupported()` returns `false` and the setters are no-ops.
+Backlight control (5–100). On boards without PWM backlight `backlightSupported()` returns `false` and the setters are no-ops.
+
+**Brightness, volume, auto-brightness and screen timeout are device settings:** only `"system"` apps (Settings) persist them to NVS. For other apps the change lasts **while the app runs** and the previous value comes back when it closes (a fade effect no longer writes flash every frame).
 
 #### `System.setAutoBrightness(on)` / `System.getAutoBrightness()` (API 7)
 Automatic brightness from the board's light sensor: the user's level becomes the maximum and the screen dims down to 30% of it in the dark (smoothed, checked once per second, also while apps run). `getAutoBrightness()` returns `true`/`false`, or `null` on boards without a light sensor. Persisted as the `auto_brightness` setting.
@@ -530,7 +534,7 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 - **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
 
 #### App permissions (`app.json` → runtime, F4)
-`"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) are absent. **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
+`"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, clock `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) are absent. Paths given to `FS` (and to `drawPNG`/`drawBMP`/`playWav`/`Net.download`) must be **canonical** under `/local` or `/sd`: no `//`, `.` or `..` (denied for every app). **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
 
 #### `System.toast(message)` / `System.beep(freq, ms)`
 `toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); the SmartDisplay feeds the on-board Nsiway NS4168 digital amplifier over I2S (a sine wave, softer than the CYD's square wave). Returns `false` on boards without a speaker.
@@ -547,10 +551,10 @@ Relay lines of the board. `n` is 1-based (`1` = hardware line L1); `relay(n, tru
 `System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection.
 
 #### `System.setting(key)` / `System.setting(key, value)`
-System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read returns the string or `null`; write returns `true`. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).
+System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read (open to all) returns the string or `null`; **write requires `"system"`** and returns `true` (key 1–15 chars, value up to 63). Use `Storage` for the app's own data. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).
 
 #### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
-Settings PIN, handled natively since 1.3: salted SHA-256 (`settings_pin2.bin`), no hash exposed to JS. `setPin` accepts 4–6 digits; `verifyPin` transparently upgrades a legacy MD5 PIN on first success. `pinState()` returns `0` (no PIN), `1` (active) or `2` (corrupted — flag set but file missing; the UI should ask for a redefinition).
+Settings PIN, handled natively since 1.3: salted SHA-256 (`settings_pin2.bin`), no hash exposed to JS. `setPin`, `verifyPin` and `pinClear` **require `"system"`** (`pinState` is open). `setPin` accepts 4–6 digits; `verifyPin` transparently upgrades a legacy MD5 PIN on first success and, after 5 failures in a row, refuses attempts for 30 s (the penalty doubles on each failure, up to 15 min). `pinState()` returns `0` (no PIN), `1` (active) or `2` (corrupted — flag set but file missing; the UI should ask for a redefinition).
 
 #### `System.webAuthInfo()` / `System.webAuthSetPass(pass)`
 Web server credentials (Basic Auth since 1.3 — every route requires the password). `webAuthInfo()` → `{user, pass}` for display to the device owner; `webAuthSetPass` accepts 6–31 characters.
@@ -563,7 +567,7 @@ Web server credentials (Basic Auth since 1.3 — every route requires the passwo
 - **Returns:** `{ok, error?}` — flashes the inactive OTA slot; on success the app should offer `System.restart()`.
 
 #### `System.setTimezone(tz)` / `System.setManualTime(year, month, day, hour, minute)` / `System.set24hFormat(bool)` / `System.get24hFormat()` / `System.setNtpEnabled(bool)` / `System.getNtpEnabled()`
-Time configuration (persisted by TimeManager).
+Time configuration (persisted by TimeManager). The setters **require `"system"`**. `setTimezone` returns `false` (changing nothing) for an empty TZ, one longer than 48 chars or one with `|`/control characters; `setManualTime` returns `false` when a field is out of range (year 2020–2099).
 
 #### `System.factoryReset(mode)`
 - `"configs"` — clears configuration files in `/local` and saved WiFi networks, **keeps** apps and icons.
@@ -783,8 +787,18 @@ name reverts to the default when the app exits.
 
 `options` (object, **API 11**): `{pairing: true}` enables the pairing gate —
 every new connection then requires the 6-digit code (see `verify()` and
-`status().code`). Without it (or on older firmware) the link stays open as
-always. Applies to connections made after the call.
+`status().code`). **Since API 14 pairing is the default**: `start()` /
+`start(name)` already require the code (before, any BLE device nearby could
+send commands). An open link needs an explicit `{pairing: false}`. Show
+`status().code` on the peripheral app's screen while `status().pairing` is
+`true`. Applies to connections made after the call.
+
+Paired peers become a keyed *bond* (API 14): the key is derived from the
+code + that connection's challenge, and on reconnect the central answers a
+fresh challenge — spoofing the MAC of a paired controller no longer opens the
+channel. API 11 bonds (MAC only) are discarded: each controller pairs once
+more. A central running older firmware asks for the code on every
+connection.
 
 #### `CelerLink.stop()` → Boolean
 Stops advertising (the device is no longer discoverable).
@@ -901,7 +915,9 @@ recent first): reconnections come in without a code; `unpair()` forgets.
 
 ```javascript
 // "bot": receives commands and acts (beep/LED here; servos on a robot)
-CelerLink.start();  // "Celer-XXXX" on the air
+// open link only for the demo: in a real app keep pairing (the default)
+// and show status().code on screen
+CelerLink.start(null, {pairing: false});  // "Celer-XXXX" on the air
 System.drawString("esperando controle...", 10, 10);
 while (true) {
     var msg = CelerLink.poll();
@@ -965,7 +981,7 @@ setTimeout(function () {
 }, 60000);
 ```
 
-- **Returns:** id `1..8` (`0` = failed — 8 timers max). 10 ms floor.
+- **Returns:** id `>= 1`, unique within the app (`0` = failed — 8 live timers max). The id of a timer that already fired or was cleared never cancels the new timer that reused its slot. 10 ms floor.
 - **A callback error PROPAGATES**: the app dies with the error screen and
   the callback's stack (same policy as any binding). A late interval fires
   **once** on the next yield (catch-up, no burst).
@@ -984,8 +1000,15 @@ Storage.remove("hiscore");
 Storage.clear();                       // wipes EVERYTHING of this app
 ```
 
-- Key: 1–15 chars (NVS limit). Value: string up to 4 KB; numbers and
-  booleans are serialized (`get` **always returns a string**).
+- Key: 1–15 chars (NVS limit). Value: string up to 4 KB (`\0` bytes are
+  kept); numbers and booleans are serialized (`get` **always returns a
+  string** — `""` when missing and no default is given).
+- `set` returns `false` when writing would leave the NVS without the space
+  reserved for the system (WiFi credentials, calibration, settings) — the
+  partition is small (~20 KB) and shared.
+- A `packageName` longer than 11 chars uses a namespace hashed from the full
+  name (it used to be truncated, so `celeros.notes`/`celeros.notepad` shared
+  data); data in the old namespace is copied on first open.
 - Loose `.js` scripts (no app.json) share the `app__anon` namespace.
 - `Storage.clearFor(packageName)` wipes ANOTHER app's Storage — requires the
   `"system"` capability (App Store 2.1.3+ uses it on uninstall; `clear()`
@@ -1068,10 +1091,13 @@ System.deepSleep(600000, 4);      // whichever comes first
 
 ### 17.3 Daily alarm — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
 
-When the local clock passes `h:m`, the system fires an **ALARME: msg**
-toast and disarms. In RAM (does not survive a reboot); needs a valid time
-(NTP or manual). `System.getAlarm()` returns `{armed, hour, minute, msg}`
-or `null`.
+Fires at the **next** occurrence of `h:m` (today if it has not passed yet,
+otherwise tomorrow) with an **ALARME: msg** toast, then disarms. In RAM
+(does not survive a reboot); needs a valid time (NTP or manual — changing
+the timezone or the time recomputes the next occurrence). Checked by the
+launcher: while an app is open the toast shows when the app closes.
+`System.getAlarm()` returns `{armed, hour, minute, msg}` or `null` (message
+up to 64 chars).
 
 ### 17.4 Persistent time
 
@@ -1172,16 +1198,65 @@ without the hardware the calls degrade gracefully (feature-detect with
 ### 19.5 `System.keepAwake(bool)`
 
 - **Description:** holds the screen awake (skips the dim/AOD/off ladder of
-  the ScreenPower state machine) while `true`. Games and workout apps call
-  `System.keepAwake(true)` on start and `false` on exit. No-op on boards
-  without screen states.
+  the ScreenPower state machine) while `true`, or for `ms` milliseconds
+  with `System.keepAwake(ms)` (expires by itself). Games and workout apps
+  call it on start. **Released automatically when the app closes.** No-op
+  on boards without screen states.
 
 ### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
 
-- **Parameters/Returns:** `pct` 0..100 (persisted; default 100).
+- **Parameters/Returns:** `pct` 0..100 (default 100; persisted only by
+  `"system"` apps — for other apps it lasts while the app runs).
 - **Description:** OS-wide audio volume. On I²S boards it scales the
   waveform; on the watch codec (ES8311) it also sets the hardware volume
   register. `System.beep`/`playTone` pick it up automatically. Buzzer
   (LEDC) boards have fixed gain — the value is still stored.
   `System.getInfo().hasMic` tells whether `System.micLevel()` is available
   (robot dog and the watch).
+
+## 20. API Level 14 — Permission consent, default pairing, prompt
+
+### 20.1 Permission consent
+
+The `app.json` `"permissions"` field is now a **request**: the first time the
+app opens (or when an update asks for something new) the launcher shows
+**"Permitir <app>? Acesso a: arquivos, rede, GPIO, sistema"**. The runtime
+gets only what was granted (declared ∩ granted). An app without the field
+asks for all four — declare only what you use. Grants live in NVS, keyed by
+`packageName` + install folder (a copy in another folder asks again). Apps
+already installed the first time a consent-aware firmware boots are granted
+automatically. Uninstalling (launcher or the store's `Storage.clearFor`)
+forgets the grant.
+
+`packageName` must be `[A-Za-z0-9._-]` (up to 64, no `..`); otherwise it is
+ignored (the app is identified by its name).
+
+Matching `FS` rules:
+- **Writing** under `/local/apps` and `/sd/apps` (other apps' code) requires
+  `"system"` — reading stays open.
+- **Another** app's `/local/data/<pkg>/` is invisible (read and write); the
+  app's own `FS.appData()` stays open.
+- Trees: copying all of `/local` or `/local/data`, or removing / using the
+  `/sd` root as a destination, requires `"system"`.
+
+### 20.2 `CelerLink.start` requires pairing by default
+
+See `CelerLink.start` above. Pass `{pairing: false}` for an open link.
+
+### 20.3 `System.prompt(msg, initial, {nullOnCancel: true})`
+
+With `nullOnCancel`, cancelling (X) returns `null`; without it you still get
+`""` (indistinguishable from confirming an empty value). The keyboard also
+serves the remote `exit` and the physical buttons while open (JS timers pause
+until it closes).
+
+### 20.4 Alarm and toasts while an app is open
+
+`System.setAlarm` fires even with an app open: the system bar turns into an
+**ALARME: msg** banner for 8 s and the device beeps 3 times.
+`System.toast`/`notify` called during the app now show when it closes (the
+first one used to "expire" before it was ever drawn).
+
+### 20.5 `FS.listDir` without a cap
+
+Returns every entry (it used to silently stop at 128).

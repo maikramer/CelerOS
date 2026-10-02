@@ -78,16 +78,19 @@ para o SO do ESP32.
 - **Descrição:** devolve o inteiro do Nível de API do SO.
 
 #### `System.millis()`
-- **Retorna:** `Integer`
+- **Retorna:** `Number`
 - **Descrição:** devolve o uptime total do hardware ESP32 em milissegundos
   desde o boot. Útil para física com delta-time e temporização de loop.
+  Relógio de 64 bits: não dá a volta (antes era `uint32` e voltava a 0 aos
+  ~49 dias).
 
 #### `System.micros()`
-- **Retorna:** `Integer`
+- **Retorna:** `Number`
 - **Descrição:** devolve o uptime total do hardware ESP32 em microssegundos
   desde o boot. Essencial para temporização de altíssima resolução (ex.:
-  protocolos bit-banged customizados). Note que o inteiro de 32 bits faz
-  wrap a cada ~71 minutos.
+  protocolos bit-banged customizados). Relógio de 64 bits, exato até 2^53:
+  `agora - t0` nunca fica negativo (o `uint32` antigo fazia wrap a cada ~71
+  minutos).
 
 #### `System.getTemperature()`
 - **Retorna:** `Float`
@@ -107,13 +110,15 @@ para o SO do ESP32.
 - **Descrição:** pausa a execução do JavaScript. **CRÍTICO:** essa função
   comanda o kernel C++ para executar Garbage Collection em background. Se
   você tem um loop `while(true)`, é OBRIGATÓRIO incluir um `System.delay(10)`
-  para evitar que o SO trave por exaustão de heap.
+  para evitar que o SO trave por exaustão de heap. Teto de 30 s por chamada
+  (`delay(60000)` espera 30 s; antes não esperava nada).
 
 #### `System.delayMicroseconds(us)`
 - **Parâmetros:** `us` (Integer) - Quantidade de microssegundos para pausar.
 - **Retorna:** `undefined`
 - **Descrição:** delays sub-milissegundo de alta precisão, nativamente.
-  Bloqueia a CPU de forma limpa, sem disparar Garbage Collection.
+  Bloqueia a CPU de forma limpa, sem disparar Garbage Collection. Espera
+  ocupada com teto de 1 s (1.000.000 µs) — para mais, use `System.delay`.
 
 #### `System.print(str)`
 - **Parâmetros:** `str` (String)
@@ -411,6 +416,9 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
   GPIO)
 - **Descrição:** define o estado elétrico físico de um pino (ex.: pino 2
   como OUTPUT para acender um LED).
+- Todas as funções de `System.gpio` lançam `RangeError` para pino
+  inexistente ou reservado pelo sistema (flash/PSRAM) — mexer neles
+  derrubava o aparelho.
 
 #### `System.gpio.digitalWrite(pin, state)`
 - **Parâmetros:** `pin` (Integer), `state` (HIGH ou LOW)
@@ -434,7 +442,7 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
 
 #### `System.gpio.pulseIn(pin, state, [timeout])`
 - **Parâmetros:** `pin` (Integer), `state` (HIGH ou LOW), `timeout` (Integer
-  opcional em microssegundos, padrão 1.000.000)
+  opcional em microssegundos, padrão e teto 1.000.000)
 - **Retorna:** `Integer` (duração do pulso em microssegundos, ou 0 se deu
   timeout)
 - **Descrição:** **Medição Nativa de Pulsos por Hardware.** Suspende o motor
@@ -608,7 +616,11 @@ que 32 KB são truncadas.
     `(bytesBaixados, bytesTotais)`; `bytesTotais` é `-1` quando o servidor
     não manda `Content-Length`
 - **Retorna:** Boolean — `true` no sucesso; em falha o arquivo parcial é
-  removido
+  removido e o arquivo existente em `caminho` fica **intacto** (o download
+  vai para `caminho + ".part"` e só substitui o destino no sucesso)
+- **Permissão:** exige `"fs"` além de `"net"`; o destino segue as mesmas
+  regras do `FS` (caminho canônico em `/local` ou `/sd`, sem arquivos do
+  sistema).
 - **Descrição:** baixa direto para um arquivo em modo **streaming** — o
   corpo nunca passa pela heap do JS, então **não sofre o teto de 32 KB** (é
   o mecanismo da App Store para instalar/atualizar apps; os limites de
@@ -659,6 +671,9 @@ arquivos, controle de OTA e o formato de pacote de app.
 
 #### `System.exitApp()`
 Fecha o app e volta ao launcher (igual a tocar o canto superior direito).
+A saída é "grudenta": se um `try/catch` do app engolir o erro de saída, o
+próximo `System.delay`/`getTouch`/`keypadPoll` relança — o app fecha mesmo
+assim.
 
 #### `System.rescanApps()`
 Pede ao launcher para reescanear `/local/apps` e `/sd/apps`. Chame depois de
@@ -691,9 +706,13 @@ PSRAM).
 ### 12.3 Hardware e Sistema
 
 #### `System.setBrightness(level)` / `System.getBrightness()` / `System.backlightSupported()`
-Controle do backlight (5–100). `setBrightness` persiste em
-`/local/brightness.txt`. Em placas sem backlight PWM,
+Controle do backlight (5–100). Em placas sem backlight PWM,
 `backlightSupported()` devolve `false` e os setters são no-op.
+
+**Brilho, volume, brilho automático e tempo de tela são configurações do
+aparelho:** só apps com `"system"` (Settings) gravam na NVS. Nos demais
+apps a mudança vale **enquanto o app roda** e o valor anterior volta quando
+ele fecha (um efeito de fade não grava mais a flash a cada frame).
 
 #### `System.setAutoBrightness(on)` / `System.getAutoBrightness()` (API 7)
 Brilho automático pelo sensor de luz da placa: o nível escolhido pelo usuário
@@ -715,7 +734,7 @@ reboot.
   (veja `setPin` abaixo).
 
 #### Permissões do app (`app.json` → runtime, F4)
-`"permissions": ["fs","net","gpio","system"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio` e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`) ficam ausentes. **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
+`"permissions": ["fs","net","gpio","system"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio` e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, hora `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) ficam ausentes. Caminhos do `FS` (e de `drawPNG`/`drawBMP`/`playWav`/`Net.download`) precisam ser **canônicos** dentro de `/local` ou `/sd`: sem `//`, `.` ou `..` (negados para todos os apps). **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
 
 #### `System.toast(mensagem)` / `System.beep(freq, ms)`
 `toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` toca um tom na saída de alto-falante da placa (bloqueante; 20–20000 Hz, até 5000 ms). A CYD aciona o conector de alto-falante (GPIO26, amplificador na placa, onda quadrada); a SmartDisplay alimenta o amplificador digital Nsiway NS4168 da placa via I2S (senoide, som mais suave). Devolve `false` em placa sem alto-falante.
@@ -745,13 +764,15 @@ alto-falante I2S da SKU padrão, então a placa tem um ou outro.
 para detecção de recursos.
 
 #### `System.setting(key)` / `System.setting(key, value)`
-Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura devolve a string ou `null`; escrita devolve `true`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).
+Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura (aberta) devolve a string ou `null`; **escrita exige `"system"`** e devolve `true` (chave 1–15 caracteres, valor até 63). Para dados do próprio app use `Storage`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).
 
 #### `System.setPin(pin)` / `System.verifyPin(pin)` / `System.pinClear()` / `System.pinState()`
 PIN do Settings, tratado nativamente desde a 1.3: SHA-256 com salt
-(`settings_pin2.bin`), sem hash exposto ao JS. `setPin` aceita 4–6 dígitos;
-`verifyPin` faz upgrade transparente de um PIN MD5 legado no primeiro
-sucesso. `pinState()` retorna `0` (sem PIN), `1` (ativo) ou `2` (corrompido —
+(`settings_pin2.bin`), sem hash exposto ao JS. `setPin`, `verifyPin` e
+`pinClear` **exigem `"system"`** (`pinState` é aberto). `setPin` aceita 4–6
+dígitos; `verifyPin` faz upgrade transparente de um PIN MD5 legado no
+primeiro sucesso e, depois de 5 erros seguidos, recusa tentativas por 30 s
+(o castigo dobra a cada erro, até 15 min). `pinState()` retorna `0` (sem PIN), `1` (ativo) ou `2` (corrompido —
 flag setada sem arquivo; a UI deve pedir redefinição).
 
 #### `System.webAuthInfo()` / `System.webAuthSetPass(senha)`
@@ -769,7 +790,10 @@ senha). `webAuthInfo()` → `{user, pass}` para exibição ao dono do aparelho;
   o app deve oferecer `System.restart()`.
 
 #### `System.setTimezone(tz)` / `System.setManualTime(year, month, day, hour, minute)` / `System.set24hFormat(bool)` / `System.get24hFormat()` / `System.setNtpEnabled(bool)` / `System.getNtpEnabled()`
-Configurações de horário (persistidas pelo TimeManager).
+Configurações de horário (persistidas pelo TimeManager). Os setters
+**exigem `"system"`**. `setTimezone` devolve `false` (sem mudar nada) para
+fuso vazio, maior que 48 caracteres ou com `|`/caracteres de controle;
+`setManualTime` devolve `false` com campo fora da faixa (ano 2020–2099).
 
 #### `System.factoryReset(mode)`
 - `"configs"` — limpa arquivos de configuração em `/local` e redes WiFi
@@ -1023,8 +1047,17 @@ volta ao default quando o app sai.
 
 `opcoes` (objeto, **API 11**): `{pairing: true}` liga o gate de pareamento —
 cada conexão nova exige o código de 6 dígitos (veja `verify()` e
-`status().code`). Sem a opção (ou em firmware anterior), o link fica aberto
-como sempre. Vale para as conexões seguintes à chamada.
+`status().code`). **Desde a API 14 o pareamento é o padrão**: `start()` /
+`start(nome)` já exigem o código (antes qualquer aparelho BLE por perto podia
+mandar comandos). Link aberto só com `{pairing: false}` explícito. Mostre
+`status().code` na tela do app periférico quando `status().pairing` for
+`true`. Vale para as conexões seguintes à chamada.
+
+Pareados viram *bond* com chave (API 14): a chave nasce do código + um
+desafio daquela conexão, e nas reconexões o central responde a um desafio
+novo — trocar o MAC para o de um controle pareado não abre mais o canal.
+Bonds da API 11 (só MAC) são descartados: cada controle pareia uma vez de
+novo. Central com firmware antigo passa a pedir o código a cada conexão.
 
 #### `CelerLink.stop()` → Boolean
 Para o advertising (o device deixa de ser descobrível).
@@ -1140,7 +1173,9 @@ primeiro): a reconexão entra sem código; `unpair()` esquece.
 
 ```javascript
 // "bot": recebe comandos e age (aqui beep/LED; servos num robo de verdade)
-CelerLink.start();  // "Celer-XXXX" no ar
+// link aberto so para a demo: em app real deixe o pareamento (padrao) e
+// mostre status().code na tela
+CelerLink.start(null, {pairing: false});  // "Celer-XXXX" no ar
 System.drawString("esperando controle...", 10, 10);
 while (true) {
     var msg = CelerLink.poll();
@@ -1204,7 +1239,9 @@ setTimeout(function () {
 }, 60000);
 ```
 
-- **Retorno:** id `1..8` (`0` = falhou — máximo 8 timers). Piso de 10 ms.
+- **Retorno:** id `>= 1`, único dentro do app (`0` = falhou — máximo 8
+  timers vivos). Um id de timer que já disparou ou foi cancelado não
+  cancela o timer novo que reaproveitou a vaga. Piso de 10 ms.
 - **Erro no callback PROPAGA**: o app morre com a tela de erro e a stack do
   callback (mesma política de qualquer binding). Interval atrasado dispara
   **uma vez** na cedida seguinte (catch-up sem rajada).
@@ -1224,9 +1261,17 @@ Storage.remove("recorde");
 Storage.clear();                       // apaga TUDO do app
 ```
 
-- Chave: 1–15 caracteres (limite do NVS). Valor: string até 4 KB; números e
-  booleanos são serializados (`get` devolve **sempre string** — converta de
-  volta com `parseInt`/`parseFloat`).
+- Chave: 1–15 caracteres (limite do NVS). Valor: string até 4 KB (bytes
+  `\0` preservados); números e booleanos são serializados (`get` devolve
+  **sempre string** — `""` quando ausente e sem default; converta de volta
+  com `parseInt`/`parseFloat`).
+- `set` devolve `false` quando gravar deixaria a NVS sem a folga reservada
+  ao sistema (credenciais WiFi, calibração, ajustes) — a partição é pequena
+  (~20 KB) e compartilhada.
+- `packageName` com mais de 11 caracteres usa um namespace por hash do nome
+  completo (antes o nome era cortado e `celeros.notes`/`celeros.notepad`
+  dividiam dados); os dados do namespace antigo são copiados na primeira
+  abertura.
 - Scripts `.js` avulso (sem app.json) compartilham o namespace `app__anon`.
 - `Storage.clearFor(packageName)` apaga o Storage de OUTRO app — exige a
   permissao `"system"` (a App Store 2.1.3+ usa na desinstalacao; `clear()`
@@ -1310,10 +1355,12 @@ System.deepSleep(600000, 4);      // o que vier primeiro
 
 ### 17.3 Alarme do dia — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
 
-Quando o relógio local passa de `h:m`, o sistema dispara um toast
-**ALARME: msg** e desarma. Em RAM (não sobrevive a reboot); precisa de hora
-válida (NTP ou ajuste manual). Requer `System.getAlarm()` devolve
-`{armed, hour, minute, msg}` ou `null`.
+Dispara na **próxima** ocorrência de `h:m` (hoje se ainda não passou, senão
+amanhã) com um toast **ALARME: msg** e desarma. Em RAM (não sobrevive a
+reboot); precisa de hora válida (NTP ou ajuste manual — trocar fuso ou hora
+recalcula a próxima ocorrência). Conferido pelo launcher: com um app aberto,
+o toast aparece quando o app fecha. `System.getAlarm()` devolve
+`{armed, hour, minute, msg}` ou `null` (mensagem até 64 caracteres).
 
 ### 17.4 Hora persistente
 
@@ -1420,16 +1467,65 @@ em placas sem o hardware as chamadas degradam limpo (feature-detect com
 ### 19.5 `System.keepAwake(bool)`
 
 - **Descrição:** segura a tela acesa (pula a escada dim/AOD/off do
-  ScreenPower) enquanto `true`. Jogos e apps de treino chamam
-  `System.keepAwake(true)` ao abrir e `false` ao sair. No-op em placas sem
-  estados de tela.
+  ScreenPower) enquanto `true`, ou por `ms` milissegundos com
+  `System.keepAwake(ms)` (expira sozinho). Jogos e apps de treino chamam
+  ao abrir. **Solto automaticamente quando o app fecha.** No-op em placas
+  sem estados de tela.
 
 ### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
 
-- **Parâmetros/Retorna:** `pct` 0..100 (persistido; default 100).
+- **Parâmetros/Retorna:** `pct` 0..100 (default 100; persistido só por
+  apps `"system"` — nos demais vale enquanto o app roda).
 - **Descrição:** volume do áudio do OS. Nas placas I²S escala a forma de
   onda; no codec do watch (ES8311) também vai no registrador de volume de
   hardware. `System.beep`/`playTone` pegam o valor sozinhos. Placas de
   buzzer (LEDC) têm ganho fixo — o valor segue guardado.
   `System.getInfo().hasMic` diz se há `System.micLevel()` disponível (cão
   robô e o watch).
+
+## 20. Nível de API 14 — Consentimento de permissões, pareamento padrão, prompt
+
+### 20.1 Consentimento de permissões
+
+O `"permissions"` do `app.json` agora é um **pedido**: na primeira vez que o
+app abre (ou quando uma atualização pede algo novo) o launcher mostra
+**"Permitir <app>? Acesso a: arquivos, rede, GPIO, sistema"**. O runtime
+recebe só o que foi concedido (declaradas ∩ concedidas). App sem o campo
+pede as quatro — declare só o que usa. Concessões ficam no NVS, por
+`packageName` + pasta de instalação (cópia em outra pasta pede de novo).
+Apps já instalados quando o firmware com consentimento roda pela primeira
+vez são concedidos automaticamente. Desinstalar (launcher ou
+`Storage.clearFor` da loja) esquece a concessão.
+
+`packageName` precisa ser `[A-Za-z0-9._-]` (até 64, sem `..`); fora disso é
+ignorado (o app é identificado pelo nome).
+
+Regras do `FS` que acompanham:
+- **Escrita** em `/local/apps` e `/sd/apps` (código de outros apps) só com
+  `"system"` — leitura segue livre.
+- `/local/data/<pkg>/` de **outro** app é invisível (leitura e escrita);
+  o `FS.appData()` do próprio app segue aberto.
+- Árvores: copiar `/local` ou `/local/data` inteiros, ou remover/usar como
+  destino a raiz do `/sd`, só com `"system"`.
+
+### 20.2 `CelerLink.start` exige pareamento por padrão
+
+Veja `CelerLink.start` acima. Use `{pairing: false}` para o link aberto.
+
+### 20.3 `System.prompt(msg, inicial, {nullOnCancel: true})`
+
+Com `nullOnCancel`, cancelar (X) devolve `null`; sem a opção continua `""`
+(não dá para distinguir de confirmar vazio). O teclado também atende o
+`exit` remoto e os botões físicos enquanto está aberto (timers JS pausam
+até ele fechar).
+
+### 20.4 Alarme e toasts com app aberto
+
+O alarme do `System.setAlarm` dispara mesmo com um app aberto: a faixa do
+sistema vira um banner **ALARME: msg** por 8 s e o aparelho bipa 3 vezes.
+`System.toast`/`notify` chamados durante o app agora aparecem quando ele
+fecha (antes o primeiro "vencia" antes de ser desenhado).
+
+### 20.5 `FS.listDir` sem limite
+
+Devolve todas as entradas (antes cortava em 128 em silêncio).
