@@ -67,3 +67,9 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 # stream de chunks do proto 2 perde bytes (framing destruido). O CDC/USJ tem
 # NAK de protocolo e nao perde; a UART precisa do ISR residente.
 CONFIG_UART_ISR_IN_IRAM=y
+
+# Buffers do mbedtls (handshake TLS pede ~40KB internos) na PSRAM: com a RAM
+# interna apertada o handshake falhava "UNKNOWN ERROR" e o xTaskCreate da task
+# jsnet (32KB) nem nascia. Boards sem PSRAM nao ligam isto por padrao — o
+# Kconfig do mbedtls so expoe a opcao com SPIRAM presente.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
