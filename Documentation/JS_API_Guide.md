@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 16
+### API Level: 17
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -103,6 +103,25 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
   - `minFreeRAM`: The lowest free RAM amount recorded since boot.
   - `maxAllocRAM`: The largest single contiguous block of RAM you can allocate.
   - `appRAM`: Free heap when the current app was launched (before its code was loaded; on boards without PSRAM, internal RAM plus the byte-accessible IRAM the runtime overflows into) — how much RAM this board gives an app. `freeRAM` is measured now, with your app already loaded. Absent on older firmware.
+  - `hasDisplay` (API 17, Boolean): `false` on headless boards (barebone
+    devkit, no glass). Apps that draw should check this before touching
+    the Canvas/screen — on headless boards the panel is a stub that
+    discards everything.
+  - `shape` (API 15, String): `"rounded"` (glass with dead corners, e.g.
+    the watch), `"rect"`, or `"headless"` (API 17, no display).
+  - `board`: board id (`"cyd"`, `"devkit"`, ...).
+
+#### `System.button()` (API 17)
+- **Returns:** `Integer` — `0` none, `1` short press, `2` held ~1.2 s
+- **Description:** Reads the board's physical button 1 as app input (the
+  default is the button acting as the OS "home" key). Consumable poll in
+  house style: returns the pending event since the last call and resets.
+  Always returns `0` on regular boards (no latch there). On `buttonToApp`
+  boards (headless devkit) the button no longer exits your app: short
+  presses show up here and holding ~1.2 s closes the app. The latch is
+  pumped by the same `present()` behind `delay`/`getTouch` — alternate
+  `System.button()` with `System.delay(ms)` in your loop. Unread events do
+  not leak across apps (reset on app open).
 
 #### `System.getIPAddress()`
 - **Returns:** String

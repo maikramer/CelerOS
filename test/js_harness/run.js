@@ -197,6 +197,9 @@ function makeEnv() {
 
     // fila de toques: cada item = {x,y,touched} consumido por getTouch
     var touchQ = [];
+    // fila de eventos do botao fisico (API 17): 1 curto, 2 longo — consumido
+    // por System.button (no host so entra quem injetar aqui)
+    var buttonQ = [];
     // fila de eventos do teclado acoplado
     var kbEvents = [];
     var kbBuffer = '';
@@ -244,6 +247,13 @@ function makeEnv() {
             if (touchQ.length) return touchQ.shift();
             return { x: 0, y: 0, touched: 0 };
         },
+        // API 17: botao fisico como input (placas buttonToApp). O host nao
+        // tem botao: fila injetavel por testes (buttonQ) ou sempre 0.
+        button: function() {
+            fireTimers();
+            if (buttonQ.length) return buttonQ.shift();
+            return 0;
+        },
         keypadOpen: function() { kbOpen = true; kbBuffer = ''; return true; },
         keypadPoll: function() {
             if (kbEvents.length) {
@@ -271,7 +281,7 @@ function makeEnv() {
         getAPILevel: function() { return 12; },
         getInfo: function() {
             return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', screenW: 240, screenH: 320,
+                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
                 totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
                 chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'

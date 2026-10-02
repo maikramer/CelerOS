@@ -3,6 +3,8 @@
 #include "Launcher/LauncherUI.h"
 #include "Boards/Board.h"
 #include "Display/Theme.h"
+#include "NetworkManager.h"
+#include "CommonErrorCodes.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +20,10 @@
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_PHONE_LINK
+#include "Bluetooth/PhoneLink.h"
+#endif
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
@@ -70,7 +76,13 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  reboot          reinicia o sistema\n"
         "  rescan          reler lista de apps do launcher\n"
         "  run <app>       abre um app (pasta, nome ou pacote)\n"
-        "  exit            encerra o app em execucao\n");
+        "  exit            encerra o app em execucao\n"
+        "  wifi            lista as redes WiFi salvas\n"
+        "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
+#if CONFIG_CELEROS_PHONE_LINK
+        "  gb <linha>      injeta linha do Gadgetbridge (teste do protocolo)\n"
+#endif
+        );
     return 0;
 }
 
@@ -361,6 +373,57 @@ int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// Provisioning WiFi pelo console — o caminho headless (devkit barebone): sem
+// vidro nao ha tela de setup nem captive portal utilizavel, e o celerctl
+// pela UART funciona sem rede. Salva no credential store (NVS, mesma origem
+// do portal) e conecta em segundo plano; `info` mostra o IP quando subir.
+// O shell nao trata aspas: ssid sem espacos; a senha pode ter espacos.
+int cmdWifi(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    NetworkManager& nm = NetworkManager::instance();
+    if (argc < 2) {
+        auto nets = nm.getKnownNetworks();
+        if (nets.empty()) {
+            print(ctx, "nenhuma rede salva (use: wifi <ssid> <senha>)\r\n");
+            return 0;
+        }
+        for (auto& n : nets) print(ctx, "%s (prioridade %d)\r\n", n.ssid, n.priority);
+        return 0;
+    }
+    std::string ssid = argv[1];
+    std::string pass;
+    for (int i = 2; i < argc; i++) pass += std::string(i > 2 ? " " : "") + argv[i];
+    if (ssid.size() > 32) {
+        print(ctx, "wifi: ssid acima de 32 caracteres\r\n");
+        return 1;
+    }
+    KnownNetwork net(ssid.c_str(), pass.c_str());
+    if (nm.addNetwork(net) != CommonErrorCodes::None) {
+        print(ctx, "wifi: falha ao salvar no NVS\r\n");
+        return 1;
+    }
+    nm.connect(ssid, pass, false);  // credencial ja salva; conecta agora
+    print(ctx, "rede '%s' salva; conectando em segundo plano (info mostra o IP)\r\n", ssid.c_str());
+    return 0;
+}
+
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_PHONE_LINK
+// Injeta uma linha do protocolo do Gadgetbridge na mesma fila do RX do BLE
+// (teste do protocolo sem o Android). O shell nao trata aspas: mande a linha
+// compacta e sem espacos, ex.: gb GB({"t":"weather","temp":299.15,...})
+int cmdGb(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: gb <linha do protocolo, compacta e sem espacos>\r\n");
+        return 1;
+    }
+    std::string line = argv[1];
+    for (int i = 2; i < argc; i++) line += std::string(" ") + argv[i];
+    PhoneLink::injectLine(line);
+    print(ctx, "linha injetada (processada no proximo tick)\r\n");
+    return 0;
+}
+#endif
+
 struct ShellCmd {
     const char* name;
     int (*fn)(int argc, char** argv, CelerShell::PrintFn print, void* ctx);
@@ -371,6 +434,10 @@ const ShellCmd kCommands[] = {
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
+    {"wifi", cmdWifi},
+#if CONFIG_CELEROS_PHONE_LINK
+    {"gb", cmdGb},
+#endif
     {"colorbars", cmdColorBars},
 };
 

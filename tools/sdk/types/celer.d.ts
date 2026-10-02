@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 16 — 203 funcoes.
+// API level 17 — 204 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -69,6 +69,8 @@ declare const System: {
     screenHeight(): any;
     /** consulta o controlador de toque. */
     getTouch(): TouchPoint;
+    /** lê o botão físico 1 da placa como input do app (o padrão é o botão ser "home" do SO). Poll consumível no estilo da casa: devolve o (API 17) */
+    button(): any;
     /** devolve o uptime total do hardware ESP32 em milissegundos desde o boot. Útil para física com delta-time e temporização de loop. */
     millis(): number;
     /** devolve o uptime total do hardware ESP32 em microssegundos desde o boot. Essencial para temporização de altíssima resolução (ex.: */

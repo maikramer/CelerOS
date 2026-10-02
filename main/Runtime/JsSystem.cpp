@@ -19,6 +19,7 @@
 #include "../OTA/OtaManager.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Hardware/BoardIO.h"
+#include "../Hardware/Buttons.h"
 #include "../Display/ScreenCapture.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
@@ -66,6 +67,19 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "y");
     duk_push_boolean(ctx, touched ? 1 : 0);
     duk_put_prop_string(ctx, -2, "touched");
+    return 1;
+}
+
+// Botao fisico 1 da placa como input do app (API 17, placas buttonToApp —
+// devkit barebone). Poll consumivel, no estilo da casa (raisePoll/pmuKey):
+// devolve o evento pendente desde a ultima leitura e zera.
+//   0 = nada, 1 = toque curto, 2 = segurar ~1,2 s
+// Em placas comuns o botao e "home" do OS (nao ha latch) e sempre devolve 0 —
+// apps headless testam getInfo().board ou simplesmente tratam 0 como "sem botao".
+duk_ret_t JSBindings::js_button(duk_context *ctx) {
+    checkRemoteAppExit(ctx);  // shell "exit": encerra antes de ler o botao
+    present();  // bombeia Buttons::tick (alimenta o latch) e os timers
+    duk_push_int(ctx, Buttons::buttonEvents());
     return 1;
 }
 
@@ -202,8 +216,13 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     // inset em coordenadas virtuais 240 (arredondado p/ cima: margem segura)
     duk_push_int(ctx, (Board::profile().screenInset * 240 + UI::W - 1) / UI::W);
     duk_put_prop_string(ctx, -2, "inset");
-    duk_push_string(ctx, Board::profile().screenInset > 0 ? "rounded" : "rect");
+    // API 17: placas headless (devkit) nao tem vidro — apps que desenham
+    // fazem feature detect aqui antes de tocar em Canvas/tela
+    duk_push_string(ctx, Board::profile().headless ? "headless"
+                   : Board::profile().screenInset > 0 ? "rounded" : "rect");
     duk_put_prop_string(ctx, -2, "shape");
+    duk_push_boolean(ctx, Board::profile().headless ? 0 : 1);
+    duk_put_prop_string(ctx, -2, "hasDisplay");
     // vidro fisico: apps que desenham geometria (ponteiros) compensam a
     // escala nao uniforme do 240x320
     duk_push_int(ctx, UI::W);

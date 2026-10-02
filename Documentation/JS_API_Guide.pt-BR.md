@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 16
+### API Level: 17
 ### Nível de API: 13
 ---
 
@@ -145,6 +145,23 @@ para o SO do ESP32.
   - `minFreeRAM`: o menor valor de RAM livre registrado desde o boot.
   - `maxAllocRAM`: o maior bloco contíguo único que se pode alocar.
   - `appRAM`: heap livre quando o app atual foi aberto (antes de carregar o código; em placas sem PSRAM, RAM interna mais a IRAM acessível a byte para onde o runtime transborda) — quanto de RAM a placa dá a um app. `freeRAM` é medido agora, com o app já carregado. Ausente em firmware antigo.
+  - `hasDisplay` (API 17, Boolean): `false` em placas headless (devkit
+    barebone, sem vidro). Apps que desenham devem testar antes de tocar em
+    Canvas/tela — em placas headless o painel é um stub que descarta.
+  - `shape` (API 15, String): `"rounded"` (vidro com cantos mortos, ex.
+    relogio), `"rect"` ou `"headless"` (API 17, sem display).
+  - `board`: id da placa (`"cyd"`, `"devkit"`, ...).
+
+#### `System.button()` (API 17)
+- **Retorna:** `Integer` — `0` nada, `1` toque curto, `2` segurar ~1,2 s
+- **Descrição:** lê o botão físico 1 da placa como input do app (o padrão é
+  o botão ser "home" do SO). Poll consumível no estilo da casa: devolve o
+  evento pendente desde a última leitura e zera. Em placas comuns devolve
+  sempre `0` (não há latch). Em placas `buttonToApp` (devkit headless), o
+  botão deixa de sair do app: o curto fica disponível aqui e segurar ~1,2 s
+  encerra o app. O latch é bombeado pelo mesmo `present()` de
+  `delay`/`getTouch` — alterne `System.button()` com `System.delay(ms)` no
+  loop. Eventos não lidos não atravessam apps (reset na abertura).
 
 #### `System.getIPAddress()`
 - **Retorna:** String
@@ -1662,7 +1679,10 @@ tipográficos viram ASCII).
 
 - Faz o celular tocar (`true`) ou parar (`false`). O celular também pode
   fazer o relógio bipar ("encontrar dispositivo" no Gadgetbridge); um toque
-  para.
+  para. **O toque é do lado do Gadgetbridge** (sem confirmação): configure o
+  tom de ping (GB → Ajustes de notificação → Ping tone) e, no Android 10+,
+  o som só toca de forma confiável com o pareamento via Companion Device —
+  sem isso o GB pode mostrar o aviso na tela sem tocar.
 
 #### `Phone.setEnabled(on)` (API 15)
 

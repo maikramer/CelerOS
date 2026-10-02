@@ -135,6 +135,7 @@ private:
 
     // Touch Input
     static duk_ret_t js_getTouch(duk_context *ctx);
+    static duk_ret_t js_button(duk_context *ctx);  // API 17: botao fisico (buttonToApp)
 
     // System Utilities
     static duk_ret_t js_millis(duk_context *ctx);
