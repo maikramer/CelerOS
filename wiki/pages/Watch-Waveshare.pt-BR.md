@@ -11,6 +11,13 @@ sequências de init do painel foram portados do firmware Rust
 poupou desta placa a arqueologia de registradores por JTAG que o
 [robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro) precisou.
 
+| Watchface (tela inicial) | Launcher |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="230" alt="Mostrador no watch"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="230" alt="Launcher no watch"/> |
+
+*Capturas com `celerctl screencap` pelo USB nativo: o mostrador (papel de
+parede, passos, bateria) é a tela inicial; swipe pra cima abre o launcher.*
+
 ## Hardware
 
 | Item | Valor |

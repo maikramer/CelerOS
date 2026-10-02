@@ -61,15 +61,7 @@ controláveis com `System.relay` (partem desligados no boot).
 
 ### CYD (ESP32 clássico)
 
-| Launcher | App Store | Settings |
-| :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher na CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store na CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="240" alt="Settings na CYD"/> |
-| **Terminal** | **HTTP Demo** | **Snake** |
-| <img src="Documentation/assets/imgs/cyd-terminal.png" width="240" alt="Terminal na CYD"/> | <img src="Documentation/assets/imgs/cyd-httpdemo.png" width="240" alt="HTTP Demo na CYD"/> | <img src="Documentation/assets/imgs/cyd-snake.png" width="240" alt="Snake na CYD"/> |
-
 **O que esperar:**
-
-
 A CYD roda o mesmo firmware e os mesmos apps, mas é uma máquina bem menor que
 a SmartDisplay (ESP32 com ~320 KB de RAM e sem PSRAM, painel SPI de 2.8" e
 toque resistivo), então a experiência é visivelmente mais simples:

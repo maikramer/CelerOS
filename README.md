@@ -15,30 +15,23 @@ development.
 
 ## Screenshots
 
-| Boot splash | Launcher | Terminal (docked keyboard) |
-| :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-splash.png" width="260" alt="Boot splash"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> |
-| **Settings → About** | **Snake** | |
-| <img src="Documentation/assets/imgs/celeros-about.png" width="260" alt="About"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | |
-
-*Screenshots captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
-
-### CYD (2.8" 320x240, no PSRAM)
-
 | Launcher | App Store | Settings |
 | :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="260" alt="CYD launcher"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="260" alt="CYD App Store"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="260" alt="CYD Settings"/> |
-| **Terminal (docked keyboard)** | **HTTP Demo** | **Snake** |
-| <img src="Documentation/assets/imgs/cyd-terminal.png" width="260" alt="CYD Terminal"/> | <img src="Documentation/assets/imgs/cyd-httpdemo.png" width="260" alt="CYD HTTP Demo"/> | <img src="Documentation/assets/imgs/cyd-snake.png" width="260" alt="CYD Snake"/> |
-| **Settings → About** | **Live screen from the browser** | |
-| <img src="Documentation/assets/imgs/cyd-about.png" width="260" alt="CYD About"/> | <img src="Documentation/assets/imgs/cyd-webscreen.png" width="260" alt="CYD mirrored in the browser"/> | |
+| <img src="Documentation/assets/imgs/celeros-launcher.png" width="260" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-appstore.png" width="260" alt="App Store"/> | <img src="Documentation/assets/imgs/celeros-settings.png" width="260" alt="Settings"/> |
+| **Terminal (docked keyboard)** | **Snake** | |
+| <img src="Documentation/assets/imgs/celeros-terminal.png" width="260" alt="Terminal"/> | <img src="Documentation/assets/imgs/celeros-snake.png" width="260" alt="Snake"/> | |
 
-*Captured on a classic ESP32-2432S028R via `celerctl screencap` (API level 8
-firmware — Latin-1 accents on screen). The last one is the `/screen` web
-mirror: the browser shows the live display and its clicks become touches
-(see the [Web interface wiki page](https://github.com/maikramer/CelerOS/wiki/Web-Interface)).*
+*Screenshots captured from the real framebuffer of a SmartDisplay 4" (firmware 1.4, API level 13) via `celerctl screencap`.*
 
-#### What to expect on the CYD
+### Waveshare AMOLED 2.06 watch
+
+| Watchface (home screen) | Launcher |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="220" alt="Watchface"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="220" alt="Watch launcher"/> |
+
+*The watch boots into its watch face (wallpaper, steps, battery); swipe up opens the launcher. Same `celerctl screencap`, over the native USB.*
+
+### CYD (2.8" 320x240, no PSRAM)
 
 The CYD runs the same firmware and the same apps, but it is a much smaller
 machine than the SmartDisplay (an ESP32 running on one core, ~320 KB of RAM

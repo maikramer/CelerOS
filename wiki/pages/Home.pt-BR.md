@@ -14,18 +14,15 @@ isolada a partir da flash ou do SD, App Store com atualização over-the-air e
 uma ferramenta companheira via USB (`celerctl`) para o dia a dia de
 desenvolvimento.
 
-| Splash de boot | Launcher | Terminal (teclado acoplado) |
+| Launcher | App Store | Settings |
 | :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-splash.png" width="240" alt="Splash de boot"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="240" alt="Terminal"/> |
+| <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-appstore.png" width="240" alt="App Store"/> | <img src="Documentation/assets/imgs/celeros-settings.png" width="240" alt="Settings"/> |
 
-*Capturas do framebuffer real de uma SmartDisplay 4" via `celerctl screencap`.*
+*Capturas do framebuffer real de uma SmartDisplay 4" (firmware 1.4, API nível 13) via `celerctl screencap`.*
 
-| Launcher na CYD | App Store na CYD | Settings na CYD |
-| :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher na CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store na CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="240" alt="Settings na CYD"/> |
-
-*CYD (320x240, sem PSRAM): mesma base, experiência mais simples — veja
-[Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas#cyd-esp32-clássico).*
+| Watchface no watch Waveshare | Launcher no watch |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="200" alt="Mostrador no watch Waveshare"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="200" alt="Launcher no watch"/> |
 
 ## Mapa da wiki
 

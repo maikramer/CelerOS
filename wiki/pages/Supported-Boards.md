@@ -61,12 +61,6 @@ controllable with `System.relay` (they start off at boot).
 
 ### CYD (classic ESP32)
 
-| Launcher | App Store | Settings |
-| :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher on the CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store on the CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="240" alt="Settings on the CYD"/> |
-| **Terminal** | **HTTP Demo** | **Snake** |
-| <img src="Documentation/assets/imgs/cyd-terminal.png" width="240" alt="Terminal on the CYD"/> | <img src="Documentation/assets/imgs/cyd-httpdemo.png" width="240" alt="HTTP Demo on the CYD"/> | <img src="Documentation/assets/imgs/cyd-snake.png" width="240" alt="Snake on the CYD"/> |
-
 **What to expect:**
 
 The CYD runs the same firmware and the same apps, but it is a much smaller

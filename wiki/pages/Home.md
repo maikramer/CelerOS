@@ -13,18 +13,17 @@ Duktape JS engine running sandboxed apps from flash or SD, an App Store with
 over-the-air updates, and a USB companion tool (`celerctl`) for day-to-day
 development.
 
-| Boot splash | Launcher | Terminal (docked keyboard) |
+| Launcher | App Store | Settings |
 | :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/celeros-splash.png" width="240" alt="Boot splash"/> | <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-terminal.png" width="240" alt="Terminal"/> |
+| <img src="Documentation/assets/imgs/celeros-launcher.png" width="240" alt="Launcher"/> | <img src="Documentation/assets/imgs/celeros-appstore.png" width="240" alt="App Store"/> | <img src="Documentation/assets/imgs/celeros-settings.png" width="240" alt="Settings"/> |
+
+*Captured from the real framebuffer of a SmartDisplay 4" (firmware 1.4, API level 13) via `celerctl screencap`.*
+
+| Watchface on the Waveshare watch | Launcher on the watch |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="200" alt="Watchface on the Waveshare watch"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="200" alt="Launcher on the watch"/> |
 
 *Captured from the real framebuffer of a SmartDisplay 4" via `celerctl screencap`.*
-
-| Launcher on the CYD | App Store on the CYD | Settings on the CYD |
-| :---: | :---: | :---: |
-| <img src="Documentation/assets/imgs/cyd-launcher.png" width="240" alt="Launcher on the CYD"/> | <img src="Documentation/assets/imgs/cyd-appstore.png" width="240" alt="App Store on the CYD"/> | <img src="Documentation/assets/imgs/cyd-settings.png" width="240" alt="Settings on the CYD"/> |
-
-*CYD (320x240, no PSRAM): same core, simpler experience — see
-[Supported boards](/maikramer/CelerOS/wiki/Supported-Boards#cyd-classic-esp32).*
 
 ## Wiki map
 

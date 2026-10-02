@@ -7,14 +7,6 @@ mostrado no app Web Server (ou no `celerctl info`) em qualquer navegador da
 mesma rede para gerenciar arquivos, enviar firmware e assistir a tela ao
 vivo.
 
-<p align="center">
-  <img src="Documentation/assets/imgs/cyd-webscreen.png" width="640" alt="Espelho da tela ao vivo no navegador"/>
-</p>
-
-*Uma CYD espelhada no navegador em `/screen`: o Settings foi aberto
-clicando no ícone **através do espelho**. A linha de status mostra
-resolução, fps e banda.*
-
 ## Autenticação
 
 Todas as páginas ficam atrás de HTTP Basic Auth:

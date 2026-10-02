@@ -11,6 +11,13 @@ firmware for the same watch), which kept this board from needing the
 JTAG-register archaeology the [robot dog](/maikramer/CelerOS/wiki/Robot-Dog)
 required.
 
+| Watchface (home screen) | Launcher |
+| :---: | :---: |
+| <img src="Documentation/assets/imgs/watch-watchface.png" width="230" alt="Watchface on the watch"/> | <img src="Documentation/assets/imgs/watch-launcher.png" width="230" alt="Launcher on the watch"/> |
+
+*Captured with `celerctl screencap` over the native USB: the watch face
+(wallpaper, steps, battery) is the home screen; swipe up opens the launcher.*
+
 ## Hardware
 
 | Item | Value |

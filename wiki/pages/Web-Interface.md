@@ -6,14 +6,6 @@ Every device with Wi-Fi connected runs a small web server. Open the IP shown
 in the Web Server app (or in `celerctl info`) from any browser on the same
 network to manage files, upload firmware and watch the live screen.
 
-<p align="center">
-  <img src="Documentation/assets/imgs/cyd-webscreen.png" width="640" alt="Live screen mirror in the browser"/>
-</p>
-
-*A CYD mirrored in the browser at `/screen`: Settings was opened by
-clicking on the icon **through the mirror**. The status line shows
-resolution, fps and bandwidth.*
-
 ## Authentication
 
 All pages are protected by HTTP Basic Auth:
