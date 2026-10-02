@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Testes do celerctl contra um device simulado (protocolo HostLink).
+
+Sem hardware: um FakeDevice espelha o comportamento do firmware (parser
+v1/v2 com CRC, ACK seq/total dos chunks, READ com offset) e responde na
+hora. Valida o lado host — o lado device e coberto pelos testes C++ do
+HostFrame.h (test/cpp/run_tests.cpp) e pela bancada.
+
+    python3 -m unittest test.test_celerctl -v
+"""
+
+import os
+import struct
+import sys
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+import celerctl as C  # noqa: E402
+
+KL = C.KL
+MAGIC = 0x43
+
+
+def frame_v2(cmd, payload=b"", status=None):
+    if status is not None:
+        payload = bytes([status]) + payload
+    head = struct.pack("<BH", cmd, len(payload))
+    return (bytes([MAGIC]) + head + struct.pack("<I", zlib.crc32(head + payload) & 0xFFFFFFFF)
+            + payload)
+
+
+def frame_v1(cmd, payload=b"", status=None):
+    if status is not None:
+        payload = bytes([status]) + payload
+    return bytes([MAGIC, cmd]) + struct.pack("<H", len(payload)) + payload
+
+
+class FakeDevice:
+    """Espelho minimo do firmware para os testes do host.
+
+    Cada write() do celerctl e um frame completo (o host nunca parte
+    frames). `drop_chunk`/`corrupt_chunk` simulam o canal ruim: o frame
+    some ou chega com um bit virado (CRC nao fecha — device descarta).
+    """
+
+    def __init__(self, serial, proto=2, chunk=4096, win=4):
+        self.ser = serial
+        self.proto = proto
+        self.chunk = chunk
+        self.win = win
+        self.files = {}           # path -> bytes (conteudo para READ)
+        self.wr_path = None
+        self.wr_data = None
+        self.wr_seq = 0
+        self.wr_crc = 0
+        self.drop_chunk = []      # seqs cujo WRITE_CHUNK some no caminho (1x cada)
+        self.corrupt_chunk = []   # seqs que chegam com 1 byte virado (1x cada)
+
+    # ---- envio de resposta
+    def reply(self, cmd, payload=b"", status=0):
+        self.ser.rx += frame_v2(cmd, payload, status) if self.proto == 2 \
+            else frame_v1(cmd, payload, status)
+
+    # ---- recepcao
+    def _lost_in_transit(self, data):
+        """True se o frame nao chega integro ao device (drop/corrupt)."""
+        if data[0] != MAGIC or data[1] != KL["WRITE_CHUNK"] or self.proto != 2:
+            return False
+        (seq,) = struct.unpack("<H", data[8:10])
+        if seq in self.drop_chunk:
+            self.drop_chunk.remove(seq)
+            return True  # sumiu: nenhum ACK, host reenvia no timeout
+        if seq in self.corrupt_chunk:
+            self.corrupt_chunk.remove(seq)
+            return True  # bit virado: CRC do frame nao fecha, device descarta
+        return False
+
+    def on_bytes(self, data):
+        if self._lost_in_transit(data):
+            return
+        cmd, payload, ok = self.parse(data)
+        if not ok:
+            return  # CRC invalido: firmware descarta e espera reenvio
+        getattr(self, "op_%02x" % cmd, lambda p: self.reply(cmd, b"opcode?", 1))(payload)
+
+    def parse(self, data):
+        if data[0] != MAGIC:
+            return None, None, False
+        cmd = data[1]
+        (ln,) = struct.unpack("<H", data[2:4])
+        off = 4
+        if self.proto == 2:
+            (crc,) = struct.unpack("<I", data[4:8])
+            off = 8
+            if crc != zlib.crc32(data[1:4] + data[off:off + ln]) & 0xFFFFFFFF:
+                # fallback do firmware (HostFrame.h): HELLO v1 de um host
+                # que ainda nao conhece a versao chega com "CELE" no lugar
+                # do crc — devolve os bytes ao payload e cai para proto 1
+                if cmd == 0x01 and struct.pack("<I", crc) == b"CELE":
+                    self.proto = 1
+                    return cmd, b"CELE" + data[off:off + ln], True
+                return None, None, False
+        return cmd, data[off:off + ln], True
+
+    # ---- handlers
+    def op_01(self, p):  # HELLO
+        v2 = p == b"CELERCTL2"
+        if v2:
+            ident = f"CelerOS 9.9|test|api 99|proto 2|chunk {self.chunk}|win {self.win}"
+        else:
+            ident = "CelerOS 9.9|test|api 99|proto 1"
+        # resposta sai no formato VIGENTE da sessao; a troca para v2 vale
+        # para o frame SEGUINTE (espelho do handleHello do firmware)
+        self.reply(KL["HELLO"], ident.encode())
+        self.proto = 2 if v2 else 1
+
+    def op_06(self, p):  # WRITE_BEGIN
+        self.wr_path = p.rstrip(b"\0").decode()
+        self.wr_data = bytearray()
+        self.wr_seq = 0
+        self.wr_crc = 0
+        self.reply(KL["WRITE_BEGIN"])
+
+    def op_07(self, p):  # WRITE_CHUNK
+        if self.wr_data is None:
+            self.reply(KL["WRITE_CHUNK"], b"escrita nao iniciada", 1)
+            return
+        if self.proto == 2:
+            (seq,) = struct.unpack("<H", p[:2])
+            if seq != self.wr_seq:
+                # duplicado/atrasado: ACK aponta o proximo esperado, sem aplicar
+                self.reply(KL["WRITE_CHUNK"], struct.pack("<HI", self.wr_seq, len(self.wr_data)))
+                return
+            data = p[2:]
+            self.wr_seq += 1
+        else:
+            data = p
+        self.wr_data += data
+        self.wr_crc = zlib.crc32(bytes(data), self.wr_crc) & 0xFFFFFFFF
+        if self.proto == 2:
+            self.reply(KL["WRITE_CHUNK"], struct.pack("<HI", self.wr_seq, len(self.wr_data)))
+        else:
+            self.reply(KL["WRITE_CHUNK"])
+
+    def op_08(self, p):  # WRITE_END
+        if self.wr_data is None:
+            self.reply(KL["WRITE_END"], b"escrita nao iniciada", 1)
+            return
+        total = len(self.wr_data)
+        if self.proto == 2:
+            crc_host, size_host = struct.unpack("<II", p[:8]) if len(p) >= 8 else (0, 0xFFFFFFFF)
+            if crc_host != self.wr_crc or size_host != total:
+                self.wr_data = None
+                self.reply(KL["WRITE_END"], b"crc/tamanho divergem no fim da escrita", 1)
+                return
+            self.files[self.wr_path] = bytes(self.wr_data)
+            self.wr_data = None
+            self.reply(KL["WRITE_END"], struct.pack("<II", total, self.wr_crc))
+        else:
+            self.files[self.wr_path] = bytes(self.wr_data)
+            self.wr_data = None
+            self.reply(KL["WRITE_END"], struct.pack("<I", total))
+
+    def op_05(self, p):  # READ: path\0 + u32 offset + u32 want
+        z = p.index(b"\0")
+        path = p[:z].decode()
+        off, want = struct.unpack("<II", p[z + 1:z + 9])
+        data = self.files.get(path, b"")
+        body = data[off:off + want]
+        if self.proto == 2:
+            self.reply(KL["READ"], struct.pack("<I", off) + body)
+        else:
+            self.reply(KL["READ"], body)
+
+    def op_04(self, p):  # STAT: path -> exists,isDir,u32 size,u32 mtime
+        path = p.rstrip(b"\0").decode()
+        data = self.files.get(path)
+        if data is None:
+            self.reply(KL["STAT"], b"\x00")
+        else:
+            self.reply(KL["STAT"], struct.pack("<BBI", 1, 0, len(data)) + b"\0" * 4)
+
+
+class FakeSerial:
+    def __init__(self, device):
+        self.dev = device
+        self.rx = b""
+        self.timeout = 3.0
+        self.port = "FAKE"
+        self.baudrate = C.DEFAULT_BAUD
+
+    def write(self, data):
+        self.dev.on_bytes(data)
+        return len(data)
+
+    def read(self, n):
+        out, self.rx = self.rx[:n], self.rx[n:]
+        return out
+
+    def reset_input_buffer(self):
+        self.rx = b""
+
+    def close(self):
+        pass
+
+
+def make_link(proto=2, chunk=4096, win=4):
+    ser = FakeSerial(None)
+    dev = FakeDevice(ser, proto=proto, chunk=chunk, win=win)
+    ser.dev = dev
+    link = C.HostLink.__new__(C.HostLink)  # sem porta real
+    link.ser = ser
+    link.timeout = 3.0
+    link.push_queue = []
+    link.proto = 1
+    link.max_chunk = C.CHUNK
+    link.win = 1
+    return link, dev
+
+
+def tmpfile(payload):
+    f = tempfile.NamedTemporaryFile(delete=False)
+    f.write(payload)
+    f.close()
+    return f.name
+
+
+class TestProto2(unittest.TestCase):
+    def test_hello_negocia_v2(self):
+        link, dev = make_link()
+        ident = link.hello()
+        self.assertEqual(link.proto, 2)
+        self.assertEqual(link.max_chunk, 4096)
+        self.assertEqual(link.win, 4)
+        self.assertIn("proto 2", ident)
+
+    def test_push_completo_e_crc(self):
+        link, dev = make_link()
+        link.hello()
+        payload = bytes(range(256)) * 700  # 179200 bytes ~ 44 chunks
+        path = tmpfile(payload)
+        try:
+            link.write_file(path, "/local/x.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.files["/local/x.bin"], payload)
+
+    def test_push_com_chunk_perdido_recupera(self):
+        link, dev = make_link()
+        link.hello()
+        payload = b"z" * 40000  # ~10 chunks
+        path = tmpfile(payload)
+        try:
+            dev.drop_chunk = [3]  # o chunk 3 some no caminho (1x)
+            link.write_file(path, "/local/y.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.files["/local/y.bin"], payload)  # sem buraco/duplicacao
+
+    def test_push_com_corrupcao_cai_no_crc(self):
+        link, dev = make_link()
+        link.hello()
+        payload = b"q" * 12000
+        path = tmpfile(payload)
+        try:
+            dev.corrupt_chunk = [1]  # byte virado: CRC do frame rejeita, host reenvia
+            link.write_file(path, "/local/z.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.files["/local/z.bin"], payload)
+
+    def test_pull_pipelined(self):
+        link, dev = make_link()
+        link.hello()
+        payload = bytes((i * 13) & 0xFF for i in range(60000))
+        dev.files["/local/big.bin"] = payload
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            link.read_file("/local/big.bin", path, progress=False)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            os.unlink(path)
+
+    def test_caminho_legado_proto1(self):
+        # --proto 1 do CLI: host fala v1 de proposito com firmware novo
+        C.FORCE_PROTO1 = True
+        try:
+            link, dev = make_link()
+            link.hello()
+            self.assertEqual(link.proto, 1)
+            self.assertEqual(link.win, 1)
+            payload = b"a" * 9000
+            path = tmpfile(payload)
+            try:
+                link.write_file(path, "/local/v1.bin", progress=False)  # stop-and-wait
+            finally:
+                os.unlink(path)
+            self.assertEqual(dev.files["/local/v1.bin"], payload)
+            # pull v1 (stop-and-wait) tambem fecha
+            dev.files["/local/b.bin"] = payload
+            fd, path = tempfile.mkstemp()
+            os.close(fd)
+            try:
+                link.read_file("/local/b.bin", path, progress=False)
+                with open(path, "rb") as f:
+                    self.assertEqual(f.read(), payload)
+            finally:
+                os.unlink(path)
+        finally:
+            C.FORCE_PROTO1 = False
+
+
+if __name__ == "__main__":
+    unittest.main()

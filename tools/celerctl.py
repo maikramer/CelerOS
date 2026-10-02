@@ -59,8 +59,9 @@ except ImportError:
 # VIDs que podem hospedar o canal: CDC nativa do ESP32-S3 ou bridges USB-UART
 # comuns (CH340 do SmartDisplay/CYD). A identificacao real e por probing HELLO.
 USB_VIDS = (0x303A, 0x1A86, 0x10C4)
-CHUNK = 4096  # tamanho maximo de payload HostLink
+CHUNK = 4096  # tamanho maximo de payload HostLink (proto 1)
 DEFAULT_BAUD = 115200
+FORCE_PROTO1 = False  # --proto 1: valida o caminho legado sem CRC/janela
 
 
 class CelerError(Exception):
@@ -194,7 +195,7 @@ class HostLink:
     # ---------------------------------------------------------------- comandos
 
     def hello(self, force_v1=False):
-        magic = b"CELERCTL1" if force_v1 else b"CELERCTL2"
+        magic = b"CELERCTL1" if (force_v1 or FORCE_PROTO1) else b"CELERCTL2"
         cmd, payload = self.xfer(KL["HELLO"], magic, timeout=1.0, retries=0)
         if cmd != KL["HELLO"]:
             raise CelerError("resposta inesperada ao HELLO")
@@ -247,7 +248,14 @@ class HostLink:
     def read_chunk(self, path, offset, want):
         req = path.encode() + b"\0" + struct.pack("<II", offset, want)
         _, payload = self.xfer(KL["READ"], req, timeout=10.0)
-        return payload[1:]  # status + dados
+        body = payload[1:]
+        if self.proto == 2:
+            # resposta prefixada com o offset (casa mesmo fora de ordem)
+            (got_off,) = struct.unpack("<I", body[:4])
+            if got_off != offset:
+                raise CelerError(f"READ voltou offset {got_off}, pedi {offset}")
+            body = body[4:]
+        return body
 
     def exec(self, line):
         _, payload = self.xfer(KL["EXEC"], line.encode(), timeout=15.0)
@@ -255,51 +263,191 @@ class HostLink:
         exit_code = body[0]
         (out_len,) = struct.unpack("<I", body[1:5])
         out = body[5:]
-        # saida grande chega em frames de continuacao
+        # saida grande chega em frames de continuacao (logs do logcat que
+        # intercalam sao guardados, nao abortam — mesmo tratamento do
+        # screenshot/coredump)
         while len(out) < out_len:
-            cmd, more = self._read_frame(expect_cmd=KL["EXEC_CONT"])
+            cmd, more = self._read_frame(timeout=15.0)
+            if cmd in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                self.push_queue.append((cmd, more))
+                continue
             if cmd != KL["EXEC_CONT"]:
                 raise CelerError("frame inesperado durante EXEC")
             out += more[1:]
         return exit_code, out.decode("utf-8", "replace")
 
+    # ------------------------------------------------------------ janela de chunk
+
+    def _pump_chunks(self, f, total, chunk_cmd, timeout, label):
+        """Envia o conteudo de `f` em chunks com janela deslizante (proto 2).
+
+        ACK do device: [u16 proximo seq esperado][u32 total aplicado] — o
+        total e a verdade: chunks confirmados saem da janela, os que faltam
+        sao reenviados. Em proto 1 cai para stop-and-wait (janela 1, payload
+        sem seq), byte a byte como antes. Retorna (total_aplicado, crc32).
+        """
+        chunk = self.max_chunk - (2 if self.proto == 2 else 0)  # seq u16 desconta
+        win = self.win if self.proto == 2 else 1
+        crc = 0
+        pendings = {}   # seq -> (start, tamanho)
+        next_seq = 0
+        applied = 0
+        last_ack = time.monotonic()
+        tries = 0
+
+        def frame_for(seq, start):
+            f.seek(start)
+            data = f.read(min(chunk, total - start))
+            payload = (struct.pack("<H", seq) + data) if self.proto == 2 else data
+            return self._frame(chunk_cmd, payload)
+
+        while applied < total or pendings:
+            # enche a janela (crc calculado uma vez por faixa unica do arquivo)
+            while len(pendings) < win and next_seq * chunk < total:
+                start = next_seq * chunk
+                f.seek(start)
+                crc = zlib.crc32(f.read(min(chunk, total - start)), crc) & 0xFFFFFFFF
+                self.ser.write(frame_for(next_seq, start))
+                pendings[next_seq] = (start, min(chunk, total - start))
+                next_seq += 1
+            if not pendings:
+                break
+
+            # espera ACK (logs que intercalam vao para a fila)
+            try:
+                cmd_r, payload_r = self._read_frame(timeout=timeout)
+            except CelerError:
+                cmd_r = None
+            if cmd_r == chunk_cmd and payload_r and payload_r[0] == 1:
+                raise CelerError(payload_r[1:].decode("utf-8", "replace") or "erro no chunk")
+            if cmd_r == chunk_cmd and payload_r and payload_r[0] == 0 and \
+                    self.proto == 2 and len(payload_r) >= 7:
+                ack_seq, ack_total = struct.unpack("<HI", payload_r[1:7])
+                if ack_total > applied:
+                    applied = ack_total
+                    tries = 0
+                for seq in [s for s, (st, n) in pendings.items() if st + n <= applied]:
+                    del pendings[seq]
+                last_ack = time.monotonic()
+            elif cmd_r == chunk_cmd and payload_r and payload_r[0] == 0:
+                # proto 1: ACK vazio confirma o chunk mais antigo em voo
+                seq = min(pendings)
+                start, n = pendings.pop(seq)
+                applied = start + n
+                last_ack = time.monotonic()
+            elif cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                self.push_queue.append((cmd_r, payload_r))
+                last_ack = time.monotonic()
+            elif cmd_r is not None:
+                raise CelerError(f"frame inesperado durante {label}")
+            elif time.monotonic() - last_ack > 1.5:
+                # sem ACK: reenvia a janela nao confirmada (max 3 rodadas)
+                tries += 1
+                if tries > 3:
+                    raise CelerError(f"sem ACK do device em {label} (reenvios esgotados)")
+                for seq, (start, n) in list(pendings.items()):
+                    self.ser.write(frame_for(seq, start))
+                last_ack = time.monotonic()
+            show_progress(label, applied, total)
+        return applied, crc
+
     def write_file(self, local_path, remote_path, progress=True):
         total = os.path.getsize(local_path)
         self.xfer(KL["WRITE_BEGIN"], remote_path.encode() + b"\0")
-        sent = 0
         with open(local_path, "rb") as f:
-            while True:
-                chunk = f.read(CHUNK)
-                if not chunk:
-                    break
-                self.xfer(KL["WRITE_CHUNK"], chunk, timeout=15.0)
-                sent += len(chunk)
-                if progress:
-                    show_progress(f"push {os.path.basename(remote_path)}", sent, total)
-        _, payload = self.xfer(KL["WRITE_END"], timeout=10.0)
-        (written,) = struct.unpack("<I", payload[1:5])
+            try:
+                applied, crc = self._pump_chunks(f, total, KL["WRITE_CHUNK"], 15.0,
+                                                 f"push {os.path.basename(remote_path)}")
+                end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
+                _, payload = self.xfer(KL["WRITE_END"], end_payload, timeout=10.0)
+            except (CelerError, serial.SerialException):
+                # fecha a escrita sem sucesso: o device remove o parcial
+                try:
+                    self.xfer(KL["WRITE_END"], b"", timeout=2.0, retries=0)
+                except (CelerError, serial.SerialException):
+                    pass
+                raise
         if progress:
             print()
-        if written != total:
-            raise CelerError(f"escrito {written} de {total} bytes")
+        body = payload[1:]
+        if self.proto == 2:
+            if len(body) >= 8:
+                written, dev_crc = struct.unpack("<II", body[:8])
+                if written != total or dev_crc != crc:
+                    raise CelerError(f"crc/tamanho divergem: enviado {total}/{crc:08x}, "
+                                     f"gravado {written}/{dev_crc:08x}")
+        else:
+            (written,) = struct.unpack("<I", body[:4])
+            if written != total:
+                raise CelerError(f"escrito {written} de {total} bytes")
 
     def read_file(self, remote_path, local_path, progress=True):
         st = self.stat(remote_path)
         if st is None or st["dir"]:
             raise CelerError(f"{remote_path} nao existe ou e diretorio")
         total = st["size"]
-        got = 0
+        # proto 2: resposta = status + offset u32 + dados -> sobra 5 bytes
+        want = min(self.max_chunk - 1 - (4 if self.proto == 2 else 0), 0xFFFF)
+        win = self.win if self.proto == 2 else 1
+        label = f"pull {os.path.basename(remote_path)}"
+        # offsets alvo conhecidos de antemao: a janela pede varios e casa
+        # cada resposta pelo offset — fora de ordem nao confunde
+        targets = [(off, min(want, total - off)) for off in range(0, total, want)] or [(0, 0)]
+        done = set()
+        pend = {}   # offset -> n pedido
+        idx = 0
+        last_frame = time.monotonic()
+        tries = 0
         with open(local_path, "wb") as f:
-            while got < total:
-                data = self.read_chunk(remote_path, got, min(CHUNK, total - got))
-                if not data:
-                    raise CelerError("fim de arquivo inesperado")
-                f.write(data)
-                got += len(data)
+            while len(done) < len(targets) or pend:
+                while len(pend) < win and idx < len(targets):
+                    off, n = targets[idx]
+                    if off not in done:
+                        req = remote_path.encode() + b"\0" + struct.pack("<II", off, n)
+                        self.ser.write(self._frame(KL["READ"], req))
+                        pend[off] = n
+                    idx += 1
+                if not pend:
+                    break
+                try:
+                    cmd, payload = self._read_frame(timeout=10.0)
+                except CelerError:
+                    cmd = None
+                if cmd == KL["READ"] and payload and payload[0] == 0:
+                    body = payload[1:]
+                    if self.proto == 2:
+                        (off,) = struct.unpack("<I", body[:4])
+                        body = body[4:]
+                        if off not in pend:
+                            raise CelerError(f"READ voltou offset {off} fora da janela")
+                    else:
+                        off = min(pend)  # stop-and-wait: o mais antigo
+                    del pend[off]
+                    f.seek(off)
+                    f.write(body)
+                    done.add(off)
+                    tries = 0
+                    last_frame = time.monotonic()
+                elif cmd in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                    self.push_queue.append((cmd, payload))
+                    last_frame = time.monotonic()
+                elif cmd is not None:
+                    raise CelerError("frame inesperado durante pull")
+                elif time.monotonic() - last_frame > 2.0:
+                    # timeout: repede tudo que falta (max 3 rodadas)
+                    tries += 1
+                    if tries > 3:
+                        raise CelerError("pull travado (repedidos esgotados)")
+                    pend = {}
+                    idx = 0
+                    last_frame = time.monotonic()
                 if progress:
-                    show_progress(f"pull {os.path.basename(remote_path)}", got, total)
+                    show_progress(label, sum(n for o, n in targets if o in done), total)
         if progress:
             print()
+        got = sum(n for o, n in targets if o in done)
+        if got != total:
+            raise CelerError(f"pull incompleto: {got} de {total} bytes")
 
     def simple(self, op, payload=b""):
         self.xfer(KL[op], payload)
@@ -308,8 +456,19 @@ class HostLink:
         self.xfer(KL["REBOOT"])
 
     def set_baud(self, baud):
-        """Negocia a troca de baud e reabre a porta no novo valor."""
-        self.xfer(KL["SET_BAUD"], struct.pack("<I", baud))
+        """Negocia a troca de baud e reabre a porta no novo valor.
+
+        Canais sem baud (CDC nativa do S3) respondem erro: vira aviso, a
+        sessao segue na velocidade do USB.
+        """
+        try:
+            self.xfer(KL["SET_BAUD"], struct.pack("<I", baud), retries=0)
+        except CelerError as e:
+            if "nao suportada" in str(e):
+                print("aviso: canal sem baud (USB nativo); seguindo na velocidade do USB",
+                      file=sys.stderr)
+                return
+            raise
         port, timeout = self.ser.port, self.ser.timeout
         self.ser.close()
         time.sleep(0.15)  # firmware troca o baud apos o ACK
@@ -334,19 +493,22 @@ class HostLink:
         _, payload = self.xfer(KL["OTA_BEGIN"])
         part = payload[1:].decode("utf-8", "replace")
         total = os.path.getsize(local_path)
-        sent = 0
-        with open(local_path, "rb") as f:
-            while True:
-                chunk = f.read(CHUNK)
-                if not chunk:
-                    break
-                self.xfer(KL["OTA_CHUNK"], chunk, timeout=30.0)
-                sent += len(chunk)
-                if progress:
-                    show_progress(f"ota {os.path.basename(local_path)} -> {part}", sent, total)
+        try:
+            with open(local_path, "rb") as f:
+                applied, crc = self._pump_chunks(f, total, KL["OTA_CHUNK"], 30.0,
+                                                 f"ota {os.path.basename(local_path)} -> {part}")
+                end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
+                _, payload = self.xfer(KL["OTA_END"], end_payload, timeout=30.0)
+        except (CelerError, serial.SerialException):
+            # cancela a escrita da particao: um begin futuro tambem aborta,
+            # mas o estado nao fica pendurado ate lah
+            try:
+                self.xfer(KL["OTA_ABORT"], b"", timeout=2.0, retries=0)
+            except (CelerError, serial.SerialException):
+                pass
+            raise
         if progress:
             print()
-        _, payload = self.xfer(KL["OTA_END"], timeout=30.0)
         (written,) = struct.unpack("<I", payload[1:5])
         return part, written
 
@@ -428,15 +590,22 @@ def human_size(n):
 
 
 def probe(port, fast=False):
-    """Abre a porta e verifica se e o canal HostLink (CDC1)."""
-    try:
-        link = HostLink(port.device, timeout=0.6 if fast else 1.5)
+    """Abre a porta e verifica se e o canal HostLink (CDC1/UART).
+
+    Tenta tambem 921600: uma sessao anterior morta ha menos de 8s deixa a
+    UART do device em baud alto (o restore so acontece no idle timeout).
+    """
+    t = 0.6 if fast else 1.5
+    for baud in (DEFAULT_BAUD, 921600):
         try:
-            return link.hello()
-        finally:
-            link.close()
-    except (CelerError, serial.SerialException, OSError):
-        return None
+            link = HostLink(port.device, timeout=t, baud=baud)
+            try:
+                return link.hello()
+            finally:
+                link.close()
+        except (CelerError, serial.SerialException, OSError):
+            continue
+    return None
 
 
 def find_devices(verbose=False):
@@ -456,19 +625,36 @@ def find_devices(verbose=False):
 
 
 def open_link(args):
-    if args.port:
-        link = HostLink(args.port, timeout=3.0)
+    def try_open(port):
+        """Abre e faz hello; cai para o baud alto se a sessao anterior
+        (<8s) ainda estiver viva no device."""
+        link = HostLink(port, timeout=3.0)
         try:
             link.hello()
-        except CelerError:
+            return link
+        except (CelerError, serial.SerialException):
             link.close()
+        fallback = getattr(args, "baud", None) or 921600
+        link = HostLink(port, timeout=3.0, baud=fallback)
+        try:
+            link.hello()
+            return link
+        except (CelerError, serial.SerialException):
+            link.close()
+            return None
+
+    if args.port:
+        link = try_open(args.port)
+        if link is None:
             die(f"{args.port} nao responde ao protocolo HostLink")
     else:
         devices = find_devices()
         if not devices:
             die("nenhum CelerOS encontrado (usar -p PORTA para especificar)")
-        link = HostLink(devices[0][0].device, timeout=3.0)
-    if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD:
+        link = try_open(devices[0][0].device)
+        if link is None:
+            die(f"{devices[0][0].device} nao responde ao protocolo HostLink")
+    if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD and link.ser.baudrate == DEFAULT_BAUD:
         link.set_baud(args.baud)
     return link
 
@@ -937,7 +1123,7 @@ def cmd_dev(args):
             if time.monotonic() - last_keepalive > 5.0:
                 last_keepalive = time.monotonic()
                 try:
-                    link.xfer(KL["HELLO"], b"CELERCTL1", timeout=1.0)
+                    link.keepalive()  # HELLO no formato da sessao (v2 cai para v1 se vier)
                 except (CelerError, serial.SerialException):
                     print("\ndev: conexao caiu (placa reiniciou?); tentando reconectar...")
                     link = _reconnect(link)
@@ -1079,6 +1265,9 @@ def main():
     parser.add_argument("-p", "--port", help="porta serial do canal celerctl (ex: /dev/ttyUSB0)")
     parser.add_argument("-b", "--baud", type=int, default=DEFAULT_BAUD,
                         help="negocia este baud com o firmware (ex: 921600 acelera push/pull)")
+    parser.add_argument("--proto", type=int, choices=(1, 2), default=2,
+                        help="forca o formato do protocolo (default 2 = CRC32 + janela;"
+                             " 1 valida o caminho legado)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="lista placas conectadas")
@@ -1192,6 +1381,8 @@ def main():
     args = parser.parse_args()
     if args.command == "pull" and args.local is None:
         args.local = os.path.basename(args.remote) or "celer_pull.bin"
+    global FORCE_PROTO1
+    FORCE_PROTO1 = args.proto == 1
 
     try:
         args.func(args)
