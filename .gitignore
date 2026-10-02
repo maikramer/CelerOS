@@ -25,3 +25,6 @@ __pycache__/
 # segredos locais (nunca commitar; ver nota de seguranca no AGENTS.md)
 extras/esp_components/config/config/
 celer_screencap.png
+
+# dump do dispositivo puxado pelo coredump do HostLink (debug local)
+coredump.elf
