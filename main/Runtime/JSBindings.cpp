@@ -1,5 +1,6 @@
 #include "JSBindings.h"
 #include <stdio.h>
+#include <algorithm>
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Kernel/Services.h"
 #include "../USBDevice/LogSink.h"
@@ -157,9 +158,12 @@ CelerDisplay* JSBindings::tftInstance = nullptr;
 // redesenho completo a cada evento deixam de piscar sem mudar uma linha.
 // Sem PSRAM (CYD) o desenho segue direto no display, como antes.
 // Prioridade do alvo: sprite do app (bindSprite) > quadro > display.
+// O present() empurra so a caixa suja do quadro (FrameSprite): o Watchface
+// trocando a barra de segundos manda alguns KB ao vidro, nao a tela inteira.
 // ---------------------------------------------------------------------------
-CelerSprite* s_frame = nullptr;
+FrameSprite* s_frame = nullptr;
 bool s_frameDirty = false;
+static bool s_frameSuppressed = false;  // AOD/off: vidro mostrou outra coisa
 
 // Topbar no estilo da barra que o Terminal desenhava: card, linha de stroke,
 // titulo a esquerda e X a direita. hot (dedo sobre o X) clareia o traco e
@@ -391,10 +395,7 @@ int JSBindings::mapY(int v) {
 
 lgfx::LGFXBase* JSBindings::gfx() {
     if (useSprite && tftSprite) return tftSprite;
-    if (s_frame != nullptr) {
-        s_frameDirty = true;
-        return s_frame;
-    }
+    if (s_frame != nullptr) return s_frame;  // o FrameSprite rastreia o que muda
     return tftInstance;
 }
 
@@ -460,7 +461,15 @@ void JSBindings::present() {
     // PhoneLink, alerta de notificacao, confirmacao de OTA, alarmes 1x/s):
     // a MESMA lista ordenada que o celerLoop percorre — ver Kernel/Services.
     CelerServices::tickPresent();
-    if (ScreenPower::suppressAppFrame()) return;  // AOD/off: quadro do app nao vai ao vidro
+    if (ScreenPower::suppressAppFrame()) {  // AOD/off: quadro do app nao vai ao vidro
+        s_frameSuppressed = true;
+        return;
+    }
+    if (s_frameSuppressed) {
+        // o vidro mostrou o AOD (ou dormiu): a caixa suja nao cobre isso
+        s_frameSuppressed = false;
+        s_frameDirty = true;
+    }
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
     // Banner da faixa (notificacoes) expira sozinho
@@ -474,15 +483,42 @@ void JSBindings::present() {
     }
     bool wantBar = s_topbarFixed || s_barShown || bannerActive();
     if (s_frame != nullptr) {
-        // So recompoem se algo mudou (desenho do app, topbarText/Buttons ou
-        // estado hot da faixa)
-        if (!s_frameDirty && !s_tbDirty && wantBar == s_barOnGlass &&
-            (!wantBar || (s_exitArmed == s_barHotOnGlass && s_tbHotBtn == s_tbHotOnGlass))) return;
         // A topbar vai DENTRO do quadro, antes do push: chega ao vidro atomica
         // com o conteudo do app (nao pisca) e o app nao consegue cobri-la. No
-        // retratil, parar de compo-la restaura a area no proximo push.
-        if (wantBar) drawAppTopbar(*s_frame, s_exitArmed);
-        s_frame->pushSprite(tftInstance, 0, 0);
+        // retratil, parar de compo-la restaura a area no proximo push. So
+        // recompoe quando a faixa muda (texto/chips, hot, entrou/saiu) ou o
+        // app desenhou nela.
+        const bool barChanged = s_tbDirty || wantBar != s_barOnGlass ||
+                                (wantBar && (s_exitArmed != s_barHotOnGlass || s_tbHotBtn != s_tbHotOnGlass));
+        if (s_frameDirty) s_frame->markAllDirty();
+        int32_t dx, dy, dw, dh;
+        bool dirty = s_frame->takeDirty(&dx, &dy, &dw, &dh);
+        if (wantBar && (barChanged || (dirty && dy < UI::topbarH()))) {
+            drawAppTopbar(*s_frame, s_exitArmed);
+            int32_t bx, by, bw, bh;
+            if (s_frame->takeDirty(&bx, &by, &bw, &bh)) {
+                if (!dirty) {
+                    dx = bx; dy = by; dw = bw; dh = bh;
+                    dirty = true;
+                } else {
+                    const int32_t r = std::max(dx + dw, bx + bw), b = std::max(dy + dh, by + bh);
+                    dx = std::min(dx, bx);
+                    dy = std::min(dy, by);
+                    dw = r - dx;
+                    dh = b - dy;
+                }
+            }
+        }
+        if (dirty) {
+            // Recorte no destino: o pushImage do LovyanGFX so transfere a
+            // area recortada (no watch, o framebuffer do painel so faz flush
+            // dela, ja alinhada)
+            int32_t cx, cy, cw, ch;
+            tftInstance->getClipRect(&cx, &cy, &cw, &ch);
+            tftInstance->setClipRect(dx, dy, dw, dh);
+            s_frame->pushSprite(tftInstance, 0, 0);
+            tftInstance->setClipRect(cx, cy, cw, ch);
+        }
         s_frameDirty = false;
         s_tbDirty = false;
         s_barOnGlass = wantBar;
@@ -804,11 +840,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
     if (s_frame == nullptr && Board::profile().hasPsram) {
-        s_frame = new CelerSprite(tft);
-        s_frame->setPsram(true);
-        s_frame->setColorDepth(16);
+        s_frame = new FrameSprite(tft);
         s_frame->setSwapBytes(true);  // mesma convencao do display (icones, readRect)
-        if (s_frame->createSprite(tft->width(), tft->height()) == nullptr) {
+        if (s_frame->createFrame(tft->width(), tft->height()) == nullptr) {
             delete s_frame;
             s_frame = nullptr;
         }

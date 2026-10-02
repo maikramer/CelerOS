@@ -141,8 +141,7 @@ duk_ret_t JSBindings::js_pushSprite(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     // Destino (quadro/display): origem do app (abaixo da topbar no fixo)
     if (s_frame != nullptr) {
-        tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y));
-        s_frameDirty = true;
+        tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y));  // caixa suja do quadro marca
     } else {
         tftSprite->pushSprite(jsx(x), JSBindings::mapY(y));
     }

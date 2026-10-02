@@ -8,11 +8,15 @@
 #include "JSBindings.h"
 #include "../Display/Layout.h"
 #include "../Launcher/LauncherUI.h"
+#include "../Display/FrameSprite.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 
 extern CelerDisplay* s_jsTft;
 extern bool s_topbarFixed;
-extern CelerSprite* s_frame;
+extern FrameSprite* s_frame;
+// Pedido de push do quadro INTEIRO: o vidro foi sujado por fora do quadro
+// (teclado do prompt). Desenho normal no quadro dispensa: a caixa suja do
+// FrameSprite ja diz o que mudou.
 extern bool s_frameDirty;
 
 // Capabilities do app corrente (F4) e packageName (FS.appData). Os guards

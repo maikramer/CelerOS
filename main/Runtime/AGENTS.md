@@ -7,7 +7,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 | File | Holds |
 |------|-------|
 | `JSBindings.cpp` | Core: topbar/chrome engine (`s_tb*`, `pollAppChrome`, `drawAppTopbar`), automatic frame (`s_frame`, `present`), custom topbar + icon/PNG/copy bindings, and `init()` with the registration tables |
-| `JsInternal.h` | Shared state (`s_jsTft`, `s_topbarFixed`, `s_frame`, `s_frameDirty`) and the 240x320 mapping helpers `jsc/jsx/jsy/jsu/jsH/appSh/appScaleY` |
+| `JsInternal.h` | Shared state (`s_jsTft`, `s_topbarFixed`, `s_frame` (FrameSprite), `s_frameDirty` = full-push request) and the 240x320 mapping helpers `jsc/jsx/jsy/jsu/jsH/appSh/appScaleY` |
 | `JsGfx.cpp` | Sprites, drawing primitives, text, color/screen size, `drawBMP` |
 | `JsSystem.cpp` | Touch, time, info, restart, IP |
 | `JsNet.cpp` | `Net.*` (get/getJSON/post/download) |
@@ -42,6 +42,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 - Bindings are lightfuncs with fixed `nargs`: the value stack ALWAYS has `nargs` entries, so `duk_get_top()` cannot detect an omitted argument. Test `duk_is_undefined`/`duk_is_null_or_undefined` instead.
 - Native code that calls back into JS from inside a C loop (OTA progress, download progress) must wrap the call in `duk_pcall`/`duk_safe_call`: `present()` runs timers and their errors longjmp. App exit is a marked error (`throwAppExit`, sticky via `s_appExitPending`); never `duk_error(..., "OS_EXIT")`.
 - System code drawing on the app's target (topbar, docked keypad) wraps itself in `GfxStateGuard` (JsInternal.h) so text color/datum/size and clip don't leak either way.
+- The PSRAM frame `s_frame` is a `FrameSprite` (`main/Display/FrameSprite.h`): every draw on it accumulates a dirty box and `present()` pushes only that box to the glass. Drawing on the frame needs nothing extra. Code that draws straight on the glass while an app runs (blocking prompt keyboard, AOD) must set `s_frameDirty = true`, which asks for a full push. Leaving AOD/off already does this. Never recreate the frame buffer after `createFrame()`.
 - Adding or changing a JS call means you must:
   1. Bump `CELEROS_API_LEVEL` if apps can feature-detect it.
   2. Document it in both `JS_API_Guide` languages.
