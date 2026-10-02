@@ -1,6 +1,6 @@
 # Plugins de watchface
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Watchface-Plugins.pt-BR)
+[English](/maikramer/CelerOS/wiki/Watchface-Plugins) | **Português (BR)**
 
 Desde a **API 16**, apps instalados podem colocar um widget no mostrador
 (watchface) do CelerOS. O primeiro da loja é o **Previsao**: ao ser baixado,
