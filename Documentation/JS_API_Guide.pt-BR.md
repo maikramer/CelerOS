@@ -435,6 +435,7 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
   como OUTPUT para acender um LED).
 - Todas as funções de `System.gpio` lançam `RangeError` para pino
   inexistente ou reservado pelo sistema (flash/PSRAM) — mexer neles
+- Reservado tambem significa pinos que a placa nega (`gpioDeniedMask` do perfil da board): as linhas de dados da PSRAM octal GPIO 33-37 (PWM ali corrompe o heap do runtime), os pinos da UART do console (43/44 no S3, 1/3 no ESP32) e o I2C do touch da SmartDisplay (19/45). O erro e o mesmo `RangeError`.
   derrubava o aparelho.
 
 #### `System.gpio.digitalWrite(pin, state)`
@@ -828,7 +829,9 @@ fuso vazio, maior que 48 caracteres ou com `|`/caracteres de controle;
   Confirme sempre duas vezes na UI.
 
 #### `Net.beginGet(url)` / `Net.pollGet(handle)` / `Net.cancelGet(handle)` (não-bloqueante)
-`beginGet` dispara o GET em task de fundo e devolve um handle (`-1` sem slot livre ou sem WiFi). `pollGet` devolve `null` enquanto roda e depois `{done:true, ok, status, body, error}` (corpo limitado a 32 KB, igual às chamadas bloqueantes). `cancelGet` abandona a requisição (o slot se libera quando a task estoura o timeout; tasks nunca são mortas no meio do TLS). Máximo de 2 requisições concorrentes.
+`beginGet` dispara o GET em task de fundo e devolve um handle (`-1` sem slot livre ou sem WiFi — o firmware loga qual dos motivos).
+
+**Um estilo por vez:** a stack da task assíncrona somada a um `Net.get` bloqueante no mesmo app pode estourar a RAM interna em boards no limite (a requisição então falha com erro de conexão). Use a API assíncrona *ou* a bloqueante dentro de um mesmo app. `pollGet` devolve `null` enquanto roda e depois `{done:true, ok, status, body, error}` (corpo limitado a 32 KB, igual às chamadas bloqueantes). `cancelGet` abandona a requisição (o slot se libera quando a task estoura o timeout; tasks nunca são mortas no meio do TLS). Máximo de 2 requisições concorrentes.
 
 ### 12.4 WiFi (Net)
 

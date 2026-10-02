@@ -1323,9 +1323,9 @@ def main():
                         help="forca o formato do protocolo (default 2 = CRC32 + janela;"
                              " 1 valida o caminho legado)")
     parser.add_argument("--win", type=int, default=0,
-                        help="teta a janela de chunks anunciada pelo firmware (0 = usa a"
-                             " anunciada). Use 2 para OTA de firmware cuja janela"
-                             " transborda o buffer RX do proprio device")
+                        help="limita a janela de chunks anunciada pelo firmware (0 = usa"
+                             " a anunciada). Use 2 para atualizar por OTA um firmware"
+                             " cuja janela transborda o buffer RX do proprio device")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="lista placas conectadas")

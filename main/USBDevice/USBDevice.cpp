@@ -145,20 +145,22 @@ bool USBDevice::init() {
         return false;
     }
 
+    // CDC: sem hook de baud (USB nao tem baud). O NAK do USB cobre o FIFO
+    // do periferico, mas o STREAM BUFFER abaixo NAO — o driver CDC descarta
+    // pacote quando ele enche, e a janela de WRITE tem que caber inteira no
+    // buffer (com janela 8 a OTA de 2,4 MB perdia bytes e o parser
+    // respondia "payload grande demais"; bancada 2026-10-02). Buffer e
+    // janela derivam um do outro — nao existe mais como divergirem.
+    constexpr uint8_t kCdcWindow = 2;
     s_shellRx = xStreamBufferCreate(2048, 1);
-    s_linkRx = xStreamBufferCreate(HostLink::MAX_PAYLOAD * 2, 1);
+    s_linkRx = xStreamBufferCreate(kCdcWindow * HostLink::MAX_PAYLOAD, 1);
     s_writeMutex = xSemaphoreCreateMutex();
     if (s_shellRx == nullptr || s_linkRx == nullptr || s_writeMutex == nullptr) {
         ESP_LOGE(TAG, "sem memoria para buffers USB");
         return false;
     }
 
-    // CDC: sem hook de baud (USB nao tem baud). Janela 2: o NAK do USB
-    // cobre o FIFO do periferico, mas o STREAM BUFFER acima (2x MAX_PAYLOAD)
-    // NAO — o driver CDC descarta pacote quando ele enche, e com janela 8
-    // (8x8190 em voo) a OTA de 2,4 MB perdia bytes e o parser respondia
-    // "payload grande demais" (bancada 2026-10-02). Janela = buffer/payload.
-    EXT_RAM_BSS_ATTR static HostLink link(&USBDevice::linkWrite, nullptr, 2);
+    EXT_RAM_BSS_ATTR static HostLink link(&USBDevice::linkWrite, nullptr, kCdcWindow);
     s_link = &link;
 
     // Pilhas em RAM interna (o watch e apertado): pico medido ~1,7 KB no

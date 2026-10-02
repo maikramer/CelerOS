@@ -18,20 +18,26 @@
 // do console, do OpenOCD e do esptool ROM (o OTG/TinyUSB do
 // CELEROS_USB_NATIVE exigiria tirar o console daqui).
 #include "driver/usb_serial_jtag.h"
-// Anel >= janela x chunk (4 x 8190) + folga: sem controle de fluxo no
-// canal, frames a mais que o anel nao segura sao DESCARTADOS pelo driver e
-// o push morre em "sem ACK" — inclusive os reenvios, que repetem a rajada
-// inteira. O CDC (TinyUSB) escapa disso por NAK de hardware.
-constexpr size_t kRxRing = 49152;
+// Dimensionamento dos aneis vs a janela de WRITE do proto 2: sem controle
+// de fluxo no canal, frames a mais que o anel RX nao segura sao DESCARTADOS
+// pelo driver e o push morre em "sem ACK" — inclusive os reenvios, que
+// repetem a rajada inteira (anel >= janela x chunk garante o autorreparo).
+// O anel TX comporta um FRAME MAXIMO inteiro: com anel menor, write_bytes
+// devolve escrita CURTA apos o timeout e o host recebe resposta do READ
+// pela metade. O CDC (TinyUSB) escapa do RX por NAK de hardware (USBDevice).
+constexpr uint8_t kWindow = 4;
+constexpr size_t kRxRing = (size_t)kWindow * HostLink::MAX_PAYLOAD + HostLink::MAX_PAYLOAD;
+constexpr size_t kTxBuf = HostLink::MAX_PAYLOAD + 8;
+static_assert(kRxRing >= (size_t)kWindow * (HostLink::MAX_PAYLOAD - 2),
+              "anel RX menor que a janela de WRITE: reenvio transborda");
+static_assert(kTxBuf >= (size_t)HostLink::MAX_PAYLOAD + 8,
+              "anel TX nao comporta um frame maximo: READ sai truncado");
 bool chanInit() {
-    // IDF 6: install() pega a config sem const. TX precisa de ringbuffer
-    // proprio (>0 e exigido pelo driver; 0 = "TX buffer is not prepared" e
-    // o canal inteiro morre). O anel TX precisa comportar UM FRAME MAXIMO
-    // inteiro (8 + 8192): com anel menor, write_bytes de um frame de
-    // resposta do READ espera espaco com timeout de 500 ms, devolve escrita
-    // CURTA e o host recebe o frame pela metade (timeout no pull/cat).
+    // IDF 6: install() pega a config sem const. TX por ringbuffer e exigido
+    // (>0; 0 = "TX buffer is not prepared" e o canal inteiro morre — o
+    // console escreve pelo polling, mas o link nunca ouve).
     usb_serial_jtag_driver_config_t cfg = {
-        .tx_buffer_size = 16384,
+        .tx_buffer_size = kTxBuf,
         .rx_buffer_size = kRxRing,
     };
     return usb_serial_jtag_driver_install(&cfg) == ESP_OK;
@@ -46,13 +52,18 @@ void chanSetBaud(uint32_t) {}  // USB nao tem baud
 #else
 #include "driver/uart.h"
 constexpr uart_port_t K_UART = UART_NUM_0;
-// Ring RX: precisa segurar a janela de WRITE inteira (4 x 8190 = ~32KB no
-// S3) enquanto o task grava um chunk na flash — ver comentario do USJ acima.
+// Mesma regra de dimensionamento do USJ (ver comentario la em cima): o anel
+// segura a janela de WRITE enquanto o task grava um chunk na flash.
 #if CONFIG_IDF_TARGET_ESP32S3
-constexpr int kRxRing = 49152;
+constexpr uint8_t kWindow = 4;
+constexpr int kRxRing = (int)kWindow * HostLink::MAX_PAYLOAD + HostLink::MAX_PAYLOAD;
+static_assert(kRxRing >= (int)kWindow * (HostLink::MAX_PAYLOAD - 2),
+              "anel RX menor que a janela de WRITE: reenvio transborda");
 #else
 // ESP32 classico (CYD): heap sem PSRAM nao da folga — janela cai para 1 no
-// ctor do HostLink e o anel segura um frame inteiro (4098 bytes).
+// ctor do HostLink (stop-and-wait: nada chega durante o fwrite, o anel so
+// absorve o frame em stream) e 4 KB bastam com folga.
+constexpr uint8_t kWindow = 1;
 constexpr int kRxRing = 4096;
 #endif
 bool chanInit() {
@@ -249,13 +260,9 @@ bool SerialLink::init() {
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
 
-#if CONFIG_IDF_TARGET_ESP32S3
-    EXT_RAM_BSS_ATTR static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 4);
-#else
-    // ESP32 classico (CYD): ring/heap curtos — stop-and-wait (janela 1);
-    // o anel de 4KB nao segura dois chunks em voo
-    EXT_RAM_BSS_ATTR static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, 1);
-#endif
+    // Janela definida junto do anel RX do canal (ver topo do arquivo): o
+    // HostLink anuncia o que o proprio canal consegue segurar.
+    EXT_RAM_BSS_ATTR static HostLink link(&SerialLink::writeFrame, &SerialLink::setBaud, kWindow);
     s_link = &link;
 
     if (xTaskCreate(linkTask, "dbg_link", 8192, nullptr, 4, nullptr) != pdPASS) {
@@ -345,7 +352,7 @@ void celer_logcat_set(bool on) {
     if (on) {
         // drena o ring acumulado antes de ligar o stream ao vivo
         while (s_logTail != s_logHead) {
-            char chunk[1024];
+            char chunk[512];  // = kLogChunk do HostLink: um frame por bloco
             size_t n = 0;
             while (s_logTail != s_logHead && n < sizeof(chunk) - 1) {
                 chunk[n++] = s_logRing[s_logTail];

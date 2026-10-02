@@ -53,7 +53,7 @@ static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
         // throw com %d a partir de um lightfunc corrompe o heap do runtime
         // (repro: try{pinMode(99,OUT)}catch(e){} derrubava o aparelho;
         // throws sem args e os das macros duk_require_* sao estaveis —
-        // bancada 2026-10-02, ver memoria celeros-bancada-proto2)
+        // bancada 2026-10-02)
         char msg[64];
         snprintf(msg, sizeof(msg), "GPIO %d invalido ou reservado pelo sistema", pin);
         duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);

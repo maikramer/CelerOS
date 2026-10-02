@@ -115,6 +115,15 @@ UARTs/USJ do S3 (anel RX de 48 KB), 1 na CYD (heap sem PSRAM nao segura
 janela), 8 no CDC. Portas USB nativas (CDC/USJ) nao tem baud: `-b` avisa
 e segue na velocidade do USB.
 
+A janela anunciada pelo firmware e a que o canal dele consegue segurar.
+Para atualizar por OTA um firmware ANTIGO cuja janela anuncia mais do que
+o buffer dele aguenta (ex.: watch com janela 8 antes do fix do buffer
+CDC), limite na mao:
+
+```bash
+python3 tools/celerctl.py --win 2 -p <porta> ota push CelerOS.bin
+```
+
 ## Como o canal convive com o console
 
 A UART do console multiplexa dois modos (`main/USBDevice/SerialLink.cpp`)

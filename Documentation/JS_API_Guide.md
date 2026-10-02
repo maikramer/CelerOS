@@ -305,6 +305,7 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Parameters:** `pin` (Integer hardware pin number), `mode` (GPIO Constant)
 - **Description:** Sets the physical electrical state of an ESP32 pin (e.g. setting pin 2 to OUTPUT to drive an LED).
 - Every `System.gpio` function throws `RangeError` for a pin that does not exist or is reserved by the system (flash/PSRAM) — touching those crashed the device.
+- Reserved also means board-specific pins the firmware denies (`gpioDeniedMask` in the board profile): the PSRAM data lines GPIO 33-37 on octal-PSRAM boards (driving those corrupts the heap), the console UART pins (43/44 on the S3, 1/3 on the ESP32), and the touch I2C on the SmartDisplay (19/45). The message is the same `RangeError`.
 
 #### `System.gpio.digitalWrite(pin, state)`
 - **Parameters:** `pin` (Integer), `state` (HIGH or LOW)
@@ -596,7 +597,9 @@ Time configuration (persisted by TimeManager). The setters **require `"system"`*
 - `"total"` — formats the whole LittleFS partition (**apps are erased**; recovery requires `tools/flash_data.sh` or `celerctl apps install`). Always confirm twice in the UI.
 
 #### `Net.beginGet(url)` / `Net.pollGet(handle)` / `Net.cancelGet(handle)` (non-blocking)
-`beginGet` starts the GET on a background task and returns a handle (`-1` if no free slot or WiFi down). `pollGet` returns `null` while running, then `{done:true, ok, status, body, error}` (body capped at 32 KB, like the blocking calls). `cancelGet` abandons a request (the slot frees itself when the task times out; tasks never get killed mid-TLS). Two concurrent requests max.
+`beginGet` starts the GET on a background task and returns a handle (`-1` if no free slot or WiFi down — the firmware logs which).
+
+**One style at a time:** the async task stack plus a blocking `Net.get` running in the same app can exhaust internal RAM on tight boards (the request then fails with a connect error). Use the async API *or* the blocking one within a single app. `pollGet` returns `null` while running, then `{done:true, ok, status, body, error}` (body capped at 32 KB, like the blocking calls). `cancelGet` abandons a request (the slot frees itself when the task times out; tasks never get killed mid-TLS). Two concurrent requests max.
 
 ### 12.4 WiFi (Net)
 

@@ -113,6 +113,15 @@ firmware: 4 chunks on the S3 UARTs/USJ (48 KB RX ring), 1 on the CYD (no
 PSRAM to hold a window), 8 on CDC. USB-native ports (CDC/USJ) have no
 baud: `-b` prints a warning and continues at USB speed.
 
+The window the firmware announces is the one its own channel can hold.
+To OTA-update an OLDER firmware whose announced window overflows its RX
+buffer (e.g. a watch from before the CDC buffer fix, announcing 8), cap
+it by hand:
+
+```bash
+python3 tools/celerctl.py --win 2 -p <port> ota push CelerOS.bin
+```
+
 ## How the channel coexists with the console
 
 The console UART multiplexes two modes (`main/USBDevice/SerialLink.cpp`) —
