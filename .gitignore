@@ -31,3 +31,6 @@ celer_screencap.png
 
 # dump do dispositivo puxado pelo coredump do HostLink (debug local)
 coredump.elf
+
+# binario dos testes host (g++ -o celeros_tests): artefato local
+celeros_tests
