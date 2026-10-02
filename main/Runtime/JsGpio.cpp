@@ -32,14 +32,23 @@
 // Pino invalido ou reservado pelo sistema (flash/PSRAM — o IDF reserva no
 // boot): RangeError legivel. Antes pinMode(-1) era shift indefinido e
 // mexer num pino da flash/PSRAM derrubava o aparelho.
+// Pinos que ja passaram por aqui: o IDF 6 RESERVA o GPIO quando o proprio
+// runtime liga PWM/RMT nele (ledc_channel_config -> esp_gpio_reserve), entao
+// o 2o servo()/analogWrite()/neopixel no MESMO pino caia no "reservado" — o
+// Dog Face parava na primeira passada com "GPIO 17 invalido". Reserva feita
+// por nos nao conta; a do boot (flash/PSRAM) segue barrando.
+static uint64_t s_jsPins = 0;
+
 static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
     int pin = duk_require_int(ctx, idx);
     const bool valid = output ? GPIO_IS_VALID_OUTPUT_GPIO(pin) : GPIO_IS_VALID_GPIO(pin);
     // gpioDeniedMask do perfil cobre o que o esp_gpio_is_reserved nao sabe
     // (linhas DQ4..7/DQS da PSRAM octal do S3: um PWM ali corrompe o heap
     // que vive na PSRAM). Guarda do shift: pin fora de 0..63 e UB.
-    if (!valid || pin < 0 || pin >= 64 || esp_gpio_is_reserved(1ULL << pin) ||
-        (Board::profile().gpioDeniedMask & (1ULL << pin))) {
+    const bool inRange = valid && pin >= 0 && pin < 64;
+    const uint64_t bit = inRange ? (1ULL << pin) : 0;
+    if (!inRange || (!(s_jsPins & bit) && esp_gpio_is_reserved(bit)) ||
+        (Board::profile().gpioDeniedMask & bit)) {
         // Mensagem PRE-FORMATADA e duk_error SEM argumentos de conversao:
         // throw com %d a partir de um lightfunc corrompe o heap do runtime
         // (repro: try{pinMode(99,OUT)}catch(e){} derrubava o aparelho;
@@ -49,6 +58,7 @@ static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
         snprintf(msg, sizeof(msg), "GPIO %d invalido ou reservado pelo sistema", pin);
         duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
     }
+    s_jsPins |= bit;
     return pin;
 }
 
