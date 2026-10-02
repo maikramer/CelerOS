@@ -58,6 +58,10 @@ static LauncherScreen s_launcher;  // base da pilha do Navigator
 // apps em (sx(20), sy(200), sx(200), sy(10))). O blit usa zoom do design
 // (ex.: 2x no 480x480), entao o asset fica so na resolucao 240.
 static void bootSplash(const char* status) {
+    if (Board::profile().headless) {
+        (void)status;  // sem vidro: painel stub descartaria tudo — nao gasta o boot
+        return;
+    }
     tft.fillScreen(THEME_BG);
     const float zoom = (float)UI::W / 240.0f;
     tft.drawPng(kSplashLogoPng, sizeof(kSplashLogoPng),

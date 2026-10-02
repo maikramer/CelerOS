@@ -37,7 +37,9 @@ bool ledInit() {
     tim.clk_cfg = LEDC_AUTO_CLK;
     if (ledc_timer_config(&tim) != ESP_OK) return false;
     const int pins[3] = {p.r, p.g, p.b};
+    int configured = 0;
     for (int i = 0; i < 3; i++) {
+        if (pins[i] < 0) continue;  // LED de canal unico (devkit): g/b fora da placa
         ledc_channel_config_t ch = {};
         ch.speed_mode = kMode;
         ch.channel = kLedCh[i];
@@ -45,9 +47,10 @@ bool ledInit() {
         ch.gpio_num = pins[i];
         ch.duty = p.activeLow ? 255 : 0;  // apagado
         if (ledc_channel_config(&ch) != ESP_OK) return false;
+        configured++;
     }
-    s_ledReady = true;
-    return true;
+    s_ledReady = configured > 0;
+    return s_ledReady;
 }
 }  // namespace
 
@@ -56,8 +59,11 @@ bool hasLed() { return Board::profile().led.r >= 0; }
 void setLed(uint8_t r, uint8_t g, uint8_t b) {
     if (!ledInit()) return;
     const bool inv = Board::profile().led.activeLow;
+    const RgbLedPins& p = Board::profile().led;
     const uint8_t v[3] = {r, g, b};
+    const int pins[3] = {p.r, p.g, p.b};
     for (int i = 0; i < 3; i++) {
+        if (pins[i] < 0) continue;  // canal fora da placa (LED mono-canal)
         uint32_t duty = inv ? (uint32_t)(255 - v[i]) : v[i];
         ledc_set_duty(kMode, kLedCh[i], duty);
         ledc_update_duty(kMode, kLedCh[i]);

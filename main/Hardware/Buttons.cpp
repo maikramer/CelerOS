@@ -30,6 +30,9 @@ struct BtnState {
 
 BtnState s_b1, s_b2;
 bool s_inited = false;
+// Latch do botao 1 p/ apps (placas buttonToApp): 0 nada, 1 curto, 2 longo.
+// System.button() le e consome (padrao poll da casa, como raisePoll/pmuKey).
+uint8_t s_btnEvent = 0;
 
 void put16(uint8_t* p, uint16_t v) { p[0] = v & 0xFF; p[1] = v >> 8; }
 void put32(uint8_t* p, uint32_t v) {
@@ -100,18 +103,37 @@ void saveScreenshot() {
 }
 
 void onShort1(bool inApp) {
+    if (Board::profile().buttonToApp && inApp) {
+        // botao e input do app: o curto fica no latch (System.button le e
+        // consome); a saida do app e o longo
+        s_btnEvent = 1;
+        return;
+    }
     if (inApp) {
         // Encerramento limpo pelo mecanismo do X da topbar: o app sai no
         // proximo ponto de espera (delay/getTouch) e o launcher volta.
         LauncherUI::requestAppExit();
     } else if (kui::Navigator::depth() <= 1 && LauncherUI::launchHome()) {
-        // ja na raiz do launcher: BOOT leva para a casa (watchface no watch)
+        // ja na raiz do launcher: BOOT leva para a casa (watchface no watch;
+        // no devkit headless relanca o homeApp — launcher invisivel nao e casa)
     } else {
         kui::Navigator::home();
     }
 }
 
-void poll(BtnState& b, uint32_t now, void (*onShort)(bool), void (*onLong)(), bool inApp) {
+void onLong1(bool inApp) {
+    if (Board::profile().buttonToApp) {
+        if (inApp) {
+            s_btnEvent = 2;                       // registro no latch...
+            LauncherUI::requestAppExit();         // ...e saida limpa do app
+        }
+        // no launcher nao ha o que fazer: sem vidro, screenshot e lixo
+        return;
+    }
+    saveScreenshot();
+}
+
+void poll(BtnState& b, uint32_t now, void (*onShort)(bool), void (*onLong)(bool), bool inApp) {
     if (b.pin < 0) return;
     bool raw = digitalRead(b.pin) == LOW;  // ativo-baixo
     if (raw != b.raw) {
@@ -132,7 +154,7 @@ void poll(BtnState& b, uint32_t now, void (*onShort)(bool), void (*onLong)(), bo
     }
     if (b.down && !b.longFired && now - b.downAt >= 1200) {
         b.longFired = true;
-        if (onLong) onLong();
+        if (onLong) onLong(inApp);
     }
 }
 
@@ -144,7 +166,10 @@ void notePress() { Backlight::noteActivity(); }
 // Botao 2 (PWR) segurado ~1,2 s: deep sleep de verdade (acorda por EXT1).
 // No watch o pino 2 fica desligado (o PWR fisico fala com o AXP2101), mas
 // o caminho fica pronto para placas com botao GPIO de verdade.
-void pwrLong() { ScreenPower::deepSleepNow(); }
+void pwrLong(bool inApp) {
+    (void)inApp;
+    ScreenPower::deepSleepNow();
+}
 
 }  // namespace
 
@@ -153,6 +178,7 @@ namespace Buttons {
 void init() {
     s_b1.pin = Board::profile().buttonPin;
     s_b2.pin = Board::profile().buttonPin2;
+    s_btnEvent = 0;  // estado novo por boot (regra do runtime: reset no init)
     if (s_b1.pin >= 0) pinMode(s_b1.pin, INPUT_PULLUP);
     if (s_b2.pin >= 0) pinMode(s_b2.pin, INPUT_PULLUP);
     s_inited = s_b1.pin >= 0 || s_b2.pin >= 0;
@@ -168,10 +194,16 @@ void tick(bool inApp) {
     if (!s_inited) return;
     uint32_t now = millis();
     bool wasDown1 = s_b1.down, wasDown2 = s_b2.down;
-    poll(s_b1, now, onShort1, saveScreenshot, inApp);
+    poll(s_b1, now, onShort1, onLong1, inApp);
     // PWR (b2): curto = acorda a tela (notePress); segurado ~2 s dorme.
     poll(s_b2, now, nullptr, pwrLong, inApp);
     if ((!wasDown1 && s_b1.down) || (!wasDown2 && s_b2.down)) notePress();
+}
+
+int buttonEvents() {
+    int ev = s_btnEvent;
+    s_btnEvent = 0;
+    return ev;
 }
 
 }  // namespace Buttons
