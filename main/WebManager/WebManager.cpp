@@ -319,8 +319,14 @@ static std::string normalizePath(const std::string& in) {
     return in;
 }
 
+// Segmento inteiro: "/localfoo"/"/sdcard" passavam no prefixo cru e o
+// sendFile faz fopen direto (o FileSystem:: ja checava o segmento)
 static bool pathAllowed(const std::string& p) {
-    return kstr::startsWith(p, "/local") || kstr::startsWith(p, "/sd");
+    auto under = [&p](const char* mount) {
+        size_t n = strlen(mount);
+        return p.compare(0, n, mount) == 0 && (p.size() == n || p[n] == '/');
+    };
+    return under("/local") || under("/sd");
 }
 
 // Sem CORS ("Access-Control-Allow-Origin: *" deixava QUALQUER site aberto

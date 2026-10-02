@@ -5,6 +5,7 @@
 #include <duktape.h>
 #include "../Boards/Board.h"
 
+#include <string>
 #include "../Utils/AppPerms.h"  // enum AppPerm/PERM_* (header testavel no host)
 using celer::PERM_ALL;
 
@@ -14,6 +15,8 @@ public:
     // e desfaz brilho/volume/auto-brilho/tempo de tela que um app SEM
     // "system" mudou (so ao vivo — nao persistem nem vazam para o launcher)
     static void appExitCleanup();
+    // Apaga o Storage (NVS) de um pacote — desinstalacao pelo launcher
+    static bool storageClearPackage(const std::string& pkg);
 
     // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
     // retratil (swipe da borda superior revela por alguns segundos) com o

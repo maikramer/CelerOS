@@ -37,8 +37,15 @@ public:
     static bool appEntryIsSystem(int i);
     static bool appEntryTopbar(int i);
     static bool appEntryIsFolder(int i);
-    static uint32_t appEntryPerms(int i);
+    static uint32_t appEntryPerms(int i);      // DECLARADAS no app.json
     static const std::string& appEntryPkg(int i);
+    // Consentimento (AppGrants): declaradas que o usuario ainda nao
+    // concedeu (0 = pode abrir direto) e a concessao das declaradas
+    static uint32_t appEntryMissingPerms(int i);
+    static void grantEntry(int i);
+    // Desinstalacao completa: pasta/arquivo + Storage (NVS) + appData +
+    // concessao. true = o app saiu do disco.
+    static bool uninstallEntry(int i);
     static void launchApp(int index);          // executa app (sincrono)
     // F3 (CELEROS_APP_TASK): inicia na task propria; false = use launchApp
     static bool launchAppAsync(int index);

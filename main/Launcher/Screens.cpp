@@ -1,6 +1,7 @@
 #include "Screens.h"
 #include "../Kernel/AppRunner.h"
 #include "LauncherUI.h"
+#include "../Utils/AppGrants.h"
 #include "../Display/Icon.h"
 #include "../Kernel/TimeManager.h"
 #include "../FileSystem/FileSystem.h"
@@ -215,11 +216,34 @@ void LauncherScreen::openAppActions(int entry) {
     Navigator::showDialog(&m_dlg);
 }
 
+void LauncherScreen::launchEntry(int entry) {
+    const uint32_t missing = LauncherUI::appEntryMissingPerms(entry);
+    if (missing == 0) {
+        Navigator::push(AppHostScreen::instance(entry));
+        return;
+    }
+    m_dlg.buttons.clear();
+    m_dlg.title = "Permitir " + LauncherUI::appEntryName(entry) + "?";
+    m_dlg.body = "Acesso a: " + AppGrants::describe(missing);
+    kui::Button cancel;
+    cancel.label = "Cancelar";
+    cancel.style = kui::Button::Ghost;
+    cancel.onTap = [] { Navigator::closeDialog(); };
+    m_dlg.buttons.push_back(cancel);
+    kui::Button allow;
+    allow.label = "Permitir";
+    allow.onTap = [entry] {
+        Navigator::closeDialog();
+        LauncherUI::grantEntry(entry);
+        Navigator::push(AppHostScreen::instance(entry));
+    };
+    m_dlg.buttons.push_back(allow);
+    Navigator::showDialog(&m_dlg);
+}
+
 void LauncherScreen::uninstall(int entry) {
     const std::string name = LauncherUI::appEntryName(entry);
-    const std::string path = LauncherUI::appEntryPath(entry);
-    bool ok = LauncherUI::appEntryIsFolder(entry) ? FileSystem::removeTree(path.c_str())
-                                                  : FileSystem::deleteFile(path.c_str());
+    bool ok = LauncherUI::uninstallEntry(entry);
     LauncherUI::scanLocalApps();  // ja: a grade reflete na hora
     LauncherUI::needsRescan = false;
     if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
@@ -302,7 +326,7 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     for (int entry = page * gridCellsPerPage();
          entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
         if (!cellRect(entry).contains(ev.x, ev.y)) continue;
-        Navigator::push(AppHostScreen::instance(entry));
+        launchEntry(entry);
         return true;
     }
     return false;
@@ -318,7 +342,7 @@ void LauncherScreen::onTick(uint32_t dtMs) {
         }
         int idx = LauncherUI::findEntry(req);
         if (idx >= 0) {
-            Navigator::push(AppHostScreen::instance(idx));
+            launchEntry(idx);  // run remoto/autostart tambem pede consentimento
             return;
         }
         Navigator::toast("App não encontrado: " + req, THEME_ERR);

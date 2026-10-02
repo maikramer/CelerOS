@@ -33,6 +33,9 @@ private:
     int entryAt(int x, int y) const;
     void openAppActions(int entry);
     void uninstall(int entry);
+    // Abre o app passando pelo consentimento (AppGrants): permissoes
+    // declaradas e ainda nao concedidas viram um dialogo Permitir/Cancelar
+    void launchEntry(int entry);
     uint32_t m_pressMs = 0;
     int m_pressEntry = -1;
     bool m_longFired = false;      // o release desse toque nao abre o app

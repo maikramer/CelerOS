@@ -1,10 +1,14 @@
 #include "LauncherUI.h"
 #include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
+#include "../Utils/AppGrants.h"
+#include "../USBDevice/LogSink.h"
+#include "../Runtime/JSBindings.h"
 #include "../Kernel/AppRunner.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Layout.h"
 #include "../Display/Theme.h"
+#include "../UI/Kui.h"
 #include "../Display/Icon.h"
 #include "../Boards/Board.h"
 #include "../Utils/StrUtils.h"
@@ -154,6 +158,10 @@ void LauncherUI::scanLocalApps() {
 
         FileEntry entries[50];
         int count = FileSystem::listDirectory(appDirs[d], entries, 50);
+        if (count >= 50) {
+            // listDirectory para em 50: o resto da pasta nao aparece
+            celer_log_printf("[launcher] %s tem 50+ entradas: as excedentes nao aparecem\n", appDirs[d]);
+        }
 
         for (int i = 0; i < count && appCount < 50; i++) {
             if (tftInstance) {
@@ -178,6 +186,22 @@ void LauncherUI::scanLocalApps() {
                 if (name.length() == 0) continue;
 
                 pkg    = FileSystem::parseJsonValue(jsonContent, "packageName");
+                // packageName vira caminho (/local/data/<pkg>) e identidade
+                // (Storage, concessoes): so [A-Za-z0-9._-], sem "..", ate 64.
+                // Invalido = ignorado (dedup/identidade pelo nome).
+                {
+                    bool okPkg = pkg.size() <= 64 && pkg.find("..") == std::string::npos;
+                    for (char ch : pkg) {
+                        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+                              ch == '.' || ch == '_' || ch == '-')) {
+                            okPkg = false;
+                        }
+                    }
+                    if (!okPkg) {
+                        celer_log_printf("[launcher] packageName invalido ignorado: %s\n", pkg.c_str());
+                        pkg.clear();
+                    }
+                }
                 icon   = FileSystem::parseJsonValue(jsonContent, "icon");
                 system = (FileSystem::parseJsonValue(jsonContent, "system") == "true");
                 topbar = (FileSystem::parseJsonValue(jsonContent, "topbar") == "true");
@@ -223,6 +247,37 @@ void LauncherUI::scanLocalApps() {
             appOrder[appCount]    = order;
             appPerms[appCount]   = appEntryPerms;
             appCount++;
+        }
+    }
+
+    if (appCount >= 50) {
+        celer_log_println("[launcher] limite de 50 apps atingido: apps excedentes ocultos");
+        kui::Navigator::toast("Limite de 50 apps: alguns ficaram ocultos", THEME_WARN);
+    }
+
+    // Consentimento chegou com este firmware: o que ja estava instalado no
+    // primeiro scan (apps de fabrica + os que o usuario ja usava) leva o que
+    // declara — so app NOVO passa pelo dialogo. SD ausente agora = os apps
+    // de la pedem consentimento quando aparecerem (lado seguro).
+    if (!AppGrants::migrated()) {
+        for (int i = 0; i < appCount; i++) {
+            const std::string& id = appPkg[i].length() > 0 ? appPkg[i] : appPaths[i];
+            AppGrants::grant(id, appPaths[i], appPerms[i]);
+        }
+        AppGrants::setMigrated();
+        celer_log_printf("[perm] migracao: %d apps instalados concedidos\n", appCount);
+    }
+
+    // "system": true no app.json ordena o app a frente e o protege da
+    // remocao pelo launcher — so vale com a capability "system" CONCEDIDA
+    // (antes qualquer app da loja se declarava de sistema e ficava
+    // impossivel de remover pelo grid)
+    for (int i = 0; i < appCount; i++) {
+        if (!appIsSystem[i]) continue;
+        uint32_t granted = 0;
+        const std::string& id = appPkg[i].length() > 0 ? appPkg[i] : appPaths[i];
+        if (!AppGrants::lookup(id, appPaths[i], &granted) || !(granted & celer::PERM_SYSTEM)) {
+            appIsSystem[i] = false;
         }
     }
 
@@ -276,10 +331,57 @@ bool LauncherUI::appEntryTopbar(int i) { return appTopbar[i]; }
 bool LauncherUI::appEntryIsFolder(int i) { return appIsFolder[i]; }
 uint32_t LauncherUI::appEntryPerms(int i) { return appPerms[i]; }
 const std::string& LauncherUI::appEntryPkg(int i) { return appPkg[i]; }
+// Bits que o consentimento conhece (PERM_ALL do app.json sem o campo vira
+// estes quatro)
+static constexpr uint32_t kKnownPerms =
+    celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO | celer::PERM_SYSTEM;
+
+static const std::string& grantId(const std::string& pkg, const std::string& path) {
+    return pkg.length() > 0 ? pkg : path;
+}
+
+// Efetivas = declaradas & concedidas: um app que pulou o dialogo (caminho
+// novo de lancamento, concessao revogada) roda SEM o que falta
+static uint32_t effectivePerms(const std::string& pkg, const std::string& path, uint32_t declared) {
+    uint32_t granted = 0;
+    if (!AppGrants::lookup(grantId(pkg, path), path, &granted)) granted = 0;
+    return declared & granted & kKnownPerms;
+}
+
+uint32_t LauncherUI::appEntryMissingPerms(int i) {
+    if (i < 0 || i >= appCount) return 0;
+    uint32_t granted = 0;
+    if (!AppGrants::lookup(grantId(appPkg[i], appPaths[i]), appPaths[i], &granted)) granted = 0;
+    return appPerms[i] & ~granted & kKnownPerms;
+}
+
+void LauncherUI::grantEntry(int i) {
+    if (i < 0 || i >= appCount) return;
+    AppGrants::grant(grantId(appPkg[i], appPaths[i]), appPaths[i], appPerms[i] & kKnownPerms);
+}
+
+bool LauncherUI::uninstallEntry(int i) {
+    if (i < 0 || i >= appCount) return false;
+    const std::string path = appPaths[i];
+    const std::string pkg = appPkg[i];
+    bool ok = appIsFolder[i] ? FileSystem::removeTree(path.c_str()) : FileSystem::deleteFile(path.c_str());
+    if (ok) {
+        // "Apaga o app e os dados": antes so a pasta saia — o Storage (NVS)
+        // e a pasta privada /local/data/<pkg> ficavam para tras
+        if (appIsFolder[i] && pkg.length() > 0) {
+            JSBindings::storageClearPackage(pkg);
+            std::string dataDir = "/local/data/" + pkg;
+            if (FileSystem::isDirectory(dataDir.c_str())) FileSystem::removeTree(dataDir.c_str());
+        }
+        AppGrants::revoke(grantId(pkg, path));
+    }
+    return ok;
+}
+
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
     runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index],
-           appPkg[index], appPerms[index]);
+           appPkg[index], effectivePerms(appPkg[index], appPaths[index], appPerms[index]));
 }
 
 bool LauncherUI::launchAppAsync(int index) {
@@ -292,7 +394,7 @@ bool LauncherUI::launchAppAsync(int index) {
     std::string title;
     resolveApp(appPaths[index], appIsFolder[index], filePath, title);
     return AppRunner::start(filePath, title, appTopbar[index],
-                            appPkg[index], appPerms[index]);
+                            appPkg[index], effectivePerms(appPkg[index], appPaths[index], appPerms[index]));
 #else
     (void)index;
     return false;

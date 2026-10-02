@@ -103,6 +103,13 @@ static int s_tbBtnArmed = 0;                   // chip armado p/ disparo no rele
 static bool s_tbDirty = false;                 // faixa precisa recompor
 static int s_tbHotOnGlass = -2;                // hot state ja composto (-2 = nada)
 
+// Banner do SISTEMA na faixa (alarme com app aberto): ocupa a topbar por
+// BANNER_MS mesmo no modo retratil. Vazio = sem banner.
+static std::string s_bannerText;
+static uint32_t s_bannerUntil = 0;
+static const uint32_t BANNER_MS = 8000;
+static bool bannerActive() { return !s_bannerText.empty(); }
+
 // expira a faixa retratil; true se ela acabou de sair
 static bool retractTick() {
     if (!s_topbarFixed && s_barShown && millis() - s_barShownAt > RETRACT_MS) {
@@ -159,6 +166,19 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
 
 static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
     int h = UI::topbarH();
+    if (bannerActive()) {
+        // banner do sistema: faixa inteira em destaque, sem chips nem X
+        // (some sozinho em BANNER_MS; o toque na faixa segue mascarado)
+        g.fillRect(0, 0, UI::W, h, THEME_WARN);
+        std::string label = s_bannerText;
+        while (!label.empty() && g.textWidth(label.c_str(), kui::type::caption()) > UI::W - UI::sx(12)) {
+            label.pop_back();
+        }
+        g.setTextDatum(MC_DATUM);
+        g.setTextColor(THEME_BG);
+        g.drawString(label.c_str(), UI::W / 2, h / 2, kui::type::caption());
+        return;
+    }
     g.fillRect(0, 0, UI::W, h, THEME_CARD);
     g.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
 
@@ -381,7 +401,31 @@ void JSBindings::present() {
     if (ScreenPower::suppressAppFrame()) return;  // AOD/off: quadro do app nao vai ao vidro
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
-    bool wantBar = s_topbarFixed || s_barShown;
+    // Alarme vencendo com o app aberto (antes o toast so saia quando o app
+    // fechava): banner na faixa + bipe triplo. Conferido 1x/s.
+    {
+        static uint32_t s_alarmCheckAt = 0;
+        const uint32_t now = millis();
+        if (now - s_alarmCheckAt >= 1000) {
+            s_alarmCheckAt = now;
+            std::string msg;
+            if (TimeManager::pollAlarm(msg)) {
+                s_bannerText = "ALARME: " + msg;
+                s_bannerUntil = now + BANNER_MS;
+                s_tbDirty = true;
+                for (int i = 0; i < 3; i++) {
+                    BoardIO::tone(1800, 150);
+                    delay(90);
+                }
+            }
+        }
+        if (bannerActive() && (int32_t)(now - s_bannerUntil) >= 0) {
+            s_bannerText.clear();
+            s_tbDirty = true;
+            s_frameDirty = true;  // retratil: a area da faixa volta ao app
+        }
+    }
+    bool wantBar = s_topbarFixed || s_barShown || bannerActive();
     if (s_frame != nullptr) {
         // So recompoem se algo mudou (desenho do app, topbarText/Buttons ou
         // estado hot da faixa)
@@ -564,8 +608,8 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     if (!fsPathAllowed(from)) {
         duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", from);
     }
-    if (!fsPathAllowed(to)) {
-        duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", to);
+    if (!fsWriteAllowed(to)) {
+        duk_error(ctx, DUK_ERR_ERROR, "FS: escrita negada em %s", to);
     }
     duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
     return 1;
@@ -581,7 +625,7 @@ duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
     }
     // destino na raiz /local sobrescreveria os arquivos protegidos (que
     // moram la): mesma regra de arvore da origem
-    if (!fsTreeAllowed(to)) {
+    if (!fsTreeWriteAllowed(to)) {
         duk_error(ctx, DUK_ERR_ERROR,
                   "FS: copiar para %s requer permissao \"system\"", to);
     }
@@ -600,7 +644,7 @@ static bool removeTree(const std::string& dir) {
         if (n < 0) n = 0;
         if (n == 0) break;
         for (int i = 0; i < n; i++) {
-            if (!fsPathAllowed(entries[i].path.c_str())) continue;  // jail: nao e dono
+            if (!fsWriteAllowed(entries[i].path.c_str())) continue;  // jail: nao e dono
             if (entries[i].isDir) {
                 if (!removeTree(entries[i].path)) return false;
             } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
@@ -615,7 +659,7 @@ static bool removeTree(const std::string& dir) {
 duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* path = duk_require_string(ctx, 0);
-    if (!fsTreeAllowed(path)) {
+    if (!fsTreeWriteAllowed(path)) {
         duk_error(ctx, DUK_ERR_ERROR,
                   "FS: remover %s requer permissao \"system\"", path);
     }
@@ -694,6 +738,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_tbBtnArmed = 0;
     s_tbDirty = false;
     s_tbHotOnGlass = -2;
+    s_bannerText.clear();
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
     if (s_frame == nullptr && Board::profile().hasPsram) {

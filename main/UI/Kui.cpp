@@ -7,6 +7,9 @@
 #include <LovyanGFX.hpp>
 #include <cmath>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 namespace kui {
 
@@ -798,6 +801,19 @@ Dialog* s_dialog = nullptr;
 // acionar o botao que por acaso ficou sob o dedo.
 bool s_dialogArmed = false;
 std::vector<Toast> s_toasts;
+
+// Navigator NAO e thread-safe: o estado acima so e tocado pela task da UI.
+// Chamadas de OUTRA task (app JS na task "celerapp" com CELEROS_APP_TASK,
+// eventos de rede) entram numa fila com mutex e a UI aplica no tick.
+TaskHandle_t s_uiTask = nullptr;
+SemaphoreHandle_t s_pendMux = nullptr;
+std::vector<Toast> s_pendToasts;
+std::vector<Screen*> s_pendPush;
+
+bool offUiTask() {
+    return s_uiTask != nullptr && xTaskGetCurrentTaskHandle() != s_uiTask && s_pendMux != nullptr;
+}
+
 bool s_repaint = true;
 bool s_inputSuspended = false;  // app JS em task propria: UI pausa o pump
 uint32_t s_lastTickMs = 0;
@@ -824,7 +840,10 @@ void drawFrame() {
         [top](Canvas& c) {
             top->draw(c);
             if (s_dialog != nullptr) s_dialog->draw(c);
-            if (!s_toasts.empty()) drawToast(c, s_toasts.front());
+            if (!s_toasts.empty()) {
+                if (s_toasts.front().shownAtMs == 0) s_toasts.front().shownAtMs = millis() | 1;
+                drawToast(c, s_toasts.front());
+            }
         },
         top->wantsDirectDraw());
 }
@@ -863,10 +882,18 @@ bool canvasBuffered() { return s_buf != nullptr; }
 
 void Navigator::begin(CelerDisplay& dev) {
     if (s_canvas == nullptr) s_canvas = new Canvas(dev);
+    s_uiTask = xTaskGetCurrentTaskHandle();
+    if (s_pendMux == nullptr) s_pendMux = xSemaphoreCreateMutex();
 }
 
 void Navigator::push(Screen* s) {
     if (s == nullptr) return;
+    if (offUiTask()) {  // aplicado no proximo tick, na task da UI
+        xSemaphoreTake(s_pendMux, portMAX_DELAY);
+        s_pendPush.push_back(s);
+        xSemaphoreGive(s_pendMux);
+        return;
+    }
     if (!s_stack.empty()) s_stack.back()->onExit();
     s_stack.push_back(s);
     s->onEnter();
@@ -949,7 +976,16 @@ void Navigator::toast(const std::string& message, uint32_t color, uint32_t durat
     t.message = message;
     t.color = color;
     t.durationMs = durationMs;
-    t.shownAtMs = millis();
+    // 0 = ainda nao apareceu: a duracao conta do 1o desenho. Com app JS no
+    // caminho sincrono a UI nao desenha ate ele sair — contando da chamada,
+    // o toast "vencia" antes de aparecer (System.toast/notify sumiam).
+    t.shownAtMs = 0;
+    if (offUiTask()) {
+        xSemaphoreTake(s_pendMux, portMAX_DELAY);
+        if (s_pendToasts.size() < 8) s_pendToasts.push_back(t);  // rajada nao cresce sem fim
+        xSemaphoreGive(s_pendMux);
+        return;
+    }
     s_toasts.push_back(t);
     s_repaint = true;
 }
@@ -975,6 +1011,22 @@ void Navigator::tick() {
     uint32_t dt = s_lastTickMs == 0 ? 10 : now - s_lastTickMs;
     s_lastTickMs = now;
 
+    // pedidos de outras tasks (toast/push): aplicados aqui, na task da UI
+    if (s_pendMux != nullptr) {
+        std::vector<Toast> toasts;
+        std::vector<Screen*> pushes;
+        xSemaphoreTake(s_pendMux, portMAX_DELAY);
+        toasts.swap(s_pendToasts);
+        pushes.swap(s_pendPush);
+        xSemaphoreGive(s_pendMux);
+        for (Toast& t : toasts) {
+            t.shownAtMs = 0;  // conta a partir de quando aparece
+            s_toasts.push_back(t);
+            s_repaint = true;
+        }
+        for (Screen* sc : pushes) push(sc);
+    }
+
     pumpEvents();
 
     if (s_dialog != nullptr) {
@@ -984,10 +1036,10 @@ void Navigator::tick() {
     }
 
     // toast expirado (o proximo da fila comeca a contar agora)
-    if (!s_toasts.empty()) {
+    if (!s_toasts.empty() && s_toasts.front().shownAtMs != 0) {
         if (now - s_toasts.front().shownAtMs > s_toasts.front().durationMs) {
             s_toasts.erase(s_toasts.begin());
-            if (!s_toasts.empty()) s_toasts.front().shownAtMs = now;
+            if (!s_toasts.empty()) s_toasts.front().shownAtMs = 0;  // conta do desenho
             s_repaint = true;
         }
     }

@@ -21,8 +21,9 @@ enum AppPerm : uint32_t {
 };
 
 // "permissions": ["fs","net","gpio","system"] — campo ausente (ou array
-// vazio/inválido) = PERM_ALL (compat com apps existentes: não tranca app
-// por engano de formatação).
+// mal formado) = PERM_ALL (compat; o consentimento do launcher pede as
+// quatro). Array VALIDO sem nenhuma capability conhecida ("[]") = nenhuma:
+// e o que o autor quis dizer — antes virava PERM_ALL.
 inline uint32_t parsePermissions(const std::string& appJson) {
     size_t key = appJson.find("\"permissions\"");
     if (key == std::string::npos) return PERM_ALL;
@@ -37,7 +38,7 @@ inline uint32_t parsePermissions(const std::string& appJson) {
     if (arr.find("\"net\"") != std::string::npos) m |= PERM_NET;
     if (arr.find("\"gpio\"") != std::string::npos) m |= PERM_GPIO;
     if (arr.find("\"system\"") != std::string::npos) m |= PERM_SYSTEM;
-    return m == 0 ? PERM_ALL : m;
+    return m;
 }
 
 }  // namespace celer
