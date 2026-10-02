@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 17
+### API Level: 18
 ### Nível de API: 13
 ---
 
@@ -1688,3 +1688,48 @@ tipográficos viram ASCII).
 
 - Liga/desliga o link com o celular (persistido). Exige `"system"`; o painel
   de ajustes rápidos tem o mesmo botão.
+
+## 22. Nível de API 18 — IA: objeto `AI` (DeepSeek)
+
+Conversa com um LLM (DeepSeek, API compatível com OpenAI) a partir de um app
+JS. O objeto `AI` só existe para apps com permissão `"net"` (HTTPS por baixo
+dos panos).
+
+A chave da API é **do aparelho, nunca do JS**: o dono provisiona uma vez com
+`python3 tools/push_deepseek_key.py` (lê o `.env` na raiz do repo) ou pelo
+gerenciador de arquivos da web, gravando `/local/deepseek_key.txt`. O arquivo
+é protegido pelo jail do FS — nenhum app consegue lê-lo — e o framework lê na
+hora da chamada (trocar a chave não pede reboot).
+
+#### `AI.configured()` (API 18)
+- **Retorna:** Boolean
+- **Descrição:** `true` quando existe chave provisionada no aparelho. Use junto de `Net.isConnected()` antes de conversar.
+
+#### `AI.chat(opts, cb)` (API 18)
+- **Parâmetros:**
+  - `opts` (Object) — o próprio payload da requisição DeepSeek (formato OpenAI): `messages` (obrigatório, Array de `{role, content}` com role `"system"`, `"user"` ou `"assistant"`), opcional `model` (padrão `"deepseek-flash"`), `max_tokens` (padrão `1024`), `temperature`, etc. O framework força `stream: false`.
+  - `cb` (Function) — chamada **exatamente uma vez** com o objeto resultado quando a requisição termina.
+- **Retorna:** Boolean — `true` quando o pedido entrou no ar (o callback vai disparar); `false` quando ocupado (outra requisição em curso — nenhum callback).
+- **Lança:** erro legível sem WiFi ou sem chave provisionada.
+- **Descrição:** Assíncrono: o POST HTTPS roda em task própria (timeout de 90 s) enquanto o app continua desenhando. O callback recebe `{ok, status, content, usage, raw, error}`:
+  - `ok` — `true` com HTTP 2xx;
+  - `content` — o texto da resposta (`choices[0].message.content`), `null` quando o corpo não pôde ser parseado;
+  - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` quando presente;
+  - `raw` — o corpo cru da resposta (teto de 32 KB; parseie você mesmo se precisar de mais);
+  - `error` — erro de transporte ou `"cancelado"` quando `ok` é `false`.
+- Erro dentro do callback propaga como o erro de qualquer binding (o app morre com a tela de erro).
+
+### Exemplo
+
+```javascript
+if (!AI.configured() || !Net.isConnected()) {
+    System.print("configure a chave e o WiFi");
+} else if (AI.chat({ messages: [{ role: "user", content: "piada curta" }] },
+                   function (r) {
+                       if (r.ok) System.print(r.content);
+                       else System.print("erro: " + r.error);
+                   })) {
+    // siga bombeando: o callback dispara enquanto o app cede
+    while (true) System.delay(20);
+}
+```

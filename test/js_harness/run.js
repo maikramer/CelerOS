@@ -426,6 +426,34 @@ function makeEnv() {
         wifiDisconnect: function() {}
     };
 
+    // AI (API 18): DeepSeek com callback. __harness.setAiResponse(fn|obj)
+    // scripta a resposta (fn recebe os opts do chat); o callback dispara no
+    // proximo yield (setTimeout 0) como o aiTick no present() do firmware.
+    // env.__aiConfigured=false simula aparelho sem chave.
+    var aiCb = null, aiResponse = null;
+    var aiChats = [];
+    env.AI = {
+        chat: function(opts, cb) {
+            // mesmos defaults do JsAi.cpp: o app pode confiar neles
+            if (!opts.model) opts.model = 'deepseek-flash';
+            if (!opts.max_tokens) opts.max_tokens = 1024;
+            opts.stream = false;
+            aiChats.push(JSON.stringify(opts));
+            if (typeof cb !== 'function') return false;
+            aiCb = cb;
+            setTimeout(function() {
+                var f = aiCb;
+                aiCb = null;
+                if (!f) return;
+                var r = typeof aiResponse === 'function' ? aiResponse(opts) : aiResponse;
+                f(r || { ok: false, status: 0, error: 'sem resposta no harness', raw: '', content: null });
+            }, 0);
+            return true;
+        },
+        configured: function() { return env.__aiConfigured !== false; },
+        cancel: function() { var had = aiCb !== null; aiCb = null; return had; }
+    };
+
     // Celer Link (API 9; pareamento API 11): fila de mensagens recebidas
     // alimentavel pelo __harness.pushLink — o mesmo contrato de poll() do
     // firmware. __harness.setLink({conn,pairing,code}) simula os estados
@@ -461,6 +489,8 @@ function makeEnv() {
 
     env.__harness = {
         log: log,
+        setAiResponse: function(r) { aiResponse = r; },
+        aiChats: aiChats,
         setLink: function(st) {
             if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
             if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
@@ -542,10 +572,10 @@ function runApp(relPath, wire) {
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
@@ -575,10 +605,10 @@ function joinLog(log) { return log.join('\n'); }
 
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
-    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                           'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                           (env.__prelude || '') + '\n' + src);
-    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
 }
 
@@ -946,10 +976,10 @@ function runInline(src, env) {
     env.__harness.pushLink(['{"ack":1}']);
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1396,10 +1426,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1420,10 +1450,10 @@ function holdFrames(x, y, n) {
     try {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
@@ -1446,10 +1476,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1473,10 +1503,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1514,10 +1544,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1540,10 +1570,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1697,6 +1727,58 @@ function holdFrames(x, y, n) {
     check('dedup por id (appData nao duplica)', j.indexOf('DUP') < 0, j);
     check('plugin quebrado nao derruba', r.err === null && j.indexOf('25C Sol 18/28') >= 0);
     check('toque na linha abre o app', r.env.__launched === 'celeros.previsao', r.env.__launched);
+})();
+
+// --- Chat IA (API 18, objeto AI/DeepSeek) ------------------------------------
+(function() {
+    console.log('Chat IA:');
+    var r = runApp('data/apps/Chat IA/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({
+            ok: true, status: 200,
+            content: 'Ola! Sou o assistente do CelerOS.',
+            raw: '{"choices":[{"message":{"content":"Ola! Sou o assistente do CelerOS."}}]}'
+        });
+        env.__harness.typeLine('oi');
+        // bombeia o loop: o callback da IA dispara num yield (como o aiTick)
+        for (var i = 0; i < 30; i++) env.__harness.System.delay(20);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
+    check('header Chat IA', j.indexOf('Chat IA') >= 0, j);
+    check('mensagem do usuario ecoada', j.indexOf('você: oi') >= 0, j);
+    check('resposta da IA desenhada', j.indexOf('IA: Ola! Sou o assistente do CelerOS.') >= 0, j);
+    var req = r.env.__harness.aiChats[0] || '';
+    check('payload vai ao DeepSeek', req.indexOf('deepseek-flash') >= 0 && req.indexOf('"stream":false') >= 0, req);
+    check('system prompt e contexto', req.indexOf('assistente do CelerOS') >= 0 && req.indexOf('assistente do CelerOS', 10) >= 0, req);
+    check('historico gravado', (() => {
+        var h = r.env.FS.readTextFile('/local/data/celeros.chatai/historico.json');
+        return !!h && h.indexOf('oi') >= 0 && h.indexOf('Ola!') >= 0;
+    })(), r.env.FS.readTextFile('/local/data/celeros.chatai/historico.json'));
+})();
+
+// --- Chat IA: erro da API e falta de chave ------------------------------------
+(function() {
+    console.log('Chat IA (erros):');
+    var r = runApp('data/apps/Chat IA/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: false, status: 401, error: 'HTTP 401', raw: '' });
+        env.__harness.typeLine('oi');
+        for (var i = 0; i < 30; i++) env.__harness.System.delay(20);
+    });
+    check('erro nao derruba o app', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('erro do HTTP mostrado', j.indexOf('IA: erro HTTP 401') >= 0, j);
+
+    var r2 = runApp('data/apps/Chat IA/main.js', function(env) {
+        env.__aiConfigured = false;  // aparelho sem chave
+        env.Net.isConnected = function() { return true; };
+        env.__harness.typeLine('oi');
+        for (var k = 0; k < 10; k++) env.__harness.System.delay(20);
+    });
+    check('sem chave nao envia', r2.err === null &&
+          joinLog(r2.log).indexOf('sem chave') >= 0, r2.err || joinLog(r2.log));
 })();
 
 // resumo

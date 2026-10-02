@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 17 — 204 funcoes.
+// API level 18 — 207 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -302,6 +302,17 @@ declare const Net: {
     wifiConnect(arg0: number, arg1?: number): any;
     /** @permission "net+system" */
     wifiDisconnect(): void;
+};
+
+declare const AI: {
+    /** Assíncrono: o POST HTTPS roda em task própria (timeout de 90 s) enquanto o app continua desenhando. O callback recebe {ok, status, content,  (API 18) */
+    /** @permission "net" */
+    chat(opts: number, cb: number): any;
+    /** true quando existe chave provisionada no aparelho. Use junto de Net.isConnected() antes de conversar. (API 18) */
+    /** @permission "net" */
+    configured(): any;
+    /** @permission "net" */
+    cancel(): any;
 };
 
 declare const FS: {

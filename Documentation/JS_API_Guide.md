@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 17
+### API Level: 18
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1408,3 +1408,48 @@ dropped, typographic quotes/dashes turned into ASCII).
 
 - Turns the phone link on/off (persisted). Requires `"system"`; the quick
   settings panel has the same toggle.
+
+## 22. API Level 18 — AI: `AI` (DeepSeek)
+
+Chat with an LLM (DeepSeek, OpenAI-compatible API) from a JS app. The whole
+`AI` object only exists for apps with the `"net"` permission (HTTPS under
+the hood).
+
+The API key is **device-level, never in JS**: the owner provisions it once
+with `python3 tools/push_deepseek_key.py` (reads `.env` in the repo root) or
+through the web file manager, into `/local/deepseek_key.txt`. That file is
+protected by the FS jail — no app can read it — and the framework reads it
+at call time (replacing the key does not need a reboot).
+
+#### `AI.configured()` (API 18)
+- **Returns:** Boolean
+- **Description:** `true` when an API key is provisioned on the device. Pair with `Net.isConnected()` before chatting.
+
+#### `AI.chat(opts, cb)` (API 18)
+- **Parameters:**
+  - `opts` (Object) — the DeepSeek request payload itself (OpenAI shape): `messages` (required, Array of `{role, content}` where role is `"system"`, `"user"` or `"assistant"`), optional `model` (defaults to `"deepseek-flash"`), `max_tokens` (defaults to `1024`), `temperature`, etc. The framework forces `stream: false`.
+  - `cb` (Function) — called **exactly once** with the result object when the request finishes.
+- **Returns:** Boolean — `true` when the request started (callback will fire); `false` when busy (another request in flight — no callback).
+- **Throws:** readable error when WiFi is down or no key is provisioned.
+- **Description:** Asynchronous: the HTTPS POST runs on its own task (90 s timeout) while the app keeps drawing. The callback receives `{ok, status, content, usage, raw, error}`:
+  - `ok` — `true` on HTTP 2xx;
+  - `content` — the reply text (`choices[0].message.content`), `null` when the body could not be parsed;
+  - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` when present;
+  - `raw` — the raw response body (cap 32 KB; parse it yourself if you need more);
+  - `error` — transport error or `"cancelado"` when `ok` is `false`.
+- Errors inside the callback propagate like any binding error (the app dies with the error screen).
+
+### Example
+
+```javascript
+if (!AI.configured() || !Net.isConnected()) {
+    System.print("configure a chave e o WiFi");
+} else if (AI.chat({ messages: [{ role: "user", content: "piada curta" }] },
+                   function (r) {
+                       if (r.ok) System.print(r.content);
+                       else System.print("erro: " + r.error);
+                   })) {
+    // keep pumping: the callback fires while the app yields
+    while (true) System.delay(20);
+}
+```

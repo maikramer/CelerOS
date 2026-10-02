@@ -272,6 +272,14 @@ private:
     // Descarta zumbis/resultados do app anterior (chamado no init de cada app)
     static void netAsyncReset();
 
+    // AI (API 18): chat DeepSeek com callback. A chave fica no aparelho
+    // (/local/deepseek_key.txt, protegida pelo jail do FS) e nunca entra no JS
+    static duk_ret_t js_aiChat(duk_context *ctx);        // opts + cb 1x
+    static duk_ret_t js_aiConfigured(duk_context *ctx);  // chave presente?
+    static duk_ret_t js_aiCancel(duk_context *ctx);      // esquece a requisicao
+    static void aiTick(duk_context *ctx);                // entrega no present()
+    static void aiReset();                               // reset por app
+
     // Net nivel 3 (WiFi)
     static duk_ret_t js_wifiScan(duk_context *ctx);
     static duk_ret_t js_wifiConnect(duk_context *ctx);

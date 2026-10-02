@@ -50,7 +50,7 @@ const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'CelerLink', 'Storage', 'Sensors', 'Phone'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'Storage', 'Sensors', 'Phone'];
 // Objetos que so existem com o Kconfig da placa: uso sem typeof vira aviso
 const OPTIONAL_ROOTS = {
   CelerLink: 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar',

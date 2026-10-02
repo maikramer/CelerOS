@@ -451,7 +451,10 @@ void JSBindings::present() {
     // cede. Callback que desenha marca o quadro sujo e o push abaixo o leva
     // ao vidro. Erro no callback PROPAGA (present e 1a linha dos bindings
     // chamadores — o longjmp nao atravessa recurso C aberto).
-    if (s_jsCtx != nullptr) timersTick(s_jsCtx);
+    if (s_jsCtx != nullptr) {
+        timersTick(s_jsCtx);
+        aiTick(s_jsCtx);  // AI (API 18): entrega a resposta ao callback do app
+    }
     if (tftInstance == nullptr) return;
     // Servicos do OS (Backlight, Buttons, ScreenPower, PowerPolicy,
     // PhoneLink, alerta de notificacao, confirmacao de OTA, alarmes 1x/s):
@@ -778,6 +781,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Requisicoes async de um app anterior: zumbis descartam o resultado e
     // resultados nao consumidos sao liberados (o slot nunca atravessa apps)
     netAsyncReset();
+
+    // Requisicao AI de um app anterior: descartada (o callback morreu no
+    // heap stash do app que saiu)
+    aiReset();
 
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
@@ -1139,6 +1146,18 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsNetSys);
     duk_put_prop_string(ctx, -2, "Net");
+    }
+
+    // --- AI Object (API 18): chat DeepSeek — capability "net" (HTTPS) ---
+    if (perm(celer::PERM_NET)) {
+    duk_push_object(ctx); // AI
+    static const JsFn kFnsAI[] = {
+        {"chat", js_aiChat, 2},              // cb({ok,content,raw,status,usage}) 1x
+        {"configured", js_aiConfigured, 0},  // chave no aparelho?
+        {"cancel", js_aiCancel, 0},          // esquece a requisicao em curso
+    };
+    putFns(ctx, kFnsAI);
+    duk_put_prop_string(ctx, -2, "AI");
     }
 
     // --- FS Object — capability "fs" (F4) ---
