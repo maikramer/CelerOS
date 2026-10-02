@@ -24,6 +24,7 @@ namespace UI {
 
 inline int W = 240;
 inline int H = 320;
+inline int inset = 0;  // recorte dos cantos do vidro (px fisicos; 0 = retangular)
 
 // Tela "grande" (usa fontes maiores)
 inline bool big = false;
@@ -44,9 +45,10 @@ inline int sy(int v) { return v * H / 320; }
 inline int cx()      { return W / 2; }
 inline int cy()      { return H / 2; }
 
-inline void init(int w, int h) {
+inline void init(int w, int h, int insetPx = 0) {
     W = w;
     H = h;
+    inset = insetPx;
     big = (w >= 400);
 
     HEADER_H        = sy(30);
@@ -81,7 +83,7 @@ inline int font(int f) {
 inline int topbarH() { return sy(18) > 20 ? sy(18) : 20; }
 inline int topbarExitW() { return sx(40); }  // area de toque do X (a direita)
 inline bool inTopbar(int x, int y) { return y < topbarH(); }
-inline bool hitTopbarExit(int x, int y) { return inTopbar(x, y) && x >= W - topbarExitW(); }
+inline bool hitTopbarExit(int x, int y) { return inTopbar(x, y) && x >= W - topbarExitW() - inset; }
 
 }  // namespace UI
 

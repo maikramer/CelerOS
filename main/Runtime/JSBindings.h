@@ -10,6 +10,11 @@ using celer::PERM_ALL;
 
 class JSBindings {
 public:
+    // Fim do app (CelerKernel::runFile, depois do pcall): solta o keepAwake
+    // e desfaz brilho/volume/auto-brilho/tempo de tela que um app SEM
+    // "system" mudou (so ao vivo — nao persistem nem vazam para o launcher)
+    static void appExitCleanup();
+
     // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
     // retratil (swipe da borda superior revela por alguns segundos) com o
     // app em tela cheia — campo "topbar" do app.json
@@ -270,9 +275,6 @@ private:
     static duk_ret_t js_linkStatus(duk_context *ctx);
     static duk_ret_t js_linkVerify(duk_context *ctx);
     static duk_ret_t js_linkUnpair(duk_context *ctx);
-
-    // Helper
-    static void fatalErrorHandler(void *udata, const char *msg);
 };
 
 #endif // JS_BINDINGS_H

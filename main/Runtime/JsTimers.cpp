@@ -26,7 +26,7 @@ struct TimerSlot {
     bool repeat = false;
     uint32_t period = 0;     // ms (interval) / timeout (timeout)
     uint32_t nextFire = 0;   // ms()
-    int id = 0;              // 1..8 (0 = livre)
+    int id = 0;              // handle unico do app (>= 1); slot reusado ganha id novo
 };
 TimerSlot s_timers[8];
 bool s_inTick = false;       // callback chamou present(): adia o proximo disparo
@@ -119,8 +119,11 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
     t.repeat = repeat;
     t.period = ms < 10 ? 10 : ms;  // piso de 10ms: dispara no proximo present()
     t.nextFire = millis() + t.period;
-    t.id = ++s_nextId;
-    duk_push_int(ctx, slot + 1);  // id 1..8 (0 = falha)
+    // id monotonico por app (nunca o slot): o id de um timeout que ja
+    // disparou nao pode cancelar o timer novo que reusou o mesmo slot
+    if (++s_nextId <= 0) s_nextId = 1;
+    t.id = s_nextId;
+    duk_push_int(ctx, t.id);  // >= 1 (0 = falha: sem slot)
     return 1;
 }
 
@@ -134,14 +137,18 @@ duk_ret_t JSBindings::js_setInterval(duk_context *ctx) {
 
 // clearTimeout e clearInterval sao o mesmo corretor: id 0/ausente nao faz nada
 static duk_ret_t timerClear(duk_context *ctx) {
-    // id = slot+1 (handle opaco devolvido pelo setTimeout/setInterval)
+    // id = handle opaco do setTimeout/setInterval: procura o slot VIVO com
+    // esse id (id de timer ja disparado/cancelado nao acha nada)
     int id = duk_is_number(ctx, 0) ? duk_require_int(ctx, 0) : 0;
-    if (id >= 1 && id <= 8) {
-        s_timers[id - 1].used = false;
+    if (id < 1) return 0;
+    for (int i = 0; i < 8; i++) {
+        if (!s_timers[i].used || s_timers[i].id != id) continue;
+        s_timers[i].used = false;
         timerStashArray(ctx);
         duk_push_undefined(ctx);
-        duk_put_prop_index(ctx, -2, id - 1);
+        duk_put_prop_index(ctx, -2, i);
         duk_pop(ctx);  // array
+        break;
     }
     return 0;
 }

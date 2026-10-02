@@ -15,11 +15,13 @@
 
 duk_ret_t JSBindings::js_linkStart(duk_context *ctx) {
     const char* name = nullptr;
-    if (duk_get_top(ctx) >= 1 && !duk_is_null_or_undefined(ctx, 0)) {
+    // lightfunc: a pilha SEMPRE tem nargs valores (faltante = undefined),
+    // entao duk_get_top nao detecta argumento omitido — testa o valor
+    if (!duk_is_null_or_undefined(ctx, 0)) {
         name = duk_require_string(ctx, 0);
     }
     bool pairing = false;
-    if (duk_get_top(ctx) >= 2 && duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
+    if (duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
         duk_get_prop_string(ctx, 1, "pairing");
         pairing = duk_get_boolean_default(ctx, -1, 0) != 0;
         duk_pop(ctx);
@@ -36,7 +38,7 @@ duk_ret_t JSBindings::js_linkStop(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
     int timeoutMs = 2500;
-    if (duk_get_top(ctx) >= 1) timeoutMs = duk_require_int(ctx, 0);
+    if (!duk_is_null_or_undefined(ctx, 0)) timeoutMs = duk_require_int(ctx, 0);  // scan() sem arg lancava TypeError
     if (timeoutMs < 500) timeoutMs = 500;
     if (timeoutMs > 8000) timeoutMs = 8000;
 
@@ -61,7 +63,7 @@ duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
 duk_ret_t JSBindings::js_linkConnect(duk_context *ctx) {
     const char* id = duk_require_string(ctx, 0);
     int timeoutMs = 4000;
-    if (duk_get_top(ctx) >= 2) timeoutMs = duk_require_int(ctx, 1);
+    if (!duk_is_null_or_undefined(ctx, 1)) timeoutMs = duk_require_int(ctx, 1);  // connect(id) idem
     if (timeoutMs < 1000) timeoutMs = 1000;
     if (timeoutMs > 8000) timeoutMs = 8000;
 
@@ -84,7 +86,7 @@ duk_ret_t JSBindings::js_linkVerify(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_linkUnpair(duk_context *ctx) {
     const char* id = nullptr;
-    if (duk_get_top(ctx) >= 1 && !duk_is_null_or_undefined(ctx, 0)) {
+    if (!duk_is_null_or_undefined(ctx, 0)) {
         id = duk_require_string(ctx, 0);
     }
     duk_push_boolean(ctx, CelerLink::unpair(id) ? 1 : 0);

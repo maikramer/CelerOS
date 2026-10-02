@@ -1,4 +1,4 @@
-// KryonOS Cronometro — centesimos, voltas e intervalos (API 3)
+// Cronometro — centesimos, voltas e intervalos (API 3)
 // ES5 puro (Duktape). Base de tempo: System.millis() acumulado.
 
 var T = System.theme();

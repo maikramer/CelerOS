@@ -7,5 +7,5 @@
   "type": "App",
   "category": "Utility",
   "description": "Cubo 3D interativo: arraste para girar, modo solido ou so arestas e contador de FPS. Renderizador por fatias sem flicker.",
-  "changelog": "1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR\n1.1.0 - migracao da era KryonOS"
+  "changelog": "1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR"
 }

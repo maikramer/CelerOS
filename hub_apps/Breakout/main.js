@@ -1,4 +1,4 @@
-// KryonOS Breakout — quebre os tijolos, arraste a raquete (API 3)
+// Breakout — quebre os tijolos, arraste a raquete (API 3)
 // ES5 puro (Duktape). Fisica delta-time com sub-passos; recorde em
 // /local/config_breakout_hi.txt.
 

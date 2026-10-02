@@ -1,4 +1,4 @@
-// KryonOS 2048 — deslize, junte iguais, chegue no 2048 (API 3)
+// 2048 — deslize, junte iguais, chegue no 2048 (API 3)
 // ES5 puro (Duktape). Swipe para mover; recorde em /local/config_2048_hi.txt.
 
 var T = System.theme();

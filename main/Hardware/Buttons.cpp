@@ -140,6 +140,8 @@ void poll(BtnState& b, uint32_t now, void (*onShort)(bool), void (*onLong)(), bo
 void notePress() { Backlight::noteActivity(); }
 
 // Botao 2 (PWR) segurado ~1,2 s: deep sleep de verdade (acorda por EXT1).
+// No watch o pino 2 fica desligado (o PWR fisico fala com o AXP2101), mas
+// o caminho fica pronto para placas com botao GPIO de verdade.
 void pwrLong() { ScreenPower::deepSleepNow(); }
 
 }  // namespace
@@ -152,6 +154,12 @@ void init() {
     if (s_b1.pin >= 0) pinMode(s_b1.pin, INPUT_PULLUP);
     if (s_b2.pin >= 0) pinMode(s_b2.pin, INPUT_PULLUP);
     s_inited = s_b1.pin >= 0 || s_b2.pin >= 0;
+    if (s_inited) {
+        // Diagnostico de bancada: nivel crudo dos botoes com pull-up
+        ESP_LOGI("celer.btn", "botoes: b1(GPIO%d)=%d b2(GPIO%d)=%d",
+                 s_b1.pin, s_b1.pin >= 0 ? digitalRead(s_b1.pin) : -1,
+                 s_b2.pin, s_b2.pin >= 0 ? digitalRead(s_b2.pin) : -1);
+    }
 }
 
 void tick(bool inApp) {

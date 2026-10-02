@@ -7,7 +7,7 @@
   "type": "App",
   "category": "Utility",
   "description": "Controla LED/fita por GPIO: pino escolhivel, liga/desliga, brilho PWM e modo piscar. Requer permissao GPIO.",
-  "changelog": "1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)\n1.1.0 - migracao da era KryonOS",
+  "changelog": "1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)",
   "permissions": [
     "gpio"
   ]

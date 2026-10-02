@@ -13,10 +13,17 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Console pelo USB-Serial/JTAG nativo (o unico conector USB do watch): logs +
-# OpenOCD. GPIO19/20 livres. O SerialLink (celerctl) fala UART0, sem porta
-# fisica — o dia a dia e WebManager (WiFi) e Celer Link BLE.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# USB nativo (TinyUSB, GPIO19/20 livres no watch): CDC dupla — terminal
+# humano + protocolo celerctl (HostLink). O celerctl ganha push/pull/tap/
+# screencap/logcat direto no watch, sem UART fisica. O console sai da USJ
+# (os pinos viram OTG) e vai para a UART0 sem conector: os logs vivem no
+# shell CDC e no `celerctl logcat`. Flash segue pela mesma USB (ROM).
+CONFIG_CELEROS_USB_NATIVE=y
+# CDC0 shell + CDC1 celerctl (o default 1 faz o init do USB abortar cedo).
+# ATENCAO: arquivo de defaults NAO aceita comentario inline na linha da opcao.
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=2
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Desempenho: 32MB de flash sobram — interpretador JS e desenho com -O2.

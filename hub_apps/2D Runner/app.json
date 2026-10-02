@@ -7,5 +7,5 @@
   "type": "Game",
   "category": "Arcade",
   "description": "Corrida infinita neon: desvie dos trens, pegue as moedas e bata o recorde (salvo no aparelho). Render por fatias sem flicker.",
-  "changelog": "1.2.0 - recorde persistido, sons, PT-BR e destaque de novo recorde\n1.1.0 - migracao da era KryonOS"
+  "changelog": "1.2.0 - recorde persistido, sons, PT-BR e destaque de novo recorde"
 }

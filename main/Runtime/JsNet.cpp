@@ -23,6 +23,7 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "JsFsJail.h"
 
 // =====================================================
 // Network Bindings - HTTP (objeto Net, API level 2)
@@ -138,24 +139,49 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     }
     const char *url = duk_require_string(ctx, 0);
     const char *path = duk_require_string(ctx, 1);
+    // Grava no FS: mesma capability e mesmo jail do FS.writeFile. Antes so
+    // "net" bastava e o destino era livre (ota_url.txt, main.js de app de
+    // sistema...).
+    if (!perm(celer::PERM_FS)) {
+        duk_error(ctx, DUK_ERR_ERROR, "Net.download requer permissao \"fs\"");
+    }
+    if (!fsPathAllowed(path)) {
+        duk_error(ctx, DUK_ERR_ERROR, "Net.download: destino %s nao permitido", path);
+    }
     const bool hasProgress = duk_is_function(ctx, 2);
+
+    // Baixa ao lado e so troca no sucesso: o "wb" do downloadToFile zerava
+    // o arquivo existente ANTES da requisicao (404/sem rede = arquivo perdido)
+    std::string part = std::string(path) + ".part";
+    bool exitReq = false;  // X/exit pedido de dentro do callback
 
     HttpClient http;
     http.setTimeout(15000);
     http.setBufferSize(4096);  // chunk maior = menos chamadas do callback
     // callback SEMPRE presente: o reset do watchdog por chunk cobre o
     // download sem progress (o loop do app nao roda enquanto isso)
-    http.setProgressCallback([ctx, hasProgress](int64_t got, int64_t total) {
+    http.setProgressCallback([ctx, hasProgress, &exitReq](int64_t got, int64_t total) {
         esp_task_wdt_reset();
-        if (!hasProgress) return;
+        if (!hasProgress || exitReq) return;
         duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
         duk_push_number(ctx, (duk_double_t)got);
         duk_push_number(ctx, (duk_double_t)total);
-        if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) duk_pop(ctx);
+        if (duk_pcall(ctx, 2) != DUK_EXEC_SUCCESS) {
+            // saida limpa (X/System.exitApp) nao pode morrer no pcall: o
+            // app sai quando o download devolver o controle
+            if (duk_is_error(ctx, -1)) {
+                duk_get_prop_string(ctx, -1, "celerExit");
+                exitReq = duk_to_boolean(ctx, -1) != 0;
+                duk_pop(ctx);
+            }
+        }
+        duk_pop(ctx);  // resultado ou erro
     });
-    HttpResponse resp = http.downloadToFile(url, path);
-    if (!resp.isOk()) { duk_push_false(ctx); return 1; }
-    duk_push_true(ctx);
+    HttpResponse resp = http.downloadToFile(url, part);
+    bool ok = resp.isOk() && FileSystem::renameFile(part.c_str(), path);
+    if (!ok) FileSystem::deleteFile(part.c_str());
+    if (exitReq) throwAppExit(ctx);
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 

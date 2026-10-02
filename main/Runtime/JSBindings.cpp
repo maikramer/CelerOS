@@ -16,6 +16,7 @@
 #include "../Display/ScreenCapture.h"
 #include "../Display/ScreenPower.h"
 #include "../Hardware/Buttons.h"
+#include "../Hardware/BoardIO.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
@@ -43,6 +44,26 @@
 CelerDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
 uint32_t s_perms = celer::PERM_ALL;   // capabilities do app corrente (F4)
 std::string s_appPkg;                 // packageName do app corrente (F4)
+bool s_appExitPending = false;        // saida pedida (throwAppExit): relancada nas esperas
+
+// Ajustes globais (brilho/volume/auto/tempo de tela) mudados por app sem
+// "system": valem so enquanto ele roda. Valores do lancamento + flag.
+static int s_launchBright = 100, s_launchVol = 100;
+static bool s_launchAuto = false;
+static uint32_t s_launchIdle = 0;
+bool s_hwTouched = false;  // JsSystemApps marca ao aplicar sem persistir
+
+void JSBindings::appExitCleanup() {
+    ScreenPower::keepAwake(false);   // latched (keepAwake(true)) de um app
+    ScreenPower::keepAwakeFor(0);    // e o prazo (Clock: 30 min depois de sair)
+    if (s_hwTouched) {
+        s_hwTouched = false;
+        Backlight::setAuto(s_launchAuto, false);
+        Backlight::set(s_launchBright, false);
+        Backlight::setIdleTimeout(s_launchIdle, false);
+        BoardIO::setVolumePct(s_launchVol, false);
+    }
+}
 
 
 // Topbar do sistema (titulo + X de sair): s_exitArmed = dedo sobre o X no
@@ -124,7 +145,19 @@ bool s_frameDirty = false;
 // Topbar no estilo da barra que o Terminal desenhava: card, linha de stroke,
 // titulo a esquerda e X a direita. hot (dedo sobre o X) clareia o traco e
 // acende a pastilha — feedback antes de soltar.
+static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot);
+
+// A faixa e desenhada no MESMO alvo do app (quadro/display): o estado de
+// texto (cor, datum, tamanho) e o recorte do app nao podem vazar para ela
+// (setTextSize(2) do app dobrava o titulo; setClip cortava a faixa) nem ela
+// para o app (depois do present, setTextColor/datum do app viravam os da
+// faixa). Salva, desenha limpo, restaura.
 static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
+    GfxStateGuard guard(g);
+    drawAppTopbarRaw(g, hot);
+}
+
+static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
     int h = UI::topbarH();
     g.fillRect(0, 0, UI::W, h, THEME_CARD);
     g.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
@@ -132,10 +165,10 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
     // X: glifo menor e colado a direita (a zona de TOQUE continua 40 px —
     // alvo generoso, glifo discreto)
     if (hot) {
-        g.fillRoundRect(UI::W - UI::topbarExitW() + UI::sx(3), 1,
+        g.fillRoundRect(UI::W - UI::topbarExitW() - UI::inset + UI::sx(3), 1,
                         UI::topbarExitW() - 2 * UI::sx(3), h - 2, UI::sx(6), THEME_RAISED);
     }
-    int gx = UI::W - UI::sx(13);
+    int gx = UI::W - UI::sx(13) - UI::inset;  // inset: canto arredondado do vidro
     int r = h / 3;       // meia-diagonal do X (menor: era h*2/5)
     int t = h / 9;       // meia-espessura do traco
     if (t < 1) t = 1;
@@ -162,7 +195,7 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
 
     // texto: custom (topbarText) ou nome do app; corta antes do 1o chip
     std::string label = s_tbTextCustom ? s_tbText : (s_appTitle ? s_appTitle : "");
-    int rightLimit = UI::W - UI::topbarExitW();
+    int rightLimit = UI::W - UI::topbarExitW() - UI::inset;
     if (!s_tbButtons.empty()) rightLimit = UI::sx(s_tbButtons.back().x);
     while (!label.empty() &&
            g.textWidth(label.c_str(), kui::type::caption()) > rightLimit - UI::sx(10)) {
@@ -170,7 +203,7 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
     }
     g.setTextDatum(ML_DATUM);
     g.setTextColor(THEME_TEXT);
-    g.drawString(label.c_str(), UI::sx(6), h / 2, kui::type::caption());
+    g.drawString(label.c_str(), UI::sx(6) + UI::inset, h / 2, kui::type::caption());
 }
 
 // indice do chip sob o x virtual (ou -1)
@@ -262,7 +295,8 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
         int b = s_tbBtnArmed - 1;
         s_tbBtnArmed = 0;
         s_tbHotBtn = -1;
-        if (b < (int)s_tbButtons.size()) s_tbTaps.push_back(s_tbButtons[b].label);
+        // fila limitada: app que nunca chama topbarPop nao cresce sem fim
+        if (b < (int)s_tbButtons.size() && s_tbTaps.size() < 16) s_tbTaps.push_back(s_tbButtons[b].label);
         return false;
     }
     bool fire = s_exitArmed;
@@ -386,23 +420,6 @@ void JSBindings::present() {
     }
 }
 
-void JSBindings::fatalErrorHandler(void *udata, const char *msg) {
-    (void) udata;
-    celer_log_print("*** FATAL ERROR: ");
-    celer_log_println(msg ? msg : "no message");
-    
-    if (msg && strstr(msg, "alloc")) {
-        celer_log_println("out of memory");
-        if (tftInstance) {
-            tftInstance->fillScreen(TFT_RED);
-            tftInstance->setTextColor(TFT_WHITE, TFT_RED);
-            tftInstance->drawString("OUT OF MEMORY", 10, 10, 4);
-        }
-    }
-    
-    abort();
-}
-
 // =====================================================
 // Topbar custom (API level 6) — texto e chips da faixa
 // =====================================================
@@ -465,7 +482,11 @@ duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
     if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
     const char* str = duk_require_string(ctx, 0);
     int font = duk_get_int_default(ctx, 1, 2);
-    int w = tftInstance->textWidth(str, UI::font(font));
+    // mede no ALVO do desenho (sprite > quadro > display), onde o
+    // setTextSize do app vale — o display cru ignorava o tamanho no S3
+    lgfx::LGFXBase* g = (useSprite && tftSprite) ? (lgfx::LGFXBase*)tftSprite
+                        : s_frame ? (lgfx::LGFXBase*)s_frame : (lgfx::LGFXBase*)tftInstance;
+    int w = g->textWidth(str, CelerFont(UI::font(font)));
     // devolve no espaco virtual 240x320 (inverso do jsx())
     duk_push_int(ctx, (int)((long)w * 240 / tftInstance->width()));
     return 1;
@@ -476,7 +497,9 @@ duk_ret_t JSBindings::js_fontHeight(duk_context *ctx) {
     // as fontes proporcionais nao tem a altura fixa das numericas antigas)
     if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
     int font = duk_get_int_default(ctx, 0, 2);
-    int h = tftInstance->fontHeight(CelerFont(UI::font(font)));
+    lgfx::LGFXBase* g = (useSprite && tftSprite) ? (lgfx::LGFXBase*)tftSprite
+                        : s_frame ? (lgfx::LGFXBase*)s_frame : (lgfx::LGFXBase*)tftInstance;
+    int h = g->fontHeight(CelerFont(UI::font(font)));
     duk_push_int(ctx, (int)(h / appScaleY()));
     return 1;
 }
@@ -536,8 +559,13 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* from = duk_require_string(ctx, 0);
     const char* to = duk_require_string(ctx, 1);
+    // origem E destino: copiar POR CIMA de um arquivo do sistema (ota_url,
+    // PIN...) era tao perigoso quanto ler um
     if (!fsPathAllowed(from)) {
         duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", from);
+    }
+    if (!fsPathAllowed(to)) {
+        duk_error(ctx, DUK_ERR_ERROR, "FS: %s e arquivo do sistema", to);
     }
     duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
     return 1;
@@ -546,12 +574,18 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* from = duk_require_string(ctx, 0);
+    const char* to = duk_require_string(ctx, 1);
     if (!fsTreeAllowed(from)) {
         duk_error(ctx, DUK_ERR_ERROR,
                   "FS: copiar %s requer permissao \"system\"", from);
     }
-    duk_push_boolean(ctx, FileSystem::copyDirectory(from,
-                                                    duk_require_string(ctx, 1)) ? 1 : 0);
+    // destino na raiz /local sobrescreveria os arquivos protegidos (que
+    // moram la): mesma regra de arvore da origem
+    if (!fsTreeAllowed(to)) {
+        duk_error(ctx, DUK_ERR_ERROR,
+                  "FS: copiar para %s requer permissao \"system\"", to);
+    }
+    duk_push_boolean(ctx, FileSystem::copyDirectory(from, to) ? 1 : 0);
     return 1;
 }
 
@@ -621,6 +655,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_topbarFixed = topbarFixed;
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
+    s_appExitPending = false;
+    s_hwTouched = false;
+    s_launchBright = Backlight::get();
+    s_launchAuto = Backlight::isAuto();
+    s_launchIdle = Backlight::idleTimeout();
+    s_launchVol = BoardIO::volumePct();
     celer_log_printf("[TB] init app='%s' fixed=%d\n", s_appTitle ? s_appTitle : "", topbarFixed);
 
     // Estado grafico limpo por app: sprites de um app anterior (que saiu
@@ -854,9 +894,6 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"isBuffered", js_isBuffered, 0},
         {"wifiStatus", js_wifiStatus, 0},
         {"md5", js_md5, 1},
-        {"setPin", js_setPin, 1},
-        {"verifyPin", js_verifyPin, 1},
-        {"pinClear", js_pinClear, 0},
         {"pinState", js_pinState, 0},
         {"rescanApps", js_rescanApps, 0},
         {"setting", js_setting, 2},
@@ -866,11 +903,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"micLevel", js_micLevel, 0},
         {"touchPad", js_touchPad, 0},
         {"lightLevel", js_lightLevel, 0},
-        {"setTimezone", js_setTimezone, 1},
-        {"setManualTime", js_setManualTime, 5},
-        {"set24hFormat", js_set24hFormat, 1},
         {"get24hFormat", js_get24hFormat, 0},
-        {"setNtpEnabled", js_setNtpEnabled, 1},
         {"getNtpEnabled", js_getNtpEnabled, 0},
         {"theme", js_theme, 0},
         {"drawIcon", js_drawIcon, 3},
@@ -910,6 +943,16 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"webAuthInfo", js_webAuthInfo, 0},
         {"webAuthSetPass", js_webAuthSetPass, 1},
         {"deepSleep", js_deepSleep, 2},
+        // PIN do Settings e relogio do sistema: antes qualquer app podia
+        // apagar o PIN (pinClear), testar PINs a vontade (verifyPin) ou
+        // mudar a hora/fuso de todo o aparelho
+        {"setPin", js_setPin, 1},
+        {"verifyPin", js_verifyPin, 1},
+        {"pinClear", js_pinClear, 0},
+        {"setTimezone", js_setTimezone, 1},
+        {"setManualTime", js_setManualTime, 5},
+        {"set24hFormat", js_set24hFormat, 1},
+        {"setNtpEnabled", js_setNtpEnabled, 1},
     };
     if (perm(celer::PERM_SYSTEM)) putFns(ctx, kFnsSysDanger);
 

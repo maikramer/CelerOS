@@ -34,8 +34,14 @@ uint32_t s_glanceAt = 0;
 bool s_blWasOff = false;  // edge do Backlight::isOff()
 int s_lastAodMin = -1;
 bool s_keepAwake = false;
+uint32_t s_keepAwakeUntil = 0;  // keepAwakeFor(ms): expira sozinho
 uint32_t s_glanceMs = 5000;   // 3/5/8 s
 bool s_raiseWake = true;
+
+// Tela presa acesa: flag latched (jogos) OU prazo corrente (keepAwakeFor)
+bool awakeHeld() {
+    return s_keepAwake || (s_keepAwakeUntil != 0 && (int32_t)(millis() - s_keepAwakeUntil) < 0);
+}
 
 bool watchfaceApp() {
     const char* home = Board::profile().homeApp;
@@ -153,16 +159,31 @@ void tick(bool inApp) {
         if (Backlight::isOff() || s_state <= 1) enterGlance(now);
     }
 
+    // Tecla de power do PMU (watch: PEK do AXP2101): curto acorda a tela,
+    // segurar dorme de verdade. Poll ~10 Hz (1 leitura I2C barata).
+    if (bp.pmuKeyPoll != nullptr) {
+        static uint32_t s_pkAt = 0;
+        if (now - s_pkAt >= 100) {
+            s_pkAt = now;
+            int ev = bp.pmuKeyPoll();
+            if (ev == 1) {
+                Backlight::noteActivity();  // acorda/des-dima
+            } else if (ev == 2) {
+                deepSleepNow();
+            }
+        }
+    }
+
     switch (s_state) {
         case 3:
-            if (s_keepAwake) break;  // jogo segurando a tela
+            if (awakeHeld()) break;  // jogo/prazo segurando a tela
             if (idle >= kDimAfterMs) {
                 Backlight::dim(kBrightDim);
                 s_state = 2;
             }
             break;
         case 2:
-            if (s_keepAwake || idle < kDimAfterMs) {
+            if (awakeHeld() || idle < kDimAfterMs) {
                 Backlight::undim();
                 s_state = 3;
             } else if (idle >= kAodAfterMs && inApp && watchfaceApp()) {
@@ -198,6 +219,11 @@ void tick(bool inApp) {
 bool suppressAppFrame() { return s_active && s_state <= 1; }
 
 void keepAwake(bool on) { s_keepAwake = on && s_active; }
+
+void keepAwakeFor(uint32_t ms) {
+    if (!s_active) return;
+    s_keepAwakeUntil = millis() + ms;
+}
 
 void deepSleepNow() {
     const BoardProfile& bp = Board::profile();

@@ -21,6 +21,7 @@
 #include "lgfx/v1/Touch.hpp"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include <stdio.h>
 
 namespace lgfx
 {
@@ -113,9 +114,9 @@ namespace lgfx
       if (!readRegBurst(REG_XY1, xy, 4)) return 0;
 
       // So o ponto 1 (o firmware Rust tambem le apenas ele).
-      tp[0].id   = 0;
-      tp[0].x    = (int16_t)(((xy[0] & 0x0F) << 8) | xy[1]);
-      tp[0].y    = (int16_t)(((xy[2] & 0x0F) << 8) | xy[3]);
+      tp[0].id = 0;
+      tp[0].x = (int16_t)(((xy[0] & 0x0F) << 8) | xy[1]);
+      tp[0].y = (int16_t)(((xy[2] & 0x0F) << 8) | xy[3]);
       tp[0].size = 1;
 
       if (tp[0].x < _cfg.x_min) tp[0].x = _cfg.x_min;

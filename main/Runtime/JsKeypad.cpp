@@ -143,6 +143,7 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     s_kbLastPollMs = millis();
 
     {
+        GfxStateGuard guard(*JSBindings::gfx());  // cor/datum do app intactos
         kui::Canvas c(*tftInstance, JSBindings::gfx());
         s_kb->draw(c);
     }
@@ -179,6 +180,7 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
     s_kbLastPollMs = now;
     s_kb->onTick(dt);
     if (s_kb->consumeDirty()) {
+        GfxStateGuard guard(*JSBindings::gfx());  // cor/datum do app intactos
         kui::Canvas c(*tftInstance, JSBindings::gfx());
         s_kb->draw(c);
     }
@@ -238,6 +240,7 @@ duk_ret_t JSBindings::js_keypadRect(duk_context *ctx) {
 duk_ret_t JSBindings::js_keypadDraw(duk_context *ctx) {
     // App redesenhou a tela: repoe o teclado por cima (mesmo alvo do app)
     if (s_kb && tftInstance) {
+        GfxStateGuard guard(*JSBindings::gfx());  // cor/datum do app intactos
         kui::Canvas c(*tftInstance, JSBindings::gfx());
         s_kb->draw(c);
     }

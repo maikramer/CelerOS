@@ -7,6 +7,7 @@
 #include "../../Display/Theme.h"
 #include "../../UI/Kui.h"
 #include "../../Display/Icon.h"
+#include "../../Display/Backlight.h"
 #include "../../Hardware/BoardIO.h"
 #include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
@@ -429,6 +430,9 @@ std::string CelerKernel::checkSyntax(const char* jsCode) {
 
 void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed,
                          const char* appPkg, uint32_t perms) {
+    // Abrir app acorda a tela (AOD/dim escondiam o app recem-launchado em
+    // launches remotos/autostart: sem toque, o ScreenPower nunca sabia).
+    Backlight::noteActivity();
     if (ctx) {
         duk_destroy_heap(ctx);
         ctx = nullptr;
@@ -504,6 +508,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     BoardIO::ledOff();  // LED e estado do app: nao fica aceso depois que ele sai
     BoardIO::stripsOff();  // idem fitas WS2812
     BoardIO::servosOff();  // servo sem dono nao segura forca (esquenta/gasta bateria)
+    JSBindings::appExitCleanup();  // keepAwake + brilho/volume/tela de app comum
     checkJSError(ctx, rc);
     
     // Destroy heap after app exits to free RAM

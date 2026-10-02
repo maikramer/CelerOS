@@ -46,6 +46,7 @@ import re
 import struct
 import sys
 import time
+import zlib
 from pathlib import Path
 
 try:
@@ -99,15 +100,34 @@ def read_exact(ser, n, timeout):
 
 
 class HostLink:
-    """Cliente do protocolo HostLink sobre a CDC1."""
+    """Cliente do protocolo HostLink sobre a CDC1 ou a UART do CH340.
 
-    def __init__(self, port, timeout=3.0):
-        self.ser = serial.Serial(port, 115200, timeout=timeout, write_timeout=timeout)
+    Dois formatos por sessao (ver main/USBDevice/HostFrame.h):
+      proto 1: [43][cmd][len u16][payload]
+      proto 2: [43][cmd][len u16][crc32 u32][payload]   crc sobre cmd+len+payload
+    O hello() negocia: "CELERCTL2" ativa proto 2 (resposta traz
+    "proto 2|chunk W|win K"); firmware antigo responde "proto 1" e a
+    sessao segue em v1 (sem CRC, stop-and-wait — como sempre funcionou).
+    """
+
+    def __init__(self, port, timeout=3.0, baud=DEFAULT_BAUD):
+        self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
         self.timeout = timeout
         self.push_queue = []  # frames nao-solicitados (logs) que chegaram no meio de um xfer
+        # preenchidos pelo hello() a partir do que o device anuncia
+        self.proto = 1
+        self.max_chunk = CHUNK
+        self.win = 1
 
     def close(self):
         self.ser.close()
+
+    def _frame(self, cmd, payload=b""):
+        if self.proto == 2:
+            head = struct.pack("<BH", cmd, len(payload))
+            crc = zlib.crc32(head + payload) & 0xFFFFFFFF
+            return b"\x43" + head + struct.pack("<I", crc) + payload
+        return bytes([0x43, cmd]) + struct.pack("<H", len(payload)) + payload
 
     def _read_frame(self, expect_cmd=None, timeout=None):
         timeout = timeout or self.timeout
@@ -118,37 +138,84 @@ class HostLink:
                 continue
             head = first + read_exact(self.ser, 3, timeout)
             cmd, length = head[1], struct.unpack("<H", head[2:4])[0]
-            break
-        payload = read_exact(self.ser, length, timeout) if length else b""
-        return cmd, payload
+            if self.proto == 2:
+                crc = struct.unpack("<I", read_exact(self.ser, 4, timeout))[0]
+                payload = read_exact(self.ser, length, timeout) if length else b""
+                want = zlib.crc32(head[1:4] + payload) & 0xFFFFFFFF
+                if crc != want:
+                    continue  # frame corrompido: descarta e caca o proximo magic
+            else:
+                payload = read_exact(self.ser, length, timeout) if length else b""
+            return cmd, payload
 
-    def xfer(self, cmd, payload=b"", timeout=None):
+    # comandos que podem ser reenviados sem efeito colateral (retry do xfer)
+    _IDEMPOTENT = {"HELLO", "INFO", "LS", "STAT", "READ", "MKDIR", "DELETE", "RENAME",
+                   "LOG_ON", "LOG_OFF", "TOUCH", "SCREENSHOT", "COREDUMP"}
+
+    def xfer(self, cmd, payload=b"", timeout=None, retries=None):
         """Envia um comando e retorna (cmd_resposta, payload_resposta).
 
         Frames nao-solicitados (logs do logcat) que chegarem no meio do
         caminho sao guardados em push_queue em vez de confundir a resposta.
+        Comandos idempotentes ganham retry com re-hello (sessao pode ter
+        caido no idle de 8s da UART entre uma chamada e outra).
         """
-        frame = bytes([0x43, cmd]) + struct.pack("<H", len(payload)) + payload
-        self.ser.reset_input_buffer()
-        self.push_queue = []
-        self.ser.write(frame)
-        while True:
-            cmd_r, payload_r = self._read_frame(timeout=timeout)
-            if cmd_r != cmd and cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"]):
-                self.push_queue.append((cmd_r, payload_r))
-                continue
-            break
-        if cmd_r == 0x00 or (payload_r and payload_r[0] == 1):
-            raise CelerError(payload_r[1:].decode("utf-8", "replace") or "erro no dispositivo")
-        return cmd_r, payload_r
+        name = next((k for k, v in KL.items() if v == cmd and not k.endswith("_DATA")
+                     and k != "EXEC_CONT"), None)
+        if retries is None:
+            retries = 1 if name in self._IDEMPOTENT else 0
+        last_err = None
+        for attempt in range(retries + 1):
+            if attempt > 0:
+                time.sleep(0.2)
+                try:
+                    self.hello(force_v1=self.proto == 1)
+                except (CelerError, serial.SerialException):
+                    continue
+            frame = self._frame(cmd, payload)
+            try:
+                self.ser.reset_input_buffer()
+                self.push_queue = []
+                self.ser.write(frame)
+                cmd_r, payload_r = self._read_frame(timeout=timeout)
+                while cmd_r != cmd and cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                    self.push_queue.append((cmd_r, payload_r))
+                    cmd_r, payload_r = self._read_frame(timeout=timeout)
+                if cmd_r == 0x00 or (payload_r and payload_r[0] == 1):
+                    raise CelerError(payload_r[1:].decode("utf-8", "replace") or
+                                     "erro no dispositivo")
+                return cmd_r, payload_r
+            except CelerError as e:
+                last_err = e
+                if "timeout" not in str(e):
+                    raise
+        raise last_err if last_err else CelerError("timeout lendo do dispositivo")
 
     # ---------------------------------------------------------------- comandos
 
-    def hello(self):
-        cmd, payload = self.xfer(KL["HELLO"], b"CELERCTL1", timeout=1.0)
+    def hello(self, force_v1=False):
+        magic = b"CELERCTL1" if force_v1 else b"CELERCTL2"
+        cmd, payload = self.xfer(KL["HELLO"], magic, timeout=1.0, retries=0)
         if cmd != KL["HELLO"]:
             raise CelerError("resposta inesperada ao HELLO")
-        return payload[1:].decode("utf-8", "replace")
+        ident = payload[1:].decode("utf-8", "replace")
+        self.proto = 1
+        self.max_chunk = CHUNK
+        self.win = 1
+        for field in ident.split("|"):
+            key, _, value = field.partition(" ")
+            if key == "proto" and value == "2":
+                self.proto = 2
+            elif key == "chunk":
+                self.max_chunk = max(64, min(int(value), 0xFFFF))
+            elif key == "win":
+                self.win = max(1, min(int(value), 64))
+        return ident
+
+    def keepalive(self):
+        """HELLO no formato da sessao vigente (dev loop)."""
+        self.xfer(KL["HELLO"], b"CELERCTL1" if self.proto == 1 else b"CELERCTL2",
+                  timeout=1.0, retries=0)
 
     def info(self):
         _, payload = self.xfer(KL["INFO"])

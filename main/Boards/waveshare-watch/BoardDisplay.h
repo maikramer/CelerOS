@@ -100,6 +100,10 @@ public:
         }
         {
             auto cfg = _touch.config();
+            // Bounds = painel (identidade): medido com toques SUSTENTADOS
+            // topo/meio/fundo (driver grava raw em /local/touch_range.txt)
+            // — o FT3168 entrega x 0..~410, y 0..~500 nativo. Sessoes
+            // anteriores "comprimidas" eram leitura enviesada, nao o chip.
             cfg.x_min = 0;
             cfg.x_max = 411;
             cfg.y_min = 0;
@@ -142,6 +146,11 @@ public:
                 fb->setBus(&_bus);
                 fb->setAutoDisplay(auto_display);
                 setPanel(fb);
+                // BUG DO WRAPPER: o ctor dele chama setTouch() ANTES do
+                // config(412x502) chegar — a afina do touch fica calculada
+                // para um painel default (~240) e o touch sai comprimido
+                // (raw*240/412). Recalibra DEPOIS, com o cfg ja certo.
+                fb->setTouch(&_touch);
                 return true;
             }
         }

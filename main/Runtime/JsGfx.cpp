@@ -352,7 +352,8 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
-    gfx()->setTextDatum(TL_DATUM);
+    // datum = o do System.setTextDatum (API 12; TL por padrao, resetado a
+    // cada app). Antes era forcado TL aqui e o setTextDatum nao fazia nada.
     gfx()->drawString(str, jsx(x), jsy(y), CelerFont(UI::font(font)));
     return 0;
 }

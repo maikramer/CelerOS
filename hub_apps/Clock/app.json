@@ -7,5 +7,5 @@
   "type": "App",
   "category": "Utility",
   "description": "Relogio completo: hora com segundos, fuso, horas do mundo, cronometro, timer e alarme que dispara pelo sistema (vale ate com o app fechado).",
-  "changelog": "1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer\n1.1.0 - migracao da era KryonOS"
+  "changelog": "1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer"
 }

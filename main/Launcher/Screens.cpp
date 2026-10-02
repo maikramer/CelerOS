@@ -85,8 +85,8 @@ void LauncherScreen::drawStatusBar(kui::Canvas& c) {
     int hdr = gridHeaderH();
     c.fillGradient({0, 0, UI::W, hdr}, 0, THEME_CARD, THEME_BG);
 
-    // relogio + data (esquerda)
-    int x = UI::sx(14);
+    // relogio + data (esquerda; inset = cantos arredondados do vidro)
+    int x = UI::sx(14) + UI::inset;
     std::string date = shortDate();
     if (date.empty()) {
         c.text(TimeManager::getFormattedTime(), x, hdr / 2, kui::type::display(), THEME_TEXT, ML_DATUM);
@@ -99,7 +99,7 @@ void LauncherScreen::drawStatusBar(kui::Canvas& c) {
     bool wifi = WebManager::isActive();
     kui::Rect st = wifiStatusRect();
     if (kui::isPressed(st)) c.fillRoundRect({st.x + UI::sx(4), UI::sy(8), st.w - UI::sx(8), hdr - UI::sy(16)}, UI::sx(8), THEME_RAISED);
-    int gx = UI::W - UI::sx(26);
+    int gx = UI::W - UI::sx(26) - UI::inset;
     drawWifiGlyph(c, gx, hdr / 2 + UI::sx(8), wifi);
     if (!wifi && !m_noWifiPref) {
         const lgfx::IFont* f = kui::type::caption();

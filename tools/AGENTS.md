@@ -40,5 +40,5 @@ node tools/app_lint/lint.js "data/apps/Settings"             # linta um app (par
 
 ## ANTI-PATTERNS
 - Replacing icon art by editing `data/icons/` directly. Delete `icons_src/<id>.png` and/or edit `icons.json`, then rerun `make_icons.py`. A hand-made 512px PNG in `icons_src/` is respected.
-- Committing `__pycache__/` (stray `kryonctl` pyc files are leftovers from the old project name).
+- Committing `__pycache__/`.
 - Running `celerctl` while `idf.py monitor` holds the same port.

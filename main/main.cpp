@@ -72,7 +72,7 @@ static void celerSetup() {
     Board::init();
     ScreenCapture::init();  // esta task e a dona do display (capturas passam por ela)
     tft.setRotation(Board::profile().rotation);
-    UI::init(tft.width(), tft.height());
+    UI::init(tft.width(), tft.height(), Board::profile().screenInset);
     ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
 

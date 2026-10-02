@@ -134,30 +134,54 @@ void TimeManager::restoreEpoch() {
 static bool s_alarmArmed = false;
 static int s_alarmH = 0, s_alarmM = 0;
 static std::string s_alarmMsg;
+static time_t s_alarmAt = 0;  // epoch do disparo; 0 = recalcular (hora invalida/fuso novo)
+
+// Proxima ocorrencia local de hh:mm estritamente depois de "agora". O teste
+// antigo (hora atual > hh:mm) disparava NA HORA um alarme de 08:00 ligado
+// as 22:00. mktime normaliza dia 32/DST.
+static time_t nextOccurrence(int hour, int minute) {
+    time_t now;
+    time(&now);
+    struct tm t;
+    localtime_r(&now, &t);
+    t.tm_hour = hour;
+    t.tm_min = minute;
+    t.tm_sec = 0;
+    t.tm_isdst = -1;
+    time_t at = mktime(&t);
+    if (at <= now) {
+        t.tm_mday += 1;
+        t.tm_hour = hour;
+        t.tm_min = minute;
+        t.tm_sec = 0;
+        t.tm_isdst = -1;
+        at = mktime(&t);
+    }
+    return at;
+}
 
 bool TimeManager::setAlarm(int hour, int minute, const std::string& msg) {
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return false;
     s_alarmArmed = true;
     s_alarmH = hour;
     s_alarmM = minute;
-    s_alarmMsg = msg;
+    s_alarmMsg = msg.substr(0, 64);
+    s_alarmAt = isTimeValid() ? nextOccurrence(hour, minute) : 0;
     return true;
 }
 
 void TimeManager::clearAlarm() {
     s_alarmArmed = false;
+    s_alarmAt = 0;
     s_alarmMsg.clear();
 }
 
-std::string TimeManager::getAlarmJson() {
-    if (!s_alarmArmed) return "null";
-    std::string msg = s_alarmMsg;
-    for (char& c : msg)  // aspas/quebra nao tem lugar num string JSON
-        if (c == '"' || c == '\\' || c == '\n') c = ' ';
-    char buf[96];
-    snprintf(buf, sizeof(buf), "{\"armed\":true,\"hour\":%d,\"minute\":%d,\"msg\":\"%s\"}",
-             s_alarmH, s_alarmM, msg.c_str());
-    return std::string(buf);
+bool TimeManager::getAlarm(int& hour, int& minute, std::string& msg) {
+    if (!s_alarmArmed) return false;
+    hour = s_alarmH;
+    minute = s_alarmM;
+    msg = s_alarmMsg;
+    return true;
 }
 
 void TimeManager::tick(bool networkUp) {
@@ -191,19 +215,24 @@ void TimeManager::tick(bool networkUp) {
 
     // Alarme do dia: relogio local passa de hh:mm -> toast e desarma
     if (s_alarmArmed && isTimeValid()) {
+        // hora ficou valida depois do setAlarm (NTP) ou o relogio mudou
+        if (s_alarmAt == 0) s_alarmAt = nextOccurrence(s_alarmH, s_alarmM);
         time_t now3;
         time(&now3);
-        struct tm ti;
-        localtime_r(&now3, &ti);
-        if (ti.tm_hour > s_alarmH || (ti.tm_hour == s_alarmH && ti.tm_min >= s_alarmM)) {
+        if (now3 >= s_alarmAt) {
             s_alarmArmed = false;
+            s_alarmAt = 0;
             std::string msg = s_alarmMsg.empty() ? "Alarme" : s_alarmMsg;
             kui::Navigator::toast("ALARME: " + msg, THEME_WARN, 5000);
         }
     }
 }
 
-void TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {
+bool TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {
+    if (year < 2020 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return false;
+    }
     struct tm t;
     t.tm_year = year - 1900;
     t.tm_mon = month - 1;
@@ -218,15 +247,23 @@ void TimeManager::setManualTime(int year, int month, int day, int hour, int minu
     struct timeval now = { .tv_sec = epoch, .tv_usec = 0 };
     settimeofday(&now, NULL);
     syncExternalRtc("ajuste manual");
+    s_alarmAt = 0;  // "proxima hh:mm" relativa a hora nova
+    return true;
 }
 
-void TimeManager::setTimezone(const std::string& tzOffset) {
+bool TimeManager::setTimezone(const std::string& tzOffset) {
+    if (tzOffset.empty() || tzOffset.size() > 48) return false;
+    for (char c : tzOffset) {
+        if (c == '|' || (unsigned char)c < 0x20 || (unsigned char)c > 0x7E) return false;
+    }
     currentTimezone = tzOffset;
     setenv("TZ", currentTimezone.c_str(), 1);
     tzset();
     savePreferences();
     // A hora gravada no RTC e local: fuso novo = hora local nova.
     if (isTimeValid()) syncExternalRtc("fuso trocado");
+    s_alarmAt = 0;  // hh:mm e local: o epoch do disparo muda com o fuso
+    return true;
 }
 
 void TimeManager::setTimeFormat(bool use24h) {

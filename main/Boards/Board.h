@@ -117,6 +117,13 @@ struct BoardProfile {
     void (*audioCodecSleep)() = nullptr;
     // Ritual pre-deep-sleep da placa (persistir estado, desligar IMU...).
     void (*sleepPrep)() = nullptr;
+    // Tecla de power no PMU (watch: PEK do AXP2101, sem pino INT — poll).
+    // 0 = nada, 1 = toque curto, 2 = segurar.
+    int (*pmuKeyPoll)() = nullptr;
+    // Recorte dos cantos do vidro (px fisicos; 0 = vidro retangular):
+    // afasta relogio/glyphs da barra de status e o X da topbar da zona morta
+    // dos cantos arredondados (watch).
+    int screenInset = 0;
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;

@@ -7,5 +7,5 @@
   "type": "App",
   "category": "Utility",
   "description": "Calculadora de toque no tema do CelerOS: previa ao vivo, historico das ultimas contas e ANS que encadeia no resultado anterior (salvo no aparelho).",
-  "changelog": "1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.1.0 - migracao da era KryonOS\n1.0.0 - original (HarixOS)"
+  "changelog": "1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.0.0 - original"
 }

@@ -7,7 +7,7 @@
   "type": "App",
   "category": "Utility",
   "description": "Painel do aparelho: chip, memoria RAM/PSRAM, armazenamento, rede, bateria e sensores (no watch) com valores ao vivo.",
-  "changelog": "1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem\n1.1.0 - migracao da era KryonOS",
+  "changelog": "1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem",
   "permissions": [
     "fs"
   ]

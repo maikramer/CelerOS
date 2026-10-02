@@ -25,7 +25,13 @@ inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 // kernel identifica a marcacao (ou a string "OS_EXIT" exata, compat com
 // apps que a lancam direto). Antes qualquer erro cujo texto continha
 // "OS_EXIT" fechava o app silenciosamente.
+// Saida pedida e "grudenta": um app com try/catch generico no loop engolia
+// o erro e o X/exit remoto nunca fechava. Com s_appExitPending, todo ponto
+// de espera seguinte (delay/getTouch/keypadPoll) relanca. Zerado no init.
+extern bool s_appExitPending;
+
 [[noreturn]] inline void throwAppExit(duk_context* ctx) {
+    s_appExitPending = true;
     duk_push_error_object(ctx, DUK_ERR_ERROR, "app exit");
     duk_push_boolean(ctx, 1);
     duk_put_prop_string(ctx, -2, "celerExit");
@@ -37,12 +43,34 @@ inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 // pontos de espera do runtime (delay/getTouch/keypadPoll). Reusa a saida
 // limpa do X da topbar — o kernel volta ao launcher normalmente.
 inline void checkRemoteAppExit(duk_context* ctx) {
-    if (LauncherUI::consumeAppExitRequest()) throwAppExit(ctx);
+    if (s_appExitPending || LauncherUI::consumeAppExitRequest()) throwAppExit(ctx);
 }
 
 bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y);
 bool imagePathOk(const char* path);
 void keypadCloseSession();
+
+// Desenho do SISTEMA no alvo do app (faixa, teclado acoplado): salva o
+// estado de texto (cor/datum/tamanho/fonte) e o recorte do app, desenha
+// limpo e restaura na saida do escopo — nada vaza em nenhum sentido.
+struct GfxStateGuard {
+    lgfx::LGFXBase& g;
+    lgfx::TextStyle style;
+    const lgfx::IFont* font;
+    int32_t cx, cy, cw, ch;
+    explicit GfxStateGuard(lgfx::LGFXBase& target) : g(target), style(target.getTextStyle()), font(target.getFont()) {
+        g.getClipRect(&cx, &cy, &cw, &ch);
+        g.clearClipRect();
+        g.setTextSize(1);
+    }
+    ~GfxStateGuard() {
+        g.setTextStyle(style);
+        g.setFont(font);
+        g.setClipRect(cx, cy, cw, ch);
+    }
+    GfxStateGuard(const GfxStateGuard&) = delete;
+    GfxStateGuard& operator=(const GfxStateGuard&) = delete;
+};
 
 inline uint32_t jsc(uint32_t c) {
     // Cores JS sao RGB565. No LovyanGFX o TIPO decide o formato: uint32_t e

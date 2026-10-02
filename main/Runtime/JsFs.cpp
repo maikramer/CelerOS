@@ -20,6 +20,7 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "JsFsJail.h"
+#include <unistd.h>
 
 // =====================================================
 // FileSystem Bindings
@@ -70,6 +71,10 @@ duk_ret_t JSBindings::js_fileExists(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathCanonical(path)) {  // "/local/." etc.: lista vazia (como pasta ausente)
+        duk_push_array(ctx);
+        return 1;
+    }
     std::vector<std::string> files(128);
     int count = FileSystem::listDir(path, files.data(), (int)files.size());
     
@@ -100,12 +105,14 @@ duk_ret_t JSBindings::js_renameFile(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_mkdir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsPathAllowed(path)) fsDeny(ctx, path);  // pasta no nome de arquivo do sistema
     duk_push_boolean(ctx, FileSystem::mkdir(path));
     return 1;
 }
 
 duk_ret_t JSBindings::js_rmdir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
+    if (!fsTreeAllowed(path)) fsDeny(ctx, path);
     duk_push_boolean(ctx, FileSystem::rmdir(path));
     return 1;
 }
@@ -207,10 +214,19 @@ duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
     if (len > 64 * 1024) {
         duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS.writeFile: maximo 64KB");
     }
-    FILE* f = fopen(path, "wb");
+    // /local: escreve ao lado e troca por rename (atomico no LittleFS, como
+    // o writeTextFile) — queda de energia nao deixa o arquivo pela metade.
+    // FAT do SD nao sobrescreve com rename: escrita direta.
+    const bool atomic = strncmp(path, "/local/", 7) == 0;
+    std::string tmp = atomic ? std::string(path) + ".tmp" : std::string(path);
+    FILE* f = fopen(tmp.c_str(), "wb");
     if (f == nullptr) { duk_push_boolean(ctx, 0); return 1; }
     bool ok = fwrite(data, 1, len, f) == len;
     ok = fclose(f) == 0 && ok;
+    if (atomic && (!ok || rename(tmp.c_str(), path) != 0)) {
+        unlink(tmp.c_str());
+        ok = false;
+    }
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }

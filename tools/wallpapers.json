@@ -1,0 +1,14 @@
+[
+  {
+    "id": "watch",
+    "prompt": "abstract smartwatch wallpaper background, vertical portrait, deep dark navy to black gradient with a subtle teal aurora glow in the lower third, faint soft bokeh light particles, smooth continuous gradients, minimalist ambient depth, no text, no logos, no watch hands, no UI elements, no border, clean modern operating system wallpaper style",
+    "output": "wallpaper_watch_src.png",
+    "seed": 201
+  },
+  {
+    "id": "desk4848",
+    "prompt": "abstract desk clock wallpaper background, vertical portrait, warm dark charcoal background with a soft amber to deep violet diagonal gradient glow, gentle light haze from the bottom corner, smooth continuous gradients, minimalist ambient depth, no text, no logos, no clock hands, no UI elements, no border, clean modern operating system wallpaper style",
+    "output": "wallpaper_4848_src.png",
+    "seed": 202
+  }
+]

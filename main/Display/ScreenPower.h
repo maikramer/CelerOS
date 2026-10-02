@@ -27,6 +27,7 @@ void init();               // celerSetup (le config; liga o timeout do Backlight
 void tick(bool inApp);     // celerLoop -> false; present() dos apps -> true
 bool suppressAppFrame();   // present() consulta: true em AOD/off
 void keepAwake(bool on);   // apps de jogo seguram a tela acesa (F4: System)
+void keepAwakeFor(uint32_t ms);  // variante com prazo (expira sozinho)
 
 // Deep sleep de verdade (reboot ao acordar): painel em SLPIN, ritual da
 // placa (sleepPrep), radio fora, wake por EXT1 nos botoes do perfil.

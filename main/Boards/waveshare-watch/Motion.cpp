@@ -140,9 +140,12 @@ void load() {
 }
 
 void motionTask(void*) {
+    ESP_LOGI("celer.imu", "task de movimento no ar (espera FS 3 s)");
     // Espera o boot assentar (FS/NVS): Board::init roda antes do FileSystem.
     vTaskDelay(pdMS_TO_TICKS(3000));
     load();
+    ESP_LOGI("celer.imu", "estado carregado (passos %ld, dia %ld)",
+             (long)s_steps, (long)s_dayKey);
 
     if (!Qmi8658::init()) {
         ESP_LOGE("celer.imu", "servico de movimento sem IMU");

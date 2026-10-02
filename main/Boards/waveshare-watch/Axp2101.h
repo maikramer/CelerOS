@@ -18,16 +18,84 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include <stdint.h>
+#include <stdio.h>
 
 namespace Axp2101 {
 
 static constexpr uint8_t kAddr         = 0x34;
+static constexpr uint8_t REG_IRQ_EN0    = 0x40;  // IRQ enable 0 (PEK aqui)
+static constexpr uint8_t REG_IRQ_ST0    = 0x48;  // IRQ status 0 (leitura limpa)
+static constexpr uint8_t REG_IRQ_ST1    = 0x49;
+static constexpr uint8_t REG_IRQ_ST2    = 0x4A;
 static constexpr uint8_t REG_DC_ONOFF  = 0x80;  // on/off dos DCDC + DVM
 static constexpr uint8_t REG_DC_VOL0   = 0x82;  // tensao DCDC1
 static constexpr uint8_t REG_LDO_ONOFF = 0x90;  // on/off ALDO1..4
 static constexpr uint8_t REG_LDO_VOL0  = 0x92;  // tensao ALDO1
 static constexpr uint8_t REG_VBAT_H    = 0x34;  // bateria mV, 14 bits (H|L)
 static constexpr uint8_t REG_VBAT_L    = 0x35;
+
+/// Handle do device AXP no bus compartilhado (touch) p/ uso em runtime.
+inline i2c_master_dev_handle_t rtDev() {
+    static i2c_master_dev_handle_t s_dev = nullptr;
+    static bool s_tried = false;
+    if (!s_dev && !s_tried) {
+        s_tried = true;
+        WatchI2c::addDevice(kAddr, &s_dev);
+    }
+    return s_dev;
+}
+
+inline bool rtRd(uint8_t reg, uint8_t* val) {
+    return i2c_master_transmit_receive(rtDev(), &reg, 1, val, 1, 20) == ESP_OK;
+}
+
+inline bool rtWr(uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(rtDev(), buf, 2, 20) == ESP_OK;
+}
+
+/// Habilita as IRQs da tecla de power (PEK) — short/long press. Sem pino INT
+/// no watch: os status viram polling (leitura dos regs JA limpa a flag).
+inline bool initPek() {
+    if (rtDev() == nullptr) return false;
+    uint8_t en = 0;
+    if (!rtRd(REG_IRQ_EN0, &en)) return false;
+    // bits 2|3 = PEK long/short press (AXP2101); deixa os demais como estao
+    return rtWr(REG_IRQ_EN0, en | 0x0C);
+}
+
+/// Poll da tecla: 0=nada, 1=toque curto (<700 ms), 2=segurar. Medido na
+/// bancada: ST0 bit4 (0x10) = borda de DESCIDA (apertou); bit5 (0x20) =
+/// borda de SUBIDA (soltou) — a duracao press->release decide o gesto.
+inline int pollPowerKey() {
+    uint8_t st0 = 0;
+    if (rtDev() == nullptr) return 0;
+    if (!rtRd(REG_IRQ_ST0, &st0)) return 0;
+    if ((st0 & 0x30) == 0) return 0;
+
+    static uint32_t s_pressAt = 0;
+    static bool s_down = false;
+    int ev = 0;
+    if (st0 & 0x10) {  // apertou
+        s_pressAt = esp_log_timestamp();
+        s_down = true;
+    }
+    if (st0 & 0x20) {  // soltou
+        if (s_down) {
+            s_down = false;
+            ev = (esp_log_timestamp() - s_pressAt >= 700) ? 2 : 1;
+        }
+    }
+    if (ev != 0) {
+        FILE* f = fopen("/local/pek.txt", "a");
+        if (f) {
+            fprintf(f, "st0=%02X ev=%d dur=%lu\n", st0, ev,
+                    (unsigned long)(esp_log_timestamp() - s_pressAt));
+            fclose(f);
+        }
+    }
+    return ev;
+}
 
 /// Liga os trilhos do display (DCDC1 + ALDO1 em 3,3 V).
 /// Chamar ANTES do init do painel. Retorna false se o PMU nao responder.

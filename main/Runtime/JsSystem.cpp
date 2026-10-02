@@ -28,6 +28,7 @@
 #include "../Boards/Board.h"
 #include "driver/ledc.h"
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 
 // =====================================================
 // Touch Input
@@ -71,13 +72,16 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
 // System Utilities
 // =====================================================
 
+// Relogio de 64 bits como Number (double: exato ate 2^53): o uint32 do
+// Compat dava a volta — micros() a cada ~71 min e millis() a cada ~49 dias
+// — e "agora - t0" ficava negativo nos apps.
 duk_ret_t JSBindings::js_millis(duk_context *ctx) {
-    duk_push_uint(ctx, millis());
+    duk_push_number(ctx, (duk_double_t)(esp_timer_get_time() / 1000));
     return 1;
 }
 
 duk_ret_t JSBindings::js_micros(duk_context *ctx) {
-    duk_push_uint(ctx, micros());
+    duk_push_number(ctx, (duk_double_t)esp_timer_get_time());
     return 1;
 }
 
@@ -94,7 +98,8 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
         duk_gc(ctx, 0);
         lastGcMs = t0;
     }
-    if (ms > 0 && ms < 30000) { // Safety cap at 30 seconds
+    if (ms > 30000) ms = 30000;  // teto de 30 s (antes delay(60000) nao esperava NADA)
+    if (ms > 0) {
         // fatias de 4s com reset do watchdog (F2): um System.delay(30000)
         // nao pode derrubar o WDT de 15s da main task (app rodando = sem
         // celerLoop; os pontos de espera alimentam o WDT)
@@ -115,14 +120,18 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_delayMicroseconds(duk_context *ctx) {
     int us = duk_require_int(ctx, 0);
+    // espera ocupada (nao cede): teto de 1 s — acima disso use System.delay.
+    // Sem teto, delayMicroseconds(2e9) prendia a CPU ate o WDT reiniciar.
+    if (us > 1000000) us = 1000000;
     if (us > 0) {
+        esp_task_wdt_reset();
         delayMicroseconds(us);
     }
     return 0;
 }
 
 duk_ret_t JSBindings::js_print(duk_context *ctx) {
-    const char *msg = duk_require_string(ctx, 0);
+    const char *msg = duk_safe_to_string(ctx, 0);  // print(5)/print(obj) nao lancam
     celer_log_println(msg);
     return 0;
 }
@@ -202,7 +211,7 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "flashSize");
 
     // Uptime e identidade
-    duk_push_uint(ctx, (uint32_t)sys.getUptimeMillis());
+    duk_push_number(ctx, (duk_double_t)sys.getUptimeMillis());  // sem volta aos 49 dias
     duk_put_prop_string(ctx, -2, "uptimeMs");
 
     duk_push_string(ctx, sys.getMacAddress().c_str());
@@ -240,8 +249,14 @@ duk_ret_t JSBindings::js_getWeekday(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_keepAwake(duk_context *ctx) {
     // Jogos/apps que seguram a tela acesa (maquina de estados do ScreenPower
-    // pula os estagios dim/AOD enquanto true). Sem estados de tela: no-op.
-    ScreenPower::keepAwake(duk_require_boolean(ctx, 0) != 0);
+    // pula os estagios dim/AOD). Duas formas: booleano (latched, solta com
+    // false) ou duracao em ms (expira sozinho — o Touch Test usa 300000).
+    // Sem estados de tela na placa: no-op.
+    if (duk_is_number(ctx, 0)) {
+        ScreenPower::keepAwakeFor((uint32_t)duk_require_uint(ctx, 0));
+    } else {
+        ScreenPower::keepAwake(duk_require_boolean(ctx, 0) != 0);
+    }
     return 0;
 }
 
@@ -299,9 +314,21 @@ duk_ret_t JSBindings::js_isWiFiActive(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_setting(duk_context *ctx) {
     // System.setting(k) -> "1" | null; System.setting(k, v) -> bool
+    // Leitura aberta; ESCRITA so "system": as keys sao globais do aparelho
+    // (web_on liga o servidor web no boot, nowifi desliga o radio...)
     const char* key = duk_require_string(ctx, 0);
+    if (strlen(key) == 0 || strlen(key) > 15) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "System.setting: chave deve ter 1 a 15 caracteres");
+    }
     if (duk_is_string(ctx, 1)) {
-        duk_push_boolean(ctx, CelerSettings::set(key, duk_get_string(ctx, 1)) ? 1 : 0);
+        if (!perm(celer::PERM_SYSTEM)) {
+            duk_error(ctx, DUK_ERR_ERROR, "System.setting(k, v) requer permissao \"system\" (use Storage)");
+        }
+        const char* val = duk_get_string(ctx, 1);
+        if (strlen(val) > 63) {  // CelerSettings::get le ate 63: maior virava "ausente"
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "System.setting: valor acima de 63 caracteres");
+        }
+        duk_push_boolean(ctx, CelerSettings::set(key, val) ? 1 : 0);
         return 1;
     }
     std::string v = CelerSettings::get(key);

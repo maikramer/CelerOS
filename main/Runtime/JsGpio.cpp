@@ -20,6 +20,7 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "../Hardware/BoardIO.h"
+#include "esp_task_wdt.h"
 
 // =====================================================
 // GPIO Bindings
@@ -64,9 +65,15 @@ duk_ret_t JSBindings::js_pulseIn(duk_context *ctx) {
     int pin = duk_require_int(ctx, 0);
     int state = duk_require_int(ctx, 1);
     unsigned long timeout = 1000000L; // default 1 second timeout
-    if (duk_get_top(ctx) >= 3) {
+    // lightfunc: arg omitido chega como undefined (duk_get_top e sempre 3 —
+    // pulseIn(pin, state) lancava TypeError)
+    if (!duk_is_null_or_undefined(ctx, 2)) {
         timeout = duk_require_uint(ctx, 2);
     }
+    // espera ocupada sem ceder: teto de 1 s (um timeout enorme prendia a CPU
+    // ate o watchdog reiniciar o aparelho)
+    if (timeout > 1000000UL) timeout = 1000000UL;
+    esp_task_wdt_reset();
 
     unsigned long duration = pulseIn(pin, state, timeout);
     duk_push_uint(ctx, duration);

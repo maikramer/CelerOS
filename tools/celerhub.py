@@ -14,7 +14,7 @@ Exemplos:
   source ../CelerOS-Server/env/env.sh
   python3 tools/celerhub.py publish data/apps/Terminal hub_apps/2048
   python3 tools/celerhub.py list
-  python3 tools/celerhub.py delete com.kryonos.minhaapp --yes
+  python3 tools/celerhub.py delete celeros.minhaapp --yes
 """
 
 import argparse
@@ -74,7 +74,7 @@ def http(method, url, token=None, data=None, headers=None, timeout=30):
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     # Cloudflare na frente do hub bloqueia o UA default do urllib (erro 1010)
-    req.add_header("User-Agent", "celeroshub-cli/1.0 (kryonos tools)")
+    req.add_header("User-Agent", "celeroshub-cli/1.0 (celeros tools)")
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     try:

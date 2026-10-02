@@ -97,5 +97,4 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated).
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. The web UI `/update` also accepts uploads.
-- Formerly KryonOS: leftover `kryonctl` pyc files and old author strings remain.
 - `test/README`, `include/`, `lib/` are stale PlatformIO leftovers.

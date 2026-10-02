@@ -1,5 +1,5 @@
-#ifndef KRYON_BOARDS_CYD_TRAITS_H
-#define KRYON_BOARDS_CYD_TRAITS_H
+#ifndef CELEROS_BOARDS_CYD_TRAITS_H
+#define CELEROS_BOARDS_CYD_TRAITS_H
 
 // Traços de compilacao da CYD (240x320). Constantes constexpr: o codigo comum
 // escolhe por elas com ramos que o compilador descarta — as fontes da tela
@@ -8,4 +8,4 @@ namespace BoardTraits {
 constexpr bool largeUi = false;
 }
 
-#endif  // KRYON_BOARDS_CYD_TRAITS_H
+#endif  // CELEROS_BOARDS_CYD_TRAITS_H

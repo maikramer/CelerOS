@@ -32,8 +32,20 @@
 // System nivel 3 — suporte aos apps de sistema em JS (W8)
 // =====================================================
 
+// Brilho/volume/auto/tempo de tela sao config GLOBAL: so app "system"
+// (Settings) grava na NVS. Os demais mudam ao vivo e o appExitCleanup
+// devolve o valor do lancamento — antes um fade de brilho gravava a NVS a
+// cada frame e o nivel do jogo virava o do aparelho.
+extern bool s_hwTouched;
+static bool hwPersist() {
+    const bool sys = perm(celer::PERM_SYSTEM);
+    if (!sys) s_hwTouched = true;
+    return sys;
+}
+
 duk_ret_t JSBindings::js_setBrightness(duk_context *ctx) {
-    Backlight::set(duk_require_int(ctx, 0));
+    int v = duk_require_int(ctx, 0);
+    Backlight::set(v, hwPersist());
     return 0;
 }
 
@@ -45,7 +57,8 @@ duk_ret_t JSBindings::js_getBrightness(duk_context *ctx) {
 // Volume do audio (API 13): I2S escala digital + registrador do codec
 // (ES8311 do watch); buzzer LEDC e ganho fixo (so persiste o valor).
 duk_ret_t JSBindings::js_setVolume(duk_context *ctx) {
-    BoardIO::setVolumePct(duk_require_int(ctx, 0));
+    int v = duk_require_int(ctx, 0);
+    BoardIO::setVolumePct(v, hwPersist());
     return 0;
 }
 
@@ -57,7 +70,7 @@ duk_ret_t JSBindings::js_getVolume(duk_context *ctx) {
 // System.setAutoBrightness(bool) -> bool (false sem sensor de luz)
 duk_ret_t JSBindings::js_setAutoBrightness(duk_context *ctx) {
     bool on = duk_to_boolean(ctx, 0);
-    Backlight::setAuto(on);
+    Backlight::setAuto(on, hwPersist());
     duk_push_boolean(ctx, Backlight::isAuto() == on ? 1 : 0);
     return 1;
 }
@@ -119,10 +132,11 @@ duk_ret_t JSBindings::js_isBuffered(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_exitApp(duk_context *ctx) {
-    // Mesmo protocolo do canto superior direito: erro "OS_EXIT" e
-    // interceptado como saida limpa pelo CelerKernel.
-    duk_error(ctx, DUK_ERR_ERROR, "OS_EXIT");
-    return 0;  // unreachable
+    // Mesmo protocolo do X da topbar: erro MARCADO (celerExit). O antigo
+    // duk_error("OS_EXIT") criava um Error sem a marca — o kernel so aceita
+    // o marcado ou a string crua "OS_EXIT", entao exitApp caia na tela de
+    // "Erro no app".
+    throwAppExit(ctx);
 }
 
 duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {
@@ -166,9 +180,31 @@ duk_ret_t JSBindings::js_setPin(duk_context *ctx) {
     return 1;
 }
 
+// Forca bruta: o PIN tem 4-6 digitos (10^4 tentativas no pior caso). Depois
+// de 5 erros seguidos, cada tentativa espera um castigo que dobra (30s, 60s,
+// ... ate 15 min) — antes um loop JS testava todos em segundos. Estado em
+// RAM (reboot zera, mas reboot custa ~3s por rodada de 5).
+static uint8_t s_pinFails = 0;
+static uint32_t s_pinLockUntil = 0;
+
 duk_ret_t JSBindings::js_verifyPin(duk_context *ctx) {
     const char* pin = duk_require_string(ctx, 0);
-    duk_push_boolean(ctx, PinStore::verify(pin) ? 1 : 0);
+    if (s_pinLockUntil != 0 && (int32_t)(millis() - s_pinLockUntil) < 0) {
+        duk_push_boolean(ctx, 0);  // bloqueado: nem confere
+        return 1;
+    }
+    bool ok = PinStore::verify(pin);
+    if (ok) {
+        s_pinFails = 0;
+        s_pinLockUntil = 0;
+    } else if (++s_pinFails >= 5) {
+        uint32_t shift = s_pinFails - 5;
+        uint32_t penalty = 30000u << (shift > 5 ? 5 : shift);
+        if (penalty > 900000u) penalty = 900000u;
+        s_pinLockUntil = millis() + penalty;
+        if (s_pinLockUntil == 0) s_pinLockUntil = 1;
+    }
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -275,7 +311,14 @@ static void otaProgressTrampoline(int percent) {
         duk_pcall(s_otaCtx, 1);
     }
     duk_pop_2(s_otaCtx);
-    JSBindings::present();
+    // present() roda os timers e o erro de um callback PROPAGA (longjmp):
+    // aqui ele atravessaria o performUpdate no meio do flash (handle de OTA
+    // e cliente HTTP abertos). Protegido: erro de timer e descartado.
+    duk_safe_call(s_otaCtx, [](duk_context*, void*) -> duk_ret_t {
+        JSBindings::present();
+        return 0;
+    }, nullptr, 0, 1);
+    duk_pop(s_otaCtx);
 }
 
 duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
@@ -312,15 +355,18 @@ duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_setTimezone(duk_context *ctx) {
-    TimeManager::setTimezone(duk_require_string(ctx, 0));
-    return 0;
+    // TZ POSIX ("<-03>3", "UTC-5"...): o config_time.txt separa campos por
+    // '|' — um fuso com '|' ou quebra de linha corrompia a leitura no boot
+    duk_push_boolean(ctx, TimeManager::setTimezone(duk_require_string(ctx, 0)) ? 1 : 0);
+    return 1;
 }
 
 duk_ret_t JSBindings::js_setManualTime(duk_context *ctx) {
-    TimeManager::setManualTime(duk_require_int(ctx, 0), duk_require_int(ctx, 1),
-                               duk_require_int(ctx, 2), duk_require_int(ctx, 3),
-                               duk_require_int(ctx, 4));
-    return 0;
+    // false = campo fora da faixa (antes o mktime "normalizava" lixo)
+    duk_push_boolean(ctx, TimeManager::setManualTime(duk_require_int(ctx, 0), duk_require_int(ctx, 1),
+                                                     duk_require_int(ctx, 2), duk_require_int(ctx, 3),
+                                                     duk_require_int(ctx, 4)) ? 1 : 0);
+    return 1;
 }
 
 duk_ret_t JSBindings::js_set24hFormat(duk_context *ctx) {
@@ -406,7 +452,7 @@ duk_ret_t JSBindings::js_wifiDisconnect(duk_context *ctx) {
 // depois de apagado so acorda (e e consumido).
 duk_ret_t JSBindings::js_setScreenTimeout(duk_context *ctx) {
     uint32_t ms = duk_require_uint(ctx, 0);
-    Backlight::setIdleTimeout(ms);
+    Backlight::setIdleTimeout(ms, hwPersist());
     return 0;
 }
 
@@ -451,10 +497,20 @@ duk_ret_t JSBindings::js_clearAlarm(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_getAlarm(duk_context *ctx) {
-    std::string j = TimeManager::getAlarmJson();
-    if (j == "null") { duk_push_null(ctx); return 1; }
-    duk_push_string(ctx, j.c_str());
-    duk_json_decode(ctx, -1);  // decodifica no lugar: objeto fica no topo
+    // Objeto montado direto: o JSON de buffer fixo (96 B) cortava mensagens
+    // longas no meio e o duk_json_decode lancava SyntaxError
+    int h = 0, m = 0;
+    std::string msg;
+    if (!TimeManager::getAlarm(h, m, msg)) { duk_push_null(ctx); return 1; }
+    duk_push_object(ctx);
+    duk_push_boolean(ctx, 1);
+    duk_put_prop_string(ctx, -2, "armed");
+    duk_push_int(ctx, h);
+    duk_put_prop_string(ctx, -2, "hour");
+    duk_push_int(ctx, m);
+    duk_put_prop_string(ctx, -2, "minute");
+    duk_push_lstring(ctx, msg.data(), msg.size());
+    duk_put_prop_string(ctx, -2, "msg");
     return 1;
 }
 
