@@ -46,11 +46,13 @@ HostLink::WriteFn s_ctxWriter = nullptr;
 HostLink::BaudFn s_ctxBaud = nullptr;
 
 // Buffer do frame de logcat: chamado de tasks arbitrarias, nao pode ser
-// stack (MAX_PAYLOAD cresce no S3). Serializado pelo proprio sendLogFrame.
+// stack. Serializado pelo proprio sendLogFrame. Linhas de log tem no maximo
+// 256 B (celer_log_vprintf) e o dreno do ring manda blocos de 512: o frame
+// nao precisa do MAX_PAYLOAD (eram 4/8 KB de RAM interna parados para algo
+// que so carrega texto curto); texto maior sai em varios frames.
 SemaphoreHandle_t s_logFrameMutex = nullptr;
-// EXT_RAM_BSS_ATTR: com CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY (watch) os
-// quadros de 8 KB vao para a PSRAM — a RAM interna fica para o WiFi/BLE.
-EXT_RAM_BSS_ATTR uint8_t s_logFrame[8 + 1 + HostLink::MAX_PAYLOAD];
+constexpr size_t kLogChunk = 512;
+uint8_t s_logFrame[8 + 1 + kLogChunk];
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
@@ -787,17 +789,19 @@ void handleCoredump(const uint8_t* payload, uint16_t len) {
                        (uint8_t)(size >> 16), (uint8_t)(size >> 24)};
     respond(KL_COREDUMP, 0, head, sizeof(head));
 
-    static uint8_t buf[HostLink::MAX_PAYLOAD];
+    // Leitura direto no corpo do frame de resposta (como o READ): sem um
+    // buffer estatico de MAX_PAYLOAD so para o coredump
+    const size_t cap = HostLink::MAX_PAYLOAD;  // txData() tem MAX_PAYLOAD apos o status
     size_t off = 0;
     bool sentAll = true;
     while (off < size && linkWriter() != nullptr) {
         size_t rest = size - off;
-        uint16_t chunk = (uint16_t)((rest > sizeof(buf)) ? sizeof(buf) : rest);
-        if (esp_partition_read(part, (addr - part->address) + off, buf, chunk) != ESP_OK) {
+        uint16_t chunk = (uint16_t)((rest > cap) ? cap : rest);
+        if (esp_partition_read(part, (addr - part->address) + off, txData(), chunk) != ESP_OK) {
             sentAll = false;
             break;
         }
-        respond(KL_COREDUMP_DATA, 0, buf, chunk);
+        sendFrame(KL_COREDUMP_DATA, 0, chunk);
         off += chunk;
     }
     if (off < size) sentAll = false;  // leitor desconectou no meio
@@ -897,12 +901,17 @@ bool HostLink::sendLogFrame(const char* line, size_t n) {
     // rota do LogSink: NAO toma o mutex do dispatch — handlers podem
     // logar no meio do proprio dispatch (EXEC/shell) e travariam
     if (s_logFrameMutex != nullptr) xSemaphoreTake(s_logFrameMutex, portMAX_DELAY);
-    if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
-    s_logFrame[8] = 0;  // status OK
-    memcpy(s_logFrame + 9, line, n);
-    size_t total = hostframe::build(s_logFrame, sizeof(s_logFrame), a->m_parser.v2(),
-                                    KL_LOG_DATA, s_logFrame + 8, (uint16_t)(1 + n));
-    bool ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_logFrame, total);
+    bool ok = true;
+    do {
+        const size_t part = n > kLogChunk ? kLogChunk : n;
+        s_logFrame[8] = 0;  // status OK
+        memcpy(s_logFrame + 9, line, part);
+        size_t total = hostframe::build(s_logFrame, sizeof(s_logFrame), a->m_parser.v2(),
+                                        KL_LOG_DATA, s_logFrame + 8, (uint16_t)(1 + part));
+        ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_logFrame, total);
+        line += part;
+        n -= part;
+    } while (ok && n > 0);
     if (s_logFrameMutex != nullptr) xSemaphoreGive(s_logFrameMutex);
     return ok;
 }

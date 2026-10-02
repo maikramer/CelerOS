@@ -100,18 +100,12 @@ bool hasSpeaker() {
 }
 
 namespace {
-// Senoide para o tom I2S: 256 amostras de 16 bits, amplitude ~0.6 (alto e
-// nitido sem estourar). Gerada na primeira chamada.
-int16_t s_sine[256];
-bool s_sineReady = false;
-
-void sineInit() {
-    if (s_sineReady) return;
-    for (int i = 0; i < 256; i++) {
-        s_sine[i] = (int16_t)(sinf(i * 6.2831853f / 256.0f) * 20000.0f);
-    }
-    s_sineReady = true;
-}
+// Tom I2S: senoide de 256 amostras de 16 bits (amplitude ~0.6, alto e nitido
+// sem estourar) + bloco de 512 quadros estereo. Os dois vivem no heap so
+// durante o tom (2,5KB que ficavam estaticos na RAM interna — inclusive nas
+// placas sem I2S); gerar a tabela custa ~256 sinf por tom, nada perto do DMA.
+constexpr int kSineLen = 256;
+constexpr uint32_t kToneBlock = 512;
 
 // Tom via amplificador digital I2S (NS4168 na SmartDisplay: 44,1 kHz sem
 // MCLK; ES8311 do watch: 16 kHz com MCLK 256x e codec no I2C — wake/sleep
@@ -155,27 +149,36 @@ bool toneI2s(int freqHz, int ms) {
         delay(2);  // PA estabiliza antes do primeiro sample
     }
 
-    sineInit();
-    // Fase em Q16.16 sobre a tabela de 256 amostras.
-    const uint32_t step = (uint32_t)(((uint64_t)freqHz << 24) / kSampleRate);
-    const int vol = volumePct();  // escala digital (codec tambem tem reg.)
-    uint32_t phase = 0;
-    static int16_t frames[512][2];  // estereo L/R duplicado (amp mono)
-    const uint32_t framesNeeded = (uint32_t)(((uint64_t)ms * kSampleRate) / 1000);
-    uint32_t sent = 0;
-    while (sent < framesNeeded) {
-        uint32_t n = framesNeeded - sent;
-        if (n > 512) n = 512;
-        for (uint32_t i = 0; i < n; i++) {
-            phase += step;
-            const int16_t s = (int16_t)(((int32_t)s_sine[(phase >> 16) & 0xFF] * vol) / 100);
-            frames[i][0] = s;
-            frames[i][1] = s;
+    // estereo L/R duplicado (amp mono) + tabela, num bloco so
+    int16_t* frames = (int16_t*)malloc(kToneBlock * 2 * sizeof(int16_t) + kSineLen * sizeof(int16_t));
+    if (frames != nullptr) {
+        // tabela ja com o volume aplicado (escala digital; o codec tambem
+        // tem registrador): o laco por amostra fica so com a busca
+        int16_t* sine = frames + kToneBlock * 2;
+        const int vol = volumePct();
+        for (int i = 0; i < kSineLen; i++) {
+            sine[i] = (int16_t)((int32_t)(sinf(i * 6.2831853f / kSineLen) * 20000.0f) * vol / 100);
         }
-        size_t written = 0;
-        i2s_channel_write(tx, frames, n * sizeof(frames[0]), &written, portMAX_DELAY);
-        esp_task_wdt_reset();
-        sent += n;
+        // Fase em Q16.16 sobre a tabela de 256 amostras.
+        const uint32_t step = (uint32_t)(((uint64_t)freqHz << 24) / kSampleRate);
+        uint32_t phase = 0;
+        const uint32_t framesNeeded = (uint32_t)(((uint64_t)ms * kSampleRate) / 1000);
+        uint32_t sent = 0;
+        while (sent < framesNeeded) {
+            uint32_t n = framesNeeded - sent;
+            if (n > kToneBlock) n = kToneBlock;
+            for (uint32_t i = 0; i < n; i++) {
+                phase += step;
+                const int16_t s = sine[(phase >> 16) & 0xFF];
+                frames[i * 2] = s;
+                frames[i * 2 + 1] = s;
+            }
+            size_t written = 0;
+            i2s_channel_write(tx, frames, n * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+            esp_task_wdt_reset();
+            sent += n;
+        }
+        free(frames);
     }
     if (bp.audioPaPin >= 0) digitalWrite(bp.audioPaPin, LOW);
     if (hasCodec) bp.audioCodecSleep();

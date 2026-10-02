@@ -54,9 +54,7 @@ void saveScreenshot() {
     int rowBytes = w * 3;
     int pad = (4 - (rowBytes % 4)) % 4;
 
-    static uint16_t row565[520];       // linha RGB565 (larguras atuais < 520)
-    static uint8_t row888[520 * 3 + 4];
-    static uint8_t zero4[4] = {0, 0, 0, 0};
+    static const uint8_t zero4[4] = {0, 0, 0, 0};
 
     long n = atol(CelerSettings::get("shot_n", "0").c_str()) + 1;
     char sd[40], local[32];
@@ -64,8 +62,14 @@ void saveScreenshot() {
     snprintf(local, sizeof(local), "/local/shot%03ld.bmp", ((n - 1) % 3) + 1);
     const char* path = sdAvailable() ? sd : local;
 
-    FILE* f = fopen(path, "wb");
+    // Linhas no heap so durante a captura (eram 2,6KB estaticos de RAM
+    // interna parados para um gesto raro)
+    uint16_t* row565 = (uint16_t*)malloc((size_t)w * sizeof(uint16_t));
+    uint8_t* row888 = (uint8_t*)malloc((size_t)rowBytes);
+    FILE* f = (row565 && row888) ? fopen(path, "wb") : nullptr;
     if (!f) {
+        free(row565);
+        free(row888);
         kui::Navigator::toast("Screenshot: sem onde gravar", THEME_WARN, 2500);
         return;
     }
@@ -82,8 +86,12 @@ void saveScreenshot() {
     put32(&hdr[34], (uint32_t)(rowBytes + pad) * h);
     fwrite(hdr, 1, 54, f);
 
+    bool ok = true;
     for (int y = h - 1; y >= 0; --y) {
-        if (ScreenCapture::readRows((uint16_t)y, 1, row565) != 1) { fclose(f); return; }
+        if (ScreenCapture::readRows((uint16_t)y, 1, row565) != 1) {
+            ok = false;
+            break;
+        }
         for (int x = 0; x < w; ++x) {
             uint16_t p = row565[x];
             row888[x * 3 + 0] = (uint8_t)(((p >> 11) & 0x1F) * 255 / 31);  // B (bottom-up + BGR)
@@ -94,6 +102,9 @@ void saveScreenshot() {
         if (pad) fwrite(zero4, 1, pad, f);
     }
     fclose(f);
+    free(row565);
+    free(row888);
+    if (!ok) return;  // captura incompleta: numeracao nao avanca
 
     char v[16];
     snprintf(v, sizeof(v), "%ld", n);
