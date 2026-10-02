@@ -58,7 +58,16 @@ inline int appSh(int v) {
 inline float appScaleY() {
     return (float)(s_topbarFixed ? (UI::H - UI::topbarH()) : UI::H) / 320.0f;
 }
-inline int jsu(int v) { return (UI::sx(v) + appSh(v)) / 2; }  // uniforme (raios)
+// Raio "uniforme": MINIMO das duas escalas. O circulo desenhado no vidro tem
+// um unico raio fisico, mas o app raciocina num bbox virtual (cx±r, cy±r) —
+// com o minimo ele fica CONTIDO nesse bbox nos dois eixos. A media antiga
+// estourava o eixo menor em escala nao-inteira (4848: sx 2 / sy 1,5 → r4
+// virava 7 fisicos e passava 1px da celula), e apps que apagam circulo com
+// fillRect do retangulo virtual deixavam a ultima linha viva (artefato).
+inline int jsu(int v) {
+    int a = UI::sx(v), b = appSh(v);
+    return a < b ? a : b;
+}
 inline int jsH(int v) { return appSh(v); }
 inline int jsy(int v) { return JSBindings::mapY(v); }
 

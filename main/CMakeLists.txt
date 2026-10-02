@@ -73,7 +73,7 @@ endif()
 # e o diretorio da placa entra no include path (BoardDisplay.h resolve para
 # a placa certa). Nenhum outro arquivo pode conter #ifdef de placa.
 if(NOT CELEROS_BOARD)
-    set(CELEROS_BOARD "smartdisplay" CACHE STRING "CelerOS target board: smartdisplay|cyd")
+    set(CELEROS_BOARD "smartdisplay" CACHE STRING "CelerOS target board")
 endif()
 if(CELEROS_BOARD STREQUAL "smartdisplay")
     set(CELEROS_BOARD_DIR Boards/smartdisplay)
@@ -173,7 +173,7 @@ foreach(page ${CELEROS_WEB_PAGES})
 endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    CELEROS_VERSION="1.4.0"
+    CELEROS_VERSION="1.4.1"
     CELEROS_API_LEVEL=13
 )
 
