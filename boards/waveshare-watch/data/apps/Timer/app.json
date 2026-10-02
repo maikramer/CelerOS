@@ -1,0 +1,14 @@
+{
+  "name": "Timer",
+  "packageName": "celeros.timer",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Contagem regressiva que roda em segundo plano: atalhos de 1 a 30 minutos, ajuste fino e alarme em tela cheia ao terminar, mesmo com a tela apagada.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 15,
+  "permissions": [],
+  "icon": "cronometro",
+  "order": 2,
+  "changelog": "1.0.0 - primeira versao (agendador do sistema, API 15)"
+}

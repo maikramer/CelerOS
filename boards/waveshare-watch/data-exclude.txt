@@ -1,0 +1,6 @@
+# Apps de data/ que NAO vao para o LittleFS do relogio (tools/flash_data.sh).
+# Um caminho por linha, relativo a data/. Teclado-dependentes ou de bancada.
+apps/Terminal
+apps/HTTP Demo
+apps/Touch Test
+apps/Web Server

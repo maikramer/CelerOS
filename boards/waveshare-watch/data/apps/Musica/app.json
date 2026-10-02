@@ -1,0 +1,13 @@
+{
+  "name": "Música",
+  "packageName": "celeros.musica",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Controle do player do celular pelo Gadgetbridge: faixa e artista, tocar/pausar, anterior/proxima e volume.",
+  "type": "Utility",
+  "category": "Media",
+  "api": 15,
+  "permissions": [],
+  "order": 4,
+  "changelog": "1.0.0 - primeira versao (Phone.music, API 15)"
+}

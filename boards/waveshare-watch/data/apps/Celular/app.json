@@ -1,0 +1,15 @@
+{
+  "name": "Celular",
+  "packageName": "celeros.celular",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Conexao com o celular pelo Gadgetbridge (Android): estado, ligar/desligar, codigo de pareamento, achar celular e esquecer o pareamento.",
+  "type": "System",
+  "category": "System",
+  "api": 15,
+  "system": true,
+  "order": 6,
+  "icon": "remote",
+  "permissions": ["system"],
+  "changelog": "1.0.0 - primeira versao (Phone Link, API 15)"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Clima",
+  "packageName": "celeros.clima",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Tempo atual enviado pelo celular (Gadgetbridge + provedor de clima): temperatura, condicao, umidade e cidade. Funciona sem WiFi.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 15,
+  "permissions": [],
+  "order": 5,
+  "changelog": "1.0.0 - primeira versao (Phone.weather, API 15)"
+}

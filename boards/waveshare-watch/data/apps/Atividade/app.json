@@ -1,0 +1,14 @@
+{
+  "name": "Atividade",
+  "packageName": "celeros.atividade",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Passos do dia contra a meta (Ajustes > Relogio), distancia e calorias estimadas e os ultimos 7 dias em barras.",
+  "type": "Utility",
+  "category": "Health",
+  "api": 15,
+  "permissions": [],
+  "icon": "runner",
+  "order": 3,
+  "changelog": "1.0.0 - primeira versao (Sensors.stepHistory, API 15)"
+}

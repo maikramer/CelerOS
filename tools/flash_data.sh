@@ -42,6 +42,19 @@ if [ -d "$ROOT/boards/$BOARD/data" ]; then
     cp -a "$ROOT/boards/$BOARD/data/." "$STAGE/"
     echo "overlay: boards/$BOARD/data somado"
 fi
+# Exclusao opcional da placa: boards/<placa>/data-exclude.txt (um caminho
+# relativo a data/ por linha; # comenta) sai do stage — ex.: o relogio nao
+# leva Terminal/HTTP Demo.
+EXCL="$ROOT/boards/$BOARD/data-exclude.txt"
+if [ -f "$EXCL" ]; then
+    while IFS= read -r rel || [ -n "$rel" ]; do
+        case "$rel" in ''|'#'*) continue ;; esac
+        case "$rel" in *..*|/*) echo "data-exclude: caminho invalido: $rel"; exit 1 ;; esac
+        if [ ! -e "$STAGE/$rel" ]; then echo "data-exclude: nao existe: $rel"; exit 1; fi
+        rm -rf "${STAGE:?}/$rel"
+        echo "excluido: $rel"
+    done < "$EXCL"
+fi
 
 IMG="$ROOT/build/littlefs-$(date +%s).img"
 "$ROOT/tools/bin/mklittlefs.bin" -c "$STAGE" -s "$SIZE" "$IMG"

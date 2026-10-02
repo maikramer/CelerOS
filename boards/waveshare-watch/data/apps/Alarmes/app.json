@@ -1,0 +1,14 @@
+{
+  "name": "Alarmes",
+  "packageName": "celeros.alarmes",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Ate 8 alarmes com dias da semana e rotulo, guardados no sistema: tocam com a tela apagada, sobrevivem a reboot e acordam o relogio do deep sleep. Sem teclado: hora e minuto por +/-.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 15,
+  "permissions": [],
+  "icon": "clockapp",
+  "order": 1,
+  "changelog": "1.0.0 - primeira versao (agendador do sistema, API 15)"
+}

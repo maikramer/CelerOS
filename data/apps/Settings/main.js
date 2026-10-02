@@ -1,8 +1,5 @@
-// CelerOS Settings — app de sistema (W8). Porte JS do SettingsScreens.cpp:
-// PIN de entrada (nativo: System.setPin/verifyPin), menu, Wi-Fi,
-// Aplicativos, Hora/Fuso, Seguranca (PIN + senha web), Tela (brilho),
-// Atualizacao OTA, Sobre e Reset. Canvas virtual 240x320, tema do OS
-// (System.theme). X no canto sup. direito sai (exit nativo).
+// CelerOS Settings — app de sistema (W8): PIN, Wi-Fi, apps, hora, seguranca,
+// tela, som, relogio, OTA, sobre e reset. Canvas 240x320, tema do OS.
 
 var T = System.theme();
 var INSTALL_SD = "/local/config_install_sd.txt";
@@ -11,7 +8,6 @@ var INSTALL_SD = "/local/config_install_sd.txt";
 
 function ctext(s, cx, cy, f, col, bg) {
     System.setTextColor(col, bg);
-    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
     var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
     System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
 }
@@ -19,8 +15,7 @@ function hit(t, x, y, w, h) {
     return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 function header(title) {
-    // o titulo da tela/sub-tela vive na faixa do sistema (API 6) — o app
-    // ganha a area inteira para o conteudo
+    // titulo na faixa do sistema (API 6)
     if (System.topbarText) System.topbarText(title);
 }
 function trimStr(s) {
@@ -189,7 +184,7 @@ function drawRows() {
 
 function rowsVisible() {
     return tela === "menu" || tela === "tz" || tela === "security" || tela === "about" ||
-        tela === "apps" || tela === "time";
+        tela === "apps" || tela === "time" || tela === "watch";
 }
 function rowAt(t) {
     if (t.y < TOP || t.y >= listBottom) return -1;
@@ -245,6 +240,7 @@ function titleNow() {
     if (tela === "apps") return "Aplicativos";
     if (tela === "reset") return "Reset";
     if (tela === "notif") return "Notificações";
+    if (tela === "watch") return "Relógio";
     return "Settings";
 }
 function rebuildItems() {
@@ -256,6 +252,7 @@ function rebuildItems() {
     else if (tela === "security") setItems(buildSec());
     else if (tela === "about") setItems(buildAbout());
     else if (tela === "notif") setItems(buildNotif());
+    else if (tela === "watch") setItems(buildWatch());
     else setItems([]);
 }
 function go(s) {
@@ -333,7 +330,7 @@ function drawAll() {
 
 function drawContent() {
     if (tela === "menu" || tela === "tz" || tela === "security" ||
-        tela === "about" || tela === "notif") {
+        tela === "about" || tela === "notif" || tela === "watch") {
         drawRows();
     } else if (tela === "wifi") {
         drawWifi();
@@ -360,6 +357,39 @@ function drawContent() {
 }
 
 // ---- menu principal --------------------------------------------------------
+
+// Relogio (API 15)
+function watchSupported() {
+    try { return typeof System.batteryInfo === "function" && !!System.getInfo().hasImu; } catch (e) { return false; }
+}
+var WOPT = [
+    "raise_wake|1|Levantar p/ acordar|1:Sim,0:Não",
+    "raise_sens|1|Sensibilidade|0:Baixa,1:Média,2:Alta",
+    "glance_sec|5|Olhadinha|3:3 s,5:5 s,8:8 s",
+    "aod|1|Sempre ligada|1:Sim,0:Não",
+    "screen_off_min|3|Tela apaga em|1:1 min,2:2 min,3:3 min,5:5 min",
+    "home_idle_s|30|Voltar ao relógio|15:15 s,30:30 s,60:1 min,0:Nunca",
+    "step_goal|8000|Meta de passos|5000:5000,8000:8000,10000:10000,12000:12000",
+    "wifi_sleep_min|10|WiFi dorme após|5:5 min,10:10 min,30:30 min,0:Nunca",
+    "imu_wake|0|Movimento acorda|0:Não,1:Sim"
+];
+function wOpt(i) {
+    var p = WOPT[i].split("|"), v = System.setting(p[0]) || p[1], o = p[3].split(","), k = 0;
+    for (var j = 0; j < o.length; j++) if (o[j].split(":")[0] === v) k = j;
+    return { key: p[0], label: p[2], o: o, k: k };
+}
+function buildWatch() {
+    var a = [];
+    for (var i = 0; i < WOPT.length; i++) {
+        var w = wOpt(i);
+        a.push({ l: w.label, v: w.o[w.k].split(":")[1], a: "w" + i });
+    }
+    return a;
+}
+function watchTap(act) {
+    var w = wOpt(parseInt(act.substring(1), 10));
+    System.setting(w.key, w.o[(w.k + 1) % w.o.length].split(":")[0]);
+}
 
 // Notificacoes (API 12): historico do System.notify
 function notifSupported() {
@@ -408,6 +438,7 @@ function buildMenu() {
     if (typeof Sensors !== "undefined" && Sensors && Sensors.accel) {
         a.push({ l: "Sensores", a: "sensors" });
     }
+    if (watchSupported()) a.push({ l: "Relógio", a: "watch" });
     a.push({ l: "Atualização", a: "ota" });
     a.push({ l: "Sobre", v: "v" + System.getOSVersion(), a: "about" });
     if (notifSupported()) a.push({ l: "Notificações", v: String(notifCount()), a: "notif" });
@@ -996,6 +1027,7 @@ function onTap() {
         else if (a === "ota") go("update");
         else if (a === "about") go("about");
         else if (a === "notif") go("notif");
+        else if (a === "watch") go("watch");
         else if (a === "reset") go("reset");
     } else if (tela === "wifi") {
         if (hit(t, 48, 150, 144, 36)) {
@@ -1018,6 +1050,12 @@ function onTap() {
         }
     } else if (tela === "appdetail") {
         if (hit(t, 48, 246, 144, 32)) askUninstall(selApp);
+    } else if (tela === "watch") {
+        var idxW = rowAt(t);
+        if (idxW < 0) return;
+        watchTap(items[idxW].a);
+        rebuildItems();
+        drawAll();
     } else if (tela === "notif") {
         var idxN = rowAt(t);
         if (idxN < 0) return;
