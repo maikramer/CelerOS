@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_rom_md5.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../Display/Backlight.h"
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
@@ -170,6 +171,13 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     // download sem progress (o loop do app nao roda enquanto isso)
     http.setProgressCallback([ctx, hasProgress, &exitReq](int64_t got, int64_t total) {
         esp_task_wdt_reset();
+        // Chunk recebido e cedida de rede: cada um renova a janela do
+        // exec-timeout (present() so roda UMA vez, no inicio do binding — um
+        // download de app grande passava de 1s e o executor matava a loja com
+        // RangeError "execution timeout" DEPOIS de engolir o mesmo erro nos
+        // callbacks deste duk_pcall; o arquivo chegava inteiro, mas o app
+        // morria no meio da instalacao).
+        CelerKernel::noteAppYield();
         if (!hasProgress || exitReq) return;
         duk_dup(ctx, 2);  // funcao segue no stack (arg 2 da chamada)
         duk_push_number(ctx, (duk_double_t)got);
