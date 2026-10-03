@@ -51,6 +51,12 @@ CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=16
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# Raizes alem da lista Mozilla (main/Assets/Tls/extra_roots.pem): a Cloudflare
+# serve o openrouter.ai com GTS Root R4 CRUZADA pela GlobalSign Root CA de
+# 1998, fora do bundle do IDF — sem ela o handshake das IA cai com UNKNOWN
+# ERROR (bancada 2026-10-03).
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="main/Assets/Tls/extra_roots.pem"
 
 # Tamanho: recursos de rede que o CelerOS nao usa. STA segue com WPA2/WPA3
 # (SAE); o AP do captive portal e aberto ou WPA2. Nenhum codigo usa IPv6.
