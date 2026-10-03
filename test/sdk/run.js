@@ -120,6 +120,21 @@ function check(name, ok, detail) {
 
     var r2 = runAppFolder(path.join(ROOT, 'hub_apps', 'Cronometro'), { render: true, stopAtMs: 600 });
     check('Cronometro roda limpo no emu', r2.err === null, r2.err);
+
+    // --frames: um PNG por marco do relogio do app + diff entre consecutivos
+    // (Watchface redesenha quando o segundo vira — o relogio do harness anda)
+    var r3 = runAppFolder(path.join(ROOT, 'data', 'apps', 'Watchface'),
+                          { render: true, frames: [0, 1100, 2300] });
+    check('Watchface roda limpo com frames', r3.err === null, r3.err);
+    check('frames nos marcos pedidos',
+          r3.frames.length === 3 && r3.frames[0].ms === 0 && r3.frames[2].ms === 2300,
+          JSON.stringify(r3.frames.map(function (f) { return f.ms; })));
+    check('cada frame tem PNG 240x320',
+          r3.frames.every(function (f) { return f.png.length > 100 && f.fb.length === 240 * 320; }));
+    var d01 = 0;
+    for (var i = 0; i < r3.frames[0].fb.length; i++)
+        if (r3.frames[0].fb[i] !== r3.frames[1].fb[i]) d01++;
+    check('diff detecta o relogio andando (frame 0 -> 1100)', d01 > 0, 'pixels=' + d01);
 })();
 
 // resumo

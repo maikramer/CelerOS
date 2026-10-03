@@ -202,13 +202,43 @@ function cmdEmu(args) {
         if (typeof events !== 'function') die(flags.events + ': exporte `events(env)` (use env.__harness.tap/pushTouch)');
     }
 
+    // --frames "0,600,1500": um PNG por marco do relogio do app (0 = estado
+    // inicial) + diff de pixels entre consecutivos — ver a UI andar sem GUI
+    let frames = null;
+    if (flags.frames != null) {
+        frames = String(flags.frames).split(',').map((s) => parseInt(s.trim(), 10));
+        if (frames.some((n) => isNaN(n) || n < 0)) die('--frames: lista de ms nao-negativos, ex. "0,600,1500"');
+    }
+
     try {
-        const r = runAppFolder(dir, { render: true, stopAtMs: flags.ms ? +flags.ms : undefined, events });
+        const r = runAppFolder(dir, { render: true, stopAtMs: flags.ms ? +flags.ms : undefined,
+                                      frames, events });
         fs.mkdirSync(path.dirname(out), { recursive: true });
-        fs.writeFileSync(out, r.renderer.png());
+        if (frames) {
+            let prev = null;
+            for (const f of r.frames) {
+                const fout = path.join(path.dirname(out),
+                                       'tela-' + String(f.ms).padStart(4, '0') + '.png');
+                fs.writeFileSync(fout, f.png);
+                if (prev) {
+                    let diff = 0;
+                    for (let i = 0; i < prev.fb.length; i++) if (prev.fb[i] !== f.fb[i]) diff++;
+                    const pct = diff * 100 / prev.fb.length;
+                    const label = pct >= 0.1 ? pct.toFixed(1) : (diff > 0 ? '<0.1' : '0.0');
+                    console.log('frame ' + f.ms + 'ms: ' + fout + ' (' + label + '% dos pixels mudaram)');
+                } else {
+                    console.log('frame ' + f.ms + 'ms: ' + fout + ' (estado inicial)');
+                }
+                prev = f;
+            }
+        } else {
+            fs.writeFileSync(out, r.renderer.png());
+        }
         printRun(r);
-        console.log('tela: ' + out + ' (240x320' +
-                    (r.renderer.unsupported.size ? '; nao renderizado: ' + Array.from(r.renderer.unsupported).join(', ') : '') + ')');
+        if (!frames) {
+            console.log('tela: ' + out + ' (240x320' +
+                        (r.renderer.unsupported.size ? '; nao renderizado: ' + Array.from(r.renderer.unsupported).join(', ') : '') + ')');
+        }
         process.exit(r.err ? 1 : 0);
     } catch (e) { die(e.message); }
 }
