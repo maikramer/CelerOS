@@ -21,5 +21,9 @@ void celer_log_print(const char* s);
 // Logcat (uso do HostLink)
 void celer_logcat_set(bool on);
 bool celer_logcat_active(void);
+// Dump do ring SEM consumir (KL_LOG_DUMP / logcat --dump repetivel):
+// tamanho em bytes e visita por blocos de ate 512 B
+size_t celer_log_ring_size(void);
+void celer_log_ring_forEach(void (*emit)(const char* chunk, size_t n));
 
 #endif // CELER_LOG_SINK_H

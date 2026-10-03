@@ -125,6 +125,7 @@ constexpr uint8_t KL_SCREENSHOT = 0x17;   // [u8 fmt: 1=RLE] -> u16 w + u16 h + 
 constexpr uint8_t KL_TOUCH = 0x19;        // u8 n + n × {u8 down,u16 x,u16 y,u16 delayMs}
 constexpr uint8_t KL_COREDUMP = 0x1A;     // [u8 flags: 1=nao apagar] -> u32 size, depois chunks KL_COREDUMP_DATA
 constexpr uint8_t KL_LS = 0x03;           // path\0 [u32 cursor] -> [u32 next] u16 n + entradas {isDir,size,mtime,name}
+constexpr uint8_t KL_LOG_DUMP = 0x1D;     // -> u32 total; conteudo do ring em seguida, em frames KL_LOG_DATA
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

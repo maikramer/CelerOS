@@ -147,7 +147,9 @@ duk_ret_t JSBindings::js_delayMicroseconds(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_print(duk_context *ctx) {
     const char *msg = duk_safe_to_string(ctx, 0);  // print(5)/print(obj) nao lancam
-    celer_log_println(msg);
+    // prefixo de origem: separa o print do app dos logs do firmware no
+    // logcat (filtro "celerctl logcat --grep app")
+    celer_log_printf("[app] %s\n", msg);
     return 0;
 }
 

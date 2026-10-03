@@ -105,7 +105,10 @@ LineEditor* s_editor = nullptr;
 HostLink* s_link = nullptr;
 
 // ---- ring de logs + logcat ------------------------------------------------
-constexpr size_t K_LOG_RING = 2048;  // era 8K: 6KB fazem falta no heap da CYD (sem PSRAM); logcat segue funcional (janela menor)
+// Tamanho via Kconfig (CONFIG_CELEROS_LOG_RING): boards sem PSRAM (CYD,
+// devkit) pagam cada KB de DRAM e mantem o minimo; boards com PSRAM sobem
+// nos sdkconfig.defaults da placa (historico completo do boot no --dump).
+constexpr size_t K_LOG_RING = CONFIG_CELEROS_LOG_RING;
 char s_logRing[K_LOG_RING];
 volatile size_t s_logHead = 0;  // posicao de escrita
 volatile size_t s_logTail = 0;  // posicao de leitura
@@ -367,4 +370,36 @@ void celer_logcat_set(bool on) {
 
 bool celer_logcat_active(void) {
     return s_logcat;
+}
+
+size_t celer_log_ring_size(void) {
+    size_t n = 0;
+    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    size_t head = s_logHead, tail = s_logTail;
+    if (head >= tail) {
+        n = head - tail;
+    } else {
+        n = K_LOG_RING - tail + head;  // wrap
+    }
+    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+    return n;
+}
+
+// Copia o conteudo do ring SEM consumir (dump repetivel): chama emit por
+// bloco de ate 512 B segurando o mutex — logs de outras tasks esperam a
+// copia acabar (mesmo custo do drain do LOG_ON, so que nao apaga nada).
+void celer_log_ring_forEach(void (*emit)(const char* chunk, size_t n)) {
+    if (emit == nullptr) return;
+    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    size_t tail = s_logTail;
+    while (tail != s_logHead) {
+        char chunk[512];  // = kLogChunk do HostLink: um frame por bloco
+        size_t n = 0;
+        while (tail != s_logHead && n < sizeof(chunk)) {
+            chunk[n++] = s_logRing[tail];
+            tail = (tail + 1) % K_LOG_RING;
+        }
+        emit(chunk, n);
+    }
+    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
 }

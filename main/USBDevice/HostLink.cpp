@@ -599,6 +599,19 @@ void handleLogOff() {
     respond(KL_LOG_OFF, 0);
 }
 
+// Dump do ring SEM consumir (celerctl logcat --dump): responde o total e
+// emite o historico em frames KL_LOG_DATA logo em seguida — o host le ate
+// fechar o total, sem janela de silencio. O LOG_ON (stream ao vivo) segue
+// drenando como sempre: celerctl antigo nao muda nada, o novo copia antes.
+void handleLogDump() {
+    uint8_t rec[4];
+    le32(rec, (uint32_t)celer_log_ring_size());
+    respond(KL_LOG_DUMP, 0, rec, sizeof(rec));
+    celer_log_ring_forEach([](const char* chunk, size_t n) {
+        HostLink::sendLogFrame(chunk, n);
+    });
+}
+
 // ---------------------------------------------------------------------- OTA
 
 esp_ota_handle_t s_ota = 0;
@@ -839,6 +852,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_SET_BAUD: handleSetBaud(payload, len); break;
         case KL_LOG_ON: handleLogOn(); break;
         case KL_LOG_OFF: handleLogOff(); break;
+        case KL_LOG_DUMP: handleLogDump(); break;
         case KL_OTA_BEGIN: handleOtaBegin(); break;
         case KL_OTA_CHUNK: handleOtaChunk(payload, len); break;
         case KL_OTA_END: handleOtaEnd(payload, len); break;

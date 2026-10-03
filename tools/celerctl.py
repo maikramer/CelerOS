@@ -17,7 +17,7 @@ Comandos:
   push LOCAL REMOTO           envia arquivo para o dispositivo
   pull REMOTO [LOCAL]         baixa arquivo do dispositivo
   reboot                      reinicia a placa
-  logcat [--dump]              logs: stream ao vivo ou absorve o buffer (--dump)
+  logcat [--dump] [--ts] [--grep P]  logs: stream ao vivo ou copia o buffer (--dump)
   ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
@@ -152,7 +152,7 @@ class HostLink:
 
     # comandos que podem ser reenviados sem efeito colateral (retry do xfer)
     _IDEMPOTENT = {"HELLO", "INFO", "LS", "STAT", "READ", "MKDIR", "DELETE", "RENAME",
-                   "LOG_ON", "LOG_OFF", "TOUCH", "SCREENSHOT", "COREDUMP"}
+                   "LOG_ON", "LOG_OFF", "LOG_DUMP", "TOUCH", "SCREENSHOT", "COREDUMP"}
 
     def xfer(self, cmd, payload=b"", timeout=None, retries=None):
         """Envia um comando e retorna (cmd_resposta, payload_resposta).
@@ -834,30 +834,66 @@ def cmd_reboot(args):
 
 def cmd_logcat(args):
     link = open_link(args)
+
+    # saida com filtro/timestamp por linha: os frames trazem chunks do ring
+    # (linhas podem vir picotadas), entao um buffer costura antes do grep
+    out_buf = [""]
+
+    def out(data):
+        out_buf[0] += data.decode("utf-8", "replace")
+        *done, out_buf[0] = out_buf[0].split("\n")
+        for line in done:
+            if args.grep and args.grep.lower() not in line.lower():
+                continue
+            if args.ts:
+                t = time.time()
+                stamp = time.strftime("%H:%M:%S", time.localtime(t))
+                line = f"[{stamp}.{int((t % 1) * 1000):03d}] {line}"
+            sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
     try:
-        link.logcat_on()
         if args.dump:
-            # absorve o ring acumulado: imprime as linhas que chegarem e
-            # encerra apos uma janela sem linha nova (o dispositivo para de
-            # mandar quando o buffer acaba)
-            quiet = args.quiet_ms / 1000.0
-            last = time.monotonic()
-            while time.monotonic() - last < quiet:
+            # firmware atual: KL_LOG_DUMP copia o ring SEM consumir (dump
+            # repetivel) e anuncia o total — le exatamente isso, sem janela
+            # de silencio. Firmware antigo recusa o opcode: cai no fallback
+            # abaixo (LOG_ON, que drena o ring, + janela de silencio)
+            dumped = False
+            if "LOG_DUMP" in KL:
                 try:
-                    cmd, payload = link.read_push_frame(timeout=0.15)
-                except Exception:
-                    continue
-                if cmd == KL["LOG_DATA"]:
-                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
-                    sys.stdout.flush()
-                    last = time.monotonic()
+                    _, payload = link.xfer(KL["LOG_DUMP"], b"", timeout=10.0)
+                    if payload and payload[0] == 0 and len(payload) >= 5:
+                        (total,) = struct.unpack("<I", payload[1:5])
+                        got = 0
+                        while got < total:
+                            cmd, pl = link.read_push_frame(timeout=10.0)
+                            if cmd == KL["LOG_DATA"]:
+                                out(pl[1:])
+                                got += len(pl) - 1
+                        dumped = True
+                except CelerError:
+                    pass  # opcode desconhecido = firmware antigo
+            if not dumped:
+                link.logcat_on()
+                quiet = args.quiet_ms / 1000.0
+                last = time.monotonic()
+                while time.monotonic() - last < quiet:
+                    try:
+                        cmd, payload = link.read_push_frame(timeout=0.15)
+                    except Exception:
+                        continue
+                    if cmd == KL["LOG_DATA"]:
+                        out(payload[1:])
+                        last = time.monotonic()
+            out(b"\n")
             return
-        print("aguardando logs do dispositivo (Ctrl-C para sair; --dump absorve o buffer e sai)", file=sys.stderr)
+        link.logcat_on()
+        print("aguardando logs do dispositivo (Ctrl-C para sair; --dump copia o buffer e sai)",
+              file=sys.stderr)
         while True:
             cmd, payload = link.read_push_frame(timeout=3600.0)
             if cmd == KL["LOG_DATA"]:
-                sys.stdout.write(payload[1:].decode("utf-8", "replace"))
-                sys.stdout.flush()
+                out(payload[1:])
     except KeyboardInterrupt:
         print()
     finally:
@@ -1378,9 +1414,13 @@ def main():
 
     p = sub.add_parser("logcat", help="stream de logs do dispositivo")
     p.add_argument("--dump", action="store_true",
-                   help="absorve o buffer acumulado no dispositivo e sai")
+                   help="copia o buffer acumulado no dispositivo e sai (dump repetivel)")
     p.add_argument("--quiet-ms", type=int, default=800,
-                   help="janela de silencio do --dump em ms (padrao 800)")
+                   help="janela de silencio do --dump em ms (so no firmware antigo)")
+    p.add_argument("--ts", action="store_true",
+                   help="prefixa cada linha com hora do host (HH:MM:SS.mmm)")
+    p.add_argument("--grep", metavar="PADRAO",
+                   help="mostra so as linhas que contem o padrao (ignora caixa)")
     p.set_defaults(func=cmd_logcat)
 
     p = sub.add_parser("ota", help="grava firmware pela conexao (sem esptool)")
