@@ -19,6 +19,8 @@ Comandos:
   reboot                      reinicia a placa
   logcat [--dump] [--ts] [--grep P]  logs: stream ao vivo ou copia o buffer (--dump)
   ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
+  coredump [--out ARQ]        baixa coredump ELF do ultimo crash nativo
+  debug [APP] [--tcp-port N]  debugger Duktape (cliente: node tools/debug/dbg.js)
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
   swipe X0 Y0 X1 Y1 [ms]      injeta um arrasto (scroll/troca de pagina)
@@ -43,6 +45,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import struct
 import sys
 import time
@@ -182,7 +185,7 @@ class HostLink:
                 self.push_queue = []
                 self.ser.write(frame)
                 cmd_r, payload_r = self._read_frame(timeout=timeout)
-                while cmd_r != cmd and cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                while cmd_r != cmd and cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
                     self.push_queue.append((cmd_r, payload_r))
                     cmd_r, payload_r = self._read_frame(timeout=timeout)
                 if cmd_r == 0x00 or (payload_r and payload_r[0] == 1):
@@ -292,7 +295,7 @@ class HostLink:
         # screenshot/coredump)
         while len(out) < out_len:
             cmd, more = self._read_frame(timeout=self.exec_timeout)
-            if cmd in (KL["LOG_DATA"], KL["SCR_DATA"]):
+            if cmd in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
                 self.push_queue.append((cmd, more))
                 continue
             if cmd != KL["EXEC_CONT"]:
@@ -359,7 +362,7 @@ class HostLink:
                 start, n = pendings.pop(seq)
                 applied = start + n
                 last_ack = time.monotonic()
-            elif cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"]):
+            elif cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
                 self.push_queue.append((cmd_r, payload_r))
                 last_ack = time.monotonic()
             elif cmd_r is not None:
@@ -453,7 +456,7 @@ class HostLink:
                     done.add(off)
                     tries = 0
                     last_frame = time.monotonic()
-                elif cmd in (KL["LOG_DATA"], KL["SCR_DATA"]):
+                elif cmd in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
                     self.push_queue.append((cmd, payload))
                     last_frame = time.monotonic()
                 elif cmd is not None:
@@ -936,6 +939,113 @@ def cmd_coredump(args):
     Path(args.out).write_bytes(data)
     print(f"{args.out}: {len(data)} bytes (ELF) — analise com:")
     print(f"  idf.py -B build coredump-info -c {args.out}")
+
+
+def cmd_debug(args):
+    """Debug do Duktape pela serial: arma o attach no proximo app, abre um
+    TCP local que fala o protocolo dmsg cru e faz o proxy bidirecional com
+    frames KL_DEBUG_DATA. Cliente: node tools/debug/dbg.js (REPL) — ou
+    qualquer cliente do Duktape debugger apontando para 127.0.0.1:PORTA.
+
+    Ordem: o cliente conecta ANTES do app rodar — a linha de versao que o
+    target manda no attach so tem para onde ir. O cliente NAO fala primeiro;
+    o DEBUG_CTL 1 depois do accept e o gate do attach no device."""
+    link = open_link(args)
+    if "DEBUG_CTL" not in KL:
+        die("celerctl sem KL_DEBUG_CTL: firmware muito antigo para o debugger")
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", args.tcp_port))
+    srv.listen(1)
+    app = getattr(args, "app", None)
+    print(f"debug: TCP em 127.0.0.1:{args.tcp_port} — conecte o cliente:")
+    port_arg = f" --port {args.tcp_port}" if args.tcp_port != 9092 else ""
+    print(f"  node tools/debug/dbg.js{port_arg}   (o app pausa na 1a linha; `h` = ajuda)")
+    conn, _ = srv.accept()
+    print("debug: cliente conectado" + (f"; abrindo {app}" if app else " (run <app> por sua conta)"))
+    conn.setblocking(False)
+
+    # Armar SO DEPOIS do accept: o canal do device cai para o console apos
+    # 8s sem frames do host, e o accept pode demorar minutos esperando o
+    # cliente — um DEBUG_CTL cedo morre no idle e o run seguinte vira lixo
+    # no console do shell (o frame nem chega ao dispatch)
+    try:
+        _, payload = link.xfer(KL["DEBUG_CTL"], b"\x01", timeout=5.0)
+        if len(payload) < 2 or payload[1] != 1:
+            die("firmware sem o debugger compilado (Kconfig CELEROS_JS_DEBUGGER; "
+                "padrao so nas placas S3)")
+    except CelerError as e:
+        die(f"firmware sem suporte ao debugger ({e})")
+    if app:
+        # sem `exit` antes: sem app rodando o pedido fica pendente e mataria
+        # o app recem-aberto no primeiro delay. Com outro app no ar o run
+        # espera ele sair (a mensagem do device diz)
+        code, out = link.exec(f"run {app}")
+        print(("debug: " if code == 0 else f"debug: run {app} falhou: ") + out.strip())
+    # logs do device no terminal do proxy: o attach e os estados do
+    # debugger aparecem junto com o que o app printa
+    link.logcat_on()
+
+    last_keepalive = time.monotonic()
+    try:
+        while True:
+            # cliente -> device: emoldura os bytes dmsg em KL_DEBUG_DATA
+            try:
+                data = conn.recv(8192)
+                if not data:
+                    print("debug: cliente desconectou")
+                    break
+                for i in range(0, len(data), link.max_chunk):
+                    link.ser.write(link._frame(KL["DEBUG_DATA"], data[i:i + link.max_chunk]))
+            except BlockingIOError:
+                pass
+            # device -> cliente: KL_DEBUG_DATA (payload puro); logs seguem
+            # no terminal para o contexto do que o app esta fazendo
+            try:
+                cmd_, payload = link._read_frame(timeout=0.2)
+                if cmd_ == KL["DEBUG_DATA"]:
+                    conn.sendall(payload)
+                elif cmd_ == KL["LOG_DATA"]:
+                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
+                    sys.stdout.flush()
+            except CelerError:
+                pass
+            while link.push_queue:
+                cmd_, payload = link.push_queue.pop(0)
+                if cmd_ == KL["DEBUG_DATA"]:
+                    conn.sendall(payload)
+                elif cmd_ == KL["LOG_DATA"]:
+                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
+            # canal cai para console apos 8s sem bytes do host. Keepalive
+            # PASSIVO: so escreve o HELLO — o xfer comum daria
+            # reset_input_buffer e limparia a push_queue, APAGANDO frames do
+            # debugger/logs que o loop ainda nao leu (o handshake do attach
+            # sumia inteiro e a sessao parecia morta)
+            if time.monotonic() - last_keepalive > 5.0:
+                last_keepalive = time.monotonic()
+                try:
+                    magic = b"CELERCTL1" if link.proto == 1 else b"CELERCTL2"
+                    link.ser.write(link._frame(KL["HELLO"], magic))
+                except (CelerError, serial.SerialException, OSError):
+                    print("\ndebug: conexao caiu; encerrando")
+                    break
+    except KeyboardInterrupt:
+        print()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        srv.close()
+        # DEBUG_CTL 0 = cliente saiu: o read do transporte no device devolve
+        # 0, o Duktape desattacha e um app pausado no breakpoint volta a rodar
+        try:
+            link.xfer(KL["DEBUG_CTL"], b"\x00", timeout=3.0)
+        except Exception:
+            pass
+        link.close()
+        print("debug: encerrado (flag do debugger desarmada)")
 
 def cmd_screencap(args):
     link = open_link(args)
@@ -1472,6 +1582,12 @@ def main():
     p.add_argument("--keep", action="store_true",
                    help="nao apaga o dump apos baixar (reler depois)")
     p.set_defaults(func=cmd_coredump)
+
+    p = sub.add_parser("debug", help="debugger Duktape do app (breakpoints/step/eval)")
+    p.add_argument("app", nargs="?", help="app a abrir apos o cliente conectar (default: nenhum)")
+    p.add_argument("--tcp-port", type=int, default=9092, dest="tcp_port",
+                   help="porta TCP local do proxy (default 9092; nao confundir com -p serial)")
+    p.set_defaults(func=cmd_debug)
 
     p = sub.add_parser("screencap", help="captura da tela -> PNG")
     p.add_argument("out", nargs="?", default="celer_screencap.png")

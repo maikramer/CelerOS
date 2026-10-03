@@ -11,3 +11,17 @@ extern duk_bool_t celer_exec_timeout_check(void *udata);
 #ifdef __cplusplus
 }
 #endif
+
+/* Debugger do Duktape por placa (Kconfig CELEROS_JS_DEBUGGER): o yaml liga
+ * DUK_USE_DEBUGGER_SUPPORT e o recorte acontece AQUI, onde o sdkconfig da
+ * placa e visivel. Ligado, cada funcao compilada ganha a propriedade
+ * fileName — sem ela o executor nunca ativa breakpoint (o match e por
+ * fileName da funcao) e o Status chega com arquivo undefined. Custo: uma
+ * propriedade por funcao/closure, por isso so nas placas com PSRAM.
+ */
+#include "sdkconfig.h"
+#if defined(CONFIG_CELEROS_JS_DEBUGGER) && CONFIG_CELEROS_JS_DEBUGGER
+#define DUK_USE_FUNC_FILENAME_PROPERTY
+#else
+#undef DUK_USE_DEBUGGER_SUPPORT
+#endif

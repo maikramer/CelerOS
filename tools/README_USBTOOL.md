@@ -94,6 +94,28 @@ keyboard) — and `screencap` reads the real framebuffer. Sample session:
 python3 tools/celerctl.py tap 360 88 && python3 tools/celerctl.py screencap s.png
 ```
 
+### Debugging JS apps (breakpoints, step, eval)
+
+Boards built with `CONFIG_CELEROS_JS_DEBUGGER` (default on the S3 boards;
+off on the CYD, where the OTA slot and RAM are tight) speak the Duktape
+debugger protocol over the same channel (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`).
+`celerctl debug` is a local TCP proxy; `tools/debug/dbg.js` is the client:
+
+```bash
+python3 tools/celerctl.py debug Snake   # terminal 1: proxy, opens the app once the client connects
+node tools/debug/dbg.js                 # terminal 2: REPL
+```
+
+The app pauses on its first line when the debugger attaches (without an app
+name, the running app attaches on its next yield). Commands: `b <line>`,
+`B`, `d <idx>`, `c`/`p`, `s`/`n`/`o` (into/over/out), `l [n]` (source around
+the pause, read from `data/apps`/`hub_apps` or `--src`), `e <expr>`,
+`v <var>`, `set <var> <json>`, `cs`, `lc`, `up`/`down`, `q`. Stdin may be a
+script: every command waits for its reply, and `c`/`s`/`n`/`o` wait for the
+next pause. Closing the client (or the proxy) detaches and the app keeps
+running. The handshake is one-way: the device sends the version line and
+the client must not write anything before it.
+
 ## Speeding up transfers (-b)
 
 The UART channel starts at 115200 baud. With `-b 921600` the tool negotiates the

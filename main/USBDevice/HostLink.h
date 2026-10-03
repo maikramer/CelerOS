@@ -60,6 +60,11 @@ public:
     // arbitrarias; nao passa pelos locks do dispatch (sem deadlock).
     static bool sendLogFrame(const char* line, size_t n);
 
+    // Envia um frame KL_DEBUG_DATA (binario puro, sem byte de status) pelo
+    // canal ativo: a saida do debugger Duktape. Mesma rota thread-safe do
+    // logcat — chamado pela task do app dentro do write callback.
+    static bool sendDebugFrame(const uint8_t* data, size_t n);
+
     // Parametros anunciados no HELLO proto 2.
     uint8_t window() const { return m_window; }
     bool v2() const { return m_parser.v2(); }
@@ -126,6 +131,8 @@ constexpr uint8_t KL_TOUCH = 0x19;        // u8 n + n × {u8 down,u16 x,u16 y,u1
 constexpr uint8_t KL_COREDUMP = 0x1A;     // [u8 flags: 1=nao apagar] -> u32 size, depois chunks KL_COREDUMP_DATA
 constexpr uint8_t KL_LS = 0x03;           // path\0 [u32 cursor] -> [u32 next] u16 n + entradas {isDir,size,mtime,name}
 constexpr uint8_t KL_LOG_DUMP = 0x1D;     // -> u32 total; conteudo do ring em seguida, em frames KL_LOG_DATA
+constexpr uint8_t KL_DEBUG_CTL = 0x1E;    // u8 1=on 0=off -> u8 estado (arma o attach do proximo app)
+constexpr uint8_t KL_DEBUG_DATA = 0x1F;   // payload binario do debugger Duktape (dmsg; sem resposta)
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

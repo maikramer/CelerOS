@@ -2904,6 +2904,7 @@ typedef struct duk_hthread duk_context;
 #undef DUK_USE_CBOR_BUILTIN
 #undef DUK_USE_CBOR_SUPPORT
 #undef DUK_USE_COROUTINE_SUPPORT
+#define DUK_USE_DEBUGGER_SUPPORT
 #undef DUK_USE_ENCODING_BUILTINS
 #undef DUK_USE_ES6_PROXY
 #undef DUK_USE_ES7_EXP_OPERATOR
@@ -2958,7 +2959,6 @@ typedef struct duk_hthread duk_context;
 #undef DUK_USE_DEBUGGER_DUMPHEAP
 #undef DUK_USE_DEBUGGER_INSPECT
 #undef DUK_USE_DEBUGGER_PAUSE_UNCAUGHT
-#undef DUK_USE_DEBUGGER_SUPPORT
 #define DUK_USE_DEBUGGER_THROW_NOTIFY
 #undef DUK_USE_DEBUGGER_TRANSPORT_TORTURE
 #define DUK_USE_DEBUG_BUFSIZE 65536L
@@ -3110,6 +3110,20 @@ extern duk_bool_t celer_exec_timeout_check(void *udata);
 
 #ifdef __cplusplus
 }
+#endif
+
+/* Debugger do Duktape por placa (Kconfig CELEROS_JS_DEBUGGER): o yaml liga
+ * DUK_USE_DEBUGGER_SUPPORT e o recorte acontece AQUI, onde o sdkconfig da
+ * placa e visivel. Ligado, cada funcao compilada ganha a propriedade
+ * fileName — sem ela o executor nunca ativa breakpoint (o match e por
+ * fileName da funcao) e o Status chega com arquivo undefined. Custo: uma
+ * propriedade por funcao/closure, por isso so nas placas com PSRAM.
+ */
+#include "sdkconfig.h"
+#if defined(CONFIG_CELEROS_JS_DEBUGGER) && CONFIG_CELEROS_JS_DEBUGGER
+#define DUK_USE_FUNC_FILENAME_PROPERTY
+#else
+#undef DUK_USE_DEBUGGER_SUPPORT
 #endif
 
 /*

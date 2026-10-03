@@ -1,5 +1,6 @@
 #include "CelerKernel.h"
 #include "../../Boards/Board.h"  // perfil (buttonPin dispensa erro de runtime no headless)
+#include "../../USBDevice/JsDebugger.h"
 #include "../../USBDevice/LogSink.h"
 #include "../../Display/Layout.h"
 #include "../../Runtime/JSBindings.h"
@@ -52,6 +53,13 @@ void CelerKernel::noteAppYield() {
 extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
     (void)udata;
     esp_task_wdt_reset();
+    // Sessao de debug pausada (breakpoint/step): o executor processa as
+    // mensagens do debugger no MESMO interrupt — renovar a janela em vez
+    // de matar o app que o dev esta inspecionando
+    if (JsDebugger::attached(CelerKernel::ctx)) {
+        CelerKernel::noteAppYield();
+        return 0;
+    }
     const uint32_t now = millis();
     if (s_jsTimedOut) return 1;
     if (s_jsSliceStart == 0) {
@@ -652,6 +660,10 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     s_jsSliceStart = 0;
     s_jsTimedOut = false;
 
+    // `debug on` (celerctl debug): attacha ANTES de compilar/executar, com
+    // o heap ainda vazio — breakpoints e o handshake completos do app
+    if (JsDebugger::requested()) JsDebugger::attach(ctx);
+
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
     celer_log_printf("[duk] heap base+API: %u B (livre %u, iram %u)\n",
                      (unsigned)(freeBefore - heap_caps_get_free_size(MALLOC_CAP_8BIT)),
@@ -667,6 +679,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
                          (unsigned)(millis() - t0));
         if (rc != 0) {
             checkJSError(ctx, rc);
+            JsDebugger::detach(ctx);
             duk_destroy_heap(ctx);
             ctx = nullptr;
             return;
@@ -684,7 +697,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     BoardIO::servosOff();  // servo sem dono nao segura forca (esquenta/gasta bateria)
     JSBindings::appExitCleanup();  // keepAwake + brilho/volume/tela de app comum
     checkJSError(ctx, rc);
-    
+    JsDebugger::detach(ctx);
+
     // Destroy heap after app exits to free RAM
     duk_destroy_heap(ctx);
     ctx = nullptr;

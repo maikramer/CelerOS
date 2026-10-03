@@ -1,6 +1,8 @@
 #include "CelerShell.h"
 #include "FileSystem/FileSystem.h"
+#include "JsDebugger.h"
 #include "Launcher/LauncherUI.h"
+#include "Display/Backlight.h"
 #include "Boards/Board.h"
 #include "Display/Theme.h"
 #include "NetworkManager.h"
@@ -80,6 +82,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  run <app>       abre um app (pasta, nome ou pacote)\n"
         "  grant <app>     concede as permissoes declaradas (consentimento headless)\n"
         "  lasterror       ultimo erro de app gravado (/local/lastcrash.txt)\n"
+        "  debug on|off    arma o debugger Duktape (a sessao e do celerctl debug)\n"
         "  exit            encerra o app em execucao\n"
         "  wifi            lista as redes WiFi salvas\n"
         "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
@@ -385,6 +388,10 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     // junta argumentos (nomes com espaco: run App Store)
     std::string target = argv[1];
     for (int i = 2; i < argc; i++) target += std::string(" ") + argv[i];
+    // launch remoto com a tela apagada: o light-sleep do PowerPolicy quase
+    // para o tick do launcher (quem consome o requestLaunch) — acordar a
+    // tela devolve o ritmo e o app abre em segundos, nao em minutos
+    Backlight::noteActivity();
     LauncherUI::requestRescan();  // app recem-instalado entra na lista
     LauncherUI::requestLaunch(target);
     print(ctx, "abrindo %s (volta ao launcher quando o app atual sair)\r\n", target.c_str());
@@ -449,6 +456,27 @@ int cmdGrant(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     }
     print(ctx, "app nao encontrado: %s\r\n", target.c_str());
     return 1;
+}
+
+// Arma/desarma o debugger Duktape do PROXIMO app lancado (a sessao em si e
+// do celerctl debug, que faz o proxy TCP do protocolo dmsg).
+int cmdDebug(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    bool on;
+    if (argc > 1 && strcmp(argv[1], "on") == 0) on = true;
+    else if (argc > 1 && strcmp(argv[1], "off") == 0) on = false;
+    else {
+        print(ctx, "uso: debug on|off (debugger do proximo app; celerctl debug abre a sessao)\r\n");
+        return 1;
+    }
+    JsDebugger::setRequested(on);
+    if (on && !JsDebugger::requested()) {
+        print(ctx, "debugger JS: suporte NAO compilado neste firmware\r\n"
+              "(Kconfig CELEROS_JS_DEBUGGER; padrao so nas placas S3)\r\n");
+        return 1;
+    }
+    print(ctx, "debugger JS %s\r\n", on ? "armado (attacha quando o celerctl debug conectar um cliente)"
+                                         : "desarmado");
+    return 0;
 }
 
 int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
@@ -521,6 +549,7 @@ const ShellCmd kCommands[] = {
     {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},
+    {"debug", cmdDebug},
     {"wifi", cmdWifi},
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},

@@ -50,7 +50,8 @@ DUK_USE_STRTAB_MINSIZE: 256
 DUK_USE_HOBJECT_HASH_PROP_LIMIT: 32
 DUK_USE_CACHE_ACTIVATION: false
 DUK_USE_CACHE_CATCHER: false
-# fileName por funcao compilada (nao-padrao): o erro segue com linha (pc2line)
+# fileName por funcao compilada (nao-padrao): o erro segue com linha (pc2line).
+# Placas com o debugger ligam de volta no celeros_fixup.h (breakpoints)
 DUK_USE_FUNC_FILENAME_PROPERTY: false
 # Indice de array cacheado na string: incompativel com builtins em ROM
 DUK_USE_HSTRING_ARRIDX: false
@@ -64,3 +65,14 @@ DUK_USE_HSTRING_ARRIDX: false
 # abaixo). Custo: um decremento+branch por dispatch de bytecode.
 DUK_USE_INTERRUPT_COUNTER: true
 DUK_USE_EXEC_TIMEOUT_CHECK: celer_exec_timeout_check
+
+# ---- Debugger (2026-10) ----
+# Duktape debugger pelo HostLink (KL_DEBUG_DATA): celerctl debug faz o proxy
+# TCP, tools/debug/dbg.js e o cliente. O handshake e UNILATERAL (o target
+# escreve a linha de versao; o cliente nao manda nada antes) — byte extra
+# do cliente derruba a sessao com Detaching 1. Custo medido: +10.1 KB
+# smartdisplay / +6.7 KB CYD. Ligado AQUI para o codigo existir no
+# duktape.c; o recorte por placa (Kconfig CELEROS_JS_DEBUGGER, so S3 por
+# padrao) e o fileName por funcao que os breakpoints exigem ficam no
+# celeros_fixup.h.
+DUK_USE_DEBUGGER_SUPPORT: true

@@ -56,6 +56,18 @@ config CELEROS_APP_TASK
       padrao; a concorrencia nova (touch/display entre tasks) so existe com
       esta opcao ligada.
 
+config CELEROS_JS_DEBUGGER
+    bool "Debugger Duktape para apps (celerctl debug)"
+    default y if IDF_TARGET_ESP32S3
+    default n
+    help
+      Breakpoints, step, Eval e inspecao de variaveis nos apps JS pelo
+      celerctl debug + tools/debug/dbg.js. Liga DUK_USE_DEBUGGER_SUPPORT e
+      a propriedade fileName por funcao (o match dos breakpoints), via
+      components/duktape/celeros_fixup.h. Custo: ~10 KB de flash e uma
+      propriedade por funcao do app — ligado por padrao so nas placas S3
+      (PSRAM); no CYD o slot OTA e a RAM sao o limite.
+
 config CELEROS_JS_GPIO
     bool "API System.gpio para apps"
     default y

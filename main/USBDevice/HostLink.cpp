@@ -2,6 +2,7 @@
 #include "esp_attr.h"
 #include "../Display/ScreenCapture.h"
 #include "CelerShell.h"
+#include "JsDebugger.h"
 #include "LogSink.h"
 #include "FileSystem/FileSystem.h"
 
@@ -53,6 +54,10 @@ HostLink::BaudFn s_ctxBaud = nullptr;
 SemaphoreHandle_t s_logFrameMutex = nullptr;
 constexpr size_t kLogChunk = 512;
 uint8_t s_logFrame[8 + 1 + kLogChunk];
+// frame de saida do debugger Duktape (KL_DEBUG_DATA, binario puro)
+SemaphoreHandle_t s_dbgFrameMutex = nullptr;
+constexpr size_t kDbgChunk = 1024;
+uint8_t s_dbgFrame[8 + kDbgChunk];
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
@@ -612,6 +617,25 @@ void handleLogDump() {
     });
 }
 
+// ---------------------------------------------------------------- debugger
+
+// Arma o attach do debugger Duktape no PROXIMO app (celerctl debug roda o
+// app depois de armar): u8 1=on 0=off, resposta devolve o estado vigente.
+void handleDebugCtl(const uint8_t* payload, uint16_t len) {
+    // o proxy so manda 1 depois do accept: armar = cliente conectado
+    bool on = len >= 1 && payload[0] != 0;
+    JsDebugger::setClient(on);
+    uint8_t st = JsDebugger::requested() ? 1 : 0;
+    respond(KL_DEBUG_CTL, 0, &st, sizeof(st));
+}
+
+// Mensagem do cliente de debug (protocolo dmsg binario): produz no stream
+// buffer consumido pela task do app. SEM resposta — o fluxo do debugger e
+// assincrono (o cliente fala com o runtime, nao com o celerctl).
+void handleDebugData(const uint8_t* payload, uint16_t len) {
+    JsDebugger::feedHost(payload, len);
+}
+
 // ---------------------------------------------------------------------- OTA
 
 esp_ota_handle_t s_ota = 0;
@@ -860,6 +884,8 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_SCREENSHOT: handleScreenshot(payload, len); break;
         case KL_COREDUMP: handleCoredump(payload, len); break;
         case KL_TOUCH: handleTouch(payload, len); break;
+        case KL_DEBUG_CTL: handleDebugCtl(payload, len); break;
+        case KL_DEBUG_DATA: handleDebugData(payload, len); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }
@@ -870,6 +896,7 @@ HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window)
     : m_writer(writer), m_baudHook(baudHook), m_window(window), m_parser(m_small, SMALL_PAYLOAD) {
     if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
     if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
+    if (s_dbgFrameMutex == nullptr) s_dbgFrameMutex = xSemaphoreCreateMutex();
 }
 
 void HostLink::trampoline(void* ctx, uint8_t cmd, const uint8_t* payload, uint16_t len) {
@@ -981,6 +1008,23 @@ bool HostLink::sendLogFrame(const char* line, size_t n) {
         n -= part;
     } while (ok && n > 0);
     if (s_logFrameMutex != nullptr) xSemaphoreGive(s_logFrameMutex);
+    return ok;
+}
+
+bool HostLink::sendDebugFrame(const uint8_t* data, size_t n) {
+    HostLink* a = s_active;  // leitura simples: trocas de sessao sao raras
+    if (a == nullptr || data == nullptr) return false;
+    if (s_dbgFrameMutex != nullptr) xSemaphoreTake(s_dbgFrameMutex, portMAX_DELAY);
+    bool ok = true;
+    while (ok && n > 0) {
+        const size_t part = n > kDbgChunk ? kDbgChunk : n;
+        size_t total = hostframe::build(s_dbgFrame, sizeof(s_dbgFrame), a->m_parser.v2(),
+                                        KL_DEBUG_DATA, data, (uint16_t)part);
+        ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_dbgFrame, total);
+        data += part;
+        n -= part;
+    }
+    if (s_dbgFrameMutex != nullptr) xSemaphoreGive(s_dbgFrameMutex);
     return ok;
 }
 

@@ -96,6 +96,28 @@ e o `screencap` le o framebuffer real. Exemplo de sessao:
 python3 tools/celerctl.py tap 360 88 && python3 tools/celerctl.py screencap s.png
 ```
 
+### Depurando apps JS (breakpoints, step, eval)
+
+Placas com `CONFIG_CELEROS_JS_DEBUGGER` (padrao nas S3; desligado no CYD,
+onde slot OTA e RAM sao o limite) falam o protocolo do debugger do Duktape
+pelo mesmo canal (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`). `celerctl debug` e um
+proxy TCP local; `tools/debug/dbg.js` e o cliente:
+
+```bash
+python3 tools/celerctl.py debug Snake   # terminal 1: proxy, abre o app quando o cliente conecta
+node tools/debug/dbg.js                 # terminal 2: REPL
+```
+
+O app pausa na primeira linha quando o debugger attacha (sem nome de app, o
+app que ja roda attacha no proximo yield). Comandos: `b <linha>`, `B`,
+`d <idx>`, `c`/`p`, `s`/`n`/`o` (into/over/out), `l [n]` (fonte ao redor da
+pausa, lido de `data/apps`/`hub_apps` ou `--src`), `e <expr>`, `v <var>`,
+`set <var> <json>`, `cs`, `lc`, `up`/`down`, `q`. O stdin pode ser um
+roteiro: cada comando espera a resposta, e `c`/`s`/`n`/`o` esperam a
+proxima pausa. Fechar o cliente (ou o proxy) desattacha e o app segue
+rodando. O handshake e unilateral: o device manda a linha de versao e o
+cliente nao pode escrever nada antes dela.
+
 ## Acelerando transferencias (-b)
 
 O canal UART nasce a 115200 baud. Com `-b 921600` a ferramenta negocia a
