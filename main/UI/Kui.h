@@ -160,6 +160,10 @@ public:
     int fontHeight(const lgfx::IFont* font);
     // Corta s com ".." ate caber em maxW
     std::string ellipsize(const std::string& s, const lgfx::IFont* font, int maxW);
+    // Quebra por palavra em ate maxLines linhas que cabem em maxW; a ultima
+    // leva o resto com "..". So geometria (draw idempotente segue valendo).
+    std::vector<std::string> wrapText(const std::string& s, const lgfx::IFont* font, int maxW,
+                                      int maxLines);
 
     int width() const;
     int height() const;

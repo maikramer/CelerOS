@@ -12,11 +12,15 @@
 //   - leitura: 6 bytes a partir de 0x35 (AX_L), little-endian, escala
 //     ±8 g -> 8/32768 g por LSB;
 //   - INT (GPIO21) ativo-baixo; o nivel segura ate ler STATUS1 (0x2F).
-// O servico le a 30 Hz por polling (regularidade ajuda o pedometro); a INT
-// so e usada no deep sleep com o ajuste "imu_wake" (Motion::prepareSleep).
+// O servico le a 30 Hz por polling com a tela acesa; apagada/AOD, le em
+// lotes da FIFO (stream de 32 amostras, protocolo CTRL9 do driver oficial da
+// QST: REQ_FIFO + handshake de ACK). A INT so e usada no deep sleep com o
+// ajuste "imu_wake" (Motion::prepareSleep).
 
 #include "WatchI2c.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdint.h>
 
 namespace Qmi8658 {
@@ -29,7 +33,13 @@ static constexpr uint8_t REG_CTRL3 = 0x04;  // gyro FS/ODR
 static constexpr uint8_t REG_CTRL5 = 0x06;  // LPF
 static constexpr uint8_t REG_CTRL7 = 0x08;  // sensores on/off
 static constexpr uint8_t REG_CTRL8 = 0x09;  // bit1 = engine AnyMotion
+static constexpr uint8_t REG_CTRL9 = 0x0A;  // comandos (protocolo CTRL9)
 static constexpr uint8_t REG_CAL1_L = 0x0B;  // CAL1..CAL4 (16-bit LE)
+static constexpr uint8_t REG_FIFO_WTM  = 0x13;  // watermark (amostras)
+static constexpr uint8_t REG_FIFO_CTRL = 0x14;  // [3:2] tamanho, [1:0] modo
+static constexpr uint8_t REG_FIFO_CNT  = 0x15;  // LSB; MSB em FIFO_STATUS[1:0]
+static constexpr uint8_t REG_FIFO_DATA = 0x17;
+static constexpr uint8_t REG_STATUSINT = 0x2D;  // bit7 = CmdDone do CTRL9
 static constexpr uint8_t REG_STATUS1 = 0x2F;
 static constexpr uint8_t REG_AX_L   = 0x35;
 static constexpr uint8_t REG_RESET  = 0x60;
@@ -100,6 +110,68 @@ inline bool readAccelG(float* x, float* y, float* z) {
     *y = ry * kScale;
     *z = rz * kScale;
     return true;
+}
+
+// ---- FIFO (lotes com a tela apagada) ----------------------------------------
+static constexpr uint8_t kFifoCtrl = (0x01 << 2) | 0x02;  // 32 amostras, modo stream
+static constexpr int kFifoMax = 32;
+static constexpr uint8_t CMD_ACK = 0x00, CMD_RST_FIFO = 0x04, CMD_REQ_FIFO = 0x05;
+
+/// Comando CTRL9: escreve, espera CmdDone (STATUSINT bit7), responde ACK e
+/// espera o bit baixar. false = chip nao confirmou.
+inline bool ctrl9(uint8_t cmd) {
+    if (!wr(REG_CTRL9, cmd)) return false;
+    uint8_t st = 0;
+    bool done = false;
+    for (int i = 0; i < 20 && !done; i++) {
+        if (rd(REG_STATUSINT, &st, 1) && (st & 0x80)) done = true;
+        else vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    wr(REG_CTRL9, CMD_ACK);
+    for (int i = 0; i < 20; i++) {
+        if (rd(REG_STATUSINT, &st, 1) && !(st & 0x80)) break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return done;
+}
+
+/// Liga a FIFO em stream (guarda as ultimas 32 amostras do accel) e esvazia.
+inline bool fifoStart() {
+    return wr(REG_FIFO_WTM, 8) && wr(REG_FIFO_CTRL, kFifoCtrl) && ctrl9(CMD_RST_FIFO);
+}
+
+/// FIFO em bypass (desligada).
+inline void fifoStop() { wr(REG_FIFO_CTRL, 0x00); }
+
+/// Esvazia a FIFO sem ler (amostras ja consumidas pela leitura direta).
+inline bool fifoReset() { return ctrl9(CMD_RST_FIFO); }
+
+/// Le ate max amostras do accel (em g, ordem de chegada). -1 = falha no bus
+/// ou no comando; 0 = vazia. Contador do chip em palavras de 2 bytes; so
+/// accel ligado = 6 bytes por amostra.
+inline int fifoReadAccelG(float (*out)[3], int max) {
+    uint8_t c[2] = {0, 0};
+    if (!rd(REG_FIFO_CNT, c, 2)) return -1;
+    int n = ((((int)c[1] & 0x03) << 8) | c[0]) * 2 / 6;
+    if (n <= 0) return 0;
+    if (n > max) n = max;
+    if (n > kFifoMax) n = kFifoMax;
+    if (!ctrl9(CMD_REQ_FIFO)) {
+        wr(REG_FIFO_CTRL, kFifoCtrl);
+        return -1;
+    }
+    uint8_t b[kFifoMax * 6];
+    const bool ok = rd(REG_FIFO_DATA, b, (size_t)n * 6);
+    wr(REG_FIFO_CTRL, kFifoCtrl);  // sai do FIFO_RD_MODE
+    if (!ok) return -1;
+    constexpr float kScale = 8.0f / 32768.0f;
+    for (int i = 0; i < n; i++) {
+        const uint8_t* p = b + i * 6;
+        out[i][0] = (int16_t)(p[0] | (p[1] << 8)) * kScale;
+        out[i][1] = (int16_t)(p[2] | (p[3] << 8)) * kScale;
+        out[i][2] = (int16_t)(p[4] | (p[5] << 8)) * kScale;
+    }
+    return n;
 }
 
 /// Temperatura do die (regs 0x33/0x34, raw/256 °C) — leitura on-demand.

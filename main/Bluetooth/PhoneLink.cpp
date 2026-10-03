@@ -458,9 +458,11 @@ bool findPhone(bool on) {
 }
 
 void injectLine(const std::string& line) {
+    // mesma protecao do LineAssembler: linha maior que o limite e cortada
+    std::string l = line.size() > kMaxLine ? line.substr(0, kMaxLine) : line;
     std::lock_guard<std::mutex> lock(s_mux);
     if (s_lines.size() >= kMaxQueued) s_lines.pop_front();
-    s_lines.push_back(line);
+    s_lines.push_back(l);
 }
 
 bool callInfo(std::string& name, std::string& number) {

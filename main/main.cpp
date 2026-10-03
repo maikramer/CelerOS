@@ -183,13 +183,14 @@ static void celerSetup() {
     celer_log_printf("reset: motivo %d\n", (int)rr);  // esp_reset_reason_t
     if (rr == ESP_RST_DEEPSLEEP) {
         // Watch dormindo acordou (EXT1 dos botoes): a causa diz quem foi
-        esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
-        if (wc == ESP_SLEEP_WAKEUP_EXT1) {
+        // IDF 6: as causas vem num bitmap (bit = esp_sleep_wakeup_cause_t)
+        const uint32_t causes = esp_sleep_get_wakeup_causes();
+        if (causes & (1u << ESP_SLEEP_WAKEUP_EXT1)) {
             uint64_t m = esp_sleep_get_ext1_wakeup_status();
             celer_log_printf("acordou do deep sleep: botao (ext1 mask 0x%llx)\n",
                              (unsigned long long)m);
         } else {
-            celer_log_printf("acordou do deep sleep: causa %d\n", (int)wc);
+            celer_log_printf("acordou do deep sleep: causas 0x%lx\n", (unsigned long)causes);
         }
     }
     if (const char* fatal = CelerKernel::takeLastFatal()) {

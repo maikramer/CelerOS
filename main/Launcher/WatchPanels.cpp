@@ -373,23 +373,12 @@ private:
                    THEME_TEXT_DIM, ML_DATUM);
             return;
         }
-        // expandida: quebra simples por palavra, ate 5 linhas
-        std::string rest = src.empty() ? n.msg : src + ": " + n.msg;
+        // expandida: quebra por palavra, ate 5 linhas (Canvas::wrapText)
+        const std::string rest = src.empty() ? n.msg : src + ": " + n.msg;
         int ly = r.y + UI::sy(34);
-        const int lh = UI::sy(16);
-        for (int ln = 0; ln < 5 && !rest.empty(); ln++) {
-            size_t cut = rest.size();
-            while (cut > 0 && c.textWidth(rest.substr(0, cut).c_str(), fc) > r.w - 2 * pad) {
-                size_t sp = rest.rfind(' ', cut - 1);
-                cut = (sp == std::string::npos || sp == 0) ? cut - 1 : sp;
-            }
-            if (cut == 0) cut = 1;
-            std::string line = rest.substr(0, cut);
-            rest = rest.substr(cut);
-            while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
-            if (ln == 4 && !rest.empty()) line = c.ellipsize(line + " " + rest, fc, r.w - 2 * pad);
+        for (const std::string& line : c.wrapText(rest, fc, r.w - 2 * pad, 5)) {
             c.text(line, r.x + pad, ly, fc, THEME_TEXT_DIM, ML_DATUM);
-            ly += lh;
+            ly += UI::sy(16);
         }
     }
 };

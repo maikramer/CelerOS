@@ -112,7 +112,6 @@ ErrorCode WifiConnection::init() {
     // Register event handlers
     static esp_event_handler_instance_t instance_any_id = nullptr;
     static esp_event_handler_instance_t instance_got_ip = nullptr;
-    static esp_event_handler_instance_t instance_scan_done = nullptr;
 
     if (instance_any_id == nullptr) {
         ret = esp_event_handler_instance_register(WIFI_EVENT,

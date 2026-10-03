@@ -108,7 +108,7 @@ public:
             cfg.x_max = 411;
             cfg.y_min = 0;
             cfg.y_max = 501;
-            cfg.pin_int = 38;          // LOW = dedo na tela (nao usado: poll)
+            cfg.pin_int = 38;          // LOW = dedo na tela: borda acorda a leitura I2C
             cfg.pin_rst = 9;
             cfg.bus_shared = false;
             cfg.offset_rotation = 0;

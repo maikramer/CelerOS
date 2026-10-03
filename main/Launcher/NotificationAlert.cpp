@@ -16,32 +16,11 @@ namespace {
 
 constexpr uint32_t kStaleMs = 15000;  // pedido mais velho que isso morre
 constexpr uint32_t kShowMs = 8000;    // sem toque: volta a dormir
+constexpr int kTitleLines = 2;
 constexpr int kBodyLines = 6;
 
 volatile bool s_req = false;
 volatile uint32_t s_reqAt = 0;  // escrito/lido de tasks diferentes (BLE -> UI)
-
-// Quebra por palavra (mesmo algoritmo da central de notificacoes); a ultima
-// linha leva o resto com "..".
-std::vector<std::string> wrapText(kui::Canvas& c, const std::string& s, const lgfx::IFont* f,
-                                  int maxW, int maxLines) {
-    std::vector<std::string> out;
-    std::string rest = s;
-    for (int ln = 0; ln < maxLines && !rest.empty(); ln++) {
-        size_t cut = rest.size();
-        while (cut > 0 && c.textWidth(rest.substr(0, cut).c_str(), f) > maxW) {
-            size_t sp = rest.rfind(' ', cut - 1);
-            cut = (sp == std::string::npos || sp == 0) ? cut - 1 : sp;
-        }
-        if (cut == 0) cut = 1;
-        std::string line = rest.substr(0, cut);
-        rest = rest.substr(cut);
-        while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
-        if (ln == maxLines - 1 && !rest.empty()) line = c.ellipsize(line + " " + rest, f, maxW);
-        out.push_back(line);
-    }
-    return out;
-}
 
 class AlertScreen : public kui::Screen {
 public:
@@ -65,45 +44,56 @@ public:
         // inicial pode ter ido ao vidro ainda em SLPIN)
         if (m_ageMs < 500) markDirty();
 
+        // geometria em duas passadas: mede o conteudo e dimensiona o card
+        // (card curto para notificacao curta, em vez de vidro vazio embaixo)
         const int m = UI::sx(10) + UI::inset / 2;
         const int top = UI::sy(22) + UI::inset / 3;
         const int bot = UI::H - UI::sy(30) - UI::inset / 3;
-        const kui::Rect card = {m, top, UI::W - 2 * m, bot - top};
+        const int x = m + UI::sx(18);
+        const int w = UI::W - 2 * m - UI::sx(30);
+        const lgfx::IFont* fc = kui::type::body();
+        const lgfx::IFont* ft = kui::type::title();
+
+        const std::string title = m_title.empty() ? m_msg : m_title;
+        const std::vector<std::string> titleLines =
+            c.wrapText(title, ft, w, kTitleLines);
+        std::vector<std::string> bodyLines;
+        if (!m_msg.empty() && !m_title.empty())
+            bodyLines = c.wrapText(m_msg, fc, w, kBodyLines);
+
+        int contentH = UI::sy(12) + UI::sy(26) + (int)titleLines.size() * UI::sy(26);
+        if (!bodyLines.empty()) contentH += UI::sy(8) + (int)bodyLines.size() * UI::sy(19);
+        if (m_unread > 1) contentH += UI::sy(22);
+        contentH += UI::sy(10);  // respiro de baixo
+
+        const int area = bot - top;
+        const int cardH = contentH < UI::sy(110) ? UI::sy(110)
+                                                : (contentH > area ? area : contentH);
+        const kui::Rect card = {m, top + (area - cardH) / 2, UI::W - 2 * m, cardH};
         c.fillRoundRect(card, UI::sx(14), THEME_CARD);
         c.fillRoundRect({card.x + UI::sx(7), card.y + UI::sy(12), UI::sx(3), card.h - UI::sy(24)},
                         1, THEME_ACCENT);
 
-        const int x = card.x + UI::sx(18);
-        const int w = card.w - UI::sx(30);
-        // um degrau acima do padrao das outras telas: alerta e leitura de
-        // relance no pulso (origem/corpo em body, titulo em title)
-        const lgfx::IFont* fc = kui::type::body();
-        const lgfx::IFont* ft = kui::type::title();
-
         int y = card.y + UI::sy(12);
         std::string src = m_src.empty() ? "Aviso" : m_src;
         c.text(c.ellipsize(src, fc, w - UI::sx(70)), x, y, fc, THEME_ACCENT, ML_DATUM);
-        c.text(TimeManager::getFormattedTime(), card.x + card.w - UI::sx(14), y, fc,
-               THEME_TEXT_DIM, MR_DATUM);
+        c.text(when(), card.x + card.w - UI::sx(14), y, fc, THEME_TEXT_DIM, MR_DATUM);
         y += UI::sy(26);
 
-        std::string title = m_title.empty() ? m_msg : m_title;
-        for (const std::string& ln : wrapText(c, title, ft, w, 2)) {
+        for (const std::string& ln : titleLines) {
             c.text(ln, x, y, ft, THEME_TEXT, ML_DATUM);
             y += UI::sy(26);
         }
         y += UI::sy(8);
-        if (!m_msg.empty() && !m_title.empty()) {
-            for (const std::string& ln : wrapText(c, m_msg, fc, w, kBodyLines)) {
-                c.text(ln, x, y, fc, THEME_TEXT_DIM, ML_DATUM);
-                y += UI::sy(19);
-            }
+        for (const std::string& ln : bodyLines) {
+            c.text(ln, x, y, fc, THEME_TEXT_DIM, ML_DATUM);
+            y += UI::sy(19);
         }
 
         if (m_unread > 1) {
             char b[24];
             snprintf(b, sizeof(b), "e mais %d", m_unread - 1);
-            c.text(b, card.x + card.w / 2, card.y + card.h - UI::sy(14), fc, THEME_ACCENT,
+            c.text(b, card.x + card.w / 2, card.y + card.h - UI::sy(12), fc, THEME_ACCENT,
                    MC_DATUM);
         }
         c.text("toque: central", UI::cx(), UI::H - UI::sy(12) - UI::inset / 3, fc, THEME_STROKE,
@@ -135,10 +125,23 @@ public:
     bool allowsBackGesture() const override { return false; }
 
 private:
+    // Hora da NOTIFICACAO (nao a corrente): HH:MM; sem epoch valida, a hora
+    // de agora.
+    std::string when() const {
+        if (m_epoch == 0) return TimeManager::getFormattedTime();
+        time_t e = (time_t)m_epoch;
+        struct tm t;
+        localtime_r(&e, &t);
+        char b[8];
+        snprintf(b, sizeof(b), "%02d:%02d", t.tm_hour, t.tm_min);
+        return b;
+    }
+
     void load() {
         m_title.clear();
         m_msg.clear();
         m_src.clear();
+        m_epoch = 0;
         m_unread = 0;
         for (const Notifications::Note& n : Notifications::list()) {
             if (n.read) continue;
@@ -147,12 +150,14 @@ private:
                 m_msg = n.msg;
                 m_src = n.src.rfind("phone:", 0) == 0 && n.src.size() > 6 ? n.src.substr(6)
                                                                          : std::string(n.src);
+                m_epoch = n.epoch;
             }
             m_unread++;
         }
     }
 
     std::string m_title, m_msg, m_src;
+    int64_t m_epoch = 0;
     int m_unread = 0;
     uint32_t m_ageMs = 0;
     bool m_wasAsleep = false;
@@ -176,11 +181,17 @@ void service(bool inApp) {
     }
     if (inApp) {
         // tela acesa e usuario dentro de um app: nao interrompe e nao fica
-        // pendente (o toast do push ja avisou; sai do app = sem alerta
-        // surpresa depois). Dormindo/dim/AOD: sai do app pelo caminho limpo
-        // e o celerLoop empilha o alerta.
+        // pendente (sai do app = sem alerta surpresa depois) — mas tambem
+        // nao fica em silencio: no watch o push nao faz toast (virou
+        // alerta), entao o heads-up aqui e o toast com o titulo.
         if (ScreenPower::state() >= 3) {
             s_req = false;
+            for (const Notifications::Note& n : Notifications::list()) {
+                if (!n.read) {
+                    kui::Navigator::toast(n.title, THEME_ACCENT, 3000);
+                    break;
+                }
+            }
             return;
         }
         LauncherUI::requestAppExit();

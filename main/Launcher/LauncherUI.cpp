@@ -1,4 +1,5 @@
 #include "LauncherUI.h"
+#include <algorithm>
 #include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
 #include "../Utils/AppGrants.h"
 #include "../USBDevice/LogSink.h"
@@ -17,15 +18,7 @@
 #include "../Kernel/Alarms.h"
 
 CelerDisplay *LauncherUI::tftInstance = nullptr;
-std::string LauncherUI::appPaths[50];
-std::string LauncherUI::appNames[50];
-std::string LauncherUI::appPkg[50];
-uint32_t LauncherUI::appPerms[50];
-std::string LauncherUI::appIcons[50];
-bool   LauncherUI::appIsFolder[50];
-bool   LauncherUI::appIsSystem[50];
-bool   LauncherUI::appTopbar[50];
-int    LauncherUI::appOrder[50];
+std::vector<LauncherUI::AppEntry> LauncherUI::apps;
 int LauncherUI::appCount = 0;
 bool LauncherUI::needsRescan = true;
 
@@ -89,9 +82,9 @@ int LauncherUI::findEntry(const std::string& pathOrName) {
     std::string want = pathOrName;
     while (want.size() > 1 && want.back() == '/') want.pop_back();
     for (int i = 0; i < appCount; i++) {
-        std::string p = appPaths[i];
+        std::string p = apps[i].path;
         while (p.size() > 1 && p.back() == '/') p.pop_back();
-        if (p == want || appNames[i] == want || appPkg[i] == want) return i;
+        if (p == want || apps[i].name == want || apps[i].pkg == want) return i;
     }
     return -1;
 }
@@ -184,6 +177,7 @@ void LauncherUI::idleHomeTick() {
 
 void LauncherUI::scanLocalApps() {
     appCount = 0;
+    apps.clear();
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
 
     const char* appDirs[] = { "/local/apps/", "/sd/apps/" };
@@ -263,7 +257,7 @@ void LauncherUI::scanLocalApps() {
             const std::string key = pkg.length() > 0 ? pkg : name;
             bool duplicate = false;
             for (int j = 0; j < appCount; j++) {
-                const std::string& kOther = appPkg[j].length() > 0 ? appPkg[j] : appNames[j];
+                const std::string& kOther = apps[j].pkg.length() > 0 ? apps[j].pkg : apps[j].name;
                 if (kOther == key) { duplicate = true; break; }
             }
             if (duplicate) continue;
@@ -272,15 +266,17 @@ void LauncherUI::scanLocalApps() {
             // (o scan do boot roda com o heap cheio, antes do WiFi)
             Icon::prewarm(icon.c_str());
 
-            appPaths[appCount]    = entries[i].path;
-            appNames[appCount]    = name;
-            appPkg[appCount]      = pkg;
-            appIcons[appCount]    = icon;
-            appIsFolder[appCount] = isFolder;
-            appIsSystem[appCount] = system;
-            appTopbar[appCount]   = topbar;
-            appOrder[appCount]    = order;
-            appPerms[appCount]   = appEntryPerms;
+            AppEntry e;
+            e.path = entries[i].path;
+            e.name = name;
+            e.pkg = pkg;
+            e.icon = icon;
+            e.perms = appEntryPerms;
+            e.order = order;
+            e.isFolder = isFolder;
+            e.isSystem = system;
+            e.topbar = topbar;
+            apps.push_back(std::move(e));
             appCount++;
         }
     }
@@ -296,8 +292,8 @@ void LauncherUI::scanLocalApps() {
     // de la pedem consentimento quando aparecerem (lado seguro).
     if (!AppGrants::migrated()) {
         for (int i = 0; i < appCount; i++) {
-            const std::string& id = appPkg[i].length() > 0 ? appPkg[i] : appPaths[i];
-            AppGrants::grant(id, appPaths[i], appPerms[i]);
+            const std::string& id = apps[i].pkg.length() > 0 ? apps[i].pkg : apps[i].path;
+            AppGrants::grant(id, apps[i].path, apps[i].perms);
         }
         AppGrants::setMigrated();
         celer_log_printf("[perm] migracao: %d apps instalados concedidos\n", appCount);
@@ -308,64 +304,33 @@ void LauncherUI::scanLocalApps() {
     // (antes qualquer app da loja se declarava de sistema e ficava
     // impossivel de remover pelo grid)
     for (int i = 0; i < appCount; i++) {
-        if (!appIsSystem[i]) continue;
+        if (!apps[i].isSystem) continue;
         uint32_t granted = 0;
-        const std::string& id = appPkg[i].length() > 0 ? appPkg[i] : appPaths[i];
-        if (!AppGrants::lookup(id, appPaths[i], &granted) || !(granted & celer::PERM_SYSTEM)) {
-            appIsSystem[i] = false;
+        const std::string& id = apps[i].pkg.length() > 0 ? apps[i].pkg : apps[i].path;
+        if (!AppGrants::lookup(id, apps[i].path, &granted) || !(granted & celer::PERM_SYSTEM)) {
+            apps[i].isSystem = false;
         }
     }
 
     // Ordem do grid: apps de sistema primeiro pelo campo "order" do
-    // app.json; apps comuns depois, na ordem de descobertura. Selection sort
-    // com rotacao — estavel em empates.
-    auto sortKey = [](bool sys, int ord) { return sys ? ord : 1000; };
-    for (int i = 0; i < appCount; i++) {
-        int best = i;
-        for (int j = i + 1; j < appCount; j++) {
-            if (sortKey(appIsSystem[j], appOrder[j]) < sortKey(appIsSystem[best], appOrder[best])) best = j;
-        }
-        if (best == i) continue;
-
-        std::string sPath = appPaths[best], sName = appNames[best],
-                    sPkg = appPkg[best], sIcon = appIcons[best];
-        bool sFolder = appIsFolder[best], sSystem = appIsSystem[best];
-        bool sTopbar = appTopbar[best];
-        int sOrder = appOrder[best];
-        uint32_t sPerms = appPerms[best];
-        for (int k = best; k > i; k--) {
-            appPaths[k]    = appPaths[k - 1];
-            appNames[k]    = appNames[k - 1];
-            appPkg[k]      = appPkg[k - 1];
-            appIcons[k]    = appIcons[k - 1];
-            appIsFolder[k] = appIsFolder[k - 1];
-            appIsSystem[k] = appIsSystem[k - 1];
-            appTopbar[k]   = appTopbar[k - 1];
-            appOrder[k]    = appOrder[k - 1];
-            appPerms[k]    = appPerms[k - 1];
-        }
-        appPaths[i]    = sPath;
-        appNames[i]    = sName;
-        appPkg[i]      = sPkg;
-        appIcons[i]    = sIcon;
-        appIsFolder[i] = sFolder;
-        appIsSystem[i] = sSystem;
-        appTopbar[i]   = sTopbar;
-        appOrder[i]    = sOrder;
-        appPerms[i]    = sPerms;
-    }
+    // app.json; apps comuns depois, na ordem de descobertura (ordenacao
+    // estavel: empates mantem a ordem do scan).
+    auto sortKey = [](const AppEntry& e) { return e.isSystem ? e.order : 1000; };
+    std::stable_sort(apps.begin(), apps.end(),
+                     [&](const AppEntry& x, const AppEntry& y) { return sortKey(x) < sortKey(y); });
+    apps.shrink_to_fit();  // sem folga do crescimento: a lista vive o boot inteiro
 }
 
 // ---- Acesso para o LauncherScreen (Kui) ------------------------------------
 int LauncherUI::appEntryCount() { return appCount; }
-const std::string& LauncherUI::appEntryPath(int i) { return appPaths[i]; }
-const std::string& LauncherUI::appEntryName(int i) { return appNames[i]; }
-const std::string& LauncherUI::appEntryIcon(int i) { return appIcons[i]; }
-bool LauncherUI::appEntryIsSystem(int i) { return appIsSystem[i]; }
-bool LauncherUI::appEntryTopbar(int i) { return appTopbar[i]; }
-bool LauncherUI::appEntryIsFolder(int i) { return appIsFolder[i]; }
-uint32_t LauncherUI::appEntryPerms(int i) { return appPerms[i]; }
-const std::string& LauncherUI::appEntryPkg(int i) { return appPkg[i]; }
+const std::string& LauncherUI::appEntryPath(int i) { return apps[i].path; }
+const std::string& LauncherUI::appEntryName(int i) { return apps[i].name; }
+const std::string& LauncherUI::appEntryIcon(int i) { return apps[i].icon; }
+bool LauncherUI::appEntryIsSystem(int i) { return apps[i].isSystem; }
+bool LauncherUI::appEntryTopbar(int i) { return apps[i].topbar; }
+bool LauncherUI::appEntryIsFolder(int i) { return apps[i].isFolder; }
+uint32_t LauncherUI::appEntryPerms(int i) { return apps[i].perms; }
+const std::string& LauncherUI::appEntryPkg(int i) { return apps[i].pkg; }
 // Bits que o consentimento conhece (PERM_ALL do app.json sem o campo vira
 // estes cinco)
 static constexpr uint32_t kKnownPerms =
@@ -386,24 +351,24 @@ static uint32_t effectivePerms(const std::string& pkg, const std::string& path, 
 uint32_t LauncherUI::appEntryMissingPerms(int i) {
     if (i < 0 || i >= appCount) return 0;
     uint32_t granted = 0;
-    if (!AppGrants::lookup(grantId(appPkg[i], appPaths[i]), appPaths[i], &granted)) granted = 0;
-    return appPerms[i] & ~granted & kKnownPerms;
+    if (!AppGrants::lookup(grantId(apps[i].pkg, apps[i].path), apps[i].path, &granted)) granted = 0;
+    return apps[i].perms & ~granted & kKnownPerms;
 }
 
 void LauncherUI::grantEntry(int i) {
     if (i < 0 || i >= appCount) return;
-    AppGrants::grant(grantId(appPkg[i], appPaths[i]), appPaths[i], appPerms[i] & kKnownPerms);
+    AppGrants::grant(grantId(apps[i].pkg, apps[i].path), apps[i].path, apps[i].perms & kKnownPerms);
 }
 
 bool LauncherUI::uninstallEntry(int i) {
     if (i < 0 || i >= appCount) return false;
-    const std::string path = appPaths[i];
-    const std::string pkg = appPkg[i];
-    bool ok = appIsFolder[i] ? FileSystem::removeTree(path.c_str()) : FileSystem::deleteFile(path.c_str());
+    const std::string path = apps[i].path;
+    const std::string pkg = apps[i].pkg;
+    bool ok = apps[i].isFolder ? FileSystem::removeTree(path.c_str()) : FileSystem::deleteFile(path.c_str());
     if (ok) {
         // "Apaga o app e os dados": antes so a pasta saia — o Storage (NVS)
         // e a pasta privada /local/data/<pkg> ficavam para tras
-        if (appIsFolder[i] && pkg.length() > 0) {
+        if (apps[i].isFolder && pkg.length() > 0) {
             JSBindings::storageClearPackage(pkg);
             std::string dataDir = "/local/data/" + pkg;
             if (FileSystem::isDirectory(dataDir.c_str())) FileSystem::removeTree(dataDir.c_str());
@@ -415,8 +380,8 @@ bool LauncherUI::uninstallEntry(int i) {
 
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
-    runApp(tftInstance, appPaths[index], appIsFolder[index], appTopbar[index],
-           appPkg[index], effectivePerms(appPkg[index], appPaths[index], appPerms[index]));
+    runApp(tftInstance, apps[index].path, apps[index].isFolder, apps[index].topbar,
+           apps[index].pkg, effectivePerms(apps[index].pkg, apps[index].path, apps[index].perms));
 }
 
 bool LauncherUI::launchAppAsync(int index) {
@@ -427,9 +392,9 @@ bool LauncherUI::launchAppAsync(int index) {
     if (index < 0 || index >= appCount) return false;
     std::string filePath;
     std::string title;
-    resolveApp(appPaths[index], appIsFolder[index], filePath, title);
-    return AppRunner::start(filePath, title, appTopbar[index],
-                            appPkg[index], effectivePerms(appPkg[index], appPaths[index], appPerms[index]));
+    resolveApp(apps[index].path, apps[index].isFolder, filePath, title);
+    return AppRunner::start(filePath, title, apps[index].topbar,
+                            apps[index].pkg, effectivePerms(apps[index].pkg, apps[index].path, apps[index].perms));
 #else
     (void)index;
     return false;

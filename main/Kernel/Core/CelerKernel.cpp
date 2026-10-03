@@ -184,17 +184,38 @@ static constexpr size_t kNoPsramFloor = 20 * 1024;
 // bits vira excecao), mas o app segue em vez de OOM ou de sufocar o TLS.
 static constexpr size_t kDramReserve = 24 * 1024;
 
+// Folga da regiao preferida acima da reserva, descontada a cada bloco: o
+// heap_caps_get_free_size por alocacao (o compile do Settings faz ~5800)
+// varre todos os heaps registrados. A folga e reconsultada quando o bloco
+// nao cabe nela ou a cada kCapsRefresh alocacoes — o que absorve os free()
+// do proprio Duktape e o consumo das outras tasks (WiFi/lwIP) entre elas.
+static constexpr int kCapsRefresh = 64;
+static size_t s_capsHeadroom = 0;
+static int s_capsCalls = 0;
+
+static void duk_caps_refresh(bool psram) {
+    const size_t freeB = heap_caps_get_free_size(psram ? MALLOC_CAP_INTERNAL : MALLOC_CAP_8BIT);
+    const size_t reserve = psram ? kInternalReserve : kDramReserve;
+    s_capsHeadroom = freeB > reserve ? freeB - reserve : 0;
+    s_capsCalls = 0;
+}
+
 // Destino preferido de um bloco e o alternativo (tentado se o primeiro falhar)
 static void duk_caps(size_t size, uint32_t* first, uint32_t* second) {
-    if (!Board::profile().hasPsram) {
-        const bool dram = heap_caps_get_free_size(MALLOC_CAP_8BIT) > kDramReserve + size;
-        *first = dram ? MALLOC_CAP_8BIT : MALLOC_CAP_IRAM_8BIT;
-        *second = dram ? MALLOC_CAP_IRAM_8BIT : MALLOC_CAP_8BIT;
+    const bool psram = Board::profile().hasPsram;
+    if (++s_capsCalls >= kCapsRefresh || size >= s_capsHeadroom) duk_caps_refresh(psram);
+    // mesmas regras de antes: sem PSRAM, DRAM enquanto sobrar kDramReserve
+    // alem do bloco (senao IRAM de transbordo); com PSRAM, interna enquanto
+    // sobrar kInternalReserve (senao PSRAM)
+    const bool preferred = psram ? s_capsHeadroom > 0 : s_capsHeadroom > size;
+    if (preferred) s_capsHeadroom -= (size < s_capsHeadroom ? size : s_capsHeadroom);
+    if (!psram) {
+        *first = preferred ? MALLOC_CAP_8BIT : MALLOC_CAP_IRAM_8BIT;
+        *second = preferred ? MALLOC_CAP_IRAM_8BIT : MALLOC_CAP_8BIT;
         return;
     }
     *second = MALLOC_CAP_8BIT;
-    *first = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > kInternalReserve ? MALLOC_CAP_8BIT
-                                                                             : MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    *first = preferred ? MALLOC_CAP_8BIT : MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 }
 
 // Orçamento para ABRIR um app (piso só no create, nunca no run): sem PSRAM,
@@ -229,6 +250,40 @@ static char* loadAppSource(const char* path, size_t* lenOut, bool* oom) {
     *oom = false;
     FILE* f = fopen(path, "rb");
     if (f == nullptr) return nullptr;
+    if (Board::profile().hasPsram) {
+        // Com PSRAM o bloco do tamanho do arquivo cru e barato: uma leitura
+        // so e o enxugamento IN-PLACE (o JsStripper nunca escreve a frente
+        // do que ja leu — test/cpp confere contra as duas passadas em todos
+        // os apps). Eram duas leituras do LittleFS + dois strips por launch.
+        size_t raw = 0;
+        if (fseek(f, 0, SEEK_END) == 0) {
+            long sz = ftell(f);
+            if (sz > 0) raw = (size_t)sz;
+            rewind(f);
+        }
+        if (raw > 0) {
+            char* buf = (char*)heap_caps_malloc(raw + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (buf == nullptr) buf = (char*)heap_caps_malloc(raw + 1, MALLOC_CAP_8BIT);
+            if (buf == nullptr) {
+                fclose(f);
+                *oom = true;
+                return nullptr;
+            }
+            const size_t got = fread(buf, 1, raw, f);
+            fclose(f);
+            celer::JsStripper strip(buf);
+            strip.feed(buf, got);
+            const size_t len = strip.finish();
+            if (len == 0) {
+                free(buf);
+                return nullptr;
+            }
+            buf[len] = 0;
+            *lenOut = len;
+            return buf;
+        }
+        // tamanho desconhecido: cai nas duas passadas
+    }
     char chunk[512];
     size_t n;
     celer::JsStripper count;

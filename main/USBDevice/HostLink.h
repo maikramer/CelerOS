@@ -84,9 +84,20 @@ private:
     BaudFn m_baudHook;
     uint8_t m_window;
 
-    // parser de frames (estado por instancia); buffer logo apos na RAM
+    // Abre os buffers grandes da sessao (payload desta instancia + frame de
+    // resposta global). false = sem memoria (HELLO recusado).
+    bool openBuffers();
+    // Resposta curta montada na stack: erros sem frame de resposta alocado
+    void sendShortError(uint8_t cmd, const char* msg);
+
+    // Parser de frames (estado por instancia). Fora de sessao ele usa o
+    // buffer pequeno (cabe o HELLO); o de MAX_PAYLOAD so existe da sessao
+    // aberta ate o endSession — eram 4 KB (CYD) / 8 KB (S3) de RAM interna
+    // fixos por canal so para o celerctl.
     hostframe::FrameParser m_parser;
-    uint8_t m_payload[MAX_PAYLOAD];
+    static constexpr uint16_t SMALL_PAYLOAD = 64;
+    uint8_t m_small[SMALL_PAYLOAD];
+    uint8_t* m_big = nullptr;
 };
 
 // --- opcodes host -> device ---

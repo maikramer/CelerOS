@@ -87,6 +87,16 @@ public:
     // payloadBuf: buffer do caller com espaco para maxPayload bytes
     FrameParser(uint8_t* payloadBuf, uint16_t maxPayload) : m_buf(payloadBuf), m_max(maxPayload) {}
 
+    // Troca o buffer de payload (HostLink: buffer pequeno fora de sessao, o
+    // de MAX_PAYLOAD so durante ela). Seguro dentro do callback de entrega:
+    // deliver() ja voltou ao WANT_MAGIC e nao toca mais o buffer antigo.
+    void setBuffer(uint8_t* payloadBuf, uint16_t maxPayload) {
+        m_buf = payloadBuf;
+        m_max = maxPayload;
+        m_state = WANT_MAGIC;
+        m_got = 0;
+    }
+
     void setV2(bool on) {
         m_v2 = on;
         m_state = WANT_MAGIC;

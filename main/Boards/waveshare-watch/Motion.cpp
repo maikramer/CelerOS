@@ -13,8 +13,10 @@
 
 #include "../../Utils/CelerSettings.h"
 #include "../../Kernel/TimeManager.h"
+#include "../../Display/ScreenPower.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <math.h>
 #include <stdio.h>
@@ -106,6 +108,23 @@ int s_raiseSens = 1;
 int s_raiseCount = 0;
 float s_ax = 0, s_ay = 0, s_az = 1;   // ultima amostra (cache p/ Sensors JS)
 volatile bool s_imuOk = false;
+// I2C do IMU: a task e o Sensors.temp (task do app) nao podem intercalar
+// transacoes no meio de um lote da FIFO (REQ_FIFO -> leitura -> saida)
+SemaphoreHandle_t s_imuLock = nullptr;
+
+struct ImuLock {
+    ImuLock() { if (s_imuLock) xSemaphoreTake(s_imuLock, portMAX_DELAY); }
+    ~ImuLock() { if (s_imuLock) xSemaphoreGive(s_imuLock); }
+};
+
+// FIFO com a tela apagada/AOD: a task acordava a CPU 30x/s (2 transacoes
+// I2C por amostra) inclusive dormindo; em lotes acorda 5x/s. O primeiro uso
+// e autotestado contra a leitura direta: FIFO que nao confere vira polling
+// de sempre (o watch nunca perde passos/raise por causa disto).
+enum class Fifo { Unknown, Ok, Broken };
+Fifo s_fifo = Fifo::Unknown;
+constexpr uint32_t kBatchMs = 200;   // lote com a tela apagada (+<=200ms no raise)
+constexpr uint32_t kSampleMs = 33;   // ODR de 30,12 Hz
 
 int32_t dayKey() {
     return TimeManager::getYear() * 10000 + TimeManager::getMonth() * 100 + TimeManager::getDay();
@@ -194,38 +213,22 @@ void motionTask(void*) {
         return;
     }
     Qmi8658::idleAccel30Hz(0x10);  // threshold medio
+    if (!Qmi8658::fifoStart()) {
+        s_fifo = Fifo::Broken;
+        ESP_LOGW("celer.imu", "FIFO nao respondeu ao CTRL9: polling a 30 Hz");
+    }
     ESP_LOGI("celer.imu", "QMI8658 ativo (30 Hz, pedo+raise sens=%d)", s_raiseSens);
     portENTER_CRITICAL(&s_mux);
     s_imuOk = true;
     portEXIT_CRITICAL(&s_mux);
 
-    TickType_t last = xTaskGetTickCount();
     int32_t lastLoggedMilestone = (s_steps / 500) * 500;
     uint32_t dayCheckMs = 0;
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(33));
-        if (!s_imuOk) {  // powerDown (pre-deep-sleep): nada de I2C em NACK
-            vTaskDelay(pdMS_TO_TICKS(500));
-            continue;
-        }
-        // Virada da meia-noite com o relogio ligado (antes so no boot)
-        dayCheckMs += 33;
-        if (dayCheckMs >= 10000) {
-            dayCheckMs = 0;
-            if (TimeManager::isTimeValid()) {
-                const int32_t today = dayKey();
-                if (today != s_dayKey) rollDay(today);
-            }
-            // sensibilidade do raise mudada no Settings vale sem reboot
-            int sens = atoi(CelerSettings::get("raise_sens", "1").c_str());
-            if (sens >= 0 && sens <= 2) s_raiseSens = sens;
-        }
-        uint32_t dtMs = (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
-        last = xTaskGetTickCount();
+    bool batching = false;
+    int fifoChecks = 0, fifoEmpty = 0;
 
-        float ax, ay, az;
-        if (!Qmi8658::readAccelG(&ax, &ay, &az)) continue;
-        Qmi8658::clearMotionIrq();
+    // Uma amostra (de onde vier) passa pelo cache, pedometro e raise
+    auto consume = [&](float ax, float ay, float az, uint32_t dtMs) {
         portENTER_CRITICAL(&s_mux);
         s_ax = ax; s_ay = ay; s_az = az;
         portEXIT_CRITICAL(&s_mux);
@@ -250,6 +253,87 @@ void motionTask(void*) {
                 ESP_LOGI("celer.imu", "raise detectado (#%d)", s_raiseCount);
             }
         }
+    };
+
+    TickType_t last = xTaskGetTickCount();
+    while (true) {
+        // Tela acesa: polling direto (Sensors.accel e jogos querem a amostra
+        // fresca). Apagada/AOD: lotes da FIFO, se ela passou no autoteste.
+        const bool wantBatch = s_fifo != Fifo::Broken && ScreenPower::state() <= 1;
+        vTaskDelay(pdMS_TO_TICKS(wantBatch ? kBatchMs : kSampleMs));
+        if (!s_imuOk) {  // powerDown (pre-deep-sleep): nada de I2C em NACK
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        uint32_t dtMs = (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
+        last = xTaskGetTickCount();
+
+        // Virada da meia-noite com o relogio ligado (antes so no boot)
+        dayCheckMs += dtMs;
+        if (dayCheckMs >= 10000) {
+            dayCheckMs = 0;
+            if (TimeManager::isTimeValid()) {
+                const int32_t today = dayKey();
+                if (today != s_dayKey) rollDay(today);
+            }
+            // sensibilidade do raise mudada no Settings vale sem reboot
+            int sens = atoi(CelerSettings::get("raise_sens", "1").c_str());
+            if (sens >= 0 && sens <= 2) s_raiseSens = sens;
+        }
+
+        if (wantBatch != batching) {
+            ImuLock lk;
+            if (wantBatch) {
+                // entra em lote: so amostras novas (as antigas ja foram lidas)
+                if (!Qmi8658::fifoReset()) s_fifo = Fifo::Broken;
+            } else {
+                // volta ao direto: o resto do lote ainda conta passos
+                float buf[Qmi8658::kFifoMax][3];
+                int n = Qmi8658::fifoReadAccelG(buf, Qmi8658::kFifoMax);
+                for (int i = 0; i < n; i++) consume(buf[i][0], buf[i][1], buf[i][2], kSampleMs);
+            }
+            batching = wantBatch && s_fifo != Fifo::Broken;
+            Qmi8658::clearMotionIrq();
+            continue;
+        }
+
+        if (batching) {
+            float buf[Qmi8658::kFifoMax][3];
+            float dx = 0, dy = 0, dz = 0;
+            int n;
+            bool direct = false;
+            {
+                ImuLock lk;
+                n = Qmi8658::fifoReadAccelG(buf, Qmi8658::kFifoMax);
+                if (s_fifo == Fifo::Unknown && n > 0) direct = Qmi8658::readAccelG(&dx, &dy, &dz);
+                Qmi8658::clearMotionIrq();
+            }
+            if (s_fifo == Fifo::Unknown) {
+                // Autoteste: a ultima amostra do lote tem no maximo ~1 ODR a
+                // mais que a leitura direta. Pulso parado confere de primeira;
+                // em movimento, ate 8 tentativas. Vazia/erro 3x = quebrada.
+                if (n > 0 && direct && fabsf(buf[n - 1][0] - dx) < 0.30f &&
+                    fabsf(buf[n - 1][1] - dy) < 0.30f && fabsf(buf[n - 1][2] - dz) < 0.30f) {
+                    s_fifo = Fifo::Ok;
+                    ESP_LOGI("celer.imu", "FIFO conferida (%d amostras/lote)", n);
+                } else if (n <= 0 ? ++fifoEmpty >= 3 : ++fifoChecks >= 8) {
+                    s_fifo = Fifo::Broken;
+                    batching = false;
+                    ESP_LOGW("celer.imu", "FIFO nao conferiu (n=%d): polling a 30 Hz", n);
+                    continue;
+                }
+            }
+            for (int i = 0; i < n; i++) consume(buf[i][0], buf[i][1], buf[i][2], kSampleMs);
+            continue;
+        }
+
+        float ax, ay, az;
+        {
+            ImuLock lk;
+            if (!Qmi8658::readAccelG(&ax, &ay, &az)) continue;
+            Qmi8658::clearMotionIrq();
+        }
+        consume(ax, ay, az, dtMs);
     }
 }
 
@@ -257,6 +341,7 @@ void motionTask(void*) {
 
 void start() {
     if (s_task != nullptr) return;
+    if (s_imuLock == nullptr) s_imuLock = xSemaphoreCreateMutex();
     xTaskCreate(motionTask, "celerimu", 4096, nullptr, 2, &s_task);
 }
 
@@ -302,7 +387,11 @@ bool accel(float* x, float* y, float* z) {
     return ok;
 }
 
-bool temp(float* c) { return s_imuOk ? Qmi8658::readTemp(c) : false; }
+bool temp(float* c) {
+    if (!s_imuOk) return false;
+    ImuLock lk;
+    return Qmi8658::readTemp(c);
+}
 
 void prepareSleep() {
     portENTER_CRITICAL(&s_mux);
@@ -311,6 +400,7 @@ void prepareSleep() {
     portEXIT_CRITICAL(&s_mux);
     if (!ok) return;
     if (s_pendingPersist > 0) persist();
+    ImuLock lk;
     if (CelerSettings::get("imu_wake", "") == "1") {
         // Wake por movimento: AnyMotion com threshold alto (so gesto firme)
         // na INT1 ativo-baixo; o ScreenPower soma o pino ao EXT1.

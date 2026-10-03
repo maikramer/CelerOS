@@ -158,7 +158,7 @@ void analogWrite(int pin, int val) {
         cfg.speed_mode = LEDC_LOW_SPEED_MODE;
         cfg.channel = channel;
         cfg.timer_sel = timer;
-        cfg.intr_type = LEDC_INTR_DISABLE;
+        // intr_type: zero-init = LEDC_INTR_DISABLE (o campo e obsoleto no IDF 6)
         cfg.gpio_num = pin;
         cfg.duty = 0;
         cfg.hpoint = 0;

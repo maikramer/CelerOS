@@ -6,6 +6,15 @@
 #include "Motion.h"
 #include "WatchUlp.h"
 #include "Hardware/BoardIO.h"
+#include "esp_attr.h"
+
+// Latch do INT do touch FT3168 (Display/Touch_FT3168_IDF.h): definicao unica
+namespace lgfx {
+inline namespace v1 {
+DRAM_ATTR volatile bool g_ft3168IntFlag = true;
+void IRAM_ATTR ft3168IntIsr(void*) { g_ft3168IntFlag = true; }
+}  // namespace v1
+}  // namespace lgfx
 
 // Smartwatch Waveshare ESP32-S3-Touch-AMOLED-2.06: ESP32-S3R8 (8MB PSRAM
 // octal, 32MB flash), AMOLED 410x502 CO5300 em QSPI, PMU AXP2101, touch

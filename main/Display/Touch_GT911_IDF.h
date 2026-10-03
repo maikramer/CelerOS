@@ -88,8 +88,14 @@ namespace lgfx
 
       uint32_t msec = lgfx::millis();
       uint32_t diff_msec = msec - _last_update;
+      // Sem dedo na ultima leitura: consulta no maximo a cada kIdleMs (a
+      // placa nao liga o INT, entao e polling; com o loop a 5 ms e refresh
+      // de ~5-10 ms eram 100-200 transacoes I2C/s com ninguem tocando).
+      // Com dedo, segue o refresh do chip (arrasto sem perder amostras).
+      const uint32_t interval = (_readdata[0] & 0x0F) ? _refresh_rate
+                                : std::max<uint32_t>(_refresh_rate, kIdleMs);
 
-      if (diff_msec >= _refresh_rate)
+      if (diff_msec >= interval)
       {
         _last_update = msec;
 
@@ -127,13 +133,15 @@ namespace lgfx
     }
 
   private:
+    static constexpr uint32_t kIdleMs = 20;
+
     i2c_master_bus_handle_t _bus = nullptr;
     i2c_master_dev_handle_t _dev = nullptr;
     bool _inited = false;
     uint32_t _last_update = 0;
     uint32_t _refresh_rate = 5;
     char productId[4] = {'?', '?', '?', 0};
-    uint8_t _readdata[5 * 8 + 2];  // [0]=status; pontos a partir de _readdata[1]
+    uint8_t _readdata[5 * 8 + 2] = {};  // [0]=status; pontos a partir de _readdata[1]
 
     bool openBus(void)
     {

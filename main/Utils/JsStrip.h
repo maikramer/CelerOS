@@ -11,6 +11,9 @@
 // durante o compile (App Store: 44KB -> ~31KB). Uso em duas passadas sobre o
 // mesmo arquivo: out = nullptr so conta (tamanho exato), depois aloca e
 // preenche. Estado persiste entre chunks (feed pode ser chamado por pedaco).
+// Tambem roda IN-PLACE (out == entrada; CelerKernel com PSRAM): todo char
+// emitido corresponde a um ja consumido, entao a escrita nunca passa da
+// leitura (test/cpp confere contra as duas passadas em todos os apps).
 //
 // Heuristica de regex vs divisao: '/' abre regex quando o ultimo token
 // significativo nao e operando (identificador, numero, ')' ou ']') ou e uma

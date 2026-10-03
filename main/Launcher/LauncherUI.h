@@ -4,6 +4,7 @@
 #include "../Boards/Board.h"
 #include <Arduino.h>
 #include <string>
+#include <vector>
 #include <cstdint>
 
 class LauncherUI {
@@ -68,15 +69,21 @@ private:
     static void resolveApp(const std::string& path, bool isFolder,
                            std::string& filePath, std::string& title);
 
-    static std::string appPaths[50];   // Path to app folder or .js file
-    static std::string appNames[50];   // Display name (from app.json or filename)
-    static std::string appPkg[50];     // packageName do app.json (dedup)
-    static uint32_t appPerms[50];      // capabilities declaradas (F4)
-    static std::string appIcons[50];   // nome do icone em /local/icons ("" = sem)
-    static bool   appIsFolder[50]; // true = folder app, false = legacy .js
-    static bool   appIsSystem[50]; // true = "system": true no app.json
-    static bool   appTopbar[50];   // true = "topbar": true (faixa fixa; ausente = retratil)
-    static int    appOrder[50];    // "order" do app.json (sistema primeiro)
+    // Um registro por app do grid (eram 9 arrays paralelos de 50 posicoes:
+    // ~5,4KB de RAM interna fixos, cheios ou nao — a lista tem o tamanho
+    // dos apps instalados)
+    struct AppEntry {
+        std::string path;   // pasta do app ou .js avulso
+        std::string name;   // nome exibido (app.json ou arquivo)
+        std::string pkg;    // packageName do app.json (dedup)
+        std::string icon;   // icone ("" = sem)
+        uint32_t perms;     // capabilities declaradas (F4)
+        int order;          // "order" do app.json (sistema primeiro)
+        bool isFolder;      // pasta com app.json (false = .js legado)
+        bool isSystem;      // "system": true (e concedido)
+        bool topbar;        // "topbar": true (faixa fixa; ausente = retratil)
+    };
+    static std::vector<AppEntry> apps;
     static int appCount;
 
     static int totalEntries();    // = appCount (sistema agora sao apps JS)

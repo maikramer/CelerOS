@@ -66,21 +66,32 @@ HostLink* linkCtx() { return s_ctxLink; }
 // build() da o deslocamento final para o formato da sessao. Quem produz
 // dados grandes (READ) escreve direto em txData() e chama sendFrame: sem
 // um segundo buffer de 8KB estatico (RAM interna e o que sobra para apps).
-EXT_RAM_BSS_ATTR uint8_t s_txFrame[8 + 1 + HostLink::MAX_PAYLOAD];
+// Alocado no HELLO e devolvido quando nenhuma sessao resta (endSession):
+// fora do celerctl sao 4/8 KB a mais de heap.
+constexpr size_t kTxFrameSize = 8 + 1 + HostLink::MAX_PAYLOAD;
+uint8_t* s_txFrame = nullptr;
+
+// PSRAM quando ha (UART/CDC copiam para os proprios buffers), senao interna
+uint8_t* linkAlloc(size_t n) {
+    uint8_t* p = (uint8_t*)heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == nullptr) p = (uint8_t*)heap_caps_malloc(n, MALLOC_CAP_8BIT);
+    return p;
+}
 
 uint8_t* txData() { return s_txFrame + 9; }  // dados apos o byte de status
 
 void sendFrame(uint8_t cmd, uint8_t status, uint16_t dataLen) {
     HostLink::WriteFn w = linkWriter();
     HostLink* ctx = linkCtx();
-    if (w == nullptr || ctx == nullptr) return;  // nenhum transporte no contexto
+    if (w == nullptr || ctx == nullptr || s_txFrame == nullptr) return;  // sem transporte/sessao
     s_txFrame[8] = status;  // primeiro byte do payload da resposta
-    size_t n = hostframe::build(s_txFrame, sizeof(s_txFrame), ctx->v2(), cmd, s_txFrame + 8,
+    size_t n = hostframe::build(s_txFrame, kTxFrameSize, ctx->v2(), cmd, s_txFrame + 8,
                                 (uint16_t)(1 + dataLen));
     if (n > 0) w(s_txFrame, n);
 }
 
 void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t dataLen = 0) {
+    if (s_txFrame == nullptr) return;  // fora de sessao (process() so despacha com ela aberta)
     if (data != nullptr && dataLen > 0 && data != txData()) {
         memcpy(txData(), data, dataLen);
     }
@@ -89,11 +100,6 @@ void respond(uint8_t cmd, uint8_t status, const void* data = nullptr, uint16_t d
 
 void respondError(uint8_t cmd, const char* msg) {
     respond(cmd, 1, msg, (uint16_t)strlen(msg));
-}
-
-void le16(uint8_t* p, uint16_t v) {
-    p[0] = (uint8_t)v;
-    p[1] = (uint8_t)(v >> 8);
 }
 
 void le32(uint8_t* p, uint32_t v) {
@@ -847,7 +853,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 }  // namespace
 
 HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window)
-    : m_writer(writer), m_baudHook(baudHook), m_window(window), m_parser(m_payload, MAX_PAYLOAD) {
+    : m_writer(writer), m_baudHook(baudHook), m_window(window), m_parser(m_small, SMALL_PAYLOAD) {
     if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
     if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
 }
@@ -862,11 +868,19 @@ void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     s_ctxBaud = m_baudHook;
     s_ctxLink = this;
     if (cmd == KL_HELLO) {
+        if (!openBuffers()) {
+            sendShortError(cmd, "sem memoria p/ sessao");
+            s_ctxWriter = nullptr;
+            s_ctxBaud = nullptr;
+            s_ctxLink = nullptr;
+            if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
+            return;
+        }
         s_active = this;  // ultimo HELLO ganha a sessao
     } else if (s_active != this) {
         // frames de outro canal (ex. UART0 de uma board USB-nativa): a
         // resposta de erro vai pelo canal de origem, sem tocar a sessao
-        respondError(cmd, "sessao ativa em outro canal");
+        sendShortError(cmd, "sessao ativa em outro canal");
         s_ctxWriter = nullptr;
         s_ctxBaud = nullptr;
         s_ctxLink = nullptr;
@@ -884,12 +898,52 @@ HostLink* HostLink::active() {
     return s_active;
 }
 
+bool HostLink::openBuffers() {
+    if (m_big == nullptr) {
+        m_big = linkAlloc(MAX_PAYLOAD);
+        if (m_big == nullptr) return false;
+        // dentro do callback do parser: o HELLO corrente segue no buffer
+        // pequeno (o deliver ja terminou de usa-lo); o proximo frame cai aqui
+        m_parser.setBuffer(m_big, MAX_PAYLOAD);
+    }
+    if (s_txFrame == nullptr) {
+        s_txFrame = linkAlloc(kTxFrameSize);
+        if (s_txFrame == nullptr) return false;
+    }
+    return true;
+}
+
+void HostLink::sendShortError(uint8_t cmd, const char* msg) {
+    if (s_txFrame != nullptr) {  // sessao de pe: caminho normal
+        respondError(cmd, msg);
+        return;
+    }
+    uint8_t frame[8 + 1 + 40];
+    size_t len = strlen(msg);
+    if (len > 40) len = 40;
+    frame[8] = 1;  // status erro
+    memcpy(frame + 9, msg, len);
+    size_t n = hostframe::build(frame, sizeof(frame), m_parser.v2(), cmd, frame + 8, (uint16_t)(1 + len));
+    if (n > 0 && m_writer != nullptr) m_writer(frame, n);
+}
+
 bool HostLink::endSession() {
     if (s_dispatchMutex != nullptr) xSemaphoreTake(s_dispatchMutex, portMAX_DELAY);
     bool was = s_active == this;
     if (was) {
         s_active = nullptr;
         m_parser.setV2(false);  // nova sessao comeca negociando de novo
+    }
+    // Canal ocioso (chamado pela task dele, sem frame em curso): o buffer
+    // grande volta ao heap; o frame de resposta tambem, se nao resta sessao
+    if (m_big != nullptr) {
+        m_parser.setBuffer(m_small, SMALL_PAYLOAD);
+        free(m_big);
+        m_big = nullptr;
+    }
+    if (s_active == nullptr && s_txFrame != nullptr) {
+        free(s_txFrame);
+        s_txFrame = nullptr;
     }
     if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
     return was;
@@ -922,7 +976,7 @@ void HostLink::feed(uint8_t byte) {
     m_parser.feed(byte, esp_timer_get_time(), &HostLink::trampoline, this);
     if (m_parser.takeReject() == hostframe::FrameParser::REJ_TOO_BIG) {
         // rejeicao no parser: resposta direta pelo canal desta instancia
-        // (ainda nao ha contexto de dispatch)
+        // (ainda nao ha contexto de dispatch: nada de respondError aqui)
         const char msg[] = "payload grande demais";
         uint8_t frame[8 + 24];
         frame[8] = 1;  // status erro

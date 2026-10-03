@@ -13,6 +13,8 @@
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
+#include <dirent.h>
+#include <cstdio>
 #include <string>
 static uint32_t s_perms = 0;
 static std::string s_appPkg;
@@ -82,7 +84,47 @@ static std::string strip(const char* src) {
     return out;
 }
 
+// In-place (CelerKernel com PSRAM: le o fonte uma vez e enxuga no proprio
+// buffer) tem que dar o mesmo resultado das duas passadas
+static std::string stripInPlace(const std::string& src) {
+    std::string buf = src;
+    JsStripper fill(&buf[0]);
+    fill.feed(buf.data(), buf.size());
+    buf.resize(fill.finish());
+    return buf;
+}
+
+static void testJsStripInPlaceApps() {
+    // todo main.js de fabrica e da loja (rodando da raiz do repo, como no CI)
+    const char* roots[] = {"data/apps", "hub_apps"};
+    int files = 0;
+    for (const char* root : roots) {
+        DIR* d = opendir(root);
+        if (d == nullptr) continue;
+        while (struct dirent* e = readdir(d)) {
+            if (e->d_name[0] == '.') continue;
+            std::string path = std::string(root) + "/" + e->d_name + "/main.js";
+            FILE* f = fopen(path.c_str(), "rb");
+            if (f == nullptr) continue;
+            std::string src;
+            char chunk[4096];
+            size_t n;
+            while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) src.append(chunk, n);
+            fclose(f);
+            if (stripInPlace(src) != strip(src.c_str())) {
+                printf("FALHA in-place: %s\n", path.c_str());
+                CHECK(false);
+            }
+            files++;
+        }
+        closedir(d);
+    }
+    CHECK(files > 10);
+}
+
 static void testJsStrip() {
+    CHECK(stripInPlace("a = b / c; r = /x\\/y/g; /* k */ d") == strip("a = b / c; r = /x\\/y/g; /* k */ d"));
+    CHECK(stripInPlace("x=1/**/2;// fim") == strip("x=1/**/2;// fim"));
     CHECK(strip("var a = 1; // c\nvar b = 2;") == "var a = 1;\nvar b = 2;");
     CHECK(strip("    if (x) {\n\t\ty();   \n    }\n") == "if (x) {\ny();\n}\n");
     CHECK(strip("a/**/b") == "a b");
@@ -192,6 +234,34 @@ static void testHostFrame() {
     p2.setV2(true);
     rx = parseAll(p2, frame, n + m);
     CHECK(rx.count == 2);
+
+    // ---- troca de buffer (HostLink sob demanda): pequeno ate o HELLO,
+    // grande depois — inclusive trocando DENTRO do callback de entrega
+    {
+        uint8_t small[16];
+        static uint8_t big[4096];
+        FrameParser ps(small, sizeof(small));
+        struct Swap { FrameParser* p; uint8_t* big; RxFrame rx; } sw{&ps, big, RxFrame()};
+        auto swapFn = [](void* ctx, uint8_t cmd, const uint8_t* pl, uint16_t len) {
+            Swap* s = (Swap*)ctx;
+            onFrame(&s->rx, cmd, pl, len);
+            if (cmd == 0x01) s->p->setBuffer(s->big, 4096);
+        };
+        n = build(frame, sizeof(frame), false, 0x07, payload, 1000);
+        for (size_t i = 0; i < n; i++) ps.feed(frame[i], 0, swapFn, &sw);
+        CHECK(sw.rx.count == 0 && ps.takeReject() == FrameParser::REJ_TOO_BIG);  // antes do HELLO
+        memcpy(payload, "CELERCTL1", 9);
+        n = build(frame, sizeof(frame), false, 0x01, payload, 9);
+        size_t m2 = build(frame + n, sizeof(frame) - n, false, 0x07, payload, 1000);
+        for (size_t i = 0; i < n + m2; i++) ps.feed(frame[i], 0, swapFn, &sw);
+        CHECK(sw.rx.count == 2 && sw.rx.cmd == 0x07 && sw.rx.payload.size() == 1000);
+        CHECK(memcmp(sw.rx.payload.data(), payload, 1000) == 0);
+        ps.setBuffer(small, sizeof(small));  // fim de sessao: volta ao pequeno
+        n = build(frame, sizeof(frame), false, 0x07, payload, 1000);
+        sw.rx = RxFrame();
+        for (size_t i = 0; i < n; i++) ps.feed(frame[i], 0, swapFn, &sw);
+        CHECK(sw.rx.count == 0 && ps.takeReject() == FrameParser::REJ_TOO_BIG);
+    }
 
     // ---- resync de silencio: frame cortado descartado, o proximo passa
     p2.setV2(true);
@@ -357,6 +427,7 @@ int main() {
     testFsJail();
     testPermissions();
     testJsStrip();
+    testJsStripInPlaceApps();
     testHostFrame();
     testAlarmCalc();
     testGbProto();

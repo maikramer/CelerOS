@@ -20,6 +20,8 @@
 
 #include "lgfx/v1/Touch.hpp"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include <stdio.h>
 
@@ -28,6 +30,15 @@ namespace lgfx
  inline namespace v1
  {
 //----------------------------------------------------------------------------
+
+  // INT desceu desde a ultima leitura. Definidos UMA vez, no Board.cpp da
+  // placa que usa este touch (watch): o header entra em todo TU via
+  // Board.h, e uma ISR inline com IRAM_ATTR num header nem linka ("literal
+  // placed after use"). Flag em DRAM e ISR IRAM-safe: o servico de GPIO usa
+  // ESP_INTR_FLAG_IRAM (como o FileSystem) e o objeto do display pode estar
+  // na PSRAM.
+  extern volatile bool g_ft3168IntFlag;
+  void ft3168IntIsr(void*);
 
   struct Touch_FT3168_IDF : public ITouch
   {
@@ -88,6 +99,7 @@ namespace lgfx
         if (readReg(REG_FINGER_NUM, &fingers))
         {
           _inited = true;
+          armIntLatch();
           ESP_LOGI("celer.touch", "FT3168 init OK (0x%02X @ %u kHz, monitor, fingers=%u)",
                    (unsigned)_cfg.i2c_addr, (unsigned)(_cfg.freq / 1000), (unsigned)fingers);
           return true;
@@ -106,9 +118,21 @@ namespace lgfx
     {
       if (!_inited || tp == nullptr || count == 0) return 0;
 
+      // Sem dedo na ultima leitura: so vai ao I2C se o INT avisou (borda de
+      // descida travada pela ISR — pega tanto o nivel do modo polling quanto
+      // os pulsos do modo trigger) ou a cada kIdlePollMs (rede de seguranca:
+      // INT mudo nao mata o touch, so atrasa o primeiro toque). Com o loop
+      // a 5 ms eram ~200 transacoes I2C/s com a tela acesa e ninguem tocando.
+      const uint32_t now = lgfx::millis();
+      if (!_down && _intLatchOn && !g_ft3168IntFlag && now - _lastPollMs < kIdlePollMs) return 0;
+      g_ft3168IntFlag = false;
+      _lastPollMs = now;
+
       uint8_t fingers = 0;
+      _down = false;
       if (!readReg(REG_FINGER_NUM, &fingers)) return 0;
       if ((fingers & 0x0F) == 0) return 0;
+      _down = true;
 
       uint8_t xy[4] = {0, 0, 0, 0};
       if (!readRegBurst(REG_XY1, xy, 4)) return 0;
@@ -127,9 +151,28 @@ namespace lgfx
     }
 
   private:
+    static constexpr uint32_t kIdlePollMs = 50;
+
     i2c_master_bus_handle_t _bus = nullptr;
     i2c_master_dev_handle_t _dev = nullptr;
     bool _inited = false;
+    bool _down = false;            // ultima leitura tinha dedo
+    bool _intLatchOn = false;      // ISR do INT instalada
+    uint32_t _lastPollMs = 0;
+
+    // Borda de descida do INT (LOW = toque) vira flag. Sem pino ou sem ISR
+    // o driver segue no polling de sempre.
+    void armIntLatch(void)
+    {
+      if (_intLatchOn || _cfg.pin_int < 0) return;
+      const gpio_num_t pin = (gpio_num_t)_cfg.pin_int;
+      esp_err_t e = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+      if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return;  // ja instalado = ok
+      if (gpio_set_intr_type(pin, GPIO_INTR_NEGEDGE) != ESP_OK) return;
+      if (gpio_isr_handler_add(pin, &ft3168IntIsr, nullptr) != ESP_OK) return;
+      g_ft3168IntFlag = true;  // primeira leitura vai ao chip
+      _intLatchOn = true;
+    }
 
     bool openBus(void)
     {
@@ -166,6 +209,11 @@ namespace lgfx
 
     void deinit(void)
     {
+      if (_intLatchOn)
+      {
+        gpio_isr_handler_remove((gpio_num_t)_cfg.pin_int);
+        _intLatchOn = false;
+      }
       closeBus();
       _inited = false;
     }

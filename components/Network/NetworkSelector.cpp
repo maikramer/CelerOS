@@ -74,8 +74,6 @@ std::vector<NetworkScore> NetworkSelector::evaluateNetworks(
     std::vector<NetworkScore> scores;
     scores.reserve(scannedNetworks.size());
 
-    uint32_t currentTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
-
     for (const auto& scanned : scannedNetworks) {
         // Skip networks with signal too weak
         if (scanned.rssi < _config.minimumRssi) {

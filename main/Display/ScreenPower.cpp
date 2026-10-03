@@ -183,13 +183,14 @@ void tick(bool inApp) {
     uint32_t now = millis();
 
     // Primeiro tick pos-boot: motivo do wake pela sentinela ULP (watch).
-    // PEK (tecla PWR) e raise acendem a tela — sem isso so o BOOT acordava.
+    // PEK (tecla PWR), raise e cabo plugado (4) acendem a tela — sem isso
+    // so o BOOT acordava.
     static bool s_ulpChecked = false;
     if (!s_ulpChecked) {
         s_ulpChecked = true;
         if (bp.ulpWake != nullptr) {
             const int r = bp.ulpWake();
-            if (r == 1 || r == 2) {
+            if (r == 1 || r == 2 || r == 4) {
                 Backlight::noteActivity();
             } else if (r == 3) {
                 ESP_LOGW("celer.screen", "wake do ULP: bateria fraca");

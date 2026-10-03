@@ -159,7 +159,8 @@ struct BoardProfile {
     // armada, bit1 = o ULP cuida do wake por movimento (a INT1 sai do EXT1,
     // que acordava cru em qualquer esbarrão). ulpWake consome o motivo do
     // wake no primeiro tick pos-boot: 1 = tecla (PEK), 2 = raise, 3 =
-    // bateria fraca — 1/2 devem acender a tela. nullptr = placa sem ULP.
+    // bateria fraca, 4 = cabo plugado — 1/2/4 devem acender a tela.
+    // nullptr = placa sem ULP.
     int (*ulpArm)() = nullptr;
     int (*ulpWake)() = nullptr;
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =

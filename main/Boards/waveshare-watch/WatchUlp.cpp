@@ -11,6 +11,7 @@
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "soc/rtc_cntl_reg.h"
 #include "ulp_riscv.h"
 
 // Header gerado pelo build do ULP (ulp_embed_binary no CMakeLists): declara
@@ -24,13 +25,26 @@ extern const uint8_t ulp_watch_bin_end[] asm("_binary_ulp_watch_bin_end");
 
 namespace {
 
-// Ciclo da sentinela: 100 ms e o compromisso entre resposta da tecla PWR
-// (<=100 ms ate o wake) e o tempo de ULP ativo por segundo (~1 ms de I2C
-// bit-banged por ciclo = ~1% de duty no coprocessador).
-constexpr uint32_t kPeriodUs = 100000;
-constexpr uint32_t kRaiseWinCycles = 20;    // 2 eventos em ~2 s = gesto
-constexpr uint32_t kBatEveryCycles = 3000;  // VBAT a cada ~5 min
-constexpr uint16_t kRaiseThr = 0x20;        // AnyMotion firme (gesto deliberado)
+// Ciclo adaptativo da sentinela: rapido com o pulso mexendo (resposta da
+// tecla PWR <=100 ms), lento depois de kCalmMs sem INT do IMU (mesa,
+// noite: ~2,5x menos ciclos de ULP + I2C bit-banged). O PEK fica latchado
+// no AXP2101, entao o lento so atrasa o wake (<=250 ms), nao perde toque.
+constexpr uint32_t kFastUs = 100000;
+constexpr uint32_t kSlowUs = 250000;
+constexpr uint32_t kCalmMs = 60000;
+constexpr uint32_t kRaiseWinMs = 2000;     // 2 eventos em ~2 s = gesto
+constexpr uint32_t kBatEveryMs = 300000;   // VBAT a cada ~5 min
+constexpr uint32_t kVbusEveryMs = 1000;    // cabo plugado acorda em ~1 s
+constexpr uint32_t kBatLoMv = 3300;        // aviso (borda, uma vez)
+constexpr uint32_t kBatCritMv = 3150;      // sobrevivencia: IMU off no ULP
+constexpr uint16_t kRaiseThr = 0x20;       // AnyMotion firme (gesto deliberado)
+
+// Periodo em ciclos do RTC slow, como o ulp_set_wakeup_period o grava (a
+// calibracao do clock so existe no main): o ULP so copia o valor pronto.
+uint32_t periodCycles(uint32_t us) {
+    ulp_set_wakeup_period(0, us);
+    return REG_GET_FIELD(RTC_CNTL_ULP_CP_TIMER_1_REG, RTC_CNTL_ULP_CP_TIMER_SLP_CYCLE);
+}
 
 }  // namespace
 
@@ -46,7 +60,7 @@ int arm() {
 
     // Config da mailbox ANTES do run(): defaults do programa sao
     // sobrescritos e o ciclo de clear do .data ja passou no load.
-    uint32_t enable = ULP_EN_PEK | ULP_EN_BAT;
+    uint32_t enable = ULP_EN_PEK | ULP_EN_BAT | ULP_EN_VBUS;
     const bool raiseOn = CelerSettings::get("raise_wake", "1") == "1";
     if (raiseOn) {
         enable |= ULP_EN_RAISE;
@@ -57,11 +71,17 @@ int arm() {
         Qmi8658::clearMotionIrq();
     }
     ulp_cfg_enable = enable;
-    ulp_cfg_bat_lo_mv = 3300;
-    ulp_cfg_raise_win = kRaiseWinCycles;
-    ulp_cfg_bat_every = kBatEveryCycles;
+    ulp_cfg_bat_lo_mv = kBatLoMv;
+    ulp_cfg_bat_crit_mv = kBatCritMv;
+    ulp_cfg_raise_win_ms = kRaiseWinMs;
+    ulp_cfg_bat_every_ms = kBatEveryMs;
+    ulp_cfg_vbus_every_ms = kVbusEveryMs;
+    ulp_cfg_calm_ms = kCalmMs;
+    ulp_cfg_fast_ms = kFastUs / 1000;
+    ulp_cfg_slow_ms = kSlowUs / 1000;
+    ulp_cfg_slow_cyc = periodCycles(kSlowUs);
+    ulp_cfg_fast_cyc = periodCycles(kFastUs);  // por ultimo: o timer parte no rapido
 
-    ulp_set_wakeup_period(0, kPeriodUs);
     if (ulp_riscv_run() != ESP_OK) {
         ESP_LOGE("celer.ulp", "ULP nao subiu: sentinela desligada");
         return 0;
@@ -70,8 +90,9 @@ int arm() {
     // dominio RTC_PERIPH alimentado (custa dezenas de uA; sem isso o bus morre).
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
     esp_sleep_enable_ulp_wakeup();
-    ESP_LOGI("celer.ulp", "sentinela armada (PEK%s, VBAT < %d mV, ciclo %d ms)",
-             raiseOn ? "+raise filtrado" : "", (int)ulp_cfg_bat_lo_mv, (int)(kPeriodUs / 1000));
+    ESP_LOGI("celer.ulp", "sentinela armada (PEK+VBUS%s, VBAT %d/%d mV, ciclo %d/%d ms)",
+             raiseOn ? "+raise filtrado" : "", (int)kBatLoMv, (int)kBatCritMv,
+             (int)(kFastUs / 1000), (int)(kSlowUs / 1000));
     return 1 | (raiseOn ? 2 : 0);
 }
 
@@ -85,8 +106,10 @@ int wake() {
     if (ulp_mb_magic != ULP_MB_MAGIC) return ULP_WAKE_NONE;
     const int r = (int)ulp_mb_wake;
     ulp_mb_wake = ULP_WAKE_NONE;  // nao deixa o motivo vazar para o proximo boot
-    ESP_LOGI("celer.ulp", "acordou pelo ULP: motivo %d (%d ciclos, VBAT %d mV, %d erros I2C)",
-             r, (int)ulp_mb_run, (int)ulp_mb_bat_mv, (int)ulp_mb_i2c_err);
+    ESP_LOGI("celer.ulp",
+             "acordou pelo ULP: motivo %d (%d ciclos, %d lentos, flags 0x%x, VBAT %d mV, %d erros I2C)",
+             r, (int)ulp_mb_run, (int)ulp_mb_slow, (unsigned)ulp_mb_flags, (int)ulp_mb_bat_mv,
+             (int)ulp_mb_i2c_err);
     return r;
 }
 

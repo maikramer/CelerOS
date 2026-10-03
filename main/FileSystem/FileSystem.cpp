@@ -24,9 +24,11 @@
 
 static const char* FS_TAG = "celer.fs";
 
+#if CONFIG_CELEROS_SD_CARD
 // Handle do cartao para unmount; bus SPI inicializada sob demanda
 static sdmmc_card_t* s_sd_card = nullptr;
 static bool s_spi_bus_ready = false;
+#endif
 static bool s_localMountFailed = false;
 
 // Flag NVS do primeiro mount de fabrica: sem ela, format_if_mount_failed

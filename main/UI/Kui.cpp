@@ -277,6 +277,26 @@ std::string Canvas::ellipsize(const std::string& s, const lgfx::IFont* font, int
     return "..";
 }
 
+std::vector<std::string> Canvas::wrapText(const std::string& s, const lgfx::IFont* font, int maxW,
+                                          int maxLines) {
+    std::vector<std::string> out;
+    std::string rest = s;
+    for (int ln = 0; ln < maxLines && !rest.empty(); ln++) {
+        size_t cut = rest.size();
+        while (cut > 0 && textWidth(rest.substr(0, cut).c_str(), font) > maxW) {
+            size_t sp = rest.rfind(' ', cut - 1);
+            cut = (sp == std::string::npos || sp == 0) ? cut - 1 : sp;
+        }
+        if (cut == 0) cut = 1;
+        std::string line = rest.substr(0, cut);
+        rest = rest.substr(cut);
+        while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
+        if (ln == maxLines - 1 && !rest.empty()) line = ellipsize(line + " " + rest, font, maxW);
+        out.push_back(line);
+    }
+    return out;
+}
+
 int Canvas::width() const { return m_dev.width(); }
 
 int Canvas::height() const { return m_dev.height(); }
