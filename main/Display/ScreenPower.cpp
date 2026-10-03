@@ -1,11 +1,17 @@
 #include "ScreenPower.h"
 #include "Backlight.h"
+#include "Theme.h"
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
 #include "../Kernel/TimeManager.h"
 #include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
+#include "../UI/Kui.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/I18n.h"
+#if CONFIG_CELEROS_PHONE_LINK
+#include "../Bluetooth/PhoneLink.h"
+#endif
 #include "esp_log.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -34,10 +40,12 @@ int s_state = 3;          // 3 pleno, 2 dim, 1 AOD, 0 off
 bool s_glance = false;    // AOD vindo de raise (expira para off)
 uint32_t s_glanceAt = 0;
 bool s_blWasOff = false;  // edge do Backlight::isOff()
+uint32_t s_blOffAt = 0;   // quando a tela apagou de verdade (auto deep sleep)
 int s_lastAodMin = -1;
 bool s_keepAwake = false;
 uint32_t s_keepAwakeUntil = 0;  // keepAwakeFor(ms): expira sozinho
 uint32_t s_glanceMs = 5000;   // 3/5/8 s
+uint32_t s_deepSleepMs = 15 * 60000UL;  // auto deep sleep (0 = nunca)
 bool s_raiseWake = true;
 bool s_aodOn = true;
 volatile bool s_glanceReq = false;  // requestGlance (qualquer task)
@@ -139,13 +147,17 @@ void reloadSettings() {
     int glance = atoi(CelerSettings::get("glance_sec", "5").c_str());
     if (glance != 3 && glance != 8) glance = 5;
     s_glanceMs = glance * 1000UL;
+    int dsMin = atoi(CelerSettings::get("deep_sleep_min", "15").c_str());
+    if (dsMin < 0) dsMin = 0;
+    if (dsMin > 120) dsMin = 120;
+    s_deepSleepMs = (uint32_t)dsMin * 60000UL;
     s_raiseWake = CelerSettings::get("raise_wake", "1") == "1";
     s_aodOn = CelerSettings::get("aod", "1") == "1";
 
     // OFF logico continua no Backlight (timeout + wake consumido no touch)
     Backlight::setIdleTimeout((uint32_t)offMin * 60000UL, false);
-    ESP_LOGI("celer.screen", "estados de tela (off %d min, glance %d s, raise %d, aod %d)",
-             offMin, glance, (int)s_raiseWake, (int)s_aodOn);
+    ESP_LOGI("celer.screen", "estados de tela (off %d min, glance %d s, raise %d, aod %d, deep %d min)",
+             offMin, glance, (int)s_raiseWake, (int)s_aodOn, dsMin);
 }
 
 void init() {
@@ -181,6 +193,7 @@ void tick(bool inApp) {
                 Backlight::noteActivity();
             } else if (r == 3) {
                 ESP_LOGW("celer.screen", "wake do ULP: bateria fraca");
+                kui::Navigator::toast(i18n::TR("Bateria fraca", "Low battery"), THEME_WARN, 4000);
             }
         }
     }
@@ -199,6 +212,7 @@ void tick(bool inApp) {
     bool blOff = Backlight::isOff();
     if (blOff && !s_blWasOff) {
         s_blWasOff = true;
+        s_blOffAt = now;
         if (!s_glance && s_state != 0) {
             if (bp.screenSleep) bp.screenSleep();
             s_state = 0;
@@ -284,6 +298,30 @@ void tick(bool inApp) {
             break;
         default:
             break;
+    }
+
+    // Deep sleep automatico (watch): tela apagada de verdade por
+    // deep_sleep_min, sem cabo (VBUS segura o USB/celerctl) e sem o celular
+    // conectado (Phone Link morre no sono profundo — as notificacoes do
+    // Gadgetbridge ficam para o light sleep). A sentinela ULP assume o PWR,
+    // o raise filtrado e o alarme por timer.
+    if (s_deepSleepMs > 0 && s_state == 0 && s_blWasOff && now - s_blOffAt >= s_deepSleepMs) {
+        const int cs = BoardIO::chargeState();
+        if (cs >= 0 && (cs & 2)) return;  // na USB/carregando
+#if CONFIG_CELEROS_PHONE_LINK
+        static bool s_plLogged = false;
+        if (PhoneLink::connected()) {
+            if (!s_plLogged) {
+                s_plLogged = true;
+                ESP_LOGI("celer.screen", "deep sleep adiado: celular conectado");
+            }
+            return;
+        }
+        s_plLogged = false;
+#endif
+        ESP_LOGI("celer.screen", "tela apagada ha %u min: deep sleep com sentinela ULP",
+                 (unsigned)(s_deepSleepMs / 60000UL));
+        deepSleepNow();
     }
 }
 

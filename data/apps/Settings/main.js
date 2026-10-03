@@ -368,6 +368,7 @@ var WOPT = [
     "glance_sec|5|Olhadinha|3:3 s,5:5 s,8:8 s",
     "aod|1|Sempre ligada|1:Sim,0:Não",
     "screen_off_min|3|Tela apaga em|1:1 min,2:2 min,3:3 min,5:5 min",
+"deep_sleep_min|15|Sono profundo em|5:5,15:15,30:30,0:Nunca",
     "home_idle_s|30|Voltar ao relógio|15:15 s,30:30 s,60:1 min,0:Nunca",
     "step_goal|8000|Meta de passos|5000:5000,8000:8000,10000:10000,12000:12000",
     "wifi_sleep_min|10|WiFi dorme após|5:5 min,10:10 min,30:30 min,0:Nunca",
