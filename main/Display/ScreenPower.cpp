@@ -169,6 +169,22 @@ void tick(bool inApp) {
     }
     const BoardProfile& bp = Board::profile();
     uint32_t now = millis();
+
+    // Primeiro tick pos-boot: motivo do wake pela sentinela ULP (watch).
+    // PEK (tecla PWR) e raise acendem a tela — sem isso so o BOOT acordava.
+    static bool s_ulpChecked = false;
+    if (!s_ulpChecked) {
+        s_ulpChecked = true;
+        if (bp.ulpWake != nullptr) {
+            const int r = bp.ulpWake();
+            if (r == 1 || r == 2) {
+                Backlight::noteActivity();
+            } else if (r == 3) {
+                ESP_LOGW("celer.screen", "wake do ULP: bateria fraca");
+            }
+        }
+    }
+
     if (s_glanceReq) {
         s_glanceReq = false;
         if (Backlight::isOff() || s_state <= 1) {
@@ -327,12 +343,19 @@ void deepSleepNow() {
     // Radio fora (desconecta limpo; ao acordar e reboot, tudo re-sobe)
     esp_wifi_stop();
 
+    // Sentinela ULP (watch): o coprocessador vigia a tecla PWR do AXP2101,
+    // o raise (INT1 filtrada) e a bateria durante o sono. bit1 = o ULP
+    // cuida do wake por movimento, e a INT1 sai do EXT1 (o cru acordava em
+    // qualquer esbarrão).
+    const int ulp = bp.ulpArm != nullptr ? bp.ulpArm() : 0;
+
     // Wake: EXT1 nivel BAIXO nos botoes do perfil (BOOT do watch; o PWR
-    // fala com o AXP2101, sem IRQ ligado a GPIO — nao acorda do deep sleep)
+    // fala com o AXP2101, sem IRQ ligado a GPIO — quem o acorda e o ULP)
     uint64_t mask = 0;
     // INT do IMU (opt-in "imu_wake": cada movimento forte acorda = boot
-    // inteiro, entao fica desligado por padrao)
-    const int imuPin = CelerSettings::get("imu_wake", "") == "1" ? bp.imuWakePin : -1;
+    // inteiro, entao fica desligado por padrao). Com o ULP no comando do
+    // raise (bit1 acima) a INT fica com ele — filtro melhor que o EXT1 cru.
+    const int imuPin = (!(ulp & 2) && CelerSettings::get("imu_wake", "") == "1") ? bp.imuWakePin : -1;
     int pins[3] = {bp.buttonPin, bp.buttonPin2, imuPin};
     for (int p : pins) {
         if (p < 0) continue;

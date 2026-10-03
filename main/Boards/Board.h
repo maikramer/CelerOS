@@ -148,6 +148,15 @@ struct BoardProfile {
     // INT do IMU ligada a um GPIO RTC (ativo-baixo): acorda do deep sleep
     // com movimento quando o ajuste "imu_wake" = 1. -1 = nao ha.
     int imuWakePin = -1;
+    // Sentinela ULP do deep sleep (watch, ulp/ulp_main.c): o coprocessador
+    // vigia o que so ele alcanca com os nucleos dormindo. ulpArm entra no
+    // ritual do deep sleep (apos sleepPrep); retorna 0 se nao armou, bit0 =
+    // armada, bit1 = o ULP cuida do wake por movimento (a INT1 sai do EXT1,
+    // que acordava cru em qualquer esbarrão). ulpWake consome o motivo do
+    // wake no primeiro tick pos-boot: 1 = tecla (PEK), 2 = raise, 3 =
+    // bateria fraca — 1/2 devem acender a tela. nullptr = placa sem ULP.
+    int (*ulpArm)() = nullptr;
+    int (*ulpWake)() = nullptr;
     // App que abre sozinho no boot (ex.: a cara do cao robotico). nullptr =
     // launcher normal. /local/autostart.txt tem precedencia sobre este campo.
     const char* homeApp = nullptr;

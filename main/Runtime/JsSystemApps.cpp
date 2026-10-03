@@ -31,6 +31,7 @@
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "JsFsJail.h"
+#include "../Boards/Board.h"
 #include "../Kernel/AppRunner.h"
 
 // =====================================================
@@ -493,6 +494,14 @@ duk_ret_t JSBindings::js_deepSleep(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_RANGE_ERROR, "deepSleep: ms deve ser > 0");
     }
     present();  // ultimo frame e despedida visiveis
+    // Mesmo ritual do ScreenPower::deepSleepNow: painel desligado, estado
+    // da placa persistido (passos no NVS, IMU fora), radio desligado e a
+    // sentinela ULP armada — a tecla PWR do watch acorda tambem daqui.
+    const BoardProfile& bp = Board::profile();
+    if (bp.screenSleep != nullptr) bp.screenSleep();
+    if (bp.sleepPrep != nullptr) bp.sleepPrep();
+    esp_wifi_stop();
+    if (bp.ulpArm != nullptr) bp.ulpArm();
     if (duk_is_number(ctx, 1)) {
         int pin = duk_require_int(ctx, 1);
         if (pin >= 0) {

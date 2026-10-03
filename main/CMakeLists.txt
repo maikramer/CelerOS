@@ -100,6 +100,12 @@ elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_BOARD_DIR Boards/waveshare-watch)
     # Servico de movimento (QMI8658: pedometro + raise) e exclusivo do watch
     list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Motion.cpp")
+    # Sentinela ULP do deep sleep (ulp/): o WatchUlp.cpp inclui o header
+    # gerado ulp_watch.h; o binario e embutido no app pela macro abaixo.
+    list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/WatchUlp.cpp")
+    set(CELEROS_ULP_APP ulp_watch)
+    set(CELEROS_ULP_SOURCES "Boards/waveshare-watch/ulp/ulp_main.c")
+    set(CELEROS_ULP_REQUIRES ulp)
 elseif(CELEROS_BOARD STREQUAL "devkit")
     set(CELEROS_BOARD_DIR Boards/devkit)
 else()
@@ -140,9 +146,28 @@ idf_component_register(
         esp_netif
         duktape
         ${CELEROS_BT_REQUIRES}
+        ${CELEROS_ULP_REQUIRES}
     PRIV_REQUIRES
         ${CELEROS_PRIV_REQUIRES}
 )
+
+# Programa ULP-RISC-V (watch): build externo pelo IDF, binario embutido no
+# componente. O 3o argumento e a fonte que inclui o header gerado (dep. de
+# rebuild). Vars vazias nas outras placas = bloco vira no-op.
+if(CELEROS_ULP_APP)
+    # IDF 6.1: os includes do componente ulp nao chegam ao projeto externo
+    # (COMPONENT_INCLUDES = INTERFACE_INCLUDE_DIRECTORIES do main) pela via
+    # normal do REQUIRES — mesma quirk do bt/NimBLE abaixo. Caminho explicito.
+    set_property(TARGET ${COMPONENT_LIB} APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+        "$ENV{IDF_PATH}/components/ulp/ulp_common/include"
+        "$ENV{IDF_PATH}/components/ulp/ulp_riscv/include")
+    ulp_embed_binary(${CELEROS_ULP_APP} "${CELEROS_ULP_SOURCES}"
+                     "${CELEROS_BOARD_DIR}/WatchUlp.cpp" TYPE riscv)
+    # ... e o WatchUlp.cpp (lado main) tambem nao ve ulp_riscv.h/ulp_common.h
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "$ENV{IDF_PATH}/components/ulp/ulp_common/include"
+        "$ENV{IDF_PATH}/components/ulp/ulp_riscv/include")
+endif()
 
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/${CELEROS_BOARD_DIR}")
 

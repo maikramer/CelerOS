@@ -3,6 +3,7 @@
 #include "Pcf85063.h"
 #include "Es8311.h"
 #include "Motion.h"
+#include "WatchUlp.h"
 #include "Hardware/BoardIO.h"
 
 // Smartwatch Waveshare ESP32-S3-Touch-AMOLED-2.06: ESP32-S3R8 (8MB PSRAM
@@ -68,6 +69,8 @@ static const BoardProfile s_profile = {
     .autoLightSleep = true,  // DFS + light sleep com a tela apagada (PowerPolicy)
     .wifiSleepMin = 10,      // WiFi ocioso cai apos 10 min de tela apagada
     .imuWakePin = 21,        // INT1 do QMI8658 (AnyMotion, ativo-baixo)
+    .ulpArm = WatchUlp::arm,   // sentinela ULP no deep sleep: PEK acorda,
+    .ulpWake = WatchUlp::wake, // raise filtrado e VBAT (ulp/ulp_main.c)
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
     .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8); 43/44: UART0 do SerialLink
 };
