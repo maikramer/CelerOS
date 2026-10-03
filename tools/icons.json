@@ -160,5 +160,11 @@
   "prompt": "flat minimal vector game icon, simple white tic tac toe board of four lines with one X and one O placed on it glyph, centered, solid rose red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
   "output": "tictactoe.png",
   "seed": 128
+ },
+ {
+  "id": "qwen",
+  "prompt": "flat minimal vector app icon, simple white microphone glyph with two small sound wave arcs, centered, solid deep indigo blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+  "output": "qwen.png",
+  "seed": 129
  }
 ]

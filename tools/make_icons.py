@@ -211,6 +211,7 @@ APP_PKG_ICONS = {
     "Settings": "settings",
     "Web Server": "web",
     "Terminal": "terminal",
+    "Qwen": "qwen",
     "Snake": "snake",
     "HTTP Demo": "httpdemo",
     "Touch Test": "touchtest",

@@ -1870,6 +1870,92 @@ function holdFrames(x, y, n) {
     check('arrasto oposto volta ao vivo', r.env.__harness.chatScroll === 0, r.env.__harness.chatScroll);
 })();
 
+// --- Qwen (API 19): voz no touch — hold no botao, input_audio no payload ------
+(function() {
+    console.log('Qwen (voz, touch):');
+    var r = runApp('data/apps/Qwen/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: 'Ouvi voce dizer oi.',
+            usage: { total_tokens: 120 }, raw: ''
+        });
+        // segura o botao de voz (120, 276) ~840 ms e solta: 42 frames + release
+        var held = [];
+        for (var i = 0; i < 42; i++) held.push({ x: 120, y: 276, touched: 1 });
+        held.push({ x: 0, y: 0, touched: 0 });
+        env.__harness.pushTouch(held);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('header Qwen', j.indexOf('Qwen ') >= 0, j.slice(0, 200));
+    check('pergunta (voz) no transcript', j.indexOf('você: (voz)') >= 0, j);
+    check('resposta desenhada', j.indexOf('Q: Ouvi voce dizer oi.') >= 0, j);
+    check('tokens da resposta', j.indexOf('(120 tokens)') >= 0, j);
+    check('mic usado com teto de 8 s', r.env.__harness.mic.ms === 8000, r.env.__harness.mic.ms);
+    var req = r.env.__harness.aiChats[0] || '';
+    check('input_audio wav no payload', req.indexOf('input_audio') >= 0 &&
+          req.indexOf('"format":"wav"') >= 0, req.slice(0, 200));
+    check('modelo qwen omni e provider fora do payload',
+          req.indexOf('qwen/qwen3.8-omni-flash') >= 0 && req.indexOf('provider') < 0, req.slice(0, 200));
+    check('"(voz)" nao vai como texto no contexto', req.indexOf('(voz)') < 0, req.slice(0, 300));
+    check('historico gravado com a voz marcada', (() => {
+        var h = r.env.FS.readTextFile('/local/data/celeros.qwen/historico.json');
+        return !!h && h.indexOf('(voz)') >= 0 && h.indexOf('Ouvi voce') >= 0;
+    })(), r.env.FS.readTextFile('/local/data/celeros.qwen/historico.json'));
+})();
+
+// --- Qwen (API 19): cao — pad capacitivo, fonte 4x6, 3 toques saem -----------
+(function() {
+    console.log('Qwen (cao):');
+    var script = [];
+    var r = runApp('data/apps/Qwen/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: true, status: 200, content: 'Ola! Tudo bem?', raw: '' });
+        var gi = env.System.getInfo;
+        env.System.getInfo = function() {
+            var inf = gi(); inf.board = 'spotpear-dog'; inf.hasMic = true; return inf;
+        };
+        // roteiro do pad (1 valor por volta de loop): segurar ~1,4 s, soltar,
+        // resposta chega, 1 toque rola a pagina, 2 toques rapidos saem (3 no total)
+        for (var i = 0; i < 70; i++) script.push(1);   // hold
+        for (var g = 0; g < 5; g++) script.push(0);     // solta -> envia
+        script.push(1, 0, 0);                           // toque 1: rola
+        script.push(1, 0, 0);                           // toque 2
+        script.push(1, 0);                              // toque 3: sai
+        env.System.touchPad = function() { return script.length ? script.shift() : 0; };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var req = r.env.__harness.aiChats[0] || '';
+    check('voz do pad vira input_audio', req.indexOf('input_audio') >= 0 &&
+          req.indexOf('"format":"wav"') >= 0 && req.indexOf('(voz)') < 0, req.slice(0, 200));
+    var qd = r.env.__harness.qwenDog || {};
+    check('resposta em linhas 4x6', qd.lines === 1, JSON.stringify(qd));
+    // toque rola a pagina (os 2 primeiros) e o 3o sai do app por OS_EXIT
+    check('toques avancaram a pagina', qd.page === 2, JSON.stringify(qd));
+    // o 3o toque saiu do app (OS_EXIT) antes do LIMIT do harness
+    var mic = r.env.__harness.mic;
+    check('gravacao aberta e fechada', mic.ms === 6000 && !mic.on, JSON.stringify(mic));
+})();
+
+// --- Qwen (API 19): placa sem microfone = chat de texto ----------------------
+(function() {
+    console.log('Qwen (sem mic):');
+    var r = runApp('data/apps/Qwen/main.js', function(env) {
+        delete env.Mic;  // runtime sem o objeto (sem perm/placa sem mic)
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: true, status: 200, content: 'Oi do servidor.', raw: '' });
+        env.__harness.typeLine('ola');
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('aviso de sem microfone', j.indexOf('sem microfone aqui') >= 0, j.slice(0, 300));
+    check('teclado aberto sozinho e resposta chega',
+          j.indexOf('você: ola') >= 0 && j.indexOf('Q: Oi do servidor.') >= 0, j);
+    var req = r.env.__harness.aiChats[0] || '';
+    check('payload de texto puro (sem input_audio)',
+          req.indexOf('input_audio') < 0 && req.indexOf('qwen/qwen3.8-omni-flash') >= 0, req.slice(0, 200));
+})();
+
 // resumo
 console.log('');
 if (failures) {
