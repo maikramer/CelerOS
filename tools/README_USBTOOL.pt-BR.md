@@ -100,23 +100,30 @@ python3 tools/celerctl.py tap 360 88 && python3 tools/celerctl.py screencap s.pn
 
 Placas com `CONFIG_CELEROS_JS_DEBUGGER` (padrao nas S3; desligado no CYD,
 onde slot OTA e RAM sao o limite) falam o protocolo do debugger do Duktape
-pelo mesmo canal (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`). `celerctl debug` e um
-proxy TCP local; `tools/debug/dbg.js` e o cliente:
+pelo mesmo canal (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`):
 
 ```bash
-python3 tools/celerctl.py debug Snake   # terminal 1: proxy, abre o app quando o cliente conecta
-node tools/debug/dbg.js                 # terminal 2: REPL
+python3 tools/celerctl.py debug Snake          # proxy + REPL neste terminal, com os logs do app
+python3 tools/celerctl.py debug Snake --serve  # so o proxy (dmsg em :9092, logs em :9093)
+node tools/debug/dbg.js                        #   ...e o REPL em outro terminal
 ```
 
-O app pausa na primeira linha quando o debugger attacha (sem nome de app, o
-app que ja roda attacha no proximo yield). Comandos: `b <linha>`, `B`,
-`d <idx>`, `c`/`p`, `s`/`n`/`o` (into/over/out), `l [n]` (fonte ao redor da
-pausa, lido de `data/apps`/`hub_apps` ou `--src`), `e <expr>`, `v <var>`,
-`set <var> <json>`, `cs`, `lc`, `up`/`down`, `q`. O stdin pode ser um
-roteiro: cada comando espera a resposta, e `c`/`s`/`n`/`o` esperam a
-proxima pausa. Fechar o cliente (ou o proxy) desattacha e o app segue
-rodando. O handshake e unilateral: o device manda a linha de versao e o
-cliente nao pode escrever nada antes dela.
+O app pausa quando o debugger attacha (na primeira linha; sem nome de app, o
+app que ja roda attacha no proximo yield), e erro nao capturado pausa no
+throw. `h` lista os comandos: breakpoints (`b 42 if x > 3`, `tb`,
+`u <linha>`, `B`, `d`, `cond`), `c`/`p` (ou Ctrl-C), `s`/`n`/`o`, inspecao
+com objetos em JSON montado no device (`v`, `e`, `lc`, `cs`, `up`/`down`,
+`set`), watches (`w`), `l` (fonte local), `i` (heap) e `r`: linta e envia a
+pasta local editada do app e reinicia com os breakpoints restaurados. O
+stdin pode ser um roteiro: cada comando espera a resposta, e `c`/`s`/`n`/`o`
+esperam a proxima pausa.
+
+Regras de robustez: o handshake e unilateral (o device manda a linha de
+versao; o cliente nao escreve antes dela); `q`, fechar o cliente, matar o
+proxy (ate `kill -9`: o device solta o cliente quando a sessao do host
+expira em 8s) ou puxar o cabo desattacham e o app segue rodando. Protocolo e
+cliente tem cobertura no host em `node test/debug/run.js` (alvo Duktape
+falso).
 
 ## Acelerando transferencias (-b)
 

@@ -68,7 +68,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Selective staging only**: `git add <explicit paths>`, never `-A`/`-u`/`.`. When one file carries two features, split it by hunks (`git apply --cached` with a crafted patch is the reliable non-interactive way) — see 317c7d3 or the API 15 commits (ed70e10/4a04292).
 - **Commit style**: Portuguese without accents, subject `Area: assunto` + a detailed body (what, why, bench evidence). One story per commit; its tests, stubs and lint updates ride along. No AI attribution footers.
 - **Push discipline**: fast-forward only, never `--force` (history was filter-repo'd once; old hashes must never come back). On rejection, fetch and rebase your own unpushed commits.
-- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
+- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Bench**: hardware validation is manual (CI has no device). Ports: `/dev/ttyUSB0` SmartDisplay, `/dev/ttyUSB1` CYD, `/dev/ttyACM0` dog or watch (flash id disambiguates: 16MB vs 32MB). The watch takes firmware over `celerctl ota push` (retry on timeout); esptool is for first load only.
 
@@ -103,11 +103,13 @@ idf.py -B build build flash -p /dev/ttyUSB0 monitor
 tools/flash_data.sh [smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit] [PORT]  # LittleFS data partition (needs IDF env)
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART/CDC
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool (the watch's path)
+python3 tools/celerctl.py debug MyApp                                       # JS debugger REPL (S3 boards: CELEROS_JS_DEBUGGER)
 
 # Validation battery (run before any push; CI runs the same)
 node test/js_harness/run.js
 node test/app_lint/run.js
 node test/sdk/run.js
+node test/debug/run.js
 node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
 node tools/sdk/celer.js check            # drift; `celer.js types` regenerates celer.d.ts
 g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests

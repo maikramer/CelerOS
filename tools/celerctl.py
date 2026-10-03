@@ -20,7 +20,7 @@ Comandos:
   logcat [--dump] [--ts] [--grep P]  logs: stream ao vivo ou copia o buffer (--dump)
   ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
   coredump [--out ARQ]        baixa coredump ELF do ultimo crash nativo
-  debug [APP] [--tcp-port N]  debugger Duktape (cliente: node tools/debug/dbg.js)
+  debug [APP] [--serve]       debugger Duktape: breakpoints, step, eval (REPL neste terminal)
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
   swipe X0 Y0 X1 Y1 [ms]      injeta um arrasto (scroll/troca de pagina)
@@ -115,6 +115,12 @@ class HostLink:
     sessao segue em v1 (sem CRC, stop-and-wait — como sempre funcionou).
     """
 
+    # Fluxo continuo (celerctl debug): o xfer NAO limpa a entrada nem a fila —
+    # frames do debugger que chegam entre comandos sao o proprio protocolo — e
+    # descarta respostas velhas (HELLO do keepalive) em vez de toma-las pela
+    # resposta esperada
+    keep_push = False
+
     def __init__(self, port, timeout=3.0, baud=DEFAULT_BAUD):
         self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
         self.timeout = timeout
@@ -181,12 +187,16 @@ class HostLink:
                     continue
             frame = self._frame(cmd, payload)
             try:
-                self.ser.reset_input_buffer()
-                self.push_queue = []
+                if not self.keep_push:
+                    self.ser.reset_input_buffer()
+                    self.push_queue = []
                 self.ser.write(frame)
                 cmd_r, payload_r = self._read_frame(timeout=timeout)
-                while cmd_r != cmd and cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
-                    self.push_queue.append((cmd_r, payload_r))
+                while cmd_r != cmd:
+                    if cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
+                        self.push_queue.append((cmd_r, payload_r))
+                    elif not (self.keep_push and cmd_r != 0x00):
+                        break  # resposta de erro (0x00) ou inesperada: decide abaixo
                     cmd_r, payload_r = self._read_frame(timeout=timeout)
                 if cmd_r == 0x00 or (payload_r and payload_r[0] == 1):
                     raise CelerError(payload_r[1:].decode("utf-8", "replace") or
@@ -376,7 +386,8 @@ class HostLink:
                 for seq, (start, n) in list(pendings.items()):
                     self.ser.write(frame_for(seq, start))
                 last_ack = time.monotonic()
-            show_progress(label, applied, total)
+            if label:  # write_file(progress=False) passa label None
+                show_progress(label, applied, total)
         return applied, crc
 
     def write_file(self, local_path, remote_path, progress=True):
@@ -385,7 +396,7 @@ class HostLink:
         with open(local_path, "rb") as f:
             try:
                 applied, crc = self._pump_chunks(f, total, KL["WRITE_CHUNK"], 15.0,
-                                                 f"push {os.path.basename(remote_path)}")
+                                                 f"push {os.path.basename(remote_path)}" if progress else None)
                 end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
                 _, payload = self.xfer(KL["WRITE_END"], end_payload, timeout=10.0)
             except (CelerError, serial.SerialException):
@@ -941,30 +952,129 @@ def cmd_coredump(args):
     print(f"  idf.py -B build coredump-info -c {args.out}")
 
 
+def split_frames(buf, proto):
+    """Extrai os frames completos de um buffer acumulado da serial, sem
+    bloquear: devolve ([(cmd, payload)], resto). Lixo antes do magic (texto
+    do console) e frame com CRC errado sao descartados; frame pela metade
+    fica no resto esperando os bytes seguintes — nunca se perde um pedaco do
+    fluxo do debugger por timeout no meio do frame."""
+    frames = []
+    head_len = 8 if proto == 2 else 4
+    while True:
+        i = buf.find(b"\x43")
+        if i < 0:
+            return frames, b""
+        buf = buf[i:]
+        if len(buf) < head_len:
+            return frames, buf
+        cmd, length = buf[1], struct.unpack("<H", buf[2:4])[0]
+        if len(buf) < head_len + length:
+            return frames, buf
+        payload = bytes(buf[head_len:head_len + length])
+        if proto == 2:
+            crc = struct.unpack("<I", buf[4:8])[0]
+            if crc != zlib.crc32(bytes(buf[1:4]) + payload) & 0xFFFFFFFF:
+                buf = buf[1:]  # magic falso ou frame corrompido: caca o proximo
+                continue
+        frames.append((cmd, payload))
+        buf = buf[head_len + length:]
+
+
 def cmd_debug(args):
-    """Debug do Duktape pela serial: arma o attach no proximo app, abre um
-    TCP local que fala o protocolo dmsg cru e faz o proxy bidirecional com
-    frames KL_DEBUG_DATA. Cliente: node tools/debug/dbg.js (REPL) — ou
-    qualquer cliente do Duktape debugger apontando para 127.0.0.1:PORTA.
+    """Debugger do Duktape pela serial. Abre dois TCP locais — o protocolo
+    dmsg cru (porta) e as linhas de log do device (porta+1) — e faz o proxy
+    com frames KL_DEBUG_DATA. Por padrao ja abre o cliente (node
+    tools/debug/dbg.js) neste terminal; com --serve so o proxy fica no ar
+    (cliente em outro terminal, ou qualquer cliente do Duktape debugger).
 
     Ordem: o cliente conecta ANTES do app rodar — a linha de versao que o
-    target manda no attach so tem para onde ir. O cliente NAO fala primeiro;
+    alvo manda no attach so tem para onde ir. O cliente NAO fala primeiro;
     o DEBUG_CTL 1 depois do accept e o gate do attach no device."""
+    import select
+    import shutil
+    import signal
+    import subprocess
+
     link = open_link(args)
     if "DEBUG_CTL" not in KL:
         die("celerctl sem KL_DEBUG_CTL: firmware muito antigo para o debugger")
 
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", args.tcp_port))
-    srv.listen(1)
+    def _terminate(*_):
+        raise KeyboardInterrupt  # kill/terminal fechado: roda a limpeza (DEBUG_CTL 0)
+    signal.signal(signal.SIGTERM, _terminate)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _terminate)
+
+    def listen(port):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError as e:
+            die(f"porta TCP {port} ocupada ({e}): outro celerctl debug? use --tcp-port")
+        s.listen(1)
+        return s
+
+    srv = listen(args.tcp_port)
+    log_srv = listen(args.tcp_port + 1)
+    log_srv.setblocking(False)
     app = getattr(args, "app", None)
-    print(f"debug: TCP em 127.0.0.1:{args.tcp_port} — conecte o cliente:")
-    port_arg = f" --port {args.tcp_port}" if args.tcp_port != 9092 else ""
-    print(f"  node tools/debug/dbg.js{port_arg}   (o app pausa na 1a linha; `h` = ajuda)")
-    conn, _ = srv.accept()
-    print("debug: cliente conectado" + (f"; abrindo {app}" if app else " (run <app> por sua conta)"))
+
+    client = None
+    node = shutil.which("node")
+    if not args.serve and node is None:
+        print("debug: node nao encontrado; seguindo so com o proxy (--serve)")
+    spawn = not args.serve and node is not None
+    if spawn:
+        cli = [node, str(Path(__file__).resolve().parent / "debug" / "dbg.js"),
+               "--port", str(args.tcp_port)]
+        if args.src:
+            cli += ["--src", args.src]
+        # Ctrl-C e do cliente (pausa o app); o proxy so sai quando ele sair
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        client = subprocess.Popen(cli)
+    else:
+        port_arg = f" --port {args.tcp_port}" if args.tcp_port != 9092 else ""
+        print(f"debug: proxy em 127.0.0.1:{args.tcp_port} (logs em :{args.tcp_port + 1}) — em outro terminal:")
+        print(f"  node tools/debug/dbg.js{port_arg}")
+
+    srv.settimeout(1.0)
+    conn = None
+    while conn is None:
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            if client is not None and client.poll() is not None:
+                die("cliente saiu antes de conectar")
     conn.setblocking(False)
+    if not spawn:
+        print("debug: cliente conectado" + (f"; abrindo {app}" if app else " (abra o app no device)"))
+
+    # logs ao vivo, mas sem o historico do ring (boot inteiro): o LOG_ON
+    # drena o ring de uma vez — descarta ate a serial sossegar
+    link.logcat_on()
+    link.push_queue.clear()
+    link.keep_push = True  # daqui em diante frames do debugger nunca se perdem
+    quiet_since = time.monotonic()
+    deadline = quiet_since + 6.0
+    while time.monotonic() - quiet_since < 0.3 and time.monotonic() < deadline:
+        if link.ser.in_waiting:
+            link.ser.read(link.ser.in_waiting)
+            quiet_since = time.monotonic()
+        else:
+            time.sleep(0.02)
+
+    log_conns = []
+    if spawn:
+        # o cliente abre a porta de logs logo apos a principal: espera por
+        # ele para o que o app imprimir no attach ja cair no REPL
+        log_srv.settimeout(2.0)
+        try:
+            lc, _ = log_srv.accept()
+            log_conns.append(lc)
+        except OSError:
+            pass
+        log_srv.setblocking(False)
 
     # Armar SO DEPOIS do accept: o canal do device cai para o console apos
     # 8s sem frames do host, e o accept pode demorar minutos esperando o
@@ -982,70 +1092,154 @@ def cmd_debug(args):
         # o app recem-aberto no primeiro delay. Com outro app no ar o run
         # espera ele sair (a mensagem do device diz)
         code, out = link.exec(f"run {app}")
-        print(("debug: " if code == 0 else f"debug: run {app} falhou: ") + out.strip())
-    # logs do device no terminal do proxy: o attach e os estados do
-    # debugger aparecem junto com o que o app printa
-    link.logcat_on()
+        if code != 0 or not spawn:
+            print(("debug: " if code == 0 else f"debug: run {app} falhou: ") + out.strip())
 
+    def emit_log(text):
+        # logs vao para o cliente (porta lateral); sem cliente de logs, aqui
+        dead = []
+        for lc in log_conns:
+            try:
+                lc.sendall(text.encode("utf-8", "replace"))
+            except OSError:
+                dead.append(lc)
+        for lc in dead:
+            log_conns.remove(lc)
+        if not log_conns:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    # `r` no cliente: sincroniza o fonte local com o device antes de relancar
+    # (pedido "sync <pasta no device>" pela porta de logs, que e bidirecional;
+    # resposta numa linha com prefixo \x01 que o cliente nao imprime)
+    synced = {}
+    log_bufs = {}
+
+    def local_app_dir(dev_dir):
+        if args.src:
+            p = Path(args.src)
+            return p if p.is_dir() else p.parent
+        name = dev_dir.rstrip("/").rsplit("/", 1)[-1]
+        root = Path(__file__).resolve().parent.parent
+        cands = [root / "data" / "apps" / name, root / "hub_apps" / name]
+        cands += sorted(root.glob(f"boards/*/data/apps/{name}"))
+        return next((c for c in cands if (c / "app.json").is_file()), None)
+
+    def do_sync(dev_dir):
+        src = local_app_dir(dev_dir)
+        if src is None:
+            return "skip sem fonte local (use --src)"
+        if not _lint_app_folder(src, fatal=False):
+            return "erro lint com erros (detalhes no terminal do celerctl)"
+        snap = _snapshot(src)
+        # 1o sync empurra a pasta inteira (cria subpastas; o device pode ter
+        # outra versao); os seguintes, so o que mudou desde o anterior
+        only = None if not synced else [rel for rel, st in sorted(snap.items()) if synced.get(rel) != st]
+        pushed = _push_app_files(link, src, dev_dir.rstrip("/"), only=only, progress=False)
+        synced.clear()
+        synced.update(snap)
+        return f"ok {len(pushed)} {' '.join(pushed) if only is not None else '(pasta inteira)'}".rstrip()
+
+    def handle(cmd_, payload):
+        if cmd_ == KL["DEBUG_DATA"]:
+            conn.sendall(payload)
+        elif cmd_ == KL["LOG_DATA"]:
+            emit_log(payload[1:].decode("utf-8", "replace"))
+
+    # frames que o xfer/exec acima enfileiraram (attach rapido)
+    while link.push_queue:
+        handle(*link.push_queue.pop(0))
+
+    rxbuf = b""
     last_keepalive = time.monotonic()
+    reason = "cliente desconectou"
     try:
         while True:
-            # cliente -> device: emoldura os bytes dmsg em KL_DEBUG_DATA
-            try:
-                data = conn.recv(8192)
-                if not data:
-                    print("debug: cliente desconectou")
-                    break
-                for i in range(0, len(data), link.max_chunk):
-                    link.ser.write(link._frame(KL["DEBUG_DATA"], data[i:i + link.max_chunk]))
-            except BlockingIOError:
-                pass
-            # device -> cliente: KL_DEBUG_DATA (payload puro); logs seguem
-            # no terminal para o contexto do que o app esta fazendo
-            try:
-                cmd_, payload = link._read_frame(timeout=0.2)
-                if cmd_ == KL["DEBUG_DATA"]:
-                    conn.sendall(payload)
-                elif cmd_ == KL["LOG_DATA"]:
-                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
-                    sys.stdout.flush()
-            except CelerError:
-                pass
-            while link.push_queue:
-                cmd_, payload = link.push_queue.pop(0)
-                if cmd_ == KL["DEBUG_DATA"]:
-                    conn.sendall(payload)
-                elif cmd_ == KL["LOG_DATA"]:
-                    sys.stdout.write(payload[1:].decode("utf-8", "replace"))
-            # canal cai para console apos 8s sem bytes do host. Keepalive
-            # PASSIVO: so escreve o HELLO — o xfer comum daria
-            # reset_input_buffer e limparia a push_queue, APAGANDO frames do
-            # debugger/logs que o loop ainda nao leu (o handshake do attach
-            # sumia inteiro e a sessao parecia morta)
-            if time.monotonic() - last_keepalive > 5.0:
-                last_keepalive = time.monotonic()
+            if client is not None and client.poll() is not None:
+                reason = "cliente saiu"
+                break
+            rlist, _, _ = select.select([conn, log_srv, link.ser.fileno()] + log_conns, [], [], 0.05)
+            if log_srv in rlist:
                 try:
-                    magic = b"CELERCTL1" if link.proto == 1 else b"CELERCTL2"
-                    link.ser.write(link._frame(KL["HELLO"], magic))
-                except (CelerError, serial.SerialException, OSError):
-                    print("\ndebug: conexao caiu; encerrando")
+                    lc, _ = log_srv.accept()
+                    log_conns.append(lc)
+                except OSError:
+                    pass
+            for lc in [c for c in log_conns if c in rlist]:
+                try:
+                    chunk = lc.recv(4096)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    log_conns.remove(lc)
+                    continue
+                log_bufs[lc] = log_bufs.get(lc, b"") + chunk
+                while b"\n" in log_bufs[lc]:
+                    line, log_bufs[lc] = log_bufs[lc].split(b"\n", 1)
+                    req = line.decode("utf-8", "replace").strip()
+                    if req.startswith("sync "):
+                        try:
+                            res = do_sync(req[5:].strip())
+                        except (CelerError, OSError) as e:
+                            res = f"erro {e}"
+                        lc.sendall(("\x01sync " + res + "\n").encode())
+                        # xfer do push guarda frames do debugger/logs na fila
+                        while link.push_queue:
+                            handle(*link.push_queue.pop(0))
+            # cliente -> device: emoldura os bytes dmsg em KL_DEBUG_DATA
+            if conn in rlist:
+                try:
+                    data = conn.recv(8192)
+                except (BlockingIOError, InterruptedError):
+                    data = None
+                except OSError:
+                    data = b""
+                if data == b"":
                     break
+                if data:
+                    for i in range(0, len(data), link.max_chunk):
+                        link.ser.write(link._frame(KL["DEBUG_DATA"], data[i:i + link.max_chunk]))
+            # device -> cliente: tudo o que a serial tiver, em frames inteiros
+            waiting = link.ser.in_waiting
+            if waiting:
+                rxbuf += link.ser.read(waiting)
+                frames, rxbuf = split_frames(rxbuf, link.proto)
+                for f in frames:
+                    handle(*f)
+            # canal cai para console apos 8s sem bytes do host. Keepalive
+            # PASSIVO: so escreve o HELLO (a resposta e descartada acima) —
+            # o xfer comum limparia o buffer de entrada e apagaria frames do
+            # debugger que ainda nao foram lidos
+            if time.monotonic() - last_keepalive > 4.0:
+                last_keepalive = time.monotonic()
+                magic = b"CELERCTL1" if link.proto == 1 else b"CELERCTL2"
+                link.ser.write(link._frame(KL["HELLO"], magic))
+    except (serial.SerialException, OSError) as e:
+        reason = f"serial caiu ({e}) — device reiniciou ou cabo saiu?"
     except KeyboardInterrupt:
-        print()
+        reason = "interrompido"
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        srv.close()
+        for s in [conn, srv, log_srv] + log_conns:
+            try:
+                s.close()
+            except Exception:
+                pass
         # DEBUG_CTL 0 = cliente saiu: o read do transporte no device devolve
         # 0, o Duktape desattacha e um app pausado no breakpoint volta a rodar
         try:
             link.xfer(KL["DEBUG_CTL"], b"\x00", timeout=3.0)
         except Exception:
             pass
-        link.close()
-        print("debug: encerrado (flag do debugger desarmada)")
+        try:
+            link.close()
+        except Exception:
+            pass
+        if client is not None:
+            try:
+                client.wait(timeout=3.0)
+            except Exception:
+                client.kill()
+        print(f"debug: encerrado ({reason})")
 
 def cmd_screencap(args):
     link = open_link(args)
@@ -1587,6 +1781,9 @@ def main():
     p.add_argument("app", nargs="?", help="app a abrir apos o cliente conectar (default: nenhum)")
     p.add_argument("--tcp-port", type=int, default=9092, dest="tcp_port",
                    help="porta TCP local do proxy (default 9092; nao confundir com -p serial)")
+    p.add_argument("--serve", action="store_true",
+                   help="so o proxy (cliente em outro terminal: node tools/debug/dbg.js)")
+    p.add_argument("--src", help="fonte local do app para o cliente (default: data/apps, hub_apps...)")
     p.set_defaults(func=cmd_debug)
 
     p = sub.add_parser("screencap", help="captura da tela -> PNG")

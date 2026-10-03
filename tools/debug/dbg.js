@@ -1,148 +1,77 @@
 #!/usr/bin/env node
-// Cliente minimo do Duktape debugger para o CelerOS: conecta no proxy TCP do
-// `celerctl debug` e fala o protocolo dmsg do Duktape 2.7 (breakpoints, step,
-// Eval, GetVar/PutVar, call stack, locals) num REPL de uma linha. Zero
-// dependencias (Node puro, como o resto do repo).
+// Cliente do Duktape debugger para o CelerOS: conecta no proxy TCP do
+// `celerctl debug` e fala o protocolo dmsg (tools/debug/dmsg.js) num REPL.
+// Zero dependencias (Node puro, como o resto do repo).
 //
-//   python3 tools/celerctl.py debug MeuApp   # terminal 1: proxy + roda o app
-//   node tools/debug/dbg.js                  # terminal 2: REPL abaixo
+//   python3 tools/celerctl.py debug MeuApp   # abre proxy + este REPL juntos
+//   python3 tools/celerctl.py debug MeuApp --serve  +  node tools/debug/dbg.js
 //
 // O app PAUSA na primeira linha ao attachar: ponha os breakpoints e `c`.
-// Comandos (frame = o do topo da pilha, salvo `lc N`/`up`/`down`):
-//   b <linha> [arquivo]  breakpoint (default: arquivo da pausa atual)
-//   B                    lista breakpoints     d <idx>  remove
-//   c | p                continue | pause      q        detach e sair
-//   s | n | o            step into/over/out    l [n]    fonte ao redor da linha
-//   e <expr JS>          Eval no frame         v <nome> GetVar no frame
-//   set <nome> <json>    PutVar no frame       cs       call stack
-//   lc                   locals do frame       up|down  troca o frame
-//   i                    BasicInfo
+// Erro nao capturado tambem pausa (no ponto do throw). `h` lista os comandos.
 //
-// Opcoes: --file /local/apps/X/main.js (default dos breakpoints antes da 1a
-// pausa), --src <pasta|arquivo> (fonte local para o `l`; sem ela o cliente
-// procura o app em data/apps, hub_apps e boards/*/data/apps), --host, --port.
-// Variaveis DBG_HOST/DBG_PORT/DBG_FILE valem como default.
+// Opcoes: --port P (proxy, default 9092), --log-port P (logs do device,
+// default port+1), --host H, --file /local/apps/X/main.js (arquivo dos
+// breakpoints antes da 1a pausa), --src <pasta|arquivo> (fonte local para
+// `l`; sem ela procura o app em data/apps, hub_apps e boards/*/data/apps).
 'use strict';
 
 var net = require('net');
 var fs = require('fs');
 var path = require('path');
 var readline = require('readline');
+var D = require('./dmsg');
 
 // ---- opcoes -----------------------------------------------------------------
 var OPT = { host: process.env.DBG_HOST || '127.0.0.1', port: process.env.DBG_PORT || '9092',
-            file: process.env.DBG_FILE || '', src: '' };
+            'log-port': '', file: process.env.DBG_FILE || '', src: '' };
 (function parseArgs(argv) {
     for (var i = 0; i < argv.length; i++) {
-        var m = /^--(host|port|file|src)(?:=(.*))?$/.exec(argv[i]);
+        var m = /^--(host|port|log-port|file|src)(?:=(.*))?$/.exec(argv[i]);
         if (!m) {
-            console.error('uso: dbg.js [--host H] [--port P] [--file /local/apps/X/main.js] [--src pasta]');
+            console.error('uso: dbg.js [--host H] [--port P] [--log-port P] [--file /local/apps/X/main.js] [--src pasta]');
             process.exit(2);
         }
         OPT[m[1]] = m[2] !== undefined ? m[2] : argv[++i];
     }
 })(process.argv.slice(2));
+var PORT = parseInt(OPT.port, 10);
+var LOG_PORT = OPT['log-port'] ? parseInt(OPT['log-port'], 10) : PORT + 1;
 var REPO = path.resolve(__dirname, '..', '..');
+var TTY = !!process.stdin.isTTY;
 
-// ---- constantes dmsg (duktape.c, DUK_DBG_CMD_* / DUK_DBG_IB_*) --------------
-var CMD = {
-    STATUS: 0x01, THROW: 0x05, DETACHING: 0x06, APPNOTIFY: 0x07,
-    BASICINFO: 0x10, PAUSE: 0x12, RESUME: 0x13, STEPINTO: 0x14, STEPOVER: 0x15,
-    STEPOUT: 0x16, LISTBREAK: 0x17, ADDBREAK: 0x18, DELBREAK: 0x19, GETVAR: 0x1a,
-    PUTVAR: 0x1b, GETCALLSTACK: 0x1c, GETLOCALS: 0x1d, EVAL: 0x1e, DETACH: 0x1f
+// ---- saida ------------------------------------------------------------------
+var COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR;
+function paint(code, s) { return COLOR ? '\x1b[' + code + 'm' + s + '\x1b[0m' : s; }
+var C = {
+    pause: function (s) { return paint('1;33', s); },
+    err: function (s) { return paint('31', s); },
+    dim: function (s) { return paint('2', s); },
+    ok: function (s) { return paint('32', s); },
+    cur: function (s) { return paint('1', s); }
 };
-var IB = { EOM: 0x00, REQ: 0x01, REP: 0x02, ERR: 0x03, NFY: 0x04 };
-var ERRS = ['desconhecido', 'nao suportado', 'demais', 'nao encontrado', 'aplicacao'];
-var DETACH_REASONS = ['normal', 'erro de transporte/protocolo'];
-
-// ---- codificacao de dvalues -------------------------------------------------
-function dvInt(n) {
-    if (n >= 0 && n <= 0x3f) return Buffer.from([0x80 + n]);
-    if (n >= 0 && n <= 0x3fff) return Buffer.from([0xc0 + (n >> 8), n & 0xff]);
-    var b = Buffer.alloc(5);
-    b[0] = 0x10;  // INT4
-    b.writeInt32BE(n, 1);
-    return b;
-}
-function dvStr(s) {
-    var bytes = Buffer.from(String(s), 'utf8');
-    if (bytes.length <= 31) return Buffer.concat([Buffer.from([0x60 + bytes.length]), bytes]);
-    var head = Buffer.alloc(5);
-    head[0] = 0x11;  // STR4
-    head.writeUInt32BE(bytes.length, 1);
-    return Buffer.concat([head, bytes]);
-}
-// valor JS (do JSON digitado no `set`) -> dvalue
-function dvValue(v) {
-    if (v === undefined) return Buffer.from([0x16]);
-    if (v === null) return Buffer.from([0x17]);
-    if (v === true) return Buffer.from([0x18]);
-    if (v === false) return Buffer.from([0x19]);
-    if (typeof v === 'string') return dvStr(v);
-    if (typeof v === 'number') {
-        var b = Buffer.alloc(9);
-        b[0] = 0x1a;
-        b.writeDoubleBE(v, 1);
-        return b;
+var rl = null;
+var rlClosed = false;
+function out(s) {
+    if (TTY && process.stdout.isTTY) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
     }
-    throw new Error('so numero, string, true/false/null');
+    console.log(s);
+    prompt();
 }
-// mensagem = [REQ][cmd int][args...][EOM] — fluxo continuo de dvalues, sem
-// framing de comprimento
-function request(cmd, args) {
-    return Buffer.concat([Buffer.from([IB.REQ]), dvInt(cmd)].concat(args || [], [Buffer.from([IB.EOM])]));
-}
+function prompt() { if (rl && !rlClosed && TTY && ready()) rl.prompt(true); }
 
-// ---- decodificacao ----------------------------------------------------------
-function Incomplete() {}
-function Reader(buf) { this.buf = buf; this.off = 0; }
-Reader.prototype.need = function (n) {
-    if (this.off + n > this.buf.length) throw new Incomplete();
-};
-Reader.prototype.bytes = function (n) {
-    this.need(n);
-    var s = this.buf.slice(this.off, this.off + n);
-    this.off += n;
-    return s;
-};
-Reader.prototype.u8 = function () { this.need(1); return this.buf[this.off++]; };
-Reader.prototype.dvalue = function () {
-    var b = this.u8();
-    if (b <= 0x04) return { t: ['eom', 'req', 'rep', 'err', 'nfy'][b] };
-    if (b === 0x10) return { t: 'int', v: this.bytes(4).readInt32BE(0) };
-    if (b === 0x11) return { t: 'str', v: this.bytes(this.bytes(4).readUInt32BE(0)).toString('utf8') };
-    if (b === 0x12) return { t: 'str', v: this.bytes(this.bytes(2).readUInt16BE(0)).toString('utf8') };
-    if (b === 0x13) return { t: 'buf', v: this.bytes(this.bytes(4).readUInt32BE(0)).toString('hex') };
-    if (b === 0x14) return { t: 'buf', v: this.bytes(this.bytes(2).readUInt16BE(0)).toString('hex') };
-    if (b === 0x15) return { t: 'unused' };
-    if (b === 0x16) return { t: 'undefined' };
-    if (b === 0x17) return { t: 'null' };
-    if (b === 0x18) return { t: 'bool', v: true };
-    if (b === 0x19) return { t: 'bool', v: false };
-    if (b === 0x1a) return { t: 'num', v: this.bytes(8).readDoubleBE(0) };
-    if (b === 0x1b) {  // OBJECT <classnum u8> <ptrlen u8> <ptr>
-        var cls = this.u8();
-        this.bytes(this.u8());
-        return { t: 'obj', v: cls };
-    }
-    if (b === 0x1c) { this.bytes(this.u8()); return { t: 'ptr' }; }
-    if (b === 0x1d) { this.bytes(2); this.bytes(this.u8()); return { t: 'lfunc' }; }  // flags u16, ptr
-    if (b === 0x1e) { this.bytes(this.u8()); return { t: 'heapptr' }; }
-    if (b >= 0x60 && b <= 0x7f) return { t: 'str', v: this.bytes(b - 0x60).toString('utf8') };
-    if (b >= 0x80 && b <= 0xbf) return { t: 'int', v: b - 0x80 };
-    if (b >= 0xc0) return { t: 'int', v: ((b - 0xc0) << 8) + this.u8() };
-    return { t: 'invalido', v: b };
-};
-
-// DUK_HOBJECT_CLASS_* (nomes uteis no REPL)
+// ---- renderizacao de valores --------------------------------------------------
+// DUK_HOBJECT_CLASS_*
 var CLASSES = ['none', 'Object', 'Array', 'Function', 'Arguments', 'Boolean', 'Date', 'Error',
                'JSON', 'Math', 'Number', 'RegExp', 'String', 'global', 'Symbol', 'ObjEnv',
                'DecEnv', 'Pointer', 'Thread', 'ArrayBuffer', 'DataView'];
+var PRE = '\u0001';  // prefixo do valor ja formatado no device (ver prettyExpr)
 function render(dv) {
     if (!dv) return '?';
     switch (dv.t) {
         case 'int': case 'num': case 'bool': return String(dv.v);
-        case 'str': return JSON.stringify(dv.v);
+        case 'str': return dv.v.charAt(0) === PRE ? dv.v.slice(1) : JSON.stringify(dv.v);
         case 'obj': return '[object ' + (CLASSES[dv.v] || 'class ' + dv.v) + ']';
         case 'undefined': case 'null': return dv.t;
         case 'unused': return '<unused>';
@@ -150,8 +79,22 @@ function render(dv) {
     }
 }
 function plain(dv) { return dv && dv.v !== undefined ? dv.v : render(dv); }
+// Objetos chegam como ponteiro: reavaliar dentro de uma funcao que serializa
+// NO DEVICE (JSON, truncado) devolve o conteudo em uma ida. A expressao vai
+// como argumento: avaliada no escopo do frame (eval direto), uma vez so.
+// ES5 puro (Duktape).
+var PRETTY_MAX = 600;
+function prettyExpr(expr) {
+    return '(function(v){var t=typeof v;' +
+        'if(v===null||(t!=="object"&&t!=="function"))return v;' +
+        'if(t==="function")return "' + PRE + '[function "+(v.name||"anonima")+"]";' +
+        'var s;try{s=JSON.stringify(v);}catch(e){s=String(v);}' +
+        'if(s===undefined)s=String(v);' +
+        'if(s.length>' + PRETTY_MAX + ')s=s.slice(0,' + PRETTY_MAX + ')+"...";' +
+        'return "' + PRE + '"+s;})((' + expr + '\n))';
+}
 
-// ---- fonte local (para mostrar a linha da pausa) -----------------------------
+// ---- fonte local ------------------------------------------------------------
 var srcCache = {};
 function localSource(devFile) {
     if (!devFile) return null;
@@ -160,8 +103,9 @@ function localSource(devFile) {
     var m = /\/apps\/([^/]+)\//.exec(devFile);
     var cands = [];
     if (OPT.src) {
-        cands.push(fs.existsSync(OPT.src) && fs.statSync(OPT.src).isDirectory()
-                   ? path.join(OPT.src, base) : OPT.src);
+        var isDir = false;
+        try { isDir = fs.statSync(OPT.src).isDirectory(); } catch (e) { /* trata como arquivo */ }
+        cands.push(isDir ? path.join(OPT.src, base) : OPT.src);
     }
     if (m) {
         cands.push(path.join(REPO, 'data/apps', m[1], base), path.join(REPO, 'hub_apps', m[1], base));
@@ -178,329 +122,600 @@ function localSource(devFile) {
     srcCache[devFile] = lines;
     return lines;
 }
-function showSource(file, line, ctx) {
+function sourceLines(file, line, ctx) {
     var lines = localSource(file);
-    if (!lines || !line) return false;
-    var from = Math.max(1, line - ctx), to = Math.min(lines.length, line + ctx);
+    if (!lines || !line) return null;
+    var from = Math.max(1, line - ctx), to = Math.min(lines.length, line + ctx), res = [];
     for (var i = from; i <= to; i++) {
-        console.log((i === line ? '=> ' : '   ') + ('    ' + i).slice(-4) + '  ' + lines[i - 1]);
+        var txt = ('    ' + i).slice(-4) + '  ' + lines[i - 1];
+        res.push(i === line ? C.cur('=> ' + txt) : '   ' + txt);
     }
-    return true;
+    return res.join('\n');
+}
+// linha sem codigo executavel: breakpoint ali nunca dispara
+function looksEmpty(file, line) {
+    var lines = localSource(file);
+    if (!lines || line < 1 || line > lines.length) return false;
+    var t = lines[line - 1].trim();
+    return t === '' || /^\/\//.test(t) || /^\/?\*/.test(t) || /^[{}\])]*;?$/.test(t);
 }
 
-// ---- estado da sessao --------------------------------------------------------
-var state = { paused: false, file: OPT.file, func: '', line: 0, level: -1 };
-var replyQ = [];   // um callback por request, na ordem (o target responde em ordem)
-var handshaked = false;
-var sessions = 0;
-var firstPause = false;  // handshake feito, Status da pausa do attach a caminho
-var inBuf = Buffer.alloc(0);
+// ---- estado -----------------------------------------------------------------
+var S = {
+    handshaked: false, sessions: 0,
+    awaitingFirst: false,  // attach feito, Status da pausa inicial a caminho
+    deciding: false,       // pausa chegou e o cliente decide (condicao/temp/exit)
+    paused: false,
+    file: OPT.file, func: '', line: 0, level: -1,
+    lastAction: 'attach', exitPending: false, lastThrow: null
+};
+var bps = [];       // espelho da lista do Duktape (mesma ordem): {file, line, cond, hits, temp}
+var watches = [];   // expressoes avaliadas a cada pausa
+var pendingRpc = [];  // um resolver por request (o alvo responde em ordem)
+var throwsVisible = true;
 
-function out(s) {
-    // imprime sem atropelar a linha que o usuario esta digitando
-    if (process.stdout.isTTY) { readline.clearLine(process.stdout, 0); readline.cursorTo(process.stdout, 0); }
-    console.log(s);
-    prompt();
-}
+function ready() { return S.handshaked && !S.awaitingFirst && !S.deciding; }
 
-var sock = net.connect(parseInt(OPT.port, 10), OPT.host, function () {
-    // handshake UNILATERAL: o target manda a linha de versao no attach e o
+// ---- conexao ----------------------------------------------------------------
+var stream = new D.Stream();
+var sock = net.connect(PORT, OPT.host, function () {
+    // handshake UNILATERAL: o alvo manda a linha de versao no attach e o
     // cliente nao escreve nada antes dela (byte extra vira initial byte
     // invalido no Duktape e a sessao cai com Detaching 1)
-    console.log('dbg: conectado em ' + OPT.host + ':' + OPT.port + ' (aguardando o app attachar...)');
+    out(C.dim('dbg: conectado em ' + OPT.host + ':' + PORT + ' — aguardando o app attachar...'));
 });
 sock.on('error', function (e) {
     console.error('dbg: conexao falhou (' + e.message + ') — o celerctl debug esta no ar?');
     process.exit(1);
 });
-sock.on('data', function (chunk) {
-    inBuf = Buffer.concat([inBuf, chunk]);
-    // o loop alterna handshake e mensagens: um Detaching seguido da linha
-    // de versao do proximo app pode chegar no mesmo pedaco
-    while (inBuf.length > 0) {
-        if (!handshaked) {
-            var nl = inBuf.indexOf(0x0a);
-            if (nl < 0) return;
-            var hello = inBuf.slice(0, nl).toString('utf8').trim();
-            inBuf = inBuf.slice(nl + 1);
-            if (!/^2 /.test(hello)) {
-                console.error('dbg: handshake inesperado (' + JSON.stringify(hello) + '): protocolo 2 esperado');
-                process.exit(1);
-            }
-            handshaked = true;
-            sessions++;
-            out('dbg: target ' + hello.split(' ').slice(2).join(' ') + ' (protocolo 2)' +
-                (sessions > 1 ? ' — sessao ' + sessions : ''));
-            // o attach sempre pausa: a fila espera o Status dessa pausa (que
-            // traz o arquivo do app para os breakpoints) antes do 1o comando
-            firstPause = true;
-            var sess = sessions;
-            setTimeout(function () {
-                if (sess === sessions && firstPause) { firstPause = false; pump(); }
-            }, 3000);
-            continue;
-        }
-        // mensagens completas terminam em EOM; uma incompleta espera mais bytes
-        var r = new Reader(inBuf), msg = [];
-        try {
-            for (;;) {
-                var dv = r.dvalue();
-                if (dv.t === 'eom') break;
-                if (dv.t === 'invalido') throw new Error('dvalue invalido 0x' + dv.v.toString(16));
-                msg.push(dv);
-            }
-        } catch (e) {
-            if (e instanceof Incomplete) return;
-            out('dbg: ' + e.message + ' — fluxo dessincronizado, encerrando');
-            sock.destroy();
-            return;
-        }
-        inBuf = inBuf.slice(r.off);
-        dispatch(msg);
-    }
-});
 sock.on('close', function () {
-    console.log('\ndbg: conexao encerrada');
+    out(C.dim('dbg: conexao com o proxy encerrada'));
     process.exit(0);
 });
+sock.on('data', function (chunk) {
+    stream.feed(chunk).forEach(function (ev) {
+        if (ev.error) {
+            out(C.err('dbg: ' + ev.error + ' — encerrando'));
+            sock.destroy();
+        } else if (ev.hello) {
+            onHello(ev.hello);
+        } else {
+            onMessage(ev.msg);
+        }
+    });
+});
 
-function dispatch(msg) {
+// Porta lateral do proxy: logs do device (linhas) e o canal de controle do
+// `r` (pedido "sync <pasta>"; a resposta vem numa linha com prefixo \x01).
+// Opcional: sem ela o REPL funciona, so sem logs e sem sync.
+var side = { sock: null, ok: false, waiter: null };
+(function connectSide() {
+    var ls = net.connect(LOG_PORT, OPT.host, function () { side.ok = true; });
+    side.sock = ls;
+    var acc = '';
+    ls.on('data', function (d) {
+        acc += d.toString('utf8');
+        var parts = acc.split('\n');
+        acc = parts.pop();
+        parts.forEach(function (l) {
+            l = l.replace(/\r$/, '');
+            if (l.charAt(0) === '\x01') {
+                var w = side.waiter;
+                side.waiter = null;
+                if (w) w(l.slice(1));
+            } else if (l) {
+                out(C.dim('| ' + l));
+            }
+        });
+    });
+    ls.on('error', function () { side.ok = false; });
+    ls.on('close', function () { side.ok = false; });
+})();
+
+// sincroniza o fonte local com o device (o proxy linta e empurra o que mudou)
+function syncSource(devDir) {
+    return new Promise(function (resolve) {
+        if (!side.ok) return resolve('skip proxy sem canal lateral');
+        var t = setTimeout(function () { side.waiter = null; resolve('erro sync sem resposta em 60s'); }, 60000);
+        side.waiter = function (line) { clearTimeout(t); resolve(line.replace(/^sync /, '')); };
+        side.sock.write('sync ' + devDir + '\n');
+    });
+}
+
+function onHello(line) {
+    S.handshaked = true;
+    S.sessions++;
+    S.awaitingFirst = true;
+    S.paused = false;
+    S.lastAction = 'attach';
+    S.exitPending = false;
+    S.level = -1;
+    // "2 <DUK_VERSION> <git describe> <target info>"
+    var f = line.split(' ');
+    var v = parseInt(f[1], 10) || 0;
+    out(C.dim('dbg: attachado — Duktape ' + Math.floor(v / 10000) + '.' + Math.floor(v / 100) % 100 + '.' + v % 100 +
+              (f.length > 3 ? ' (' + f.slice(3).join(' ') + ')' : '') +
+              (S.sessions > 1 ? ' — sessao ' + S.sessions : '')));
+    // o attach sempre pausa; se o Status nao vier (alvo estranho), libera
+    var sess = S.sessions;
+    setTimeout(function () {
+        if (S.sessions === sess && S.awaitingFirst) { S.awaitingFirst = false; prompt(); }
+    }, 3000);
+}
+
+function onMessage(msg) {
     var head = msg.shift();
     if (!head) return;
-    if (head.t === 'nfy') return notify(msg.length ? msg.shift().v : -1, msg);
+    if (head.t === 'nfy') return onNotify(msg.length ? msg.shift().v : -1, msg);
     if (head.t === 'rep' || head.t === 'err') {
-        var cb = replyQ.shift();
-        if (head.t === 'err') {
-            var code = msg.length ? msg[0].v : 0;
-            return out('erro (' + (ERRS[code] || code) + '): ' + (msg.length > 1 ? plain(msg[1]) : ''));
-        }
-        if (cb) cb(msg);
-        return;
+        var resolve = pendingRpc.shift();
+        if (!resolve) return;
+        if (head.t === 'rep') return resolve({ ok: true, v: msg });
+        return resolve({ ok: false, code: msg.length ? msg[0].v : 0, msg: msg.length > 1 ? plain(msg[1]) : '' });
     }
-    // REQ do target (AppRequest reverso): nao suportado, responde erro
-    sock.write(Buffer.from([IB.ERR, 0x81, IB.EOM]));
+    // REQ do alvo (AppRequest reverso): nao suportado
+    sock.write(D.message(D.IB.ERR, null, [D.int(D.ERR.UNSUPPORTED), D.str('cliente nao atende requests')]));
 }
 
-function notify(cmd, a) {
-    if (cmd === CMD.STATUS) {
-        // NFY STATUS <paused> <file> <func> <line> <pc>
-        var paused = a.length && a[0].v === 1;
-        var wasPaused = state.paused;
-        state.paused = paused;
-        if (paused) {
-            if (a[1] && a[1].t === 'str') state.file = a[1].v;
-            state.func = a[2] && a[2].t === 'str' ? a[2].v : '';
-            state.line = a[3] ? a[3].v : 0;
-            state.level = -1;
-            if (firstPause) { firstPause = false; setImmediate(pump); }
-            var where = state.file ? state.file + ':' + state.line : '(fora de funcao JS)';
-            out('[pausado] ' + where + (state.func ? ' em ' + state.func + '()' : ''));
-            showSource(state.file, state.line, 0);
-        } else if (wasPaused) {
-            out('[rodando]');
+function rpc(cmd, args) {
+    return new Promise(function (resolve) {
+        if (!S.handshaked) return resolve({ ok: false, detached: true, msg: 'sem app attachado' });
+        pendingRpc.push(resolve);
+        sock.write(D.request(cmd, args));
+    });
+}
+
+var ERRS = ['desconhecido', 'nao suportado', 'demais', 'nao encontrado', 'aplicacao'];
+function errText(r) {
+    return r.detached ? r.msg : 'erro (' + (ERRS[r.code] || r.code) + '): ' + r.msg;
+}
+
+// ---- notificacoes -----------------------------------------------------------
+function onNotify(cmd, a) {
+    if (cmd === D.CMD.STATUS) {
+        // NFY STATUS <pausado> <arquivo> <funcao> <linha> <pc>
+        var paused = a.length > 0 && a[0].v === 1;
+        var loc = {
+            file: a[1] && a[1].t === 'str' ? a[1].v : '',
+            func: a[2] && a[2].t === 'str' ? a[2].v : '',
+            line: a[3] ? a[3].v : 0
+        };
+        if (paused && !S.paused && !S.deciding) {
+            onPaused(loc);
+        } else if (paused) {
+            S.func = loc.func;
+            S.line = loc.line;
+            if (loc.file) S.file = loc.file;
+        } else if (!S.deciding) {
+            if (S.paused) out(C.dim('[rodando]'));
+            S.paused = false;
         }
-    } else if (cmd === CMD.THROW) {
-        // NFY THROW <fatal> <msg> <file> <line>. A saida do app (X da topbar,
-        // System.exitApp, celerctl exit) e um throw interno do runtime
-        if (a[1] && a[1].v === 'Error: app exit') return out('[app encerrado]');
-        out('[throw' + (a[0] && a[0].v ? ' FATAL' : '') + '] ' + plain(a[1]) +
-            (a[2] ? '  em ' + plain(a[2]) + ':' + plain(a[3]) : ''));
-    } else if (cmd === CMD.DETACHING) {
-        // o app saiu (ou a sessao caiu): o proxy segue no ar e o PROXIMO app
-        // lancado attacha de novo com outra linha de versao no mesmo socket
+    } else if (cmd === D.CMD.THROW) {
+        // NFY THROW <fatal> <msg> <arquivo> <linha>
+        var fatal = !!(a[0] && a[0].v);
+        var text = plain(a[1]);
+        var where = a[2] && a[2].t === 'str' ? a[2].v + ':' + plain(a[3]) : '';
+        // a saida do app (X da topbar, System.exitApp, celerctl exit) e um
+        // throw interno do runtime: sem pausa para inspecao, retoma sozinho
+        if (text === 'Error: app exit') {
+            S.exitPending = fatal;
+            return out(C.dim('[app encerrando]'));
+        }
+        S.lastThrow = fatal ? { text: text, where: where } : null;
+        if (!fatal && !throwsVisible) return;
+        out(fatal ? C.err('[erro nao capturado] ' + text + (where ? '  em ' + where : ''))
+                  : C.dim('[throw capturado] ' + text + (where ? '  em ' + where : '')));
+    } else if (cmd === D.CMD.DETACHING) {
         var reason = a.length ? a[0].v : 0;
-        handshaked = false;
-        state.paused = false;
-        replyQ = [];
-        if (scriptWait) { clearInterval(scriptWait); scriptWait = null; }
-        out('[detach] ' + (DETACH_REASONS[reason] || 'motivo ' + reason) +
-            (a.length > 1 ? ': ' + plain(a[1]) : '') + ' — aguardando o proximo app attachar');
-    } else if (cmd === CMD.APPNOTIFY) {
+        S.handshaked = false;
+        S.paused = S.deciding = S.awaitingFirst = false;
+        pendingRpc.splice(0).forEach(function (r) { r({ ok: false, detached: true, msg: 'app saiu' }); });
+        out(C.dim('[detach] ' + (reason === 0 ? 'app saiu' : 'erro de transporte/protocolo') +
+                  (a.length > 1 ? ': ' + plain(a[1]) : '') + ' — aguardando o proximo app'));
+    } else if (cmd === D.CMD.APPNOTIFY) {
         out('[app] ' + a.map(render).join(' '));
     } else {
-        out('[notify 0x' + Number(cmd).toString(16) + '] ' + a.map(render).join(' '));
+        out(C.dim('[notify 0x' + Number(cmd).toString(16) + '] ' + a.map(render).join(' ')));
     }
 }
 
-function send(cmd, args, cb) {
-    replyQ.push(cb || function () {});
-    sock.write(request(cmd, args));
+function findBp(file, line) {
+    for (var i = 0; i < bps.length; i++) if (bps[i].file === file && bps[i].line === line) return i;
+    return -1;
+}
+
+async function onPaused(loc) {
+    S.deciding = true;
+    var first = S.awaitingFirst;
+    S.awaitingFirst = false;
+    if (loc.file) S.file = loc.file;
+    S.func = loc.func;
+    S.line = loc.line;
+    S.level = -1;
+    try {
+        if (S.exitPending) {  // pausa do "app exit": nada a inspecionar
+            S.exitPending = false;
+            await rpc(D.CMD.RESUME, []);
+            return;
+        }
+        if (first) await restoreBreakpoints();
+        var note = '';
+        var idx = S.lastAction === 'resume' ? findBp(S.file, S.line) : -1;
+        if (S.lastThrow) {
+            note = C.err('  (erro nao capturado: `c` deixa o erro seguir)');
+            S.lastThrow = null;
+        } else if (idx >= 0) {
+            var bp = bps[idx];
+            if (bp.cond) {
+                var r = await evalRaw(bp.cond, -1);
+                if (r.ok && !r.err && !truthy(r.val)) {
+                    await rpc(D.CMD.RESUME, []);  // condicao falsa: segue sem parar
+                    return;
+                }
+                if (r.ok && r.err) note = C.err('  (condicao deu erro: ' + render(r.val) + ')');
+            }
+            bp.hits++;
+            if (bp.temp) {
+                await rpc(D.CMD.DELBREAK, [D.int(idx)]);
+                bps.splice(idx, 1);
+            } else {
+                note = note || C.dim('  (breakpoint #' + idx + ', hit ' + bp.hits + ')');
+            }
+        }
+        S.paused = true;
+        var where = S.file ? S.file + ':' + S.line : '(funcao nativa)';
+        out(C.pause('[pausado] ' + where + (S.func ? ' em ' + S.func + '()' : '')) + note);
+        var src = sourceLines(S.file, S.line, 0);
+        if (src) out(src);
+        if (first && S.sessions === 1) out(C.dim('  app pausado: `b <linha>` e `c` para seguir (h = ajuda)'));
+        for (var w = 0; w < watches.length; w++) {
+            out(C.dim('  w' + w + ' ') + watches[w] + ' = ' + watchText(await evalPretty(watches[w], -1)));
+        }
+    } finally {
+        S.deciding = false;
+        prompt();
+    }
+}
+
+// watch de variavel que ainda nao existe neste ponto nao e erro de verdade
+function watchText(r) {
+    if (!r.ok) return errText(r);
+    if (!r.err) return render(r.val);
+    var t = render(r.val);
+    return /ReferenceError/.test(t) ? C.dim('<indefinida>') : C.err('! ' + t);
+}
+
+function truthy(dv) {
+    if (!dv) return false;
+    if (dv.t === 'bool') return dv.v;
+    if (dv.t === 'int' || dv.t === 'num') return dv.v !== 0 && !isNaN(dv.v);
+    if (dv.t === 'str') return dv.v.length > 0;
+    return !(dv.t === 'undefined' || dv.t === 'null' || dv.t === 'unused');
+}
+
+// breakpoints sobrevivem ao relaunch: o heap novo comeca sem nenhum
+async function restoreBreakpoints() {
+    if (!bps.length) return;
+    var kept = [];
+    for (var i = 0; i < bps.length; i++) {
+        var r = await rpc(D.CMD.ADDBREAK, [D.str(bps[i].file), D.int(bps[i].line)]);
+        if (r.ok) { bps[i].hits = 0; kept.push(bps[i]); }
+    }
+    bps = kept;
+    out(C.dim('  ' + kept.length + ' breakpoint(s) restaurado(s)'));
+}
+
+// ---- avaliacao ----------------------------------------------------------------
+// Eval: pausado = direto no frame (ve locais); rodando = global (indireto)
+function evalArgs(expr, level) {
+    return [S.paused || S.deciding ? D.int(level) : D.value(null), D.str(expr)];
+}
+async function evalRaw(expr, level) {
+    var r = await rpc(D.CMD.EVAL, evalArgs(expr, level));
+    if (!r.ok) return r;
+    return { ok: true, err: !!(r.v[0] && r.v[0].v), val: r.v[1] };
+}
+async function evalPretty(expr, level) {
+    var r = await evalRaw(prettyExpr(expr), level);
+    // statement (var x = 1, if...) nao cabe como argumento: avalia cru
+    if (r.ok && r.err && /^"?SyntaxError/.test(render(r.val))) r = await evalRaw(expr, level);
+    return r;
 }
 
 // ---- REPL -------------------------------------------------------------------
-// Linhas passam por uma fila com cancela: nada roda antes do handshake e, com
-// stdin scriptado (nao-TTY), cada comando espera a resposta do anterior.
+var HELP = [
+    'execucao   c continue | p pause (Ctrl-C) | s/n/o step into/over/out | u <linha> roda ate a linha',
+    'breakpts   b <linha> [arquivo] [if <cond>] | tb <linha> (temporario) | B lista | d <idx>|* | cond <idx> [expr]',
+    'inspecao   v <var> | e <expr> | set <var> <json> | lc locais | cs pilha | up/down frame | l [n] fonte',
+    'watches    w <expr> | W lista | dw <idx>',
+    'app        r envia o fonte editado e reinicia (breakpoints ficam) | i info/heap | t on|off throws | q sair',
+    'no codigo do app, `debugger;` pausa ali quando o debugger esta attachado'
+].join('\n');
+
 var cmdQ = [];
-var rlClosed = false;
-var rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+var pumping = false;
+rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: TTY });
 rl.setPrompt('dbg> ');
-function prompt() { if (!rlClosed && handshaked && process.stdin.isTTY) rl.prompt(true); }
-rl.on('line', function (line) {
-    cmdQ.push(line);
-    pump();
-});
-var scriptWait = null;  // stdin scriptado: espera a resposta (e a pausa, p/ c/s/n/o)
-function pump() {
-    while (handshaked && !firstPause && cmdQ.length > 0 && !scriptWait) {
-        var line = cmdQ.shift();
-        if (!process.stdin.isTTY) console.log('dbg> ' + line);
-        handleLine(line);
+rl.on('line', function (line) { cmdQ.push(line); pump(); });
+
+// Ctrl-C: rodando = pausa (como no gdb); pausado = dica; duas vezes = sai
+var lastSigint = 0;
+rl.on('SIGINT', function () {
+    var now = Date.now();
+    if (now - lastSigint < 1500) return quit();
+    lastSigint = now;
+    if (S.handshaked && !S.paused && !S.deciding) {
+        S.lastAction = 'pause';
+        rpc(D.CMD.PAUSE, []);
+        out(C.dim('pausando... (Ctrl-C de novo sai)'));
+    } else {
+        out(C.dim('Ctrl-C de novo (ou q) sai'));
     }
+});
+
+var restartBase = 0;  // sessoes antes do `r` (o roteiro espera a seguinte)
+
+function waitFor(pred, ms) {
+    return new Promise(function (resolve) {
+        var t0 = Date.now();
+        (function tick() {
+            if (pred()) return resolve(true);
+            if (Date.now() - t0 > ms) return resolve(false);
+            setTimeout(tick, 20);
+        })();
+    });
 }
-// No modo scriptado, comandos que soltam a execucao seguram a fila ate a
-// proxima pausa (breakpoint/step) — assim `b 7` / `c` / `v n` funciona em
-// arquivo sem sleeps magicos.
-function holdUntil(pred, ms) {
-    if (process.stdin.isTTY) return;
-    var t0 = Date.now();
-    scriptWait = setInterval(function () {
-        if (pred() || Date.now() - t0 > ms) {
-            clearInterval(scriptWait);
-            scriptWait = null;
-            pump();
+
+function scriptOver() { return rlClosed && S.sessions > 0 && !S.handshaked; }
+
+async function pump() {
+    if (pumping) return;
+    pumping = true;
+    try {
+        while (cmdQ.length) {
+            // comandos esperam o app attachar e a pausa inicial assentar
+            await waitFor(function () { return ready() || scriptOver(); }, 1e9);
+            if (!ready()) break;
+            var line = cmdQ.shift();
+            if (!TTY) console.log('dbg> ' + line);
+            await handleLine(line);
         }
-    }, 20);
-}
-function holdReply() {
-    var n = replyQ.length;
-    holdUntil(function () { return replyQ.length < n; }, 10000);
-}
-function holdPause() {
-    var n = replyQ.length;
-    state.paused = false;
-    holdUntil(function () { return replyQ.length < n && state.paused; }, 10000);
+    } finally {
+        pumping = false;
+    }
+    if (rlClosed) finishScript();
+    prompt();
 }
 
 function needPaused() {
-    if (state.paused) return true;
-    out('o app esta rodando: `p` pausa (ou espere um breakpoint)');
+    if (S.paused) return true;
+    out('o app esta rodando: `p` (ou Ctrl-C) pausa');
     return false;
 }
 
-function handleLine(raw) {
+function resolveFile(f) {
+    var file = f || S.file;
+    if (file && file.indexOf('/') < 0 && S.file) file = path.posix.join(path.posix.dirname(S.file), file);
+    return file;
+}
+
+// solta a execucao; no modo roteiro espera a proxima pausa (ou o detach)
+async function release(cmd, action) {
+    S.lastAction = action;
+    S.paused = false;
+    var r = await rpc(cmd, []);
+    if (!r.ok) return out(C.err(errText(r)));
+    if (!TTY) await waitFor(function () { return (S.paused && !S.deciding) || !S.handshaked; }, 10000);
+}
+
+async function addBreak(spec, temp) {
+    var m = /^(?:(\S+):)?(\d+)(?:\s+(?!if\b)(\S+))?(?:\s+if\s+(.+))?$/.exec(spec);
+    if (!m) { out('uso: b <linha> [arquivo] [if <condicao>]  (ou b arquivo:linha)'); return null; }
+    var line = parseInt(m[2], 10);
+    var file = resolveFile(m[1] || m[3]);
+    if (!file) { out('arquivo desconhecido: use `b <linha> /local/apps/X/main.js`'); return null; }
+    var r = await rpc(D.CMD.ADDBREAK, [D.str(file), D.int(line)]);
+    if (!r.ok) { out(C.err(errText(r))); return null; }
+    var bp = { file: file, line: line, cond: m[4] || '', hits: 0, temp: temp };
+    bps.push(bp);
+    var warn = looksEmpty(file, line) ? C.err('  (linha sem codigo: nunca vai disparar)') : '';
+    if (!temp) {
+        out(C.ok('breakpoint #' + (bps.length - 1)) + ' ' + file + ':' + line +
+            (bp.cond ? ' if ' + bp.cond : '') + warn);
+    } else if (warn) {
+        out(warn.trim());
+    }
+    return bp;
+}
+
+async function handleLine(raw) {
     var line = raw.trim();
-    if (!line) return prompt();
+    if (!line) return;
     var sp = line.indexOf(' ');
     var verb = sp < 0 ? line : line.slice(0, sp);
     var arg = sp < 0 ? '' : line.slice(sp + 1).trim();
+    var r, i, s;
     switch (verb) {
-        case 'b': {
-            var mb = /^(\d+)(?:\s+(\S+))?$/.exec(arg);
-            if (!mb) return out('uso: b <linha> [arquivo]');
-            var file = mb[2] || state.file;
-            if (!file) return out('arquivo ainda desconhecido: espere a 1a pausa ou use `b <linha> /local/apps/X/main.js`');
-            if (file.indexOf('/') < 0 && state.file) file = path.posix.join(path.posix.dirname(state.file), file);
-            send(CMD.ADDBREAK, [dvStr(file), dvInt(parseInt(mb[1], 10))], function (m) {
-                out('breakpoint #' + plain(m[0]) + ' em ' + file + ':' + mb[1]);
-            });
-            return holdReply();
-        }
+        case 'b': await addBreak(arg, false); return;
+        case 'tb': await addBreak(arg, true); return;
+        case 'u':
+            if (!(await addBreak(arg, true))) return;
+            return release(D.CMD.RESUME, 'resume');
         case 'B':
-            send(CMD.LISTBREAK, [], function (m) {
-                if (!m.length) return out('(sem breakpoints)');
-                var s = [];
-                for (var i = 0; i + 1 < m.length; i += 2) s.push('#' + i / 2 + '  ' + plain(m[i]) + ':' + plain(m[i + 1]));
-                out(s.join('\n'));
-            });
-            return holdReply();
+            if (!bps.length) return out('(sem breakpoints)');
+            return out(bps.map(function (bp, k) {
+                return '#' + k + '  ' + bp.file + ':' + bp.line + (bp.cond ? '  if ' + bp.cond : '') +
+                    (bp.temp ? '  (temporario)' : '') + C.dim('  hits ' + bp.hits);
+            }).join('\n'));
         case 'd':
-            if (!/^\d+$/.test(arg)) return out('uso: d <indice do B>');
-            send(CMD.DELBREAK, [dvInt(parseInt(arg, 10))], function () { out('removido'); });
-            return holdReply();
-        case 'i':
-            send(CMD.BASICINFO, [], function (m) {
-                out('duktape ' + plain(m[0]) + ' ' + plain(m[1]) + ' | ' + plain(m[2]) +
-                    ' | ponteiro ' + plain(m[4]) + ' B');
-            });
-            return holdReply();
-        case 'c': send(CMD.RESUME, []); return holdPause();
-        case 'p': send(CMD.PAUSE, []); return holdPause();
-        case 's': if (!needPaused()) return; send(CMD.STEPINTO, []); return holdPause();
-        case 'n': if (!needPaused()) return; send(CMD.STEPOVER, []); return holdPause();
-        case 'o': if (!needPaused()) return; send(CMD.STEPOUT, []); return holdPause();
-        case 'l': {
-            var ctx = parseInt(arg || '5', 10);
-            if (!state.file) return out('sem pausa ainda');
-            if (!showSource(state.file, state.line, ctx)) {
-                out('fonte local de ' + state.file + ' nao encontrado (use --src)');
+            if (arg === '*') {
+                while (bps.length) {
+                    r = await rpc(D.CMD.DELBREAK, [D.int(bps.length - 1)]);
+                    if (!r.ok) return out(C.err(errText(r)));
+                    bps.pop();
+                }
+                return out('breakpoints removidos');
             }
-            return prompt();
+            if (!/^\d+$/.test(arg) || +arg >= bps.length) return out('uso: d <indice do B> | d *');
+            r = await rpc(D.CMD.DELBREAK, [D.int(+arg)]);
+            if (!r.ok) return out(C.err(errText(r)));
+            bps.splice(+arg, 1);
+            return out('removido' + (+arg < bps.length ? ' (os indices seguintes andaram uma casa)' : ''));
+        case 'cond': {
+            var mc = /^(\d+)(?:\s+(.+))?$/.exec(arg);
+            if (!mc || +mc[1] >= bps.length) return out('uso: cond <idx> [expressao]  (sem expressao limpa)');
+            bps[+mc[1]].cond = mc[2] || '';
+            return out('#' + mc[1] + (mc[2] ? ' if ' + mc[2] : ' sem condicao'));
         }
+        case 'c': return release(D.CMD.RESUME, 'resume');
+        case 'p':
+            S.lastAction = 'pause';
+            r = await rpc(D.CMD.PAUSE, []);
+            if (!r.ok) return out(C.err(errText(r)));
+            if (!TTY) await waitFor(function () { return S.paused && !S.deciding; }, 10000);
+            return;
+        case 's': if (!needPaused()) return; return release(D.CMD.STEPINTO, 'step');
+        case 'n': if (!needPaused()) return; return release(D.CMD.STEPOVER, 'step');
+        case 'o': if (!needPaused()) return; return release(D.CMD.STEPOUT, 'step');
+        case 'l':
+            if (!S.file) return out('sem pausa ainda');
+            s = sourceLines(S.file, S.line, parseInt(arg || '5', 10));
+            return out(s || 'fonte local de ' + S.file + ' nao encontrado (use --src)');
         case 'e':
             if (!arg) return out('uso: e <expressao JS>');
-            // pausado: eval direto no frame (ve locais); rodando: eval global
-            send(CMD.EVAL, [state.paused ? dvInt(state.level) : Buffer.from([0x17]), dvStr(arg)], function (m) {
-                out((m[0] && m[0].v ? '! ' : '= ') + render(m[1]));
-            });
-            return holdReply();
+            r = await evalPretty(arg, S.level);
+            if (!r.ok) return out(C.err(errText(r)));
+            return out(r.err ? C.err('! ' + render(r.val)) : '= ' + render(r.val));
         case 'v':
             if (!arg) return out('uso: v <nome>');
             if (!needPaused()) return;
-            send(CMD.GETVAR, [dvInt(state.level), dvStr(arg)], function (m) {
-                out(m[0] && m[0].v ? arg + ' = ' + render(m[1]) : arg + ': nao definida neste escopo');
-            });
-            return holdReply();
+            r = await rpc(D.CMD.GETVAR, [D.int(S.level), D.str(arg)]);
+            if (!r.ok) return out(C.err(errText(r)));
+            if (!(r.v[0] && r.v[0].v)) return out(arg + ': nao definida neste escopo');
+            if (r.v[1] && r.v[1].t === 'obj') {
+                var rp = await evalPretty(arg, S.level);
+                if (rp.ok && !rp.err) return out(arg + ' = ' + render(rp.val));
+            }
+            return out(arg + ' = ' + render(r.v[1]));
         case 'set': {
             var ms = /^(\S+)\s+(.+)$/.exec(arg);
             if (!ms) return out('uso: set <nome> <valor JSON>');
             if (!needPaused()) return;
             var val;
-            try { val = dvValue(JSON.parse(ms[2])); } catch (e) { return out('valor invalido: ' + e.message); }
-            send(CMD.PUTVAR, [dvInt(state.level), dvStr(ms[1]), val], function () { out(ms[1] + ' atualizado'); });
-            return holdReply();
+            try { val = D.value(JSON.parse(ms[2])); } catch (e) { return out('valor invalido: ' + e.message); }
+            r = await rpc(D.CMD.PUTVAR, [D.int(S.level), D.str(ms[1]), val]);
+            return out(r.ok ? ms[1] + ' = ' + ms[2] : C.err(errText(r)));
         }
         case 'cs':
-            send(CMD.GETCALLSTACK, [], function (m) {
-                var s = [];
-                for (var i = 0; i + 3 < m.length; i += 4) {
-                    s.push((-1 - i / 4 === state.level ? '* ' : '  ') + (-1 - i / 4) + '  ' +
-                           (plain(m[i + 1]) || '<anon>') + '()  ' + plain(m[i]) + ':' + plain(m[i + 2]));
-                }
-                out(s.length ? s.join('\n') : '(pilha vazia)');
-            });
-            return holdReply();
+            r = await rpc(D.CMD.GETCALLSTACK, []);
+            if (!r.ok) return out(C.err(errText(r)));
+            s = [];
+            for (i = 0; i + 3 < r.v.length; i += 4) {
+                var lvl = -1 - i / 4;
+                s.push((lvl === S.level ? '* ' : '  ') + lvl + '  ' + (plain(r.v[i + 1]) || '<anonima>') + '()  ' +
+                       (r.v[i].t === 'str' ? r.v[i].v + ':' + plain(r.v[i + 2]) : '(nativa)'));
+            }
+            return out(s.length ? s.join('\n') : '(pilha vazia)');
         case 'lc':
             if (!needPaused()) return;
-            send(CMD.GETLOCALS, [dvInt(state.level)], function (m) {
-                var s = [];
-                for (var i = 0; i + 1 < m.length; i += 2) s.push(plain(m[i]) + ' = ' + render(m[i + 1]));
-                out(s.length ? s.join('\n') : '(sem locais: frame global usa `v`/`e`)');
-            });
-            return holdReply();
-        case 'up': case 'down':
+            r = await rpc(D.CMD.GETLOCALS, [D.int(S.level)]);
+            if (!r.ok) return out(C.err(errText(r)));
+            s = [];
+            for (i = 0; i + 1 < r.v.length; i += 2) {
+                var shown = render(r.v[i + 1]);
+                if (r.v[i + 1].t === 'obj') {
+                    var rv = await evalPretty(plain(r.v[i]), S.level);
+                    if (rv.ok && !rv.err) shown = render(rv.val);
+                }
+                s.push(plain(r.v[i]) + ' = ' + shown);
+            }
+            return out(s.length ? s.join('\n') : '(sem locais: no frame global use `v`/`e`)');
+        case 'up': case 'down': {
             if (!needPaused()) return;
-            state.level += verb === 'up' ? -1 : 1;
-            if (state.level > -1) state.level = -1;
-            return out('frame ' + state.level + ' (`cs` mostra a pilha)');
-        case 'q':
-            send(CMD.DETACH, [], function () { sock.end(); });
-            setTimeout(function () { process.exit(0); }, 1500);
+            r = await rpc(D.CMD.GETCALLSTACK, []);
+            if (!r.ok) return out(C.err(errText(r)));
+            var depth = Math.floor(r.v.length / 4);
+            var next = S.level + (verb === 'up' ? -1 : 1);
+            if (next > -1 || -next > depth) return out('ja no frame ' + (verb === 'up' ? 'mais externo' : 'do topo'));
+            S.level = next;
+            var k = (-1 - next) * 4;
+            var f = r.v[k].t === 'str' ? r.v[k].v : '';
+            out('frame ' + next + ': ' + (plain(r.v[k + 1]) || '<anonima>') + '()  ' +
+                (f ? f + ':' + plain(r.v[k + 2]) : '(nativa)'));
+            s = sourceLines(f, plain(r.v[k + 2]), 0);
+            if (s) out(s);
             return;
-        case 'h': case 'help': case '?':
-            return out('b <linha> [arq] | B | d <idx> | c | p | s | n | o | l [n] | e <expr> | v <var> | ' +
-                       'set <var> <json> | cs | lc | up | down | i | q');
-        default:
-            return out('comando desconhecido: ' + verb + ' (h = ajuda)');
+        }
+        case 'w':
+            if (!arg) return out('uso: w <expressao>');
+            watches.push(arg);
+            if (S.paused) {
+                return out('w' + (watches.length - 1) + ' ' + arg + ' = ' + watchText(await evalPretty(arg, S.level)));
+            }
+            return out('w' + (watches.length - 1) + ' ' + arg);
+        case 'W':
+            return out(watches.length ? watches.map(function (w, k) { return 'w' + k + ' ' + w; }).join('\n')
+                                      : '(sem watches)');
+        case 'dw':
+            if (!/^\d+$/.test(arg) || +arg >= watches.length) return out('uso: dw <idx>');
+            watches.splice(+arg, 1);
+            return out('removido');
+        case 't':
+            throwsVisible = arg !== 'off';
+            return out('throws capturados: ' + (throwsVisible ? 'visiveis' : 'ocultos'));
+        case 'i': {
+            r = await rpc(D.CMD.BASICINFO, []);
+            if (!r.ok) return out(C.err(errText(r)));
+            var info = 'duktape ' + plain(r.v[0]) + ' | ponteiro ' + plain(r.v[4]) + ' B';
+            var ri = await rpc(D.CMD.APPREQUEST, [D.str('info')]);
+            if (ri.ok && ri.v.length >= 3) {
+                info += '\napp ' + plain(ri.v[0]) + ' | heap livre ' + Math.round(plain(ri.v[1]) / 1024) +
+                        ' KB (maior bloco ' + Math.round(plain(ri.v[2]) / 1024) + ' KB)';
+            }
+            return out(info);
+        }
+        case 'r':
+            // reinicia o app (le o main.js de novo: push + r = ciclo de edicao)
+            // com breakpoints e watches mantidos para a proxima sessao
+            if (S.file) {
+                var sync = await syncSource(path.posix.dirname(S.file));
+                if (/^erro/.test(sync)) return out(C.err('sync: ' + sync.replace(/^erro /, '') + ' — app NAO reiniciado'));
+                var ms2 = /^ok (\d+)\s*(.*)$/.exec(sync);
+                if (ms2) out(C.dim(ms2[1] === '0' ? 'fonte sem mudancas' : 'enviado: ' + (ms2[2] || ms2[1] + ' arquivo(s)')));
+                else out(C.dim('sync: ' + sync.replace(/^skip /, '') + ' (relancando o que esta no device)'));
+            }
+            restartBase = S.sessions;
+            r = await rpc(D.CMD.APPREQUEST, [D.str('restart')]);
+            if (!r.ok) return out(C.err(errText(r)));
+            out(C.dim('reiniciando ' + plain(r.v[0]) + '...'));
+            S.lastAction = 'resume';
+            S.paused = false;
+            await rpc(D.CMD.RESUME, []);
+            if (!TTY) await waitFor(function () { return S.sessions > restartBase && ready(); }, 20000);
+            return;
+        case 'q': return quit();
+        case 'h': case 'help': case '?': return out(HELP);
+        default: return out('comando desconhecido: ' + verb + ' (h = ajuda)');
     }
+}
+
+function quit() {
+    // Detach limpo: o app segue rodando. Sem resposta em 1.5s sai assim mesmo
+    // (o proxy derruba o cliente no device e o app tambem e solto)
+    setTimeout(function () { process.exit(0); }, 1500);
+    if (!S.handshaked) return process.exit(0);
+    rpc(D.CMD.DETACH, []).then(function () { sock.end(); process.exit(0); });
+}
+
+var finishing = false;
+function finishScript() {
+    if (finishing || cmdQ.length || pumping) return;
+    finishing = true;
+    quit();  // roteiro (stdin nao-TTY) acabou: detach limpo e sai
 }
 
 rl.on('close', function () {
     rlClosed = true;
-    // stdin scriptado acabou: espera a fila esvaziar e sai com detach limpo
-    // (sem isso o app ficaria pausado ate o proxy fechar)
-    if (process.stdin.isTTY) {
-        try { send(CMD.DETACH, []); } catch (e) { /* ja fechou */ }
-        setTimeout(function () { sock.end(); process.exit(0); }, 300);
-        return;
-    }
-    var t = setInterval(function () {
-        if (cmdQ.length || scriptWait) return;
-        clearInterval(t);
-        if (!handshaked) {
-            if (sessions > 0) process.exit(0);  // o app ja saiu (detach)
-            return;  // ainda sem app: o close do socket encerra
-        }
-        send(CMD.DETACH, [], function () { sock.end(); });
-        setTimeout(function () { process.exit(0); }, 1500);
-    }, 50);
+    if (TTY) return quit();
+    finishScript();
 });

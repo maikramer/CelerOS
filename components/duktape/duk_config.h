@@ -3122,6 +3122,12 @@ extern duk_bool_t celer_exec_timeout_check(void *udata);
 #include "sdkconfig.h"
 #if defined(CONFIG_CELEROS_JS_DEBUGGER) && CONFIG_CELEROS_JS_DEBUGGER
 #define DUK_USE_FUNC_FILENAME_PROPERTY
+/* Erro que derrubaria o app pausa no ponto do throw (pilha e locais
+ * intactos para inspecao); o pcall do kernel e C, nao conta como catcher */
+#define DUK_USE_DEBUGGER_PAUSE_UNCAUGHT
+/* identifica o alvo na linha de versao do handshake do debugger */
+#undef DUK_USE_TARGET_INFO
+#define DUK_USE_TARGET_INFO "CelerOS"
 #else
 #undef DUK_USE_DEBUGGER_SUPPORT
 #endif

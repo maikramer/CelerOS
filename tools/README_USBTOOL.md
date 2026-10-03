@@ -98,23 +98,30 @@ python3 tools/celerctl.py tap 360 88 && python3 tools/celerctl.py screencap s.pn
 
 Boards built with `CONFIG_CELEROS_JS_DEBUGGER` (default on the S3 boards;
 off on the CYD, where the OTA slot and RAM are tight) speak the Duktape
-debugger protocol over the same channel (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`).
-`celerctl debug` is a local TCP proxy; `tools/debug/dbg.js` is the client:
+debugger protocol over the same channel (`KL_DEBUG_CTL`/`KL_DEBUG_DATA`):
 
 ```bash
-python3 tools/celerctl.py debug Snake   # terminal 1: proxy, opens the app once the client connects
-node tools/debug/dbg.js                 # terminal 2: REPL
+python3 tools/celerctl.py debug Snake          # proxy + REPL in this terminal, app logs included
+python3 tools/celerctl.py debug Snake --serve  # proxy only (dmsg on :9092, logs on :9093)
+node tools/debug/dbg.js                        #   ...and the REPL in another terminal
 ```
 
-The app pauses on its first line when the debugger attaches (without an app
-name, the running app attaches on its next yield). Commands: `b <line>`,
-`B`, `d <idx>`, `c`/`p`, `s`/`n`/`o` (into/over/out), `l [n]` (source around
-the pause, read from `data/apps`/`hub_apps` or `--src`), `e <expr>`,
-`v <var>`, `set <var> <json>`, `cs`, `lc`, `up`/`down`, `q`. Stdin may be a
-script: every command waits for its reply, and `c`/`s`/`n`/`o` wait for the
-next pause. Closing the client (or the proxy) detaches and the app keeps
-running. The handshake is one-way: the device sends the version line and
-the client must not write anything before it.
+The app pauses when the debugger attaches (on its first line; without an app
+name, the running app attaches on its next yield), and an uncaught error
+pauses at the throw. `h` lists the commands: breakpoints (`b 42 if x > 3`,
+`tb`, `u <line>`, `B`, `d`, `cond`), `c`/`p` (or Ctrl-C), `s`/`n`/`o`,
+inspection with objects rendered as JSON on the device (`v`, `e`, `lc`, `cs`,
+`up`/`down`, `set`), watches (`w`), `l` (local source), `i` (heap) and `r`:
+lint + push the edited local app folder, then restart it with the breakpoints
+restored. Stdin may be a script: every command waits for its reply, and
+`c`/`s`/`n`/`o` wait for the next pause.
+
+Robustness rules: the handshake is one-way (the device sends the version
+line; the client must not write before it); `q`, closing the client, killing
+the proxy (even `kill -9`: the device drops the client when the host session
+idles out after 8s) or pulling the cable all detach and the app keeps
+running. Protocol and client are covered on the host by
+`node test/debug/run.js` (fake Duktape target).
 
 ## Speeding up transfers (-b)
 

@@ -974,6 +974,9 @@ bool HostLink::endSession() {
     if (was) {
         s_active = nullptr;
         m_parser.setV2(false);  // nova sessao comeca negociando de novo
+        // host sumiu sem DEBUG_CTL 0 (proxy morto a forca, cabo): um app
+        // pausado no debugger ficaria esperando comando para sempre
+        JsDebugger::setClient(false);
     }
     // Canal ocioso (chamado pela task dele, sem frame em curso): o buffer
     // grande volta ao heap; o frame de resposta tambem, se nao resta sessao

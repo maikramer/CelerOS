@@ -1,7 +1,7 @@
 # test/ - host test suites (what CI runs before any firmware build)
 
 ## OVERVIEW
-Five suites, all host-side (Node/Python/g++), no hardware needed. They are the gate for every push: `.github/workflows/build.yml` runs them in the `JS harness + C++ host tests` job and a red job blocks the firmware matrix. `test/README` is a stale PlatformIO leftover — this file replaces it.
+Six suites, all host-side (Node/Python/g++), no hardware needed. They are the gate for every push: `.github/workflows/build.yml` runs them in the `JS harness + C++ host tests` job and a red job blocks the firmware matrix. `test/README` is a stale PlatformIO leftover — this file replaces it.
 
 ## SUITES
 | Suite | Runs | Command |
@@ -9,6 +9,7 @@ Five suites, all host-side (Node/Python/g++), no hardware needed. They are the g
 | `js_harness/` | The REAL app JS (data/apps, hub_apps, boards/*/data/apps) against a stubbed device API: System/Net/FS/Storage/Sensors/Phone + harness channel. Smoke + behavior checks per app (App Store update flows, Dog Face gaits, Celer Remote, API 12 timers/Storage, API 15 watch apps...) | `node test/js_harness/run.js` |
 | `app_lint/` | Linter fixtures: syntax, unknown API members, arities (min inferred from C++ bodies), permissions/gates, globals, manifest self-test (>=100 fns parsed, every C++ body found) | `node test/app_lint/run.js` |
 | `sdk/` | The app-dev SDK: scaffold manifest, types coverage, renderer, emulator | `node test/sdk/run.js` |
+| `debug/` | App debugger: dmsg codec/stream (`tools/debug/dmsg.js`) and the REPL client (`dbg.js`) scripted against a FAKE Duktape target over TCP (vm-backed Eval, breakpoints, conditional/temp, uncaught-error pause, `r` restart + side-channel sync, Detaching) | `node test/debug/run.js` |
 | `test_celerctl.py` | celerctl (HostLink client) against a FakeDevice — proto 2 framing, window/retry, no hardware | `python3 test/test_celerctl.py` (needs pyserial) |
 | `cpp/` | Pure C++ logic: `run_tests.cpp` includes `main/Utils/*` headers directly (AlarmCalc, GbProto, HostFrame framer...) | `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests` |
 

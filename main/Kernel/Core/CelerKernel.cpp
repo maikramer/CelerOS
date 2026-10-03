@@ -662,6 +662,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
 
     // `debug on` (celerctl debug): attacha ANTES de compilar/executar, com
     // o heap ainda vazio — breakpoints e o handshake completos do app
+    JsDebugger::noteApp(filePath);
     if (JsDebugger::requested()) JsDebugger::attach(ctx);
 
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);

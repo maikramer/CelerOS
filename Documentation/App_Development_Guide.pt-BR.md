@@ -227,6 +227,39 @@ node tools/sdk/celer.js publish MeuApp --dry  # valida offline
 node tools/sdk/celer.js publish MeuApp
 ```
 
+### Depurando no aparelho
+
+Placas com o debugger (as ESP32-S3 por padrão:
+`CONFIG_CELEROS_JS_DEBUGGER`) dão breakpoints, passo a passo e inspeção ao
+vivo do app rodando:
+
+```bash
+python3 tools/celerctl.py debug MeuApp    # abre o app pausado na linha 1 + REPL
+```
+
+```
+dbg> b 42 if pontos > 100    # breakpoint condicional (linha do arquivo pausado)
+dbg> w jogador               # watch: impresso a cada pausa
+dbg> c                       # continua até um breakpoint
+dbg> v jogador               # objetos mostram o conteúdo: {"x":12,"y":40}
+dbg> lc                      # locais do frame;  cs = pilha, up/down
+dbg> e pontos * 2            # eval no frame;  set vidas 9 muda uma variável
+dbg> n                       # step over (s = into, o = out, u 50 = roda até a linha 50)
+dbg> r                       # envia os arquivos editados + reinicia, mantendo os breakpoints
+```
+
+* **Erro não capturado pausa no throw**, com pilha e locais intactos; `c`
+  deixa o erro seguir para a tela de erro de sempre.
+* `debugger;` no código pausa ali quando há debugger attachado (sem ele é
+  no-op, mas tire antes de publicar).
+* Ctrl-C pausa um app rodando; Ctrl-C duas vezes (ou `q`) desattacha e o app
+  segue. Os logs do aparelho aparecem no mesmo terminal.
+* Ciclo editar-e-tentar: salve no editor, `r` no REPL — a pasta local do app
+  (achada em `data/apps`/`hub_apps`, ou `--src PASTA`) passa no lint e os
+  arquivos mudados vão para o aparelho antes do reinício; erro de lint mantém
+  o app antigo. (`celerctl debug --serve` deixa só o proxy, para um cliente
+  separado.)
+
 Detalhes que valem saber:
 
 * **`celer.d.ts`** (gerado de `tools/sdk/celer.js types`): tipos da API para

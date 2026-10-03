@@ -5,6 +5,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
 #include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
+#include "Launcher/LauncherUI.h"
+
+#include <string.h>
 
 // ---------------------------------------------------------------------------
 // Debug do Duktape sobre o canal do celerctl. O protocolo do debugger e
@@ -37,6 +41,12 @@ volatile bool s_client = false;  // proxy com cliente TCP conectado
 volatile bool s_attached = false;
 duk_context* s_ctx = nullptr;
 StreamBufferHandle_t s_rx = nullptr;
+char s_appPath[160] = "";  // main.js do app em execucao (noteApp)
+// Uma sessao por EXECUCAO de app: o Detach do cliente (`q`) nao pode ser
+// desfeito pelo maybeAttach do proximo yield do mesmo app (re-attach =
+// pausa de novo); o app seguinte (run id novo) attacha normalmente
+uint32_t s_runId = 0;
+uint32_t s_attachedRun = UINT32_MAX;
 
 // Bloqueante enquanto o cliente existir: read devolvendo 0 significa ERRO
 // DE TRANSPORTE (o debugger desattacha). Pausado num breakpoint o executor
@@ -71,6 +81,39 @@ duk_size_t dbgWrite(void* udata, const char* buf, size_t len) {
     return len;
 }
 
+// AppRequest do cliente (comando 0x22): primeiro valor = nome do pedido.
+//   "restart" -> fecha o app e o relanca (codigo novo do disco; o cliente
+//                reabre os breakpoints na sessao seguinte)
+//   "info"    -> [main.js, heap livre, maior bloco livre] em bytes
+// Roda na task do app, dentro do processamento de mensagens do Duktape.
+duk_idx_t dbgRequest(duk_context* ctx, void* udata, duk_idx_t nvalues) {
+    (void)udata;
+    const char* what = nvalues > 0 ? duk_get_string(ctx, -nvalues) : nullptr;
+    if (what != nullptr && strcmp(what, "restart") == 0) {
+        if (s_appPath[0] == '\0') {
+            duk_push_string(ctx, "app desconhecido");
+            return -1;
+        }
+        char dir[sizeof(s_appPath)];
+        memcpy(dir, s_appPath, sizeof(dir));
+        char* slash = strrchr(dir, '/');
+        if (slash != nullptr && slash != dir) *slash = '\0';  // pasta do app
+        LauncherUI::requestRescan();
+        LauncherUI::requestLaunch(dir);
+        LauncherUI::requestAppExit();  // efetiva no proximo yield do app
+        duk_push_string(ctx, dir);
+        return 1;
+    }
+    if (what != nullptr && strcmp(what, "info") == 0) {
+        duk_push_string(ctx, s_appPath);
+        duk_push_uint(ctx, (duk_uint_t)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+        duk_push_uint(ctx, (duk_uint_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        return 3;
+    }
+    duk_push_string(ctx, "pedido desconhecido (restart|info)");
+    return -1;
+}
+
 // Sessao caiu (cliente desconectou/erro de transporte): o estado local
 // acompanha — duk_debugger_attached() nao e API publica no 2.7.
 void dbgDetached(duk_context* ctx, void* udata) {
@@ -93,9 +136,17 @@ void setRequested(bool on) {
 
 bool requested() { return s_request; }
 
+void noteApp(const char* mainPath) {
+    s_runId++;
+    strncpy(s_appPath, mainPath != nullptr ? mainPath : "", sizeof(s_appPath) - 1);
+    s_appPath[sizeof(s_appPath) - 1] = '\0';
+}
+
 void setClient(bool on) {
+    if (!on && !s_client && !s_request) return;  // fim de sessao sem debugger
     s_client = on;
     s_request = on;
+    if (on) s_attachedRun = UINT32_MAX;  // cliente novo pode attachar o app que ja roda
     celer_log_printf("debugger JS: cliente %s\n", on ? "conectado (attach no proximo app/yield)" : "saiu");
 }
 
@@ -109,15 +160,16 @@ bool attach(duk_context* ctx) {
     // cliente do outro lado o app ficaria parado. So attacha com o proxy
     // avisando que ha cliente — o runFile tenta primeiro e o present() do
     // JSBindings da a segunda chance no proximo yield do app
-    if (!s_request || !s_client) return false;
+    if (!s_request || !s_client || s_attachedRun == s_runId) return false;
     // o cliente so fala depois da linha de versao: o que estiver no buffer
     // e resto da sessao anterior (comando mandado depois do detach) e viraria
     // a 1a mensagem desta
     xStreamBufferReset(s_rx);
     duk_debugger_attach(ctx, dbgRead, dbgWrite, dbgPeek,
-                        nullptr, nullptr, nullptr, dbgDetached, nullptr);
+                        nullptr, nullptr, dbgRequest, dbgDetached, nullptr);
     s_ctx = ctx;
     s_attached = true;
+    s_attachedRun = s_runId;
     celer_log_println("debugger JS: attachado (celerctl debug no outro lado)");
     return true;
 }
@@ -152,7 +204,11 @@ void feedHost(const uint8_t* data, size_t n) {
     // antes do attach esperam no buffer
     if (s_rx == nullptr) s_rx = xStreamBufferCreate(K_DBG_RX, 1);
     if (s_rx == nullptr) return;
-    xStreamBufferSend(s_rx, data, n, pdMS_TO_TICKS(100));
+    // cheio = o app nao esta consumindo (rodando sem cooperar) e o cliente
+    // despeja comandos: byte perdido dessincroniza o dmsg — melhor avisar
+    if (xStreamBufferSend(s_rx, data, n, pdMS_TO_TICKS(100)) != n) {
+        celer_log_println("debugger JS: buffer de comandos cheio, bytes perdidos");
+    }
 }
 
 }  // namespace JsDebugger
@@ -167,6 +223,7 @@ void setRequested(bool) {
 }
 bool requested() { return false; }
 void setClient(bool) {}
+void noteApp(const char*) {}
 bool attach(duk_context*) { return false; }
 void detach(duk_context*) {}
 bool maybeAttach(duk_context*) { return false; }

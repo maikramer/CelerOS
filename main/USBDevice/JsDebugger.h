@@ -24,6 +24,8 @@ bool requested();
 // Proxy do celerctl com cliente TCP conectado (KL_DEBUG_CTL 1/0): gate do
 // attach. Ligar tambem arma a flag; desligar desarma e solta um app pausado.
 void setClient(bool on);
+// main.js do app que o kernel vai rodar (AppRequest "restart"/"info").
+void noteApp(const char* mainPath);
 
 // Registra os callbacks de transporte no heap recem-criado do app. False se
 // o stream buffer nao puder ser alocado OU se nao ha cliente conectado (o

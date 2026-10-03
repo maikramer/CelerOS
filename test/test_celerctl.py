@@ -369,5 +369,56 @@ class TestProto2(unittest.TestCase):
         self.assertEqual([k for k in dev.files if k.startswith("/local/apps/")], [])
 
 
+class TestDebugProxy(unittest.TestCase):
+    """split_frames: o leitor nao-bloqueante do `celerctl debug`."""
+
+    def test_frames_inteiros_e_lixo_de_console(self):
+        dbg = KL["DEBUG_DATA"]
+        wire = b"I (123) wifi: texto do console\r\n" + frame_v2(dbg, b"\x04\x81\x01\x00") + frame_v2(dbg, b"abc")
+        frames, rest = C.split_frames(wire, 2)
+        self.assertEqual(frames, [(dbg, b"\x04\x81\x01\x00"), (dbg, b"abc")])
+        self.assertEqual(rest, b"")
+
+    def test_frame_pela_metade_espera_o_resto(self):
+        dbg = KL["DEBUG_DATA"]
+        full = frame_v2(dbg, bytes(range(200)))
+        got, buf = [], b""
+        for i in range(len(full)):  # byte a byte: nada se perde no meio
+            buf += full[i:i + 1]
+            frames, buf = C.split_frames(buf, 2)
+            got += frames
+        self.assertEqual(got, [(dbg, bytes(range(200)))])
+
+    def test_crc_errado_descarta_e_resincroniza(self):
+        dbg = KL["DEBUG_DATA"]
+        bad = bytearray(frame_v2(dbg, b"xyz"))
+        bad[-1] ^= 0xFF
+        frames, rest = C.split_frames(bytes(bad) + frame_v2(dbg, b"ok"), 2)
+        self.assertEqual(frames, [(dbg, b"ok")])
+
+    def test_keep_push_nao_perde_frames_do_debugger(self):
+        # attach do app chega ENTRE dois comandos: o xfer seguinte nao pode
+        # limpar a entrada/fila, e a resposta velha do keepalive e descartada
+        link, dev = make_link()
+        link.hello()
+        link.keep_push = True
+        dbg = frame_v2(KL["DEBUG_DATA"], b"2 20700 v2.7.0 alvo\n")
+        stale = frame_v2(KL["HELLO"], b"proto 2", status=0)
+        link.ser.rx += dbg + stale
+        link.xfer(KL["WRITE_BEGIN"], b"/local/x\0")
+        self.assertEqual(link.push_queue, [(KL["DEBUG_DATA"], b"2 20700 v2.7.0 alvo\n")])
+
+    def test_sem_keep_push_continua_limpando(self):
+        link, dev = make_link()
+        link.hello()
+        link.ser.rx += frame_v2(KL["DEBUG_DATA"], b"x")
+        link.xfer(KL["WRITE_BEGIN"], b"/local/x\0")
+        self.assertEqual(link.push_queue, [])
+
+    def test_proto1(self):
+        frames, _ = C.split_frames(frame_v1(KL["LOG_DATA"], b"\x00linha\n"), 1)
+        self.assertEqual(frames, [(KL["LOG_DATA"], b"\x00linha\n")])
+
+
 if __name__ == "__main__":
     unittest.main()
