@@ -9,6 +9,26 @@ var path = require('path');
 
 var ROOT = path.resolve(__dirname, '..', '..');
 
+// ---- API level e versao REAIS do firmware --------------------------------
+// Lidos dos CMakeLists por regex (cacheados), para o host acompanhar o
+// device sem edicao manual (o stub vivia preso no 12 enquanto a API ia a 19
+// e feature-detection por nivel nao era testavel). Regex direto NAO requer
+// o app_lint: ele e quem required ESTE harness — seria ciclo de require.
+var FW_META = null;
+function fwMeta() {
+    if (FW_META) return FW_META;
+    FW_META = { api: 12, version: '1.2.0' };  // fallback fora da arvore
+    try {
+        var mk = fs.readFileSync(path.join(ROOT, 'main/CMakeLists.txt'), 'utf8');
+        var m = mk.match(/CELEROS_API_LEVEL\s*=?\s*(\d+)/);
+        if (m) FW_META.api = parseInt(m[1], 10);
+        var root = fs.readFileSync(path.join(ROOT, 'CMakeLists.txt'), 'utf8');
+        m = root.match(/project\s*\(\s*CelerOS\s+VERSION\s+(\d+\.\d+\.\d+)/);
+        if (m) FW_META.version = m[1];
+    } catch (e) { /* mantem o fallback */ }
+    return FW_META;
+}
+
 // ------------------------------------------------------------ stubs -------
 function makeEnv() {
     var log = [];          // tudo que o app "desenha" (drawString)
@@ -16,6 +36,13 @@ function makeEnv() {
     var iters = 0;
     var LIMIT = 200000;
     var env = {};
+
+    // Relogio de parede: 27/09/2026 10:32:00 (domingo) no tick 0 e ANDA com
+    // o clock virtual — apps de relogio/alarme veem o tempo passar como no
+    // device. Partes em UTC do Date: deterministico em qualquer host.
+    var WALL0 = Date.UTC(2026, 8, 27, 10, 32, 0) - 1000;  // clock inicia em 1000
+    function wall() { return new Date(WALL0 + clock); }
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
     // Cores globais do firmware (RGB565), como globais do script
     env.__prelude = 'var BLACK=0x0000,WHITE=0xFFFF,RED=0xF800,GREEN=0x07E0,BLUE=0x001F,' +
@@ -139,6 +166,28 @@ function makeEnv() {
             if (!files[a] || files[a].dir) return false;
             return FS.writeTextFile(b, files[a].data);
         },
+        // recursiva no mapa em memoria (mesma semantica do FileSystem:
+        // cria a arvore de destino, para no primeiro erro; subpastas
+        // existentes nao sao erro)
+        copyDirectory: function(a, b) {
+            a = norm(a); b = norm(b);
+            var src = files[a];
+            if (!src || !src.dir) return false;
+            var ok = true;
+            if (!files[b] && !FS.mkdir(b)) return false;
+            for (var k in files) {
+                if (k.indexOf(a + '/') !== 0) continue;
+                var dst = b + k.substring(a.length);
+                if (files[k].dir) {
+                    if (!files[dst] && !FS.mkdir(dst)) ok = false;
+                } else {
+                    var par = parentOf(dst);
+                    if (!files[par] && !FS.mkdir(par)) ok = false;
+                    ok = FS.writeTextFile(dst, files[k].data) && ok;
+                }
+            }
+            return ok;
+        },
         exists: function(p) { return !!files[norm(p)]; },
         isDirectory: function(p) { var e = files[norm(p)]; return !!(e && e.dir); },
         isFile: function(p) { var e = files[norm(p)]; return !!(e && !e.dir); },
@@ -234,6 +283,11 @@ function makeEnv() {
             var per = font === 1 ? 6 : font === 4 ? 14 : 8;
             return s.length * per;
         },
+        // altura da fonte no espaco virtual (mesma metrica do renderer do
+        // emulador: glifo 8x8, dobro no tamanho 4)
+        fontHeight: function(font) {
+            return font === 4 ? 16 : 8;
+        },
         millis: function() { return clock; },
         micros: function() { return clock * 1000; },
         delay: function(ms) {
@@ -277,8 +331,8 @@ function makeEnv() {
         // API 16: pedido ao launcher + saida limpa (igual ao firmware)
         launchApp: function(pkg) { log.push('[launch] ' + pkg); throw 'OS_EXIT'; },
         restart: function() { throw 'OS_EXIT'; },
-        getOSVersion: function() { return '1.2.0'; },
-        getAPILevel: function() { return 12; },
+        getOSVersion: function() { return fwMeta().version; },
+        getAPILevel: function() { return fwMeta().api; },
         getInfo: function() {
             return {
                 totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
@@ -287,13 +341,19 @@ function makeEnv() {
                 macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
             };
         },
-        getTime: function() { return '10:32'; },
-        getSeconds: function() { return 0; },
-        getDate: function() { return '27/09/2026'; },
-        getYear: function() { return 2026; },
-        getMonth: function() { return 9; },
-        getDay: function() { return 27; },
-        getWeekday: function() { return 0; },   // API 13 (domingo)
+        // derivados do relogio de parede (wall): formatos identicos aos do
+        // TimeManager (getTime "HH:MM", getDate "DD/MM/YYYY", month 1-12,
+        // weekday 0=domingo, getSeconds = segundos do MINUTO)
+        getTime: function() { var w = wall(); return pad2(w.getUTCHours()) + ':' + pad2(w.getUTCMinutes()); },
+        getSeconds: function() { return wall().getUTCSeconds(); },
+        getDate: function() {
+            var w = wall();
+            return pad2(w.getUTCDate()) + '/' + pad2(w.getUTCMonth() + 1) + '/' + w.getUTCFullYear();
+        },
+        getYear: function() { return wall().getUTCFullYear(); },
+        getMonth: function() { return wall().getUTCMonth() + 1; },
+        getDay: function() { return wall().getUTCDate(); },
+        getWeekday: function() { return wall().getUTCDay(); },   // API 13 (domingo=0)
         keepAwake: function() {},               // API 13 (no-op no host)
         setVolume: function() {},               // API 13 (audio)
         getVolume: function() { return 100; },
@@ -312,6 +372,10 @@ function makeEnv() {
             analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
         },
         lightLevel: function() { return 80; },
+        // temperatura do chip: 30C com sensor presente (o firmware considera
+        // 53.33 = sensor ausente — hasTemperatureSensor acompanha o valor)
+        getTemperature: function() { return 30; },
+        hasTemperatureSensor: function() { return true; },
         beep: function() { return true; },
         relay: function() { return true; },
         relayState: function() { return 0; },
@@ -413,12 +477,61 @@ function makeEnv() {
     };
 
     env.FS = FS;
+    // ---- Net assincrono (API 12): pool de 2 slots no modelo do JsNet ----
+    // beginGet(url) -> handle (ou -1); pollGet(h) -> null enquanto roda,
+    // {done,ok,status,body,error} ao concluir; cancelGet(h) abandona (o
+    // proximo poll recebe {ok:false,error:'cancelado'}). Sem resposta
+    // scriptada o pedido conclui FALHANDO no proximo yield — o espelho de
+    // um device sem rede. __harness.pushNetGet(h, resp) entrega a resposta
+    // do teste (antes do yield ou no proprio poll).
+    var netSlots = [null, null];
+    var netQueue = [];
+    function netQueued(h) {
+        for (var i = 0; i < netQueue.length; i++) {
+            if (netQueue[i].h === h) return netQueue.splice(i, 1)[0].resp;
+        }
+        return null;
+    }
     env.Net = {
         get: function() { return null; },
         getJSON: function() { return null; },
         post: function() { return null; },
         download: function() { return false; },  // streaming p/ arquivo (API 6)
         isConnected: function() { return false; },
+        beginGet: function(url) {
+            for (var i = 0; i < netSlots.length; i++) {
+                if (netSlots[i]) continue;
+                netSlots[i] = { url: String(url), done: false };
+                (function(slot, h) {
+                    env.setTimeout(function() {
+                        if (slot.done || netSlots[h] !== slot) return;
+                        slot.done = true;
+                        slot.resp = netQueued(h) ||
+                            { done: true, ok: false, status: 0, body: '', error: 'sem rede no harness' };
+                    }, 0);
+                })(netSlots[i], i);
+                return i;
+            }
+            return -1;
+        },
+        pollGet: function(h) {
+            var s = netSlots[h];
+            if (!s) return { done: true, ok: false, status: 0, body: '', error: 'handle invalido' };
+            if (!s.done) {
+                var r = netQueued(h);
+                if (r) { s.done = true; s.resp = r; }
+            }
+            if (!s.done) return null;
+            var out = s.resp;
+            netSlots[h] = null;
+            return out;
+        },
+        cancelGet: function(h) {
+            var s = netSlots[h];
+            if (!s) return;
+            s.done = true;
+            s.resp = { done: true, ok: false, status: 0, body: '', error: 'cancelado' };
+        },
         wifiScan: function() {
             return [{ ssid: 'CasaNet', rssi: -50, secure: 1 }, { ssid: 'Vizinho', rssi: -70, secure: 0 }];
         },
@@ -533,6 +646,7 @@ function makeEnv() {
         pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
         pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
         pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
+        pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
         typeLine: function(text) {
             // simula digitacao: 1 change por char + enter com o texto completo
             kbBuffer = '';
@@ -660,7 +774,7 @@ function runInline(src, env) {
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
-    check('welcome', j.indexOf('CelerOS 1.2.0 terminal') >= 0);
+    check('welcome', j.indexOf('CelerOS ' + fwMeta().version + ' terminal') >= 0);
     check('help lista comandos', j.indexOf('Comandos:') >= 0);
     check('pwd mostra /local', j.indexOf('root@celeros:/local$') >= 0);
     check('js 2+2 -> 4', j.split('\n').indexOf('4') >= 0);
@@ -1038,7 +1152,7 @@ function runInline(src, env) {
     check('send objeto vira JSON', j.indexOf('[link] tx {"cmd":"frente","v":80}') >= 0);
     check('send string vai crua', j.indexOf('[link] tx ping') >= 0);
     check('poll recebe mensagem', j.indexOf('rx {"ack":1}') >= 0);
-    check('getAPILevel 12', env.System.getAPILevel() === 12);
+    check('getAPILevel = manifest do firmware', env.System.getAPILevel() === fwMeta().api);
 })();
 
 // --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------
@@ -1954,6 +2068,80 @@ function holdFrames(x, y, n) {
     var req = r.env.__harness.aiChats[0] || '';
     check('payload de texto puro (sem input_audio)',
           req.indexOf('input_audio') < 0 && req.indexOf('qwen/qwen3.8-omni-flash') >= 0, req.slice(0, 200));
+})();
+
+// --- Harness fiel (F4): API level do firmware, relogio que anda, Net async,
+// copyDirectory e fontHeight — o que o drift do celer.js check apontava ------
+(function() {
+    console.log('Harness fiel (F4):');
+    var meta = fwMeta();
+    check('API level do manifest do firmware', meta.api >= 19, 'api=' + meta.api);
+
+    // relogio: congela no valor antigo no tick inicial e ANDA com o clock
+    // (Terminal com 'exit' sai cedo: sobra folga no contador de iteracoes
+    // do harness para os delay() do proprio teste)
+    var r = runApp('data/apps/Terminal/main.js', function(env) {
+        env.__harness.typeLine('exit');
+    });
+    var S = r.env.System;
+    S.delay(0);  // fixa um yield sem avancar o relogio
+    check('relogio base 10:32:00 de 27/09/2026 (dom)',
+          S.getTime() === '10:32' && S.getSeconds() === 0 &&
+          S.getDate() === '27/09/2026' && S.getWeekday() === 0 && S.getMonth() === 9,
+          S.getTime() + ' ' + S.getSeconds() + ' ' + S.getDate() + ' ' + S.getWeekday());
+    S.delay(30000);  // +30s: minuto vira, segundo do minuto zera de novo
+    check('relogio avanca com o clock', S.getTime() === '10:32' && S.getSeconds() === 30,
+          S.getTime() + ':' + S.getSeconds());
+    S.delay(31000);  // +31s: 10:33:01
+    check('virada de minuto', S.getTime() === '10:33' && S.getSeconds() === 1,
+          S.getTime() + ':' + S.getSeconds());
+
+    // Net assincrono: scriptado, falha default e cancelamento
+    var r2 = runApp('data/apps/Terminal/main.js', function(env) {
+        env.__harness.pushNetGet(0, { done: true, ok: true, status: 200, body: 'corpo', error: '' });
+        env.__harness.typeLine('exit');
+    });
+    var Net = r2.env.Net;
+    var h1 = Net.beginGet('http://x/1');
+    check('beginGet devolve slot', h1 === 0, 'h=' + h1);
+    check('pollGet imediato ve resposta scriptada',
+          JSON.stringify(Net.pollGet(h1)) === '{"done":true,"ok":true,"status":200,"body":"corpo","error":""}',
+          JSON.stringify(Net.pollGet(h1)));
+    var ha = Net.beginGet('http://x/a');
+    var hb = Net.beginGet('http://x/b');
+    var hc = Net.beginGet('http://x/c');
+    check('pool de 2 slots: 3o pedido recusado',
+          ha >= 0 && hb >= 0 && ha !== hb && hc === -1,
+          [ha, hb, hc].join(','));
+    Net.cancelGet(hb);
+    // timers do harness tem piso de 10ms e o fireTimers roda ANTES do
+    // avanco do clock: um delay arma, o segundo dispara
+    r2.env.__harness.System.delay(10);
+    r2.env.__harness.System.delay(10);
+    var respA = Net.pollGet(ha);
+    check('sem script conclui falhando (sem rede)',
+          respA && respA.done && !respA.ok && /sem rede/.test(respA.error), JSON.stringify(respA));
+    var respB = Net.pollGet(hb);
+    check('cancelGet devolve erro cancelado e libera o slot',
+          respB && respB.done && !respB.ok && respB.error === 'cancelado', JSON.stringify(respB));
+    var hNext = Net.beginGet('http://x/d');
+    check('slot liberado apos consumir', hNext === ha || hNext === hb, 'h=' + hNext);
+
+    // FS.copyDirectory recursivo no mapa
+    var FS = r.env.FS;
+    FS.mkdir('/local/a');
+    FS.mkdir('/local/a/sub');
+    FS.writeTextFile('/local/a/f.txt', '1');
+    FS.writeTextFile('/local/a/sub/g.txt', '2');
+    check('copyDirectory copia a arvore',
+          FS.copyDirectory('/local/a', '/local/b') === true &&
+          FS.readTextFile('/local/b/f.txt') === '1' &&
+          FS.readTextFile('/local/b/sub/g.txt') === '2' &&
+          FS.isDirectory('/local/b/sub'), 'copia');
+    check('copyDirectory de origem inexistente falha', FS.copyDirectory('/local/zz', '/local/c') === false);
+
+    check('fontHeight segue o renderer (2->8, 4->16)', S.fontHeight(2) === 8 && S.fontHeight(4) === 16);
+    check('temperatura com sensor', S.getTemperature() === 30 && S.hasTemperatureSensor() === true);
 })();
 
 // resumo
