@@ -643,6 +643,158 @@ function handleMsg(m) {
     }
 }
 
+// ------------------------------------------------------------ voz -------
+// Comandos por voz (API 20): "hi celer" detectado NO CHIP (WakeWord, modelo
+// proprio microWakeWord) abre uma janela de gravacao; o audio vai pro
+// qwen omni (AI.chat com tools) e o tool_call dog_command dispara o gait —
+// "hi celer, senta" faz sentar. Tudo feature-detect: sem WakeWord (build
+// sem CELEROS_WAKE_WORD), sem microfone ou sem IA o cao segue igual.
+var voiceReady = (typeof WakeWord !== "undefined" && typeof Mic !== "undefined");
+var voiceBusy = false;        // da janela de escuta ate a resposta da IA
+var voiceRec = false;
+var voiceHeard = false;       // nivel subiu ao menos 1x (tem alguem falando)
+var voiceQuietAt = 0;
+var voiceWalkUntil = 0;       // andar por voz dura no maximo 3 s (sem keepalive)
+var VOICE_WALK_MS = 3000;
+var hasAI = (typeof AI !== "undefined" && typeof Net !== "undefined");
+var voiceErrorAt = 0;
+
+function cueVoice(ok) {
+    // ack do wake: duas notas subindo (ouvindo) ou duas graves (erro)
+    if (ok) System.playTone([[900, 60], [0, 30], [1350, 90]]);
+    else System.playTone([[400, 90], [0, 40], [330, 120]]);
+}
+
+function voiceRing(on, err) {
+    // anel de LED: azul = ouvindo/pensando, vermelho = erro
+    var c = err ? 0xFF2000 : (on ? 0x0040FF : 0x000000);
+    System.neopixel(0, [c, c, c, c]);
+    System.neopixel(1, [c, c, c, c]);
+}
+
+// "sentar"/"deitar"/... -> gait. O fallback por palavra-chave cobre o caso
+// do modelo responder texto em vez de tool_call (e o PT e o EN).
+var VOICE_GAITS = {
+    sit: "sit", senta: "sit", sentar: "sit", sentado: "sit", "senta aí": "sit",
+    lie: "lie", down: "lie", deita: "lie", deitar: "lie", deitado: "lie",
+    "lay down": "lie",
+    stand: "stand", levanta: "stand", levantar: "stand", em_pe: "stand", up: "stand",
+    stretch: "stretch", alonga: "stretch", alongar: "stretch", bow: "stretch",
+    walk: "walk", anda: "walk", andar: "walk", "vai": "walk", frente: "walk",
+    back: "back", tras: "back", recua: "back",
+    stop: "stop", para: "stop", pare: "stop", passo: "stop", quieta: "stop"
+};
+
+function voiceRunGait(cmd) {
+    var name = VOICE_GAITS[String(cmd).toLowerCase()];
+    if (!name) return false;
+    if (name === "stop") { stopGait(); voiceWalkUntil = 0; return true; }
+    var cont = (name === "walk" || name === "back" || name === "left" || name === "right");
+    if (startGait(name, cont)) {
+        if (cont) voiceWalkUntil = System.millis() + VOICE_WALK_MS;
+        happyUntil = System.millis() + 900;
+        return true;
+    }
+    return false;
+}
+
+function voiceFromText(t) {
+    if (!t) return false;
+    t = t.toLowerCase();
+    var keys = [];
+    for (var k in VOICE_GAITS) keys.push(k);
+    keys.sort(function (a, b) { return b.length - a.length; });
+    for (var i = 0; i < keys.length; i++) {
+        if (t.indexOf(keys[i]) >= 0) return voiceRunGait(keys[i]);
+    }
+    return false;
+}
+
+function voiceRequest(audioB64) {
+    if (!hasAI) { voiceDone(false); return; }
+    try {
+        var started = AI.chat({
+            provider: "openrouter",
+            messages: [
+                { role: "system", content: "Voce comanda um cachorro robotico. Sempre responda chamando a ferramenta dog_command com um unico comando." },
+                { role: "user", content: [
+                    { type: "input_audio", input_audio: { data: audioB64, format: "wav" } }
+                ]}
+            ],
+            tools: [{ type: "function", function: {
+                name: "dog_command",
+                description: "Executa um comando de movimento no cachorro",
+                parameters: { type: "object", properties: {
+                    command: { type: "string",
+                               enum: ["sit", "lie", "stand", "stretch", "walk", "back", "stop"] }
+                }, required: ["command"] }
+            } }],
+            tool_choice: "auto",
+            max_tokens: 150,
+            reasoning: { effort: "low" }
+        }, function (r) {
+            var done = false;
+            if (r && r.ok && r.toolCalls && r.toolCalls.length) {
+                done = voiceRunGait(r.toolCalls[0].args && r.toolCalls[0].args.command);
+            }
+            if (!done && r && r.ok) done = voiceFromText(r.content);
+            voiceDone(done);
+        });
+        if (!started) voiceDone(false);
+    } catch (e) {
+        System.print('[voz] erro: ' + e);
+        voiceDone(false);
+    }
+}
+
+function voiceDone(ok) {
+    voiceBusy = false;
+    voiceRing(false, !ok);
+    cueVoice(ok);
+    if (ok) happyUntil = System.millis() + 1600;
+    lastActivity = System.millis();
+    voiceErrorAt = ok ? 0 : System.millis();
+}
+
+function voiceTick(now) {
+    if (!voiceReady) return;
+    // janela de gravacao: fim por teto, por silencio pos-fala ou por tempo
+    if (voiceRec) {
+        var lvl = Mic.level();
+        if (lvl > 22) { voiceHeard = true; voiceQuietAt = 0; }
+        else if (voiceHeard && lvl < 5) {
+            if (!voiceQuietAt) voiceQuietAt = now + 550;
+            else if (now >= voiceQuietAt) { voiceRec = false; voiceRequest(Mic.stop()); }
+        }
+        if (voiceRec && !Mic.recording()) { voiceRec = false; voiceRequest(Mic.stop()); }
+        return;
+    }
+    // wake -> abre a janela (a task do detector descansa sozinha durante
+    // a gravacao — micRecActive no firmware)
+    if (!voiceBusy && (voiceErrorAt === 0 || now - voiceErrorAt > 2500) && WakeWord.poll()) {
+        voiceBusy = true;
+        voiceHeard = false;
+        voiceQuietAt = 0;
+        lastActivity = now;
+        cueVoice(true);
+        voiceRing(true, false);
+        if (Mic.start({ ms: 3500 })) {
+            voiceRec = true;
+        } else {
+            voiceDone(false);
+        }
+    }
+}
+
+if (voiceReady) {
+    if (WakeWord.start()) {
+        System.print('[voz] wake word "hi celer" ativo');
+    } else {
+        System.print('[voz] wake word indisponivel (modelo/RAM)');
+        voiceReady = false;
+    }
+}
+
 var telAt = 0;
 var moveAt = 0;
 var MOVE_KEEPALIVE_MS = 900;  // sem move novo nesse prazo = para (failsafe)
@@ -729,7 +881,7 @@ while (true) {
 
     // andando: mic mede o ruido dos proprios servos, e cada leitura atrasa
     // a proxima fase — pula
-    if (!walking() && now - micAt > (sleeping ? 1500 : 400)) {
+    if (!walking() && !voiceRec && now - micAt > (sleeping ? 1500 : 400)) {
         micAt = now;
         lastMic = System.micLevel();
         if (lastMic < 0) lastMic = 0;
@@ -762,6 +914,11 @@ while (true) {
         padZeros = 0;
     }
 
+    voiceTick(now);
+    if (voiceWalkUntil && now > voiceWalkUntil) {
+        voiceWalkUntil = 0;
+        stopGait();
+    }
     linkTick(now);
     gaitTick(dt);
     // andando, o flush do OLED (~100 ms no I2C) entre as fases viraria
