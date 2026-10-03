@@ -98,6 +98,10 @@ int micLevel();
 bool micRecStart(int maxMs);
 // true enquanto a task captura (false no teto de maxMs, com buffer intacto)
 bool micRecActive();
+// Marca que o I2S0 (tom/playWav) emprestou os pinos bclk/ws/mclk do canal do
+// mic e os devolveu soltos no GPIO matrix — o proximo uso recria o I2S1 para
+// re-rotear (placas com codec compartilham os clocks entre os dois canais).
+void micPinsDirty();
 // RMS 0..100 do ultimo chunk (mesma escala do micLevel); -1 = nao gravando
 int micRecLevel();
 // Descarta a gravacao em curso (exit do app inclusive)

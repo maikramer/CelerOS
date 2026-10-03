@@ -20,10 +20,14 @@
 // volume digital a 0 dB, a fala chega saudavel ao conversor.
 //
 // Hooks BoardProfile::micCodecWake/micCodecSleep: o BoardIO chama em volta
-// das capturas (mesma disciplina do ES8311 com os beeps).
+// das capturas (mesma disciplina do ES8311 com os beeps). No re-init o reset
+// fica 50 ms segurado com os clocks do I2S1 rodando — a maquina de estados
+// do chip (CSM) precisa de MCLK para rampar o analogico.
 
 #include "WatchI2c.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdint.h>
 
 namespace Es7210 {
@@ -55,8 +59,11 @@ inline uint8_t rd(uint8_t reg) {
 /// (ADC1 sai no slot ESQUERDO do frame I2S; ADC2 no direito.)
 inline bool init() {
     if (dev() == nullptr) return false;
+    static bool s_ja = false;             // 1o init: chip em POR, sem pausa
     bool ok = true;
     ok = ok && wr(0x00, 0xFF);            // reset
+    if (s_ja) vTaskDelay(pdMS_TO_TICKS(50));  // hold p/ CSM destravar (clock)
+    s_ja = true;
     ok = ok && wr(0x00, 0x32);            // limpa reset
     ok = ok && wr(0x09, 0x30);            // tempo de power-up
     ok = ok && wr(0x0A, 0x30);
@@ -84,6 +91,11 @@ inline bool init() {
     ok = ok && wr(0x04, 0x01);            // lrck_div h
     ok = ok && wr(0x05, 0x00);            // lrck_div l
     ok = ok && wr(0x06, 0x04);            // DLL power down
+    // O shutdown() derruba REG01 (todos os clocks) e o soft reset do REG00
+    // NAO o restaura: devolve ao DEFAULT 0x20 — clocks ligados com o gerador
+    // MASTER interno off (0x00 o liga e ele briga com o MCLK do pino em
+    // modo slave; bancada 2026-10-03).
+    ok = ok && wr(0x01, 0x20);
     // Bits PDN ativos: 0x00 liga TUDO do par (MICBIAS + PGA + ADC + mod +
     // VREF). O 0x0F do esp-bsp standalone derruba o MICBIAS — os mics
     // analogicos deste watch somem (bancada 2026-10-03, ver cabecalho).

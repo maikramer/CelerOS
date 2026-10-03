@@ -197,6 +197,7 @@ bool toneI2s(int freqHz, int ms) {
     if (hasCodec) bp.audioCodecSleep();
     i2s_channel_disable(tx);
     i2s_del_channel(tx);
+    if (hasCodec) micPinsDirty();  // pins do I2S1 voltam mortos
     return true;
 }
 }  // namespace
@@ -590,6 +591,13 @@ void stripsOff() {
 // ATENCAO: o pino do clock (ws) jamais pode virar canal ADC — a reconfiguracao
 // desconecta a matriz GPIO e mata o microfone ate reiniciar o canal.
 
+// O tom/playWav (I2S0) EMPRESTA os pinos compartilhados bclk/ws/mclk do
+// canal do mic (I2S1) e os devolve soltos no GPIO matrix — quem roteou por
+// ultimo domina o pino, e o I2S1 so re-roteia ao (re)nascer. Sem isto, todo
+// beep mata as capturas seguintes (bancada 2026-10-03: "primeiro audio
+// perfeito, seguintes mudos" — o ES7210 fica sem MCLK e o gravador le zeros).
+volatile bool s_micPinsDirty = false;
+
 namespace {
 i2s_chan_handle_t s_mic = nullptr;
 bool s_micFail = false;       // ultima tentativa falhou (ve o prazo abaixo)
@@ -603,7 +611,15 @@ int64_t s_micFailAtUs = 0;    // quando falhou
 bool micInit() {
     const MicI2sPins& m = Board::profile().mic;
     if (m.ws < 0) return false;
-    if (s_mic) return true;
+    if (s_mic) {
+        if (!s_micPinsDirty) return true;
+        // beep/playWav passou por aqui: recria o canal para re-rotear os
+        // pinos no GPIO matrix (ver comentario do s_micPinsDirty)
+        i2s_channel_disable(s_mic);
+        i2s_del_channel(s_mic);
+        s_mic = nullptr;
+        s_micPinsDirty = false;
+    }
     if (s_micFail) {
         if (esp_timer_get_time() - s_micFailAtUs < 3000000LL) return false;
         s_micFail = false;
@@ -705,6 +721,8 @@ void micRecTask(void*) {
     vTaskDelete(nullptr);
 }
 }  // namespace
+
+void micPinsDirty() { s_micPinsDirty = true; }
 
 int micLevel() {
     // Gravacao em curso: a task do gravador e a unica leitora do canal —

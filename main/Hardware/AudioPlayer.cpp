@@ -161,6 +161,7 @@ WavError playWav(const char* path) {
     if (hasCodec) bp.audioCodecSleep();
     i2s_channel_disable(tx);
     i2s_del_channel(tx);
+    if (hasCodec) BoardIO::micPinsDirty();  // pins do I2S1 voltam mortos
     fclose(f);
     return WavError::None;
 }
