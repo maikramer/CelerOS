@@ -2051,6 +2051,38 @@ function holdFrames(x, y, n) {
     check('gravacao aberta e fechada', mic.ms === 6000 && !mic.on, JSON.stringify(mic));
 })();
 
+// --- ToolCalls (API 20): function calling — contrato do r.toolCalls ------
+(function() {
+    console.log('ToolCalls (function calling):');
+    var r = runApp('test/js_harness/fixtures/tool-calls/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null,
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'call_1', name: 'dog_command',
+                          args: { command: 'sit' } }],
+            raw: ''
+        });
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var req = r.env.__harness.aiChats[0] || '';
+    check('tools e tool_choice viajam no payload', req.indexOf('"tools":') >= 0 &&
+          req.indexOf('dog_command') >= 0 && req.indexOf('"tool_choice":"auto"') >= 0,
+          req.slice(0, 300));
+    var j = joinLog(r.log);
+    // o fixture escreve via System.print (log do harness)
+    check('callback recebeu toolCalls', j.indexOf('call=dog_command cmd=sit id=sim') >= 0, j);
+    check('finishReason entregue', j.indexOf('finish=tool_calls') >= 0, j);
+
+    // sem toolCalls na resposta: fallback pro content sem quebrar
+    var r2 = runApp('test/js_harness/fixtures/tool-calls/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: true, status: 200, content: 'nao sei', raw: '' });
+    });
+    check('sem toolCalls cai no texto', joinLog(r2.log).indexOf('texto=nao sei') >= 0,
+          joinLog(r2.log));
+})();
+
 // --- Qwen (API 19): placa sem microfone = chat de texto ----------------------
 (function() {
     console.log('Qwen (sem mic):');

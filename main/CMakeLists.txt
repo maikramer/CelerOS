@@ -47,6 +47,7 @@ set(CELEROS_SRCS
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
     "USBDevice/HostLink.cpp"
+    "USBDevice/JsDebugger.cpp"
     "USBDevice/SerialLink.cpp"
     "UI/Kui.cpp"
     "UI/Keyboard.cpp"
@@ -222,7 +223,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.5.0"
-    CELEROS_API_LEVEL=19
+    CELEROS_API_LEVEL=20
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

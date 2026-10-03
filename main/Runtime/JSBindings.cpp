@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Kernel/Services.h"
+#include "../USBDevice/JsDebugger.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -455,6 +456,9 @@ void JSBindings::present() {
     if (s_jsCtx != nullptr) {
         timersTick(s_jsCtx);
         aiTick(s_jsCtx);  // AI (API 18): entrega a resposta ao callback do app
+        // Debugger (debug on): segunda chance do attach — o cliente pode ter
+        // conectado depois do lancamento; attacha com a versao dele ja no buffer
+        JsDebugger::maybeAttach(s_jsCtx);
     }
     if (tftInstance == nullptr) return;
     // Servicos do OS (Backlight, Buttons, ScreenPower, PowerPolicy,
@@ -1191,7 +1195,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     if (perm(celer::PERM_NET)) {
     duk_push_object(ctx); // AI
     static const JsFn kFnsAI[] = {
-        {"chat", js_aiChat, 2},              // cb({ok,content,raw,status,usage}) 1x
+        {"chat", js_aiChat, 2},              // cb({ok,content,raw,status,usage,toolCalls[{id,name,args}],finishReason}) 1x (API 20: toolCalls)
         {"configured", js_aiConfigured, 1},  // chave no aparelho? ([provider])
         {"cancel", js_aiCancel, 0},          // esquece a requisicao em curso
     };

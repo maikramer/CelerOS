@@ -1447,6 +1447,8 @@ framework reads it at call time (replacing the key does not need a reboot).
   - `content` — the reply text (`choices[0].message.content`), `null` when the body could not be parsed;
   - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` when present;
   - `raw` — the raw response body (cap 32 KB; parse it yourself if you need more);
+  - `toolCalls` (API 20) — array `[{id, name, args}]` when the model answers with a function call instead of text (`choices[0].message.tool_calls`); `args` is the `function.arguments` string decoded to an Object when it is valid JSON, otherwise the raw string;
+  - `finishReason` (API 20) — `choices[0].finish_reason` when present (`"tool_calls"` or `"stop"`);
   - `error` — transport error or `"cancelado"` when `ok` is `false`; `detail` — the API's own error message (`error.message` of the response body, truncated to 120 chars) when present — e.g. invalid key, insufficient balance, rate limit.
 - Errors inside the callback propagate like any binding error (the app dies with the error screen).
 
@@ -1511,3 +1513,37 @@ while audio is captured.
 #### `Mic.level()` (API 19)
 - **Returns:** Number — sound level 0..100 (RMS of the last 32 ms chunk; quiet room 0-3, speech 15-40), `-1` when not recording.
 - **Description:** For the live VU meter while recording. While a recording is in flight, `System.micLevel()` reports the same live level (they share the I2S channel).
+
+## 24. API Level 20 — AI function calling
+
+`tools` and `tool_choice` in the `AI.chat` opts have always travelled to the
+POST untouched (the whole opts object is serialized as-is). What API 20 adds
+is the **parsing of the answer**: when the model responds with a function
+call, the callback now receives `r.toolCalls` and `r.finishReason` (see the
+field list in `AI.chat`), so apps can act on structured commands without
+JSON-parsing `r.raw` themselves.
+
+```js
+AI.chat({
+    provider: "openrouter",
+    messages: [{ role: "user", content: "please sit" }],
+    tools: [{ type: "function", function: {
+        name: "dog_command",
+        parameters: { type: "object", properties: {
+            command: { type: "string", enum: ["sit", "lie", "stand", "walk"] }
+        }, required: ["command"] }
+    } }],
+    tool_choice: "auto",
+    max_tokens: 150
+}, function (r) {
+    if (r.ok && r.toolCalls && r.toolCalls.length) {
+        System.print("comando: " + r.toolCalls[0].args.command);
+    } else if (r.ok) {
+        System.print("resposta: " + r.content);
+    }
+});
+```
+
+Not every model/provider enables tool calling — feature-detect: with no
+`toolCalls` in the answer, fall back to reading `r.content` (e.g. keyword
+matching). `qwen/qwen3.8-omni-flash` via OpenRouter supports tools.

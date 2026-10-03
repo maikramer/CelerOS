@@ -1,0 +1,10 @@
+{
+  "name": "ToolCalls",
+  "packageName": "celeros.toolcalls",
+  "version": "1.0.0",
+  "author": "harness",
+  "description": "fixture: consumidor minimo de function calling (API 20)",
+  "type": "App",
+  "api": 20,
+  "permissions": ["net"]
+}

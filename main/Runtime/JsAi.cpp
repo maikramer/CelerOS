@@ -32,6 +32,12 @@
 // o resultado e entregue ao callback no present() (padrao dos timers em
 // JsTimers.cpp: funcao no heap stash, duk_pcall; erro de script PROPAGA
 // como erro do app).
+//
+// Function calling (API 20): `tools`/`tool_choice` no opts ja atravessam
+// o duk_json_encode sem toque nosso — o que entra aqui de novo e o parse
+// da resposta: choices[0].message.tool_calls vira r.toolCalls
+// ([{id,name,args}]; args decodificado quando e JSON valido) e
+// choices[0].finish_reason vira r.finishReason ("tool_calls" ou "stop").
 
 // Cert (*.deepseek.com, Amazon RSA 2048 / *.openrouter.ai, GTS) ja esta no
 // cert bundle FULL e CMN — nenhuma board precisa de PEM custom.
@@ -413,6 +419,49 @@ static duk_ret_t aiDecodeJson(duk_context* ctx, void*) {
     return 1;
 }
 
+// message.tool_calls -> array [{id,name,args}] no topo da pilha (API 20).
+// `args` e o `function.arguments` decodificado quando JSON valido, senao a
+// string crua — o app de ES5 nao teria como tratar falha de parse. Chamado
+// com o message no topo; nao lanca (decode vem sob safe_call).
+static void aiToolCallsFromMessage(duk_context* ctx) {
+    duk_push_array(ctx);
+    duk_uarridx_t nOut = 0;
+    duk_get_prop_string(ctx, -2, "tool_calls");
+    if (duk_is_array(ctx, -1)) {
+        const duk_uarridx_t n = (duk_uarridx_t)duk_get_length(ctx, -1);
+        for (duk_uarridx_t i = 0; i < n; i++) {
+            duk_get_prop_index(ctx, -1, i);              // tc
+            duk_push_object(ctx);                        // item
+            duk_get_prop_string(ctx, -2, "id");
+            if (duk_is_string(ctx, -1)) duk_put_prop_string(ctx, -2, "id");
+            else duk_pop(ctx);
+            duk_get_prop_string(ctx, -2, "function");
+            if (duk_is_object(ctx, -1)) {
+                duk_get_prop_string(ctx, -1, "name");
+                if (duk_is_string(ctx, -1)) duk_put_prop_string(ctx, -3, "name");
+                else duk_pop(ctx);
+                duk_get_prop_string(ctx, -1, "arguments");
+                if (duk_is_string(ctx, -1)) {
+                    duk_dup(ctx, -1);                    // copia p/ o decode
+                    if (duk_safe_call(ctx, aiDecodeJson, nullptr, 1, 1) == DUK_EXEC_SUCCESS &&
+                        (duk_is_object(ctx, -1) || duk_is_array(ctx, -1))) {
+                        duk_remove(ctx, -2);             // tira a string, fica o obj
+                    } else {
+                        duk_pop(ctx);                    // lixo do decode; fica a string
+                    }
+                }
+                duk_put_prop_string(ctx, -3, "args");    // objeto ou string crua
+                duk_pop(ctx);                            // function
+            } else {
+                duk_pop(ctx);
+            }
+            duk_pop(ctx);                                // tc
+            duk_put_prop_index(ctx, -2, nOut++);         // arr[nOut] = item
+        }
+    }
+    duk_pop(ctx);  // tool_calls — array de saida fica no topo
+}
+
 static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
     AiResult* r = (AiResult*)udata;
     duk_push_object(ctx);
@@ -464,6 +513,17 @@ static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
             } else {
                 duk_pop(ctx);
             }
+            // Function calling (API 20): res.finishReason (choices[0]) e
+            // res.toolCalls (message) quando o modelo responde com chamada
+            // de ferramenta em vez de texto. Stack: [res,parsed,choices,c0,msg]
+            duk_get_prop_string(ctx, -2, "finish_reason");
+            if (duk_is_string(ctx, -1)) {
+                duk_put_prop_string(ctx, -6, "finishReason");
+            } else {
+                duk_pop(ctx);
+            }
+            aiToolCallsFromMessage(ctx);  // +arr
+            duk_put_prop_string(ctx, -6, "toolCalls");
             duk_pop(ctx);  // message
             duk_pop(ctx);  // choices[0]
         }
