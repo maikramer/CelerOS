@@ -58,8 +58,9 @@ static void testPermissions() {
     CHECK(parsePermissions("{\"permissions\":[\"fs\",\"net\"]}") == (PERM_FS | PERM_NET));
     CHECK(parsePermissions("{\"permissions\":[\"gpio\"]}") == PERM_GPIO);
     CHECK(parsePermissions("{\"permissions\":[\"system\"]}") == PERM_SYSTEM);
-    CHECK(parsePermissions("{\"permissions\":[\"fs\",\"gpio\",\"system\",\"net\"]}") ==
-          (PERM_FS | PERM_NET | PERM_GPIO | PERM_SYSTEM));
+    CHECK(parsePermissions("{\"permissions\":[\"mic\"]}") == PERM_MIC);             // API 19
+    CHECK(parsePermissions("{\"permissions\":[\"fs\",\"gpio\",\"system\",\"net\",\"mic\"]}") ==
+          (PERM_FS | PERM_NET | PERM_GPIO | PERM_SYSTEM | PERM_MIC));
     CHECK(parsePermissions("{\"permissions\":[]}") == 0);                         // vazio = nenhuma
     CHECK(parsePermissions("{\"permissions\":[}") == PERM_ALL);                   // invalido = nao tranca
     // campo vizinho nao confunde (ordem no JSON nao importa)

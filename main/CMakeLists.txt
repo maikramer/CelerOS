@@ -33,6 +33,7 @@ set(CELEROS_SRCS
     "Runtime/JsSystem.cpp"
     "Runtime/JsNet.cpp"
     "Runtime/JsAi.cpp"
+    "Runtime/JsMic.cpp"
     "Runtime/JsFs.cpp"
     "Runtime/JsKeypad.cpp"
     "Runtime/JsSystemApps.cpp"
@@ -221,7 +222,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.5.0"
-    CELEROS_API_LEVEL=18
+    CELEROS_API_LEVEL=19
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

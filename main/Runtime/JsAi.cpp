@@ -1,45 +1,81 @@
 #include "JSBindings.h"
 #include "../FileSystem/FileSystem.h"
+#include "../USBDevice/LogSink.h"
 #include "../Utils/StrUtils.h"
 #include "../WebManager/WebManager.h"
 #include "HttpClient.h"
 #include "JsInternal.h"
 #include "esp_task_wdt.h"
+#include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"  // xTaskCreateWithCaps
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "../Boards/Board.h"
 
 // =====================================================
-// AI Bindings - DeepSeek (objeto AI, API level 18)
+// AI Bindings - chat LLM (objeto AI, API level 18)
 // =====================================================
 //
-// A chave da API NUNCA entra no JS: vive em /local/deepseek_key.txt
+// A chave da API NUNCA entra no JS: vive em /local/<provider>_key.txt
 // (arquivo protegido pelo jail do FS, gravado pelo dono via celerctl
 // push ou file manager da web) e e lida aqui a cada requisicao — trocar
 // a chave nao pede reboot (mesma filosofia do /local/ota_url.txt).
 //
-// Formato OpenAI-compatible: AI.chat(opts, cb) serializa o propio opts
-// com duk_json_encode (o C++ so fixa stream:false e injeta defaults) —
-// nenhuma montagem manual de JSON, nenhum escape de aspas do usuario.
+// Formato OpenAI-compatible (DeepSeek e OpenRouter falam o mesmo schema):
+// AI.chat(opts, cb) serializa o propio opts com duk_json_encode (o C++ so
+// fixa stream:false e injeta defaults) — nenhuma montagem manual de JSON,
+// nenhum escape de aspas do usuario. opts.provider escolhe a casa ("deepseek"
+// default, "openrouter" para o app Qwen e afins); o campo sai do payload.
 //
 // O POST roda em task propria (padrao do Net assincrono em JsNet.cpp) e
 // o resultado e entregue ao callback no present() (padrao dos timers em
 // JsTimers.cpp: funcao no heap stash, duk_pcall; erro de script PROPAGA
 // como erro do app).
 
-// Cert (*.deepseek.com, Amazon RSA 2048) ja esta no cert bundle FULL e
-// CMN — nenhuma board precisa de PEM custom.
-static const char* AI_URL = "https://api.deepseek.com/chat/completions";
-static const char* AI_KEY_FILE = "/local/deepseek_key.txt";
-static const char* AI_DEFAULT_MODEL = "deepseek-flash";
+// Cert (*.deepseek.com, Amazon RSA 2048 / *.openrouter.ai, GTS) ja esta no
+// cert bundle FULL e CMN — nenhuma board precisa de PEM custom.
+struct AiProvider {
+    const char* id;           // nome no opts.provider
+    const char* url;
+    const char* keyFile;
+    const char* defaultModel;
+    const char* referer;      // atribuicao opcional (OpenRouter): null = nao ha
+    const char* title;
+};
+static const AiProvider AI_PROVIDERS[] = {
+    {"deepseek", "https://api.deepseek.com/chat/completions",
+     "/local/deepseek_key.txt", "deepseek-flash", nullptr, nullptr},
+    {"openrouter", "https://openrouter.ai/api/v1/chat/completions",
+     "/local/openrouter_key.txt", "qwen/qwen3.8-omni-flash",
+     "https://os.celer.tec.br", "CelerOS"},
+};
+static const AiProvider& aiProviderByName(const char* name) {
+    // null/undefined/deepseek = [0]; nome desconhecido tambem cai no [0]
+    // (o chat valida e lanca antes de chegar aqui)
+    for (const AiProvider& p : AI_PROVIDERS) {
+        if (name == nullptr || strcmp(name, p.id) == 0) return p;
+    }
+    return AI_PROVIDERS[0];
+}
+
+// duk_error SEM varargs (regra do projeto: argumentos de conversao em
+// lightfunc corrompem o heap) — mensagem pre-formatada com snprintf
+static void aiThrow(duk_context* ctx, const char* fmt, const char* a) {
+    char msg[110];
+    snprintf(msg, sizeof(msg), fmt, a != nullptr ? a : "?");
+    duk_error(ctx, DUK_ERR_ERROR, msg);
+}
 
 // Teto do corpo da resposta (mesmo sink malloc/realloc do Net.get: sem
 // RAM a requisicao falha limpa em vez de abortar o aparelho). Com o
 // default de max_tokens 1024 a resposta tipica fica em poucos KB.
 #define AI_MAX_BODY 32768
 
-// Completions demoradas passam com folga dos 10s do Net.post.
-#define AI_TIMEOUT_MS 90000
+// Completions demoradas passam com folga dos 10s do Net.post. O omni
+// responde em 5-15 s na pratica; 60 s segura os casos lentos sem deixar
+// uma requisicao orfa (app fechado no meio) travar o worker por muito tempo.
+#define AI_TIMEOUT_MS 60000
 
 struct AiBody {
     char* p = nullptr;
@@ -79,6 +115,7 @@ struct AiSlot {
     char* payload = nullptr;
     size_t payloadLen = 0;
     char* key = nullptr;
+    const AiProvider* prov = &AI_PROVIDERS[0];  // resolved no begin
 };
 static AiSlot s_aiSlot;
 static bool s_aiPending = false;  // callback do app esperando resultado
@@ -102,9 +139,9 @@ static char* aiDupBuf(const char* src, size_t n) {
     return p;
 }
 
-static std::string aiReadKey() {
-    if (!FileSystem::exists(AI_KEY_FILE)) return std::string();
-    return kstr::trim(FileSystem::readTextFile(AI_KEY_FILE));
+static std::string aiReadKey(const AiProvider& p) {
+    if (!FileSystem::exists(p.keyFile)) return std::string();
+    return kstr::trim(FileSystem::readTextFile(p.keyFile));
 }
 
 // Chamado no lancamento de cada app (JSBindings::init): a requisicao do
@@ -121,8 +158,9 @@ void JSBindings::aiReset() {
     xSemaphoreGive(s.mux);
 }
 
-static void aiTask(void* raw) {
-    AiSlot* s = (AiSlot*)raw;
+// Um POST: le o pedido do slot (state==1) e publica o resultado (state==2).
+// Corpo do worker persistente abaixo.
+static void aiRunRequest(AiSlot* s) {
     AiBody got;
     bool ok;
     int status;
@@ -131,17 +169,21 @@ static void aiTask(void* raw) {
         HttpClient http;
         http.setTimeout(AI_TIMEOUT_MS);
         http.setBearerAuth(s->key ? s->key : "");
+        if (s->prov->referer != nullptr) {  // atribuicao OpenRouter (opcional)
+            http.setHeader("HTTP-Referer", s->prov->referer);
+            http.setHeader("X-Title", s->prov->title);
+        }
         http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
-        HttpResponse resp =
-            http.postJson(AI_URL, std::string(s->payload ? s->payload : "", s->payloadLen));
+        HttpResponse resp = http.postJson(s->prov->url,
+                                          std::string(s->payload ? s->payload : "", s->payloadLen));
         ok = resp.isOk();
         status = resp.statusCode;
         // %.95s: a mensagem pode vir maior que err[96] — corta em vez de
         // acionar o -Werror=format-truncation do GCC do IDF
         snprintf(err, sizeof(err), "%.95s", resp.success ? "" : resp.errorMessage.c_str());
     }  // TLS/cliente liberados antes de publicar o resultado
-    // Pedido consumido: a task e a unica que toca payload/key enquanto
-    // state==1 (o begin so reescreve quando nenhuma task esta viva)
+    // Pedido consumido: o worker e o unico que toca payload/key enquanto
+    // state==1 (o begin so reescreve quando ele esta dormindo no semaforo)
     free(s->payload);
     s->payload = nullptr;
     s->payloadLen = 0;
@@ -167,7 +209,21 @@ static void aiTask(void* raw) {
     } else {
         free(got.p);
     }
-    vTaskDelete(nullptr);
+}
+
+// Worker PERSISTENTE (nao nasce/morre por pedido): a stack de 24KB vem da
+// RAM INTERNA do xTaskCreate, e apos a 1a sessao TLS o heap interno do watch
+// fragmenta a ponto de nao ter mais bloco de 24KB (bancada 2026-10-02: a
+// 2a chamada devolvia "ocupado" para sempre). Nasce no 1o chat do boot e
+// dorme num semaforo binario ate o proximo — custo zero entre pedidos.
+static TaskHandle_t s_aiWorker = nullptr;
+static SemaphoreHandle_t s_aiWork = nullptr;
+
+static void aiWorker(void*) {
+    for (;;) {
+        xSemaphoreTake(s_aiWork, portMAX_DELAY);
+        aiRunRequest(&s_aiSlot);
+    }
 }
 
 // true = pedido no ar (o callback dispara 1x); false = ocupado/sem RAM
@@ -180,17 +236,31 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     if (!WebManager::isWifiConnected()) {
         duk_error(ctx, DUK_ERR_ERROR, "AI: WiFi is not connected");
     }
-    std::string key = aiReadKey();
+    // Provider (opts.provider): "deepseek" e o default. Nome desconhecido
+    // lanca na cara do app — errar a casa mandaria a chave pro lugar errado.
+    duk_get_prop_string(ctx, 0, "provider");
+    const char* provName = duk_is_string(ctx, -1) ? duk_get_string(ctx, -1) : nullptr;
+    duk_pop(ctx);
+    bool provKnown = false;
+    for (const AiProvider& p : AI_PROVIDERS) {
+        if (provName == nullptr || strcmp(provName, p.id) == 0) { provKnown = true; break; }
+    }
+    if (!provKnown) {
+        aiThrow(ctx, "AI: provider '%.40s' desconhecido", provName);
+    }
+    const AiProvider& prov = aiProviderByName(provName);
+    std::string key = aiReadKey(prov);
     if (key.empty()) {
-        duk_error(ctx, DUK_ERR_ERROR, "AI: chave ausente (/local/deepseek_key.txt)");
+        aiThrow(ctx, "AI: chave ausente (%.60s)", prov.keyFile);
     }
 
     // Defaults do framework por cima do opts do app
     duk_dup(ctx, 0);
+    duk_del_prop_string(ctx, -1, "provider");  // campo interno: nao viaja no JSON
     duk_push_boolean(ctx, 0);  // o runtime nao consome SSE
     duk_put_prop_string(ctx, -2, "stream");
     if (!duk_has_prop_string(ctx, -1, "model")) {
-        duk_push_string(ctx, AI_DEFAULT_MODEL);
+        duk_push_string(ctx, prov.defaultModel);
         duk_put_prop_string(ctx, -2, "model");
     }
     if (!duk_has_prop_string(ctx, -1, "max_tokens")) {
@@ -230,6 +300,7 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, "AI: sem RAM para montar o pedido");
     }
     s.payloadLen = payload.size();
+    s.prov = &prov;
     s.state = 1;
     xSemaphoreGive(s.mux);
 
@@ -249,11 +320,34 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     duk_pop(ctx);  // stash
     s_aiPending = true;
 
-    // Stack de 32KB: mesmo HttpClient/TLS do Net assincrono (com 12KB o
-    // handshake estourava — bancada 2026-10-02). Boards sem PSRAM nao
-    // abrem apps com "net", o custo e so no S3.
-    if (xTaskCreate(aiTask, "jsai", 32768, &s, 3, nullptr) != pdPASS) {
-        // task nao nasceu: devolve o slot e esquece o callback
+    // Stack de 24KB: mesma do Net assincrono (JsNet) — o TLS do handshake
+    // nao cabe em 12KB (bancada 2026-10-02). O worker nasce UMA vez e
+    // dorme entre pedidos (ver aiWorker); a falha de nascimento so ocorre
+    // no 1o chat do boot, com o heap interno ainda inteiro.
+    if (s_aiWork == nullptr) s_aiWork = xSemaphoreCreateBinary();
+    if (s_aiWork != nullptr && s_aiWorker == nullptr) {
+        // Stack na PSRAM nas placas que tem (S3 do cao/watch: 8 MB livres) —
+        // a RAM interna do boot do watch nao garante bloco de 24 KB (o
+        // httpd + TinyUSB + NimBLE comem o heap: bancada 2026-10-02, o
+        // xTaskCreate puro falhava em TODA criacao e o app so via
+        // "ocupado"). Sem PSRAM cai no heap interno (caminho antigo).
+        TaskHandle_t h = nullptr;
+        BaseType_t okc = pdFAIL;
+        if (Board::profile().hasPsram) {
+            okc = xTaskCreateWithCaps(aiWorker, "jsai", 24576, nullptr, 3, &h,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (okc != pdPASS) {
+            okc = xTaskCreate(aiWorker, "jsai", 24576, nullptr, 3, &h);
+        }
+        if (okc != pdPASS) {
+            celer_log_println("[ai] chat -1: xTaskCreate falhou (RAM p/ stack de 24KB)");
+        } else {
+            s_aiWorker = h;
+        }
+    }
+    if (s_aiWorker == nullptr || s_aiWork == nullptr) {
+        // worker nao nasceu: devolve o slot e esquece o callback
         aiMuxTake(s);
         if (s.state == 1) s.state = 0;
         xSemaphoreGive(s.mux);
@@ -267,12 +361,20 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
+    xSemaphoreGive(s_aiWork);  // acorda o worker (pedido ja esta no slot)
     duk_push_boolean(ctx, 1);
     return 1;
 }
 
+// AI.configured() = DeepSeek; AI.configured("openrouter") checa a casa certa.
+// Nome desconhecido devolve false (nao lanca: e um detector, nao uma chamada)
 duk_ret_t JSBindings::js_aiConfigured(duk_context *ctx) {
-    duk_push_boolean(ctx, aiReadKey().empty() ? 0 : 1);
+    const char* provName = duk_is_string(ctx, 0) ? duk_get_string(ctx, 0) : nullptr;
+    bool known = false;
+    for (const AiProvider& p : AI_PROVIDERS) {
+        if (provName == nullptr || strcmp(provName, p.id) == 0) { known = true; break; }
+    }
+    duk_push_boolean(ctx, (known && !aiReadKey(aiProviderByName(provName)).empty()) ? 1 : 0);
     return 1;
 }
 

@@ -426,16 +426,21 @@ function makeEnv() {
         wifiDisconnect: function() {}
     };
 
-    // AI (API 18): DeepSeek com callback. __harness.setAiResponse(fn|obj)
+    // AI (API 18+): DeepSeek/OpenRouter com callback. __harness.setAiResponse(fn|obj)
     // scripta a resposta (fn recebe os opts do chat); o callback dispara no
     // proximo yield (setTimeout 0) como o aiTick no present() do firmware.
-    // env.__aiConfigured=false simula aparelho sem chave.
+    // env.__aiConfigured=false simula aparelho sem chave nenhuma;
+    // env.__aiKeys={openrouter:false} tira um provider so.
     var aiCb = null, aiResponse = null;
     var aiChats = [];
+    var AI_MODELS = { deepseek: 'deepseek-flash', openrouter: 'qwen/qwen3.8-omni-flash' };
     env.AI = {
         chat: function(opts, cb) {
-            // mesmos defaults do JsAi.cpp: o app pode confiar neles
-            if (!opts.model) opts.model = 'deepseek-flash';
+            // mesmos defaults do JsAi.cpp: o app pode confiar neles (o
+            // provider e consumido aqui e sai do payload, como no firmware)
+            var prov = opts.provider || 'deepseek';
+            delete opts.provider;
+            if (!opts.model) opts.model = AI_MODELS[prov] || AI_MODELS.deepseek;
             if (!opts.max_tokens) opts.max_tokens = 1024;
             opts.stream = false;
             aiChats.push(JSON.stringify(opts));
@@ -452,8 +457,33 @@ function makeEnv() {
             }, 0);
             return true;
         },
-        configured: function() { return env.__aiConfigured !== false; },
+        configured: function(p) {
+            if (env.__aiConfigured === false) return false;
+            var keys = env.__aiKeys || {};
+            return keys[p || 'deepseek'] !== false;
+        },
         cancel: function() { var had = aiCb !== null; aiCb = null; return had; }
+    };
+
+    // Mic (API 19): gravacao simulada (o firmware grava em task propria).
+    // __harness.setMicB64 troca o que o stop devolve (default e um WAV
+    // PCM 16 kHz minimo); __harness.mic expoe {on,level} para assercoes.
+    var micB64 = 'UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+    var micState = { on: false, level: 20, ms: 0 };
+    env.Mic = {
+        start: function(o) {
+            if (micState.on) return false;
+            micState.on = true;
+            micState.ms = (o && o.ms) || 6000;
+            return true;
+        },
+        stop: function(o) {
+            if (!micState.on) return null;
+            micState.on = false;
+            return micB64;  // stub: mesmo conteudo cru e codificado
+        },
+        recording: function() { return micState.on; },
+        level: function() { return micState.on ? micState.level : -1; }
     };
 
     // Celer Link (API 9; pareamento API 11): fila de mensagens recebidas
@@ -493,6 +523,8 @@ function makeEnv() {
         log: log,
         setAiResponse: function(r) { aiResponse = r; },
         aiChats: aiChats,
+        setMicB64: function(s) { micB64 = s; },
+        mic: micState,
         setLink: function(st) {
             if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
             if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
@@ -574,10 +606,10 @@ function runApp(relPath, wire) {
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
@@ -607,10 +639,10 @@ function joinLog(log) { return log.join('\n'); }
 
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
-    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                           'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                           (env.__prelude || '') + '\n' + src);
-    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
 }
 
@@ -992,10 +1024,10 @@ function runInline(src, env) {
     env.__harness.pushLink(['{"ack":1}']);
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1442,10 +1474,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1466,10 +1498,10 @@ function holdFrames(x, y, n) {
     try {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
@@ -1492,10 +1524,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1519,10 +1551,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1560,10 +1592,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1586,10 +1618,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);

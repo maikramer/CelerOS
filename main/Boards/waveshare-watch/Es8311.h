@@ -1,7 +1,8 @@
 #ifndef CELER_BOARDS_WAVESHARE_WATCH_ES8311_H
 #define CELER_BOARDS_WAVESHARE_WATCH_ES8311_H
 
-// Codec ES8311 do watch (I2C0 addr 0x18) + amp PA no GPIO46. Porte fiel do
+// Codec ES8311 do watch (I2C0 addr 0x18) + amp PA no GPIO46: DAC/playback
+// (o MIC dual e o ES7210 — ver Es7210.h). Porte fiel do
 // peripherals/audio.rs do firmware Rust (waveshare-watch-rs):
 //
 //   - init a 16 kHz com MCLK 4,096 MHz (256x fs) vindo do pino (I2S0):

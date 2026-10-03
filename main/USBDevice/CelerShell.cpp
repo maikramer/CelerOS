@@ -5,6 +5,8 @@
 #include "Display/Theme.h"
 #include "NetworkManager.h"
 #include "CommonErrorCodes.h"
+#include "Utils/AppGrants.h"
+#include "Utils/AppPerms.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -76,6 +78,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  reboot          reinicia o sistema\n"
         "  rescan          reler lista de apps do launcher\n"
         "  run <app>       abre um app (pasta, nome ou pacote)\n"
+        "  grant <app>     concede as permissoes declaradas (consentimento headless)\n"
         "  exit            encerra o app em execucao\n"
         "  wifi            lista as redes WiFi salvas\n"
         "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
@@ -366,6 +369,55 @@ int cmdExit(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// Consentimento pelo console — o caminho headless: o dialogo de permissoes
+// do launcher e touch (Permitir/Cancelar), que o cao robotico (so pad
+// capacitivo) e o devkit sem vidro nao conseguem responder. Concede
+// EXATAMENTE o que o app declara no app.json (mesma mascara do grantEntry
+// do launcher), entao o `run` seguinte nao pergunta nada.
+int cmdGrant(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: grant <pasta|nome|pacote do app>\r\n");
+        return 1;
+    }
+    std::string target = argv[1];
+    for (int i = 2; i < argc; i++) target += std::string(" ") + argv[i];
+    LauncherUI::requestRescan();  // app recem-instalado entra na lista
+    // O rescan roda no onTick do launcher: com um app aberto (o cao vive no
+    // Dog Face) a lista demora — da um tempo antes de desistir dela
+    int idx = -1;
+    for (int t = 0; t < 20 && idx < 0; t++) {
+        idx = LauncherUI::findEntry(target);
+        if (idx < 0) vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    if (idx >= 0) {
+        LauncherUI::grantEntry(idx);
+        print(ctx, "permissoes concedidas a %s (as declaradas no app.json)\r\n",
+              LauncherUI::appEntryName(idx).c_str());
+        return 0;
+    }
+    // Fallback pelo FS (forma "pasta"): grant direto com o mesmo par
+    // (pacote, caminho) que o scan do launcher usa — a lista pode estar
+    // parada atras de um app aberto, o arquivo ja esta no lugar
+    for (const char* base : {"/local/apps/", "/sd/apps/"}) {
+        std::string dir = std::string(base) + target;
+        std::string json = FileSystem::readTextFile((dir + "/app.json").c_str());
+        if (json.empty()) continue;
+        size_t k = json.find("\"packageName\"");
+        size_t q1 = k == std::string::npos ? k : json.find('"', json.find(':', k) + 1);
+        size_t q2 = q1 == std::string::npos ? q1 : json.find('"', q1 + 1);
+        if (q1 == std::string::npos || q2 == std::string::npos) continue;
+        std::string pkg = json.substr(q1 + 1, q2 - q1 - 1);
+        uint32_t mask = celer::parsePermissions(json) &
+                        (celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO |
+                         celer::PERM_SYSTEM | celer::PERM_MIC);
+        AppGrants::grant(pkg, dir, mask);
+        print(ctx, "permissoes concedidas a %s (%s)\r\n", pkg.c_str(), dir.c_str());
+        return 0;
+    }
+    print(ctx, "app nao encontrado: %s\r\n", target.c_str());
+    return 1;
+}
+
 int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -434,6 +486,7 @@ const ShellCmd kCommands[] = {
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
+    {"grant", cmdGrant},
     {"wifi", cmdWifi},
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},

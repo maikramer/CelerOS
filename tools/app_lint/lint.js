@@ -736,7 +736,7 @@ function lintSource(manifest, src, appInfo) {
 
 const REQUIRED_FIELDS = ['name', 'packageName', 'version', 'author', 'description'];
 const RESERVED_FIELDS = ['size', 'md5', 'published_at', 'publisher'];
-const VALID_PERMS = ['fs', 'net', 'gpio', 'system'];
+const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic'];
 
 function lintAppJson(dir, manifest) {
   const diags = [];

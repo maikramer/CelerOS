@@ -12,7 +12,13 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "driver/touch_sens.h"
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 #include "soc/soc_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "mbedtls/base64.h"
+#include "../USBDevice/LogSink.h"
 
 namespace BoardIO {
 
@@ -117,6 +123,13 @@ bool toneI2s(int freqHz, int ms) {
     const bool hasCodec = bp.audioCodecWake != nullptr;
     const uint32_t kSampleRate = hasCodec ? 16000 : 44100;  // ES8311: 16 kHz
     if (freqHz >= (int)kSampleRate / 2) return false;
+    // Placa com codec: gravacao em curso tem prioridade sobre o som. O canal
+    // do tom (I2S0) COMPARTILHA bclk/ws/mclk com o canal do mic (I2S1) —
+    // criar e destruir o I2S0 deixa os pinos soltos no GPIO matrix e mata o
+    // clock do gravador no meio da captura, e o sleep do codec apos o tom
+    // derruba o ADC (bancada 2026-10-02). No cao (MEMS em pinos proprios) o
+    // tom segue normal.
+    if (hasCodec && micRecActive()) return false;
 
     i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (BoardIO::micLevel
@@ -579,18 +592,29 @@ void stripsOff() {
 
 namespace {
 i2s_chan_handle_t s_mic = nullptr;
-bool s_micFail = false;  // init falhou: -1 direto (sem re-tentar a cada chamada)
+bool s_micFail = false;       // ultima tentativa falhou (ve o prazo abaixo)
+int64_t s_micFailAtUs = 0;    // quando falhou
 
+// Falha de init NAO e mais permanente: no boot do cao o heap interno encosta
+// em ~3 KB (Dog Face + BLE + servos subindo juntos) e os descritores DMA do
+// I2S1 (~6 KB) nao nascem — bancada 2026-10-02, o latch antigo deixava o mic
+// morto ate reiniciar. Segura novas tentativas por 3 s (micLevel segue barato:
+// sem retry a cada chamada) e depois cura sozinho com o heap ja acomodado.
 bool micInit() {
     const MicI2sPins& m = Board::profile().mic;
-    if (m.ws < 0 || s_micFail) return false;
+    if (m.ws < 0) return false;
     if (s_mic) return true;
+    if (s_micFail) {
+        if (esp_timer_get_time() - s_micFailAtUs < 3000000LL) return false;
+        s_micFail = false;
+    }
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     cc.dma_desc_num = 6;
     cc.dma_frame_num = 256;
     if (i2s_new_channel(&cc, nullptr, &s_mic) != ESP_OK) {
         s_mic = nullptr;
         s_micFail = true;
+        s_micFailAtUs = esp_timer_get_time();
         return false;
     }
     i2s_std_config_t cfg = {};
@@ -607,18 +631,90 @@ bool micInit() {
         i2s_del_channel(s_mic);
         s_mic = nullptr;
         s_micFail = true;
+        s_micFailAtUs = esp_timer_get_time();
         return false;
     }
     return true;
 }
+
+// ---- gravacao (Mic.* do runtime, API 19): estado + task de captura ----
+//
+// Mesmo canal I2S1 do micLevel: enquanto a task vive ela e a unica leitora.
+// Grava chunks de 32 ms (slot L, 16 kHz mono) ate o teto de amostras ou um
+// stop/cancel, entao marca done e morre deixando o buffer intacto para o
+// micRecStop montar o WAV. Chamadas publicas so vem da task do app (uma
+// por vez); a mutacao concorrente relevante e o append do buffer, sob mux.
+struct MicRecState {
+    SemaphoreHandle_t mux = nullptr;
+    TaskHandle_t task = nullptr;
+    int16_t* pcm = nullptr;      // amostras 16-bit mono (PSRAM: > 4 KB)
+    volatile int levelR = 0;     // RMS do slot DIREITO (telemetria de slot)
+    size_t cap = 0;              // amostras alocadas
+    size_t n = 0;                // amostras gravadas (so a task escreve)
+    volatile bool stopReq = false;
+    volatile bool done = false;  // task terminou; buffer aguardando leitura
+    volatile int level = 0;      // RMS 0..100 do ultimo chunk (mesma escala do micLevel)
+    bool overflow = false;       // amostra descartada (teto/lock lento)
+    int state = 0;               // 0 livre, 1 gravando (done=true = teto alcancado)
+};
+MicRecState s_rec;
+
+void micRecTask(void*) {
+    int16_t buf[512];  // 256 frames stereo = 32 ms
+    int tele = 0;      // telemetria ~1x/s: RMS dos dois slots (logcat)
+    while (!s_rec.stopReq) {
+        size_t r = 0;
+        if (i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150)) != ESP_OK || r < 4)
+            continue;
+        const int frames = (int)(r / 4);
+        int64_t sum = 0, acc = 0, sumR = 0, accR = 0;
+        bool dropped = false;
+        if (xSemaphoreTake(s_rec.mux, pdMS_TO_TICKS(50)) == pdTRUE) {
+            for (int i = 0; i < frames; i++) {
+                const int32_t v = buf[2 * i];      // slot L (mono capturado)
+                const int32_t vr = buf[2 * i + 1]; // slot R (telemetria)
+                sum += v;
+                acc += (int64_t)v * v;
+                sumR += vr;
+                accR += (int64_t)vr * vr;
+                if (s_rec.n < s_rec.cap) s_rec.pcm[s_rec.n++] = (int16_t)v;
+                else dropped = true;
+            }
+            if (dropped) s_rec.overflow = true;
+            xSemaphoreGive(s_rec.mux);
+        } else {
+            s_rec.overflow = true;
+        }
+        const int64_t mean = frames > 0 ? sum / frames : 0;
+        int64_t var = frames > 0 ? acc / frames - mean * mean : 0;
+        if (var < 0) var = 0;
+        int lvl = (int)sqrtf((float)var) / 60;
+        s_rec.level = lvl > 100 ? 100 : lvl;
+        const int64_t meanR = frames > 0 ? sumR / frames : 0;
+        int64_t varR = frames > 0 ? accR / frames - meanR * meanR : 0;
+        if (varR < 0) varR = 0;
+        int lvlR = (int)sqrtf((float)varR) / 60;
+        s_rec.levelR = lvlR > 100 ? 100 : lvlR;
+        if (++tele % 31 == 0)  // ~1 s de chunks de 32 ms
+            celer_log_printf("[micrec] slotL=%d slotR=%d\n", s_rec.level, s_rec.levelR);
+        if (s_rec.n >= s_rec.cap) break;  // teto: encerra sozinho
+    }
+    s_rec.level = 0;
+    s_rec.done = true;
+    s_rec.task = nullptr;
+    vTaskDelete(nullptr);
+}
 }  // namespace
 
 int micLevel() {
+    // Gravacao em curso: a task do gravador e a unica leitora do canal —
+    // o nivel ao vivo sai dela (ler aqui roubaria chunks do audio)
+    if (s_rec.state != 0) return s_rec.done ? -1 : s_rec.level;
     if (!micInit()) return -1;
-    // Placa com codec (watch): o ES8311 dorme apos cada beep — religa o ADC
-    // a cada leitura (~1 ms de I2C; os clocks ja correm pelo canal acima).
+    // Placa com codec de captura (watch): o ES7210 dorme entre usos —
+    // religa a cada leitura (~1 ms de I2C; os clocks ja correm pelo canal).
     const BoardProfile& bp = Board::profile();
-    if (bp.audioCodecWake != nullptr && !bp.audioCodecWake()) return -1;
+    if (bp.micCodecWake != nullptr && !bp.micCodecWake()) return -1;
 
     int16_t buf[512];  // 256 frames stereo
     size_t r = 0;
@@ -640,6 +736,118 @@ int micLevel() {
     const int rms = (int)sqrtf((float)var);
     int lvl = rms / 60;  // fundo ~0-3, voz/media sala 15-40, grito >60
     return lvl > 100 ? 100 : lvl;
+}
+
+// ---- gravacao de microfone: API do runtime (Mic.*) ---------------------------
+
+namespace {
+inline void u16le(uint8_t* p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+inline void u32le(uint8_t* p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+// Header PCM16 mono 16 kHz canonico de 44 bytes (o que o input_audio das
+// LLMs e o System.playWav esperam)
+void wavHeader(uint8_t* h, uint32_t dataLen) {
+    memcpy(h, "RIFF", 4); u32le(h + 4, 36 + dataLen); memcpy(h + 8, "WAVE", 4);
+    memcpy(h + 12, "fmt ", 4); u32le(h + 16, 16);
+    u16le(h + 20, 1);  u16le(h + 22, 1);          // PCM, mono
+    u32le(h + 24, 16000); u32le(h + 28, 32000);   // fs, byte rate
+    u16le(h + 32, 2); u16le(h + 34, 16);          // block align, bits
+    memcpy(h + 36, "data", 4); u32le(h + 40, dataLen);
+}
+
+// Depois da gravacao o codec de captura do watch volta a dormir (o
+// micLevel religa na proxima leitura)
+void micRecCodecDown() {
+    if (Board::profile().micCodecSleep != nullptr) Board::profile().micCodecSleep();
+}
+
+void micRecFree() {
+    free(s_rec.pcm);
+    s_rec.pcm = nullptr;
+    s_rec.cap = 0;
+    s_rec.n = 0;
+    s_rec.state = 0;
+}
+
+// Monta WAV (ou base64 dele) do buffer gravado. Chamado SO com done=true
+// (nenhum escritor vivo). Pico transitorio: WAV + base64 na PSRAM.
+char* micRecBuildOut(bool base64, size_t* lenOut, uint32_t* msOut) {
+    if (msOut != nullptr) *msOut = (uint32_t)(s_rec.n / 16);  // 16000 amostras/s
+    const size_t dataLen = s_rec.n * sizeof(int16_t);
+    uint8_t* wav = (uint8_t*)malloc(44 + dataLen);
+    if (wav == nullptr) return nullptr;
+    wavHeader(wav, (uint32_t)dataLen);
+    if (dataLen > 0) memcpy(wav + 44, s_rec.pcm, dataLen);
+    if (!base64) {
+        if (lenOut != nullptr) *lenOut = 44 + dataLen;
+        return (char*)wav;
+    }
+    size_t b64len = 0;
+    mbedtls_base64_encode(nullptr, 0, &b64len, wav, 44 + dataLen);
+    char* b64 = (char*)malloc(b64len);
+    if (b64 == nullptr) {
+        free(wav);
+        return nullptr;
+    }
+    mbedtls_base64_encode((unsigned char*)b64, b64len, &b64len, wav, 44 + dataLen);
+    free(wav);
+    if (lenOut != nullptr) *lenOut = b64len;  // sem o NUL final
+    return b64;
+}
+
+// Espera a task morrer (ela pode estar ate 150 ms dentro do i2s_read)
+void micRecJoin() {
+    s_rec.stopReq = true;
+    while (!s_rec.done) vTaskDelay(pdMS_TO_TICKS(2));
+}
+}  // namespace
+
+bool micRecStart(int maxMs) {
+    if (!micInit()) return false;
+    if (s_rec.state != 0) return false;  // ja gravando (ou buffer nao lido)
+    const BoardProfile& bp = Board::profile();
+    if (bp.micCodecWake != nullptr && !bp.micCodecWake()) return false;  // ES7210: ADC ligado
+    if (maxMs < 200) maxMs = 200;
+    if (maxMs > 10000) maxMs = 10000;  // 10 s = 320 KB de PCM (PSRAM)
+    if (s_rec.mux == nullptr) s_rec.mux = xSemaphoreCreateMutex();
+    if (s_rec.mux == nullptr) return false;
+    s_rec.pcm = (int16_t*)malloc((size_t)maxMs * 16 * sizeof(int16_t));
+    if (s_rec.pcm == nullptr) return false;
+    s_rec.cap = (size_t)maxMs * 16;
+    s_rec.n = 0;
+    s_rec.stopReq = false;
+    s_rec.done = false;
+    s_rec.overflow = false;
+    s_rec.level = 0;
+    s_rec.state = 1;
+    if (xTaskCreate(micRecTask, "micrec", 3072, nullptr, 3, &s_rec.task) != pdPASS) {
+        s_rec.task = nullptr;
+        micRecFree();
+        micRecCodecDown();
+        return false;
+    }
+    return true;
+}
+
+bool micRecActive() { return s_rec.state == 1 && !s_rec.done; }
+
+int micRecLevel() { return s_rec.state == 1 ? s_rec.level : -1; }
+
+char* micRecStop(bool base64, size_t* lenOut, uint32_t* msOut) {
+    if (s_rec.state != 1 || s_rec.pcm == nullptr) return nullptr;
+    micRecJoin();
+    char* out = micRecBuildOut(base64, lenOut, msOut);
+    micRecFree();
+    micRecCodecDown();
+    return out;
+}
+
+void micRecCancel() {
+    if (s_rec.state != 1) return;
+    micRecJoin();
+    micRecFree();
+    micRecCodecDown();
 }
 
 // ---- volume (System.setVolume, API 13) --------------------------------------

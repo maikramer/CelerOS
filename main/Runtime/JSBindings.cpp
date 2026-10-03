@@ -822,6 +822,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // heap stash do app que saiu)
     aiReset();
 
+    // Gravacao de microfone de um app anterior: descartada (nenhum audio
+    // atravessa apps; a task morre e o buffer e liberado)
+    BoardIO::micRecCancel();
+
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
     s_barOnGlass = false;
@@ -1182,16 +1186,32 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_prop_string(ctx, -2, "Net");
     }
 
-    // --- AI Object (API 18): chat DeepSeek — capability "net" (HTTPS) ---
+    // --- AI Object (API 18): chat LLM (opts.provider: deepseek|openrouter)
+    // — capability "net" (HTTPS) ---
     if (perm(celer::PERM_NET)) {
     duk_push_object(ctx); // AI
     static const JsFn kFnsAI[] = {
         {"chat", js_aiChat, 2},              // cb({ok,content,raw,status,usage}) 1x
-        {"configured", js_aiConfigured, 0},  // chave no aparelho?
+        {"configured", js_aiConfigured, 1},  // chave no aparelho? ([provider])
         {"cancel", js_aiCancel, 0},          // esquece a requisicao em curso
     };
     putFns(ctx, kFnsAI);
     duk_put_prop_string(ctx, -2, "AI");
+    }
+
+    // --- Mic Object (API 19): gravacao de microfone — capability "mic".
+    // O audio do dono e dado sensivel: o objeto so nasce para app
+    // autorizado, em placa com microfone no perfil (cao e watch hoje). ---
+    if (perm(celer::PERM_MIC) && Board::profile().mic.ws >= 0) {
+    duk_push_object(ctx); // Mic
+    static const JsFn kFnsMic[] = {
+        {"start", js_micRecStart, 1},          // Mic.start({ms}) -> bool
+        {"stop", js_micRecStop, 1},            // Mic.stop({raw}) -> base64|wav|null
+        {"recording", js_micRecRecording, 0},  // capturando (false no teto)
+        {"level", js_micRecLevel, 0},          // RMS 0..100 (-1 parado)
+    };
+    putFns(ctx, kFnsMic);
+    duk_put_prop_string(ctx, -2, "Mic");
     }
 
     // --- FS Object — capability "fs" (F4) ---

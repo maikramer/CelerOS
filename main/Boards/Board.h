@@ -125,6 +125,11 @@ struct BoardProfile {
     int audioPaPin = -1;
     bool (*audioCodecWake)() = nullptr;
     void (*audioCodecSleep)() = nullptr;
+    // Codec de CAPTURA (ES7210 do watch: o mic dual; o ES8311 e so DAC).
+    // Wake em volta de cada gravacao/micLevel — a mesma disciplina do
+    // audioCodecWake com os beeps. nullptr = mic MEMS sempre ligado (cao).
+    bool (*micCodecWake)() = nullptr;
+    void (*micCodecSleep)() = nullptr;
     // Ritual pre-deep-sleep da placa (persistir estado, desligar IMU...).
     void (*sleepPrep)() = nullptr;
     // Tecla de power no PMU (watch: PEK do AXP2101, sem pino INT — poll).

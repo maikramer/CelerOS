@@ -2,6 +2,7 @@
 #include "Axp2101.h"
 #include "Pcf85063.h"
 #include "Es8311.h"
+#include "Es7210.h"
 #include "Motion.h"
 #include "WatchUlp.h"
 #include "Hardware/BoardIO.h"
@@ -61,6 +62,9 @@ static const BoardProfile s_profile = {
         return Es8311::init() && Es8311::unmuteVolume(BoardIO::volumePct());
     },
     .audioCodecSleep = []() { Es8311::shutdown(); },
+    // Captura: o mic dual e o ES7210 (o ES8311 e so DAC) — dado no GPIO42
+    .micCodecWake = []() { return Es7210::init(); },
+    .micCodecSleep = []() { Es7210::shutdown(); },
     .sleepPrep = []() { Motion::prepareSleep(); },  // passos no NVS + IMU off
     .pmuKeyPoll = Axp2101::pollPowerKey,  // PWR fisico do watch (via PMU)
     .screenInset = 40,   // cantos arredondados: afasta relogio/X da zona morta

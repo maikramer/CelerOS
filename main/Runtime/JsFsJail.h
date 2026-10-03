@@ -90,7 +90,8 @@ inline bool fsPathAllowed(const char* path) {
         "/local/autostart.txt",
         "/local/ota_url.txt",
         "/local/ota_allow_http.txt",
-        "/local/deepseek_key.txt",  // chave da API de IA: so o framework C++ le
+        "/local/deepseek_key.txt",   // chave da API de IA: so o framework C++ le
+        "/local/openrouter_key.txt", // idem (provider do objeto AI)
         "/local/config_time.txt",
         "/local/nowifi.txt",
         "/local/web_on.txt",

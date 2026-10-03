@@ -557,7 +557,7 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 - **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
 
 #### App permissions (`app.json` → runtime, F4)
-`"permissions": ["fs","net","gpio","system"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, clock `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) are absent. Paths given to `FS` (and to `drawPNG`/`drawBMP`/`playWav`/`Net.download`) must be **canonical** under `/local` or `/sd`: no `//`, `.` or `..` (denied for every app). **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
+`"permissions": ["fs","net","gpio","system","mic"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, without `mic` no `Mic` (recording; API 19), and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, clock `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) are absent. Paths given to `FS` (and to `drawPNG`/`drawBMP`/`playWav`/`Net.download`) must be **canonical** under `/local` or `/sd`: no `//`, `.` or `..` (denied for every app). **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
 
 #### `System.toast(message)` / `System.beep(freq, ms)`
 `toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); the SmartDisplay feeds the on-board Nsiway NS4168 digital amplifier over I2S (a sine wave, softer than the CYD's square wave). Returns `false` on boards without a speaker.
@@ -1412,28 +1412,36 @@ dropped, typographic quotes/dashes turned into ASCII).
 - Turns the phone link on/off (persisted). Requires `"system"`; the quick
   settings panel has the same toggle.
 
-## 22. API Level 18 — AI: `AI` (DeepSeek)
+## 22. API Level 18 — AI: `AI` (DeepSeek / OpenRouter)
 
-Chat with an LLM (DeepSeek, OpenAI-compatible API) from a JS app. The whole
+Chat with an LLM (OpenAI-compatible API) from a JS app. The whole
 `AI` object only exists for apps with the `"net"` permission (HTTPS under
 the hood).
 
-The API key is **device-level, never in JS**: the owner provisions it once
-with `python3 tools/push_deepseek_key.py` (reads `.env` in the repo root) or
-through the web file manager, into `/local/deepseek_key.txt`. That file is
-protected by the FS jail — no app can read it — and the framework reads it
-at call time (replacing the key does not need a reboot).
+Two providers are built in, chosen per call with `opts.provider`
+(default `"deepseek"`):
 
-#### `AI.configured()` (API 18)
+- `"deepseek"` — default model `deepseek-flash`, key in `/local/deepseek_key.txt`;
+- `"openrouter"` — default model `qwen/qwen3.8-omni-flash` (multimodal: accepts
+  `input_audio` message parts), key in `/local/openrouter_key.txt`.
+
+The API key is **device-level, never in JS**: the owner provisions it once
+with `python3 tools/push_ai_key.py deepseek|openrouter` (reads `.env` in the
+repo root) or through the web file manager, into `/local/<provider>_key.txt`.
+That file is protected by the FS jail — no app can read it — and the
+framework reads it at call time (replacing the key does not need a reboot).
+
+#### `AI.configured([provider])` (API 18)
+- **Parameters:** `provider` (String, optional) — `"deepseek"` (default) or `"openrouter"`.
 - **Returns:** Boolean
-- **Description:** `true` when an API key is provisioned on the device. Pair with `Net.isConnected()` before chatting.
+- **Description:** `true` when that provider's key is provisioned on the device. Pair with `Net.isConnected()` before chatting.
 
 #### `AI.chat(opts, cb)` (API 18)
 - **Parameters:**
-  - `opts` (Object) — the DeepSeek request payload itself (OpenAI shape): `messages` (required, Array of `{role, content}` where role is `"system"`, `"user"` or `"assistant"`), optional `model` (defaults to `"deepseek-flash"`), `max_tokens` (defaults to `1024`), `temperature`, etc. The framework forces `stream: false`.
+  - `opts` (Object) — the request payload itself (OpenAI shape): `messages` (required, Array of `{role, content}` where role is `"system"`, `"user"` or `"assistant"`; `content` may be a String or, for multimodal models, an Array of content parts such as `{type:"input_audio", input_audio:{data:"<base64 wav>", format:"wav"}}`), optional `provider` (`"deepseek"` | `"openrouter"`, consumed by the framework and stripped from the payload), optional `model` (defaults to the provider's model), `max_tokens` (defaults to `1024`), `temperature`, etc. The framework forces `stream: false`.
   - `cb` (Function) — called **exactly once** with the result object when the request finishes.
 - **Returns:** Boolean — `true` when the request started (callback will fire); `false` when busy (another request in flight — no callback).
-- **Throws:** readable error when WiFi is down or no key is provisioned.
+- **Throws:** readable error when WiFi is down, no key is provisioned or the provider name is unknown.
 - **Description:** Asynchronous: the HTTPS POST runs on its own task (90 s timeout) while the app keeps drawing. The callback receives `{ok, status, content, usage, raw, error}`:
   - `ok` — `true` on HTTP 2xx;
   - `content` — the reply text (`choices[0].message.content`), `null` when the body could not be parsed;
@@ -1445,9 +1453,10 @@ at call time (replacing the key does not need a reboot).
 ### Example
 
 ```javascript
-if (!AI.configured() || !Net.isConnected()) {
+if (!AI.configured("openrouter") || !Net.isConnected()) {
     System.print("configure a chave e o WiFi");
-} else if (AI.chat({ messages: [{ role: "user", content: "piada curta" }] },
+} else if (AI.chat({ provider: "openrouter",
+                     messages: [{ role: "user", content: "piada curta" }] },
                    function (r) {
                        if (r.ok) System.print(r.content);
                        else System.print("erro: " + r.error);
@@ -1456,3 +1465,49 @@ if (!AI.configured() || !Net.isConnected()) {
     while (true) System.delay(20);
 }
 ```
+
+### Example — voice (audio in, text out)
+
+```javascript
+// Mic.start/stop live on boards with a microphone (see section 23):
+// stop() returns the base64 WAV ready for input_audio.
+if (Mic.start({ ms: 8000 })) {
+    // ... hold-to-talk UI while Mic.recording(), level via Mic.level()
+    var b64 = Mic.stop();  // null when nothing was captured
+    if (b64) {
+        AI.chat({
+            provider: "openrouter",
+            messages: [{ role: "user", content: [
+                { type: "input_audio", input_audio: { data: b64, format: "wav" } }
+            ]}]
+        }, function (r) { if (r.ok) System.print(r.content); });
+    }
+}
+```
+
+## 23. API Level 19 — Microphone recording: `Mic`
+
+Capture audio from the board microphone (today the robot dog and the watch,
+both 16 kHz mono 16-bit). The `Mic` object only exists when **all** of these
+hold: the board has a microphone, the app **declared `"mic"`** in
+`app.json` and the user **granted it** in the launcher consent dialog.
+Otherwise `typeof Mic === "undefined"` — apps feature-detect and fall back
+to the keyboard. Recording runs on its own task: the app keeps drawing
+while audio is captured.
+
+#### `Mic.start([opts])` (API 19)
+- **Parameters:** `opts` (Object, optional) — `{ms: maxCaptureMs}`, default `6000`, clamped to `200..10000` (10 s = 320 KB of PCM, allocated in PSRAM).
+- **Returns:** Boolean — `false` when there is no mic, no RAM, or a recording is already in flight.
+- **Description:** Starts capture. The recorder stops by itself at the `ms` ceiling (`Mic.recording()` turns `false`, the buffer waits for `Mic.stop()`).
+
+#### `Mic.stop([opts])` (API 19)
+- **Parameters:** `opts` (Object, optional) — `{raw: true}` to get the raw WAV bytes instead of base64.
+- **Returns:** String — base64 of the WAV (44-byte PCM16/mono/16 kHz header + samples) ready for `input_audio`; `null` when it was not recording or memory ran out.
+- **Description:** Ends the capture and returns the audio. One recording at a time.
+
+#### `Mic.recording()` (API 19)
+- **Returns:** Boolean — `true` while the capture task is running.
+
+#### `Mic.level()` (API 19)
+- **Returns:** Number — sound level 0..100 (RMS of the last 32 ms chunk; quiet room 0-3, speech 15-40), `-1` when not recording.
+- **Description:** For the live VU meter while recording. While a recording is in flight, `System.micLevel()` reports the same live level (they share the I2S channel).

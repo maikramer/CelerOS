@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 18 — 207 funcoes.
+// API level 19 — 211 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -308,11 +308,25 @@ declare const AI: {
     /** Assíncrono: o POST HTTPS roda em task própria (timeout de 90 s) enquanto o app continua desenhando. O callback recebe {ok, status, content,  (API 18) */
     /** @permission "net" */
     chat(opts: number, cb: number): any;
-    /** true quando existe chave provisionada no aparelho. Use junto de Net.isConnected() antes de conversar. (API 18) */
+    /** true quando existe chave daquele provider provisionada no aparelho. Use junto de Net.isConnected() antes de conversar. (API 18) */
     /** @permission "net" */
-    configured(): any;
+    configured(provider?: number): any;
     /** @permission "net" */
     cancel(): any;
+};
+
+declare const Mic: {
+    /** Inicia a captura. No teto de ms o gravador para sozinho (Mic.recording() vira false; o buffer espera o Mic.stop()). (API 19) */
+    /** @permission "mic" */
+    start(opts?: number): any;
+    /** Encerra a captura e devolve o áudio. Uma gravação por vez. (API 19) */
+    /** @permission "mic" */
+    stop(opts?: number): any;
+    /** @permission "mic" */
+    recording(): any;
+    /** Para o medidor VU ao vivo. Com gravação em curso, o System.micLevel() devolve o mesmo nível ao vivo (compartilham o canal I2S). (API 19) */
+    /** @permission "mic" */
+    level(): any;
 };
 
 declare const FS: {

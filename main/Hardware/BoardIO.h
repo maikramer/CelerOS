@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // ============================================================================
@@ -88,6 +89,22 @@ void stripsOff();
 // Placa com codec (ES8311 do watch): o ADC do codec e religado a cada
 // leitura (ele dorme apos cada beep) — clocks vem do proprio I2S1 (MCLK).
 int micLevel();
+
+// ---- gravacao de microfone (Mic.* do runtime, API 19) ----
+// Captura 16 kHz mono 16-bit (slot L do mesmo canal do micLevel) numa task
+// propria: o app segue desenhando enquanto grava. Sem microfone na placa
+// (mic.ws < 0) ou sem RAM: start devolve false. maxMs: 200..10000 (10 s
+// = 320 KB de PCM, que caem na PSRAM das placas com mic).
+bool micRecStart(int maxMs);
+// true enquanto a task captura (false no teto de maxMs, com buffer intacto)
+bool micRecActive();
+// RMS 0..100 do ultimo chunk (mesma escala do micLevel); -1 = nao gravando
+int micRecLevel();
+// Descarta a gravacao em curso (exit do app inclusive)
+void micRecCancel();
+// Encerra e devolve o WAV (header de 44 bytes + PCM) ou o base64 dele;
+// buffer malloc do chamador (free). *msOut = duracao gravada. null = nada.
+char* micRecStop(bool base64, size_t* lenOut, uint32_t* msOut);
 
 // ---- volume (System.setVolume, API 13) ----
 // 0..100 persistido em "volume" (default 100). I2S: escala digital da

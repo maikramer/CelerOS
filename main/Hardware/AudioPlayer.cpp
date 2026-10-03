@@ -79,6 +79,13 @@ WavError playWav(const char* path) {
     FILE* f = fopen(path, "rb");
     if (f == nullptr) return WavError::OpenFailed;
 
+    // Placa com codec: gravacao em curso tem prioridade (mesmo motivo do
+    // toneI2s — o I2S0 compartilha bclk/ws/mclk com o I2S1 do mic)
+    if (Board::profile().audioCodecWake != nullptr && BoardIO::micRecActive()) {
+        fclose(f);
+        return WavError::NoAudio;
+    }
+
     WavInfo wi;
     if (!parseHeader(f, wi) ||
         (wi.channels != 1 && wi.channels != 2) ||

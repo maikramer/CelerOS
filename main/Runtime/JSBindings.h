@@ -272,13 +272,20 @@ private:
     // Descarta zumbis/resultados do app anterior (chamado no init de cada app)
     static void netAsyncReset();
 
-    // AI (API 18): chat DeepSeek com callback. A chave fica no aparelho
-    // (/local/deepseek_key.txt, protegida pelo jail do FS) e nunca entra no JS
+    // AI (API 18): chat LLM com callback (DeepSeek/OpenRouter pelo
+    // opts.provider). A chave fica no aparelho (/local/<provider>_key.txt,
+    // protegida pelo jail do FS) e nunca entra no JS
     static duk_ret_t js_aiChat(duk_context *ctx);        // opts + cb 1x
     static duk_ret_t js_aiConfigured(duk_context *ctx);  // chave presente?
     static duk_ret_t js_aiCancel(duk_context *ctx);      // esquece a requisicao
     static void aiTick(duk_context *ctx);                // entrega no present()
     static void aiReset();                               // reset por app
+
+    // Mic (API 19): gravacao de microfone — capability "mic" (JsMic.cpp)
+    static duk_ret_t js_micRecStart(duk_context *ctx);    // Mic.start({ms})
+    static duk_ret_t js_micRecStop(duk_context *ctx);     // Mic.stop({raw}) -> base64|wav|null
+    static duk_ret_t js_micRecRecording(duk_context *ctx); // Mic.recording()
+    static duk_ret_t js_micRecLevel(duk_context *ctx);    // Mic.level()
 
     // Net nivel 3 (WiFi)
     static duk_ret_t js_wifiScan(duk_context *ctx);
