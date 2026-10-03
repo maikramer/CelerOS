@@ -39,3 +39,11 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 # CONFIG_BT_NIMBLE_NVS_PERSIST is not set
+
+# Watchdog de bateria por ULP-RISC-V (deep sleep do System.deepSleep): o
+# coprocessador le o divisor do ADC1 (GPIO2) a cada ~60 s e acorda os
+# nucleos se a celula cair de ~3,3 V — o timer do JS segue valendo. O
+# binario vive na RTC slow mem (4 KB de reserva la, nada sai da DRAM).
+CONFIG_ULP_COPROC_ENABLED=y
+CONFIG_ULP_COPROC_TYPE_RISCV=y
+CONFIG_ULP_COPROC_RESERVE_MEM=4096

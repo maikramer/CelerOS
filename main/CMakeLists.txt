@@ -96,6 +96,12 @@ elseif(CELEROS_BOARD STREQUAL "cyd-vspi")
     set(CELEROS_BOARD_DIR Boards/cyd-vspi)
 elseif(CELEROS_BOARD STREQUAL "spotpear-dog")
     set(CELEROS_BOARD_DIR Boards/spotpear-dog)
+    # Watchdog de bateria no deep sleep: ULP-RISC-V le o ADC1 do divisor
+    list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/DogUlp.cpp")
+    set(CELEROS_ULP_APP ulp_dog)
+    set(CELEROS_ULP_SOURCES "Boards/spotpear-dog/ulp/ulp_main.c")
+    set(CELEROS_ULP_REQUIRES ulp)
+    set(CELEROS_ULP_EXP "${CELEROS_BOARD_DIR}/DogUlp.cpp")
 elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_BOARD_DIR Boards/waveshare-watch)
     # Servico de movimento (QMI8658: pedometro + raise) e exclusivo do watch
@@ -106,6 +112,7 @@ elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_ULP_APP ulp_watch)
     set(CELEROS_ULP_SOURCES "Boards/waveshare-watch/ulp/ulp_main.c")
     set(CELEROS_ULP_REQUIRES ulp)
+    set(CELEROS_ULP_EXP "${CELEROS_BOARD_DIR}/WatchUlp.cpp")
 elseif(CELEROS_BOARD STREQUAL "devkit")
     set(CELEROS_BOARD_DIR Boards/devkit)
 else()
@@ -162,7 +169,7 @@ if(CELEROS_ULP_APP)
         "$ENV{IDF_PATH}/components/ulp/ulp_common/include"
         "$ENV{IDF_PATH}/components/ulp/ulp_riscv/include")
     ulp_embed_binary(${CELEROS_ULP_APP} "${CELEROS_ULP_SOURCES}"
-                     "${CELEROS_BOARD_DIR}/WatchUlp.cpp" TYPE riscv)
+                     "${CELEROS_ULP_EXP}" TYPE riscv)
     # ... e o WatchUlp.cpp (lado main) tambem nao ve ulp_riscv.h/ulp_common.h
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "$ENV{IDF_PATH}/components/ulp/ulp_common/include"

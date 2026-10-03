@@ -1,4 +1,5 @@
 #include "Boards/Board.h"
+#include "DogUlp.h"
 
 // Cao robotico SpotBear/ZZPET (ESP32-S3-Ai-Dog-(A), SKU zzpet-s3): ESP32-S3R8
 // (8MB PSRAM octal EMBUTIDA — o anuncio diz "S3R2" mas o chip reporta R8),
@@ -37,11 +38,15 @@ static const BoardProfile s_profile = {
     .batteryPin = 2,   // divisor 2:1 no ADC1_CH1 (~2066 mV no pino sob USB)
     .batteryScalePct = 200,  // System.battery() devolve a tensao da celula
     .touchPad = 10,    // pad capacitivo: 1 toque = tap, segurar = hold
+    .ulpArm = DogUlp::arm,  // watchdog de bateria por ULP no deep sleep
     .homeApp = "celeros.dogface",  // a cara do cao e a casa do robô
     .gpioDeniedMask = 0x3E00000000ULL,  // GPIO33..37: DQ4..7/DQS da PSRAM octal (S3R8)
 };
 
 void init() {
+    // Wake do watchdog ULP (bateria fraca no deep sleep): log cedo — a cara
+    // do cao mostra o estado da celula e o celerctl logcat ve o motivo.
+    DogUlp::wake();
     s_display.init();
     // Painel 1-bit monochromo: sem conversao RGB565 (nada a trocar).
 }
