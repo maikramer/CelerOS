@@ -116,6 +116,8 @@ class HostLink:
         self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
         self.timeout = timeout
         self.push_queue = []  # frames nao-solicitados (logs) que chegaram no meio de um xfer
+        # teto de espera por comando EXEC (saida grande = mais continuacoes)
+        self.exec_timeout = 15.0
         # preenchidos pelo hello() a partir do que o device anuncia
         self.proto = 1
         self.max_chunk = CHUNK
@@ -280,7 +282,7 @@ class HostLink:
         return body
 
     def exec(self, line):
-        _, payload = self.xfer(KL["EXEC"], line.encode(), timeout=15.0)
+        _, payload = self.xfer(KL["EXEC"], line.encode(), timeout=self.exec_timeout)
         body = payload[1:]
         exit_code = body[0]
         (out_len,) = struct.unpack("<I", body[1:5])
@@ -289,7 +291,7 @@ class HostLink:
         # intercalam sao guardados, nao abortam — mesmo tratamento do
         # screenshot/coredump)
         while len(out) < out_len:
-            cmd, more = self._read_frame(timeout=15.0)
+            cmd, more = self._read_frame(timeout=self.exec_timeout)
             if cmd in (KL["LOG_DATA"], KL["SCR_DATA"]):
                 self.push_queue.append((cmd, more))
                 continue
@@ -681,6 +683,8 @@ def open_link(args):
             die(f"{devices[0][0].device} nao responde ao protocolo HostLink")
     if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD and link.ser.baudrate == DEFAULT_BAUD:
         link.set_baud(args.baud)
+    if getattr(args, "exec_timeout", None):
+        link.exec_timeout = args.exec_timeout
     return link
 
 
@@ -1035,13 +1039,14 @@ def _lint_app_folder(folder, fatal=True):
     import subprocess
     lint = Path(__file__).resolve().parent / "app_lint" / "lint.js"
     if not lint.is_file():
-        print("aviso: tools/app_lint/lint.js ausente; instalando sem lint")
+        print("AVISO: tools/app_lint/lint.js ausente — SEM LINT (erros so aparecem no device)")
         return True
     try:
         out = subprocess.run(["node", str(lint), "--json", str(folder)],
                              capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
-        print("aviso: node ausente no PATH; instalando sem lint")
+        print("AVISO: node ausente no PATH — SEM LINT: erros de ES5/API so vao "
+              "aparecer no device; instale Node ou rode tools/app_lint/lint.js na mao")
         return True
     except subprocess.TimeoutExpired:
         if fatal:
@@ -1069,13 +1074,28 @@ def _lint_app_folder(folder, fatal=True):
     return erros == 0
 
 
+# Lixo de editor/SO que nao sobe para o device: o push e o watcher do dev
+# usam a MESMA lista (senao o dev fica empurrando/deletando arquivo que o
+# install nunca mandou)
+_JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+_JUNK_SUFFIX = (".swp", ".swo", ".bak", ".tmp", "~")
+
+
+def _is_junk(p):
+    name = p.name
+    if name in _JUNK_NAMES or name.startswith(".#") or ".git" in p.parts:
+        return True
+    return name.endswith(_JUNK_SUFFIX)
+
+
 def _push_app_files(link, src, dest, only=None, progress=True):
     """Empurra os arquivos da pasta de app para <dest> no dispositivo.
     `only` limita aos caminhos relativos dados (reload do `dev`); None = tudo
     (install completo, cria a arvore de diretorios)."""
     if only is None:
         link.simple("MKDIR", dest.encode() + b"\0")
-        files = [f for f in sorted(src.rglob("*")) if f.is_file() and ".dev" not in f.parts]
+        files = [f for f in sorted(src.rglob("*"))
+                 if f.is_file() and ".dev" not in f.parts and not _is_junk(f)]
         for f in files:
             rel = f.relative_to(src).parent
             if str(rel) != ".":
@@ -1104,10 +1124,11 @@ def _relaunch(link, app_name):
 
 def _snapshot(src):
     """Mapa caminho_relativo -> (mtime_ns, size) dos arquivos da pasta de app
-    (a subpasta .dev/, onde o dev guarda screenshots, fica de fora)."""
+    (a subpasta .dev/, onde o dev guarda screenshots, e o lixo de editor
+    ficam de fora — mesma regra do _push_app_files)."""
     out = {}
     for f in src.rglob("*"):
-        if f.is_file() and ".dev" not in f.parts:
+        if f.is_file() and ".dev" not in f.parts and not _is_junk(f):
             st = f.stat()
             out[f.relative_to(src).as_posix()] = (st.st_mtime_ns, st.st_size)
     return out
@@ -1182,7 +1203,7 @@ def cmd_dev(args):
                         link.exec("rescan")
                     _relaunch(link, src.name)
                     if args.shots:
-                        time.sleep(2.5)  # launcher rescaneia (run pede rescan) e abre o app
+                        time.sleep(1.0)  # rescan+launch assincronos: da a largada
                         _dev_screenshot(link, shots_dir)
                 else:
                     print("== lint com erros; corriga e salve para tentar de novo")
@@ -1244,12 +1265,25 @@ def _reconnect(old):
     die("dev: nao conseguiu reconectar")
 
 
-def _dev_screenshot(link, shots_dir):
+def _dev_screenshot(link, shots_dir, settle_timeout=5.0):
+    """Captura a tela DEPOIS dela parar de mudar: duas capturas consecutivas
+    identicas fecham o poll (o fixo de 2.5s pegava tela de transicao do
+    rescan/launch e app lento de boot saia furado). Teto de settle_timeout —
+    relogio da topbar piscando nao segura o loop para sempre."""
     shots_dir.mkdir(exist_ok=True)
     out = shots_dir / "last.png"
+    t0 = time.monotonic()
+    last = None
+    size = None
     try:
-        w, h, data = link.screenshot()
+        while True:
+            w, h, data = link.screenshot()
+            size = (w, h)
+            if data == last or time.monotonic() - t0 >= settle_timeout:
+                break
+            last = data
         from PIL import Image
+        w, h = size
         pixels = struct.unpack(f"<{w * h}H", data)
         rgb = bytearray(w * h * 3)
         for i, p in enumerate(pixels):
@@ -1257,7 +1291,7 @@ def _dev_screenshot(link, shots_dir):
             rgb[i * 3 + 1] = ((p >> 3) & 0xFC) | ((p >> 9) & 0x03)
             rgb[i * 3 + 2] = (p << 3) & 0xF8 | ((p >> 2) & 0x07)
         Image.frombytes("RGB", (w, h), bytes(rgb)).save(out)
-        print(f"== tela: {out} ({w}x{h})")
+        print(f"== tela: {out} ({w}x{h}, estabilizou em {time.monotonic() - t0:.1f}s)")
     except ImportError:
         print("== tela: pip install Pillow para --shots")
     except CelerError as e:
@@ -1362,6 +1396,9 @@ def main():
                         help="limita a janela de chunks anunciada pelo firmware (0 = usa"
                              " a anunciada). Use 2 para atualizar por OTA um firmware"
                              " cuja janela transborda o buffer RX do proprio device")
+    parser.add_argument("--exec-timeout", type=float, default=15.0, metavar="S",
+                        help="teto de espera por comando shell em segundos, para saida"
+                             " grande (default 15)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="lista placas conectadas")
@@ -1441,8 +1478,10 @@ def main():
     p.set_defaults(func=cmd_screencap)
 
     p = sub.add_parser("tap", help="injeta um toque na tela")
-    p.add_argument("x", type=int)
-    p.add_argument("y", type=int)
+    p.add_argument("x", type=int,
+                   help="X FISICO do vidro (raw do touch: 480x480 SmartDisplay,"
+                        " 320x240 CYD, ~240x240 watch — nao e a coordenada virtual 240x320 do app)")
+    p.add_argument("y", type=int, help="Y FISICO do vidro (ver -x)")
     p.add_argument("hold", nargs="?", type=int, default=80, help="ms pressionado (default 80)")
     p.set_defaults(func=cmd_tap)
 
