@@ -1,0 +1,22 @@
+{
+  "type": "microWakeWord V1 (stream_state_internal_quant)",
+  "wake_word": "hi celer",
+  "language": "multi (en libritts_r + pt_BR faber; dono brasileiro)",
+  "author": "CelerOS (treino proprio, tools/wake/)",
+  "model": "hi_celer.tflite",
+  "model_bytes": 60968,
+  "trained_at": "2026-10-03",
+  "firmware": {
+    "header": "main/Assets/Wake/HiCelerModel.h (gerado por tflite_to_header.py)",
+    "probability_cutoff": 190,
+    "sliding_window_size": 5,
+    "slices_after_detection": 100,
+    "tensor_arena_bytes": 32768
+  },
+  "gate": {
+    "testing_set": "230 amostras de vozes NUNCA vistas (libritts_r speakers 850+ + leituras pt_BR diferentes)",
+    "false_rejection_rate": 0.0,
+    "ambient_false_accepts_per_hour": 0.0,
+    "note": "teste do proprio treinador (quantizado, streaming); palavra final e a sonda no cao"
+  }
+}

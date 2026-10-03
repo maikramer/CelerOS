@@ -29,6 +29,9 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#if CONFIG_CELEROS_WAKE_WORD
+#include "../Hardware/WakeWord.h"
+#endif
 #include "../Kernel/Alarms.h"
 #include "../Launcher/WatchPanels.h"
 #include "../Launcher/NotificationAlert.h"
@@ -829,6 +832,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Gravacao de microfone de um app anterior: descartada (nenhum audio
     // atravessa apps; a task morre e o buffer e liberado)
     BoardIO::micRecCancel();
+#if CONFIG_CELEROS_WAKE_WORD
+    // Detector de wake word de um app anterior: idem (o proximo app liga
+    // de novo se quiser — o custo de religar e o create do modelo)
+    WakeWord::stop();
+#endif
 
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
@@ -1217,6 +1225,22 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsMic);
     duk_put_prop_string(ctx, -2, "Mic");
     }
+#if CONFIG_CELEROS_WAKE_WORD
+    // Wake word on-device "Hi ESP" (API 20): mesma permissao do mic (ouvir
+    // o dono), mesma placa-requisito, e so no build com esp-sr (o cao).
+    if (perm(celer::PERM_MIC) && Board::profile().mic.ws >= 0) {
+    duk_push_object(ctx); // WakeWord
+    static const JsFn kFnsWake[] = {
+        {"start", js_wakeStart, 0},          // sobe modelo+task -> bool
+        {"stop", js_wakeStop, 0},            // encerra e libera RAM
+        {"poll", js_wakePoll, 0},            // true = detectado (consome)
+        {"level", js_wakeLevel, 0},          // RMS 0..100 (-1 parado)
+        {"running", js_wakeRunning, 0},      // task viva?
+    };
+    putFns(ctx, kFnsWake);
+    duk_put_prop_string(ctx, -2, "WakeWord");
+    }
+#endif
 
     // --- FS Object — capability "fs" (F4) ---
     if (perm(celer::PERM_FS)) {

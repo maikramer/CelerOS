@@ -90,6 +90,18 @@ void stripsOff();
 // leitura (ele dorme apos cada beep) — clocks vem do proprio I2S1 (MCLK).
 int micLevel();
 
+// Cria o canal I2S do mic se ainda nao existe (idempotente). O detector
+// de wake word chama ao ligar; devolve false sem microfone/sem DMA.
+bool micEnsureChannel();
+// Serializa leitores do canal I2S do mic (gravador, micLevel e o detector
+// de wake word alimentado por task propria): leituras concorrentes
+// roubariam chunks umas das outras. lock devolve false no timeout.
+bool micChanLock(int timeoutMs);
+void micChanUnlock();
+// Uma leitura de 32 ms do canal (slot L, mono) ja sob o lock — uso do
+// detector de wake word, que nao enxerga o handle I2S. -1 = sem dados.
+int micReadMonoLocked(int16_t* out, int maxSamples);
+
 // ---- gravacao de microfone (Mic.* do runtime, API 19) ----
 // Captura 16 kHz mono 16-bit (slot L do mesmo canal do micLevel) numa task
 // propria: o app segue desenhando enquanto grava. Sem microfone na placa

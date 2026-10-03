@@ -56,6 +56,17 @@ config CELEROS_APP_TASK
       padrao; a concorrencia nova (touch/display entre tasks) so existe com
       esta opcao ligada.
 
+config CELEROS_WAKE_WORD
+    bool "Wake word on-device (WakeNet do esp-sr)"
+    default n
+    help
+      Deteccao sempre-on do "Hi Celer" (microWakeWord V2 proprio, modelo
+      int8 embutido no firmware via TFLite Micro) rodando no proprio chip,
+      alimentada pelo mesmo canal I2S do microfone. Liga o objeto WakeWord
+      (API 20) para apps com permissao mic. Hoje so o cao (spotpear-dog):
+      o esp-tflite-micro entra no build somente com esta opcao (ver
+      main/idf_component.yml).
+
 config CELEROS_JS_DEBUGGER
     bool "Debugger Duktape para apps (celerctl debug)"
     default y if IDF_TARGET_ESP32S3

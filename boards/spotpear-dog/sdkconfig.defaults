@@ -53,3 +53,14 @@ CONFIG_ULP_COPROC_RESERVE_MEM=4096
 
 # Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump
 CONFIG_CELEROS_LOG_RING=8192
+
+# Wake word "Hi Celer" on-device (microWakeWord V2 treinado por nos,
+# TFLite Micro): o app Dog Face ouve a palavra de ativacao e abre a janela
+# de comando de voz (API 20).
+CONFIG_CELEROS_WAKE_WORD=y
+
+# Pools/buffers do HOST NimBLE na PSRAM (mesmo motivo do smartdisplay): com
+# o host interno o Celer Link consumia 66 KB de RAM interna (71 -> 5 KB) e
+# o DMA do I2S do microfone nao alocava mais — wake word surdo e GATT sem
+# resposta (Celer Remote conectava e expirava no MTU/descoberta)
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

@@ -6,6 +6,30 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 7.4.3
+  espressif/esp-nn:
+    component_hash: 3b3411b0e4ad1717a72870fde9f9b67cef6f3f97491cc64fcfc1910a8fd8a246
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.4.1
+  espressif/esp-tflite-micro:
+    component_hash: bdb2625ed976d5b861177cdc295abc6738724f84f4c7c60fc58c721d2b30bed6
+    dependencies:
+    - name: espressif/esp-nn
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.3.0'
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.1
   espressif/esp_tinyusb:
     component_hash: 0fab24246e07bdf919c6489d17a590cffbffbbf6a9c44d6235641645c8b946b7
     dependencies:
@@ -48,8 +72,9 @@ dependencies:
     version: 6.1.0
 direct_dependencies:
 - bblanchon/arduinojson
+- espressif/esp-tflite-micro
 - espressif/esp_tinyusb
 - idf
-manifest_hash: 002c42eb373d908f7610be7f2fff284b533aaf2088132db1f87dfb6f22e57e3d
+manifest_hash: e0a1290ae1a0c3d04cc4b76fbcaab45c08f4fb01e058e9bd2cb57582e5485113
 target: esp32s3
 version: 3.0.0

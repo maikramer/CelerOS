@@ -286,6 +286,14 @@ private:
     static duk_ret_t js_micRecStop(duk_context *ctx);     // Mic.stop({raw}) -> base64|wav|null
     static duk_ret_t js_micRecRecording(duk_context *ctx); // Mic.recording()
     static duk_ret_t js_micRecLevel(duk_context *ctx);    // Mic.level()
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_WAKE_WORD
+    static duk_ret_t js_wakeStart(duk_context *ctx);      // WakeWord.start()
+    static duk_ret_t js_wakeStop(duk_context *ctx);       // WakeWord.stop()
+    static duk_ret_t js_wakePoll(duk_context *ctx);       // WakeWord.poll() -> bool
+    static duk_ret_t js_wakeLevel(duk_context *ctx);      // WakeWord.level() -> 0..100
+    static duk_ret_t js_wakeRunning(duk_context *ctx);    // WakeWord.running()
+#endif
 
     // Net nivel 3 (WiFi)
     static duk_ret_t js_wifiScan(duk_context *ctx);

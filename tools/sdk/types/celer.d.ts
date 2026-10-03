@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 20 — 211 funcoes.
+// API level 20 — 216 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -327,6 +327,20 @@ declare const Mic: {
     /** Para o medidor VU ao vivo. Com gravação em curso, o System.micLevel() devolve o mesmo nível ao vivo (compartilham o canal I2S). (API 19) */
     /** @permission "mic" */
     level(): any;
+};
+
+declare const WakeWord: {
+    /** @permission "mic" */
+    start(): any;
+    /** Encerra a detecção, destrói o modelo e libera a RAM (~35 KB + arena). O runtime também encerra quando o app sai. (API 20) */
+    /** @permission "mic" */
+    stop(): void;
+    /** @permission "mic" */
+    poll(): any;
+    /** @permission "mic" */
+    level(): any;
+    /** @permission "mic" */
+    running(): any;
 };
 
 declare const FS: {

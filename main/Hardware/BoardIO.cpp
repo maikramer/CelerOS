@@ -597,6 +597,9 @@ void stripsOff() {
 // beep mata as capturas seguintes (bancada 2026-10-03: "primeiro audio
 // perfeito, seguintes mudos" — o ES7210 fica sem MCLK e o gravador le zeros).
 volatile bool s_micPinsDirty = false;
+// Leitores do canal I2S do mic (gravador, micLevel, wake word): quem vai
+// ler trava isto por chunk (~32 ms) para nao roubar audio do outro.
+SemaphoreHandle_t s_micChanMux = nullptr;
 
 namespace {
 i2s_chan_handle_t s_mic = nullptr;
@@ -608,7 +611,10 @@ int64_t s_micFailAtUs = 0;    // quando falhou
 // I2S1 (~6 KB) nao nascem — bancada 2026-10-02, o latch antigo deixava o mic
 // morto ate reiniciar. Segura novas tentativas por 3 s (micLevel segue barato:
 // sem retry a cada chamada) e depois cura sozinho com o heap ja acomodado.
-bool micInit() {
+// Cria/recria o canal. Chamar COM o s_micChanMux na mao: a recriacao apaga
+// o canal, e um leitor (wake word, em outra task) no meio do read usaria o
+// canal liberado.
+bool micInitUnlocked() {
     const MicI2sPins& m = Board::profile().mic;
     if (m.ws < 0) return false;
     if (s_mic) {
@@ -653,6 +659,18 @@ bool micInit() {
     return true;
 }
 
+bool micInit() {
+    if (Board::profile().mic.ws < 0) return false;
+    if (s_micChanMux == nullptr) s_micChanMux = xSemaphoreCreateMutex();
+    if (s_micChanMux == nullptr) return false;
+    if (xSemaphoreTake(s_micChanMux, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return s_mic != nullptr && !s_micPinsDirty;  // leitor segurando: canal vivo
+    }
+    const bool ok = micInitUnlocked();
+    xSemaphoreGive(s_micChanMux);
+    return ok;
+}
+
 // ---- gravacao (Mic.* do runtime, API 19): estado + task de captura ----
 //
 // Mesmo canal I2S1 do micLevel: enquanto a task vive ela e a unica leitora.
@@ -680,8 +698,12 @@ void micRecTask(void*) {
     int tele = 0;      // telemetria ~1x/s: RMS dos dois slots (logcat)
     while (!s_rec.stopReq) {
         size_t r = 0;
-        if (i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150)) != ESP_OK || r < 4)
-            continue;
+        // so devolve o mutex que pegou: soltar sem ter (lock falhou) corrompe
+        // o dono do mutex no FreeRTOS
+        if (!BoardIO::micChanLock(250)) continue;
+        const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
+        BoardIO::micChanUnlock();
+        if (rr != ESP_OK || r < 4) continue;
         const int frames = (int)(r / 4);
         int64_t sum = 0, acc = 0, sumR = 0, accR = 0;
         bool dropped = false;
@@ -724,6 +746,36 @@ void micRecTask(void*) {
 
 void micPinsDirty() { s_micPinsDirty = true; }
 
+bool micEnsureChannel() { return micInit(); }
+
+bool micChanLock(int timeoutMs) {
+    if (s_micChanMux == nullptr) return false;
+    return xSemaphoreTake(s_micChanMux, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+void micChanUnlock() {
+    if (s_micChanMux != nullptr) xSemaphoreGive(s_micChanMux);
+}
+
+int micReadMonoLocked(int16_t* out, int maxSamples) {
+    int16_t buf[512];  // 256 frames stereo = 32 ms
+    size_t r = 0;
+    if (!micChanLock(200)) return -1;
+    // beep/playWav desviou os pinos (ou o canal caiu): o leitor de fundo
+    // recria ele mesmo — sem isso o wake word ficava surdo apos qualquer som
+    if ((s_mic == nullptr || s_micPinsDirty) && !micInitUnlocked()) {
+        micChanUnlock();
+        return -1;
+    }
+    const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
+    micChanUnlock();
+    if (rr != ESP_OK || r < 4) return -1;
+    const int frames = (int)(r / 4);
+    const int n = frames < maxSamples ? frames : maxSamples;
+    for (int i = 0; i < n; i++) out[i] = buf[2 * i];  // slot L
+    return n;
+}
+
 int micLevel() {
     // Gravacao em curso: a task do gravador e a unica leitora do canal —
     // o nivel ao vivo sai dela (ler aqui roubaria chunks do audio)
@@ -736,8 +788,10 @@ int micLevel() {
 
     int16_t buf[512];  // 256 frames stereo
     size_t r = 0;
-    if (i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150)) != ESP_OK || r < 64)
-        return -1;
+    if (!micChanLock(150)) return -1;
+    const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
+    micChanUnlock();
+    if (rr != ESP_OK || r < 64) return -1;
     const int frames = (int)(r / 4);
     if (frames <= 0) return 0;
     // Mic MEMS tem offset DC: RMS da componente AC (variancia), senao o

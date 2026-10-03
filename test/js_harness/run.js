@@ -599,6 +599,20 @@ function makeEnv() {
         level: function() { return micState.on ? micState.level : -1; }
     };
 
+    // WakeWord (API 20): deteccao "hi celer" simulada — __harness.wake()
+    // empilha uma deteccao (o app consome com poll()); sem chamar, nada
+    // detecta. __harness.wakeRunning expoe se o app ligou o detector.
+    var wakeQueue = [];
+    var wakeState = { on: false };
+    env.WakeWord = {
+        start: function() { wakeState.on = true; return true; },
+        stop: function() { wakeState.on = false; },
+        poll: function() { return wakeQueue.length ? wakeQueue.shift() : false; },
+        level: function() { return wakeState.on ? 12 : -1; },
+        running: function() { return wakeState.on; }
+    };
+
+
     // Celer Link (API 9; pareamento API 11): fila de mensagens recebidas
     // alimentavel pelo __harness.pushLink — o mesmo contrato de poll() do
     // firmware. __harness.setLink({conn,pairing,code}) simula os estados
@@ -638,6 +652,8 @@ function makeEnv() {
         aiChats: aiChats,
         setMicB64: function(s) { micB64 = s; },
         mic: micState,
+        wake: function() { wakeQueue.push(true); },
+        wakeState: wakeState,
         setLink: function(st) {
             if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
             if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
@@ -720,10 +736,10 @@ function runApp(relPath, wire) {
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
@@ -1138,10 +1154,10 @@ function runInline(src, env) {
     env.__harness.pushLink(['{"ack":1}']);
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1309,6 +1325,60 @@ function holdMoves(ms) {
     check('tune salvo em /local/dogtune.json', r.env.FS.exists('/local/dogtune.json') &&
           JSON.parse(r.env.FS.readTextFile('/local/dogtune.json')).P === 30);
     check('keepalive expira e volta ao neutro', allNeutralAtEnd(q));
+})();
+
+// --- Dog Face (voz, API 20): "hi celer" -> janela de escuta -> tool call --
+(function() {
+    console.log('Dog Face (voz: wake word + tool_call senta):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null,
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'c1', name: 'dog_command', args: { command: 'sit' } }],
+            raw: ''
+        });
+        // mic dirigido: fala (nivel 30) e depois silencio — o app encerra a
+        // janela por quietud antes do teto de 3,5 s
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('wake word ligou no boot', j.indexOf('wake word "hi celer" ativo') >= 0, j.slice(0, 300));
+    var req = r.env.__harness.aiChats[0] || '';
+    check('input_audio + tools no payload', req.indexOf('input_audio') >= 0 &&
+          req.indexOf('dog_command') >= 0 && req.indexOf('"tool_choice":"auto"') >= 0,
+          req.slice(0, 250));
+    check('mic abriu e fechou', r.env.__harness.mic.ms === 3500 && !r.env.__harness.mic.on,
+          JSON.stringify(r.env.__harness.mic));
+    // sentou: rampa termina na pose sit (FL/BR +30, FR/BL -30, raw com SIGN)
+    var q = dogSeqs(r.log);
+    check('pose sit aplicada nos 4 servos', ['FL', 'FR', 'BL', 'BR'].every(function(k) {
+        return q[k].indexOf(rawAng(k, (k === 'FL' || k === 'BL') ? 30 : -30)) >= 0;
+    }), JSON.stringify({ FL: q.FL.slice(-4), FR: q.FR.slice(-4),
+                          BL: q.BL.slice(-4), BR: q.BR.slice(-4) }));
+})();
+
+// --- Dog Face (voz): sem tool_call cai no texto (PT: "deita") --------------
+(function() {
+    console.log('Dog Face (voz: fallback por texto):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: true, status: 200, content: 'deita!', raw: '' });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(28);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var q = dogSeqs(r.log);
+    check('pose lie aplicada via texto', q.FL.indexOf(rawAng('FL', -60)) >= 0,
+          JSON.stringify(q.FL.slice(-4)));
 })();
 
 (function() {
@@ -1588,10 +1658,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1612,10 +1682,10 @@ function holdFrames(x, y, n) {
     try {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
@@ -1638,10 +1708,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1665,10 +1735,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1706,10 +1776,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1732,10 +1802,10 @@ function holdFrames(x, y, n) {
     var env = makeEnv();
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);

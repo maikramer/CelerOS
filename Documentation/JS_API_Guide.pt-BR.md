@@ -1827,3 +1827,33 @@ AI.chat({
 Nem todo modelo/provider habilita tool calling — faça feature-detect: sem
 `toolCalls` na resposta, caia para o `r.content` (ex.: casar palavras-chave).
 O `qwen/qwen3.8-omni-flash` via OpenRouter suporta tools.
+
+## 25. Nível de API 20 — Wake word no dispositivo: objeto `WakeWord`
+
+Detecção sempre-on da palavra de ativação **"Hi Celer"** rodando no próprio
+chip (modelo microWakeWord treinado pelo CelerOS, executando em TensorFlow
+Lite Micro — nada de rede). Alimenta-se do mesmo canal I2S do `Mic`; durante
+uma gravação o detector descansa e volta depois. Só existe quando **todos**
+vale: a placa liga a opção (hoje o cachorro robô), o app declarou `"mic"`
+(mesmo consentimento do microfone — o aparelho está ouvindo) e o dono
+concedeu. Senão `typeof WakeWord === "undefined"`.
+
+#### `WakeWord.start()` (API 20)
+- **Retorna:** Boolean — `true` com o modelo e a task de pé; `false` sem microfone, sem RAM para o modelo/arena ou sem modelo embutido no build.
+
+#### `WakeWord.stop()` (API 20)
+- **Descrição:** Encerra a detecção, destrói o modelo e libera a RAM (~35 KB + arena). O runtime também encerra quando o app sai.
+
+#### `WakeWord.poll()` (API 20)
+- **Retorna:** Boolean — `true` quando "Hi Celer" foi detectado desde o último poll (consome o evento; detecções entre polls colapsam numa — poll uma vez por volta do loop).
+
+#### `WakeWord.level()` (API 20)
+- **Retorna:** Number — nível de som 0..100 do último chunk lido (mesma escala do `Mic.level()`); `-1` parado.
+
+#### `WakeWord.running()` (API 20)
+- **Retorna:** Boolean — a task de detecção está viva?
+
+Fluxo típico (Dog Face): `WakeWord.start()` no boot; ao ver `poll() ===
+true`, ack em beep, `Mic.start({ms: 3500})` para capturar o comando e
+enviá-lo ao `AI.chat` com `tools` — o detector cede sozinho durante a
+gravação.
