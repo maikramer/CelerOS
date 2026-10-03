@@ -23,6 +23,10 @@ public:
     // Mensagem do fatal do Duktape que reiniciou o aparelho (uma vez; nullptr
     // se o ultimo reset nao foi um fatal JS)
     static const char* takeLastFatal();
+    // Persiste o ultimo erro de app em /local/lastcrash.txt (header versao/
+    // data/app + detail). Best-effort SEM alocacao C++: roda tambem no caminho
+    // de OOM, onde um std::string/new que nao cresce aborta o aparelho
+    static void recordCrash(const char* kind, const char* detail);
     // O app cedeu (passou por JSBindings::present()): reinicia a janela de
     // cortesia do interrupt do executor (loop JS puro sem ceder -> erro em
     // vez de TWDT/reboot)

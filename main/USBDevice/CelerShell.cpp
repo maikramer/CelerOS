@@ -79,6 +79,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  rescan          reler lista de apps do launcher\n"
         "  run <app>       abre um app (pasta, nome ou pacote)\n"
         "  grant <app>     concede as permissoes declaradas (consentimento headless)\n"
+        "  lasterror       ultimo erro de app gravado (/local/lastcrash.txt)\n"
         "  exit            encerra o app em execucao\n"
         "  wifi            lista as redes WiFi salvas\n"
         "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
@@ -344,6 +345,38 @@ int cmdRescan(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// Ultimo erro de app registrado: /local/lastcrash.txt e gravado pelo kernel
+// em todo erro de app (inclusive OOM) e no boot apos um fatal do runtime —
+// a stack nao morre mais com o reboot ou com o ring de logs (2KB) rolando.
+int cmdLastError(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    const char* path = "/local/lastcrash.txt";
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_size == 0) {
+        print(ctx, "nenhum erro de app registrado\r\n");
+        return 0;
+    }
+    char when[24] = "--------------------";
+    struct tm tmv;
+    if (st.st_mtime > 0 && localtime_r(&st.st_mtime, &tmv) != nullptr) {
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tmv);
+    }
+    print(ctx, "ultimo erro (%s, %u B, gravado %s):\r\n", path, (unsigned)st.st_size, when);
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        print(ctx, "lasterror: nao consegui abrir %s\r\n", path);
+        return 1;
+    }
+    char buf[256];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        print(ctx, "%.*s", (int)n, buf);
+    }
+    fclose(f);
+    print(ctx, "\r\n");
+    return 0;
+}
+
 int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
         print(ctx, "uso: run <pasta|nome|pacote do app>\r\n");
@@ -487,6 +520,7 @@ const ShellCmd kCommands[] = {
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
+    {"lasterror", cmdLastError},
     {"wifi", cmdWifi},
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},

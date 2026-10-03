@@ -195,6 +195,9 @@ static void celerSetup() {
     }
     if (const char* fatal = CelerKernel::takeLastFatal()) {
         celer_log_printf("reiniciou por fatal do runtime JS: %s\n", fatal);
+        // a mensagem RTC (com o app corrente embutido pelo my_fatal) vai
+        // para o lastcrash.txt: o diagnostico sobrevive ao reinicio
+        CelerKernel::recordCrash("fatal do runtime (apos reinicio)", fatal);
         kui::Navigator::toast(i18n::TR("Um app ficou sem memória e o sistema reiniciou",
                                        "An app ran out of memory and the system restarted"),
                               THEME_WARN, 4000);

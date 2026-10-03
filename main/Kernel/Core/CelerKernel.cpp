@@ -16,8 +16,14 @@
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
 #include <cstring>
+#include <ctime>
+#include <cstdio>
 #include "esp_task_wdt.h"
 #include "esp_debug_helpers.h"
+
+#if !defined(CELEROS_VERSION)
+#define CELEROS_VERSION "?"
+#endif
 
 duk_context *CelerKernel::ctx = nullptr;
 CelerDisplay *CelerKernel::tftInstance = nullptr;
@@ -363,6 +369,12 @@ RTC_NOINIT_ATTR static uint32_t s_fatalMagic;
 RTC_NOINIT_ATTR static char s_fatalMsg[80];
 static constexpr uint32_t kFatalMagic = 0xCE1EFA7Au;
 
+// Contexto do app corrente para o /local/lastcrash.txt: titulo e pacote do
+// app em execucao (populados no runFile; o my_fatal os embute na mensagem
+// que sobrevive ao reinicio)
+static char s_crashApp[64] = {0};
+static char s_crashPkg[64] = {0};
+
 const char* CelerKernel::takeLastFatal() {
     if (s_fatalMagic != kFatalMagic) return nullptr;
     s_fatalMagic = 0;
@@ -370,11 +382,61 @@ const char* CelerKernel::takeLastFatal() {
     return s_fatalMsg;
 }
 
+// ---------------------------------------------------------------------------
+// Last crash persistente: a stack de um erro de app antes so existia no
+// logcat (ring de RAM) — reboot ou tela de erro fechada e ela sumia. Gravado
+// em TODO erro de app (inclusive OOM, que antes nem logava) e, no boot
+// seguinte, para o fatal do runtime. Escrita direta com fopen/fwrite e
+// buffer de malloc puro (NULL em falha): o caminho de OOM nao pode passar
+// por std::string/new, que abortam o aparelho justamente ali.
+// ---------------------------------------------------------------------------
+static const char* K_LAST_CRASH = "/local/lastcrash.txt";
+
+void CelerKernel::recordCrash(const char* kind, const char* detail) {
+    // header em buffer de stack; detail escrito DIRETO do ponteiro do
+    // chamador (truncado): zero malloc aqui — no OOM o heap Duktape ainda
+    // esta vivo (duk_destroy_heap vem depois do checkJSError) e um pedido
+    // de bloco grande falha justo quando o erro e o mais valioso
+    char when[32] = "sem relogio valido (NTP fora)";
+    time_t now = time(nullptr);
+    if (now > 1600000000) {  // epoch setado (NTP/manual): hora real
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tmv);
+    }
+    char head[192];
+    int hn = snprintf(head, sizeof(head),
+                      "CelerOS %s | %s | uptime %lus | app: %s (%s)\n%s\n",
+                      CELEROS_VERSION, when, (unsigned long)(millis() / 1000),
+                      s_crashApp[0] ? s_crashApp : "-", s_crashPkg[0] ? s_crashPkg : "-", kind);
+
+    size_t dn = detail != nullptr ? strlen(detail) : 0;
+    if (dn > 3000) dn = 3000;  // stack inteira nao cabe nem ajuda: trunca
+    size_t total = (hn > 0 ? (size_t)hn : 0) + dn + 1;
+
+    FILE* f = fopen(K_LAST_CRASH, "wb");
+    if (f == nullptr) {
+        celer_log_println("lastcrash: /local indisponivel neste momento");
+        return;
+    }
+    bool ok = true;
+    if (hn > 0) ok = fwrite(head, 1, (size_t)hn, f) == (size_t)hn;
+    if (ok && dn > 0) ok = fwrite(detail, 1, dn, f) == dn;
+    if (ok && (dn == 0 || detail[dn - 1] != '\n')) ok = fputc('\n', f) != EOF;
+    ok = (fclose(f) == 0) && ok;  // disco cheio aparece no fclose
+    celer_log_printf("lastcrash: %s (%u B)\n", ok ? "gravado" : "falhou ao gravar", (unsigned)total);
+}
+
 // Dummy fatal error handler if duktape aborts
 static void my_fatal(void *udata, const char *msg) {
     celer_log_print("Duktape fatal error: ");
     celer_log_println(msg ? msg : "no message");
-    strncpy(s_fatalMsg, msg ? msg : "sem mensagem", sizeof(s_fatalMsg) - 1);
+    // app corrente embutido na mensagem RTC: o fatal e quase sempre OOM do
+    // app em execucao, e saber qual importa no boot seguinte
+    char rtc[80];
+    snprintf(rtc, sizeof(rtc), "[%s] %s", s_crashApp[0] ? s_crashApp : "?",
+             msg ? msg : "sem mensagem");
+    strncpy(s_fatalMsg, rtc, sizeof(s_fatalMsg) - 1);
     s_fatalMsg[sizeof(s_fatalMsg) - 1] = 0;
     s_fatalMagic = kFatalMagic;
 
@@ -445,6 +507,9 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
 
         // Intercept OOM signals
         if (errorMsg.find("alloc") != std::string::npos || errorMsg.find("out of memory") != std::string::npos) {
+            // antes este caminho era mudo (nem no UART): morte silenciosa do app
+            celer_log_printf("JS OOM (sem memoria): %s\n", errorMsg.c_str());
+            recordCrash("OOM (sem memoria)", errorMsg.c_str());
             showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
             duk_pop(ctx);
             // This is a soft-error (not Duktape fatal), so we can just return safely to Launcher
@@ -453,6 +518,7 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
 
         celer_log_print("JS Execution Error: ");
         celer_log_println(errorMsg.c_str());
+        recordCrash("Erro no app", errorMsg.c_str());
 
         showRuntimeError(i18n::TR("Erro no app", "App error"), errorMsg);
     }
@@ -532,6 +598,11 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     // Abrir app acorda a tela (AOD/dim escondiam o app recem-launchado em
     // launches remotos/autostart: sem toque, o ScreenPower nunca sabia).
     Backlight::noteActivity();
+    // contexto do lastcrash: quem estava rodando quando o erro aconteceu
+    strncpy(s_crashApp, appTitle ? appTitle : "", sizeof(s_crashApp) - 1);
+    s_crashApp[sizeof(s_crashApp) - 1] = 0;
+    strncpy(s_crashPkg, appPkg ? appPkg : "", sizeof(s_crashPkg) - 1);
+    s_crashPkg[sizeof(s_crashPkg) - 1] = 0;
     if (ctx) {
         duk_destroy_heap(ctx);
         ctx = nullptr;
