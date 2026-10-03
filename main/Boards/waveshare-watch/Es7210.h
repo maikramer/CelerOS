@@ -11,6 +11,14 @@
 // da tabela de coeficientes: osr=0x20, adc_div=0x01, doubler=1, dll=1,
 // lrck 0x0100) — os clocks vem do proprio canal I2S1 do mic (mclk=GPIO16).
 //
+// ATENCAO aos bits de power: REG4B/4C/47-4A sao PDN ativos (1 = desligado,
+// default 0xFF = tudo off). O 0x0F do componente standalone do esp-bsp so
+// serve para mic DIGITAL: ele deixa o MICBIAS (bit 3) derrubado, e os mics
+// analogicos do watch ficam sem polarizacao — a voz vaza por acoplamento a
+// ~-23 dBFS sobre um piso de ruido alto e o ASR "ouve sem entender"
+// (bancada 2026-10-03). Com bias devidamente ligado (0x00), 30 dB de PGA e
+// volume digital a 0 dB, a fala chega saudavel ao conversor.
+//
 // Hooks BoardProfile::micCodecWake/micCodecSleep: o BoardIO chama em volta
 // das capturas (mesma disciplina do ES8311 com os beeps).
 
@@ -37,6 +45,12 @@ inline bool wr(uint8_t reg, uint8_t val) {
     return i2c_master_transmit(dev(), buf, 2, 20) == ESP_OK;
 }
 
+inline uint8_t rd(uint8_t reg) {
+    uint8_t v = 0;
+    i2c_master_transmit_receive(dev(), &reg, 1, &v, 1, 20);
+    return v;
+}
+
 /// Power-on completo: 16 kHz, I2S 16-bit, mic1-4 a 30 dB, bias 2,87 V.
 /// (ADC1 sai no slot ESQUERDO do frame I2S; ADC2 no direito.)
 inline bool init() {
@@ -52,6 +66,7 @@ inline bool init() {
     ok = ok && wr(0x20, 0x0A);
     ok = ok && wr(0x11, 0x60);            // SDP: I2S, 16-bit
     ok = ok && wr(0x12, 0x00);            // sem TDM
+    ok = ok && wr(0x16, 0x00);            // ALC off (ganho deterministico)
     ok = ok && wr(0x40, 0xC3);            // analog on + VMID
     ok = ok && wr(0x41, 0x70);            // bias dos mic1/2 = 2,87 V
     ok = ok && wr(0x42, 0x70);            // bias dos mic3/4
@@ -69,8 +84,11 @@ inline bool init() {
     ok = ok && wr(0x04, 0x01);            // lrck_div h
     ok = ok && wr(0x05, 0x00);            // lrck_div l
     ok = ok && wr(0x06, 0x04);            // DLL power down
-    ok = ok && wr(0x4B, 0x0F);            // power mic1/2 + ADC1/2 + PGA
-    ok = ok && wr(0x4C, 0x0F);            // mic3/4
+    // Bits PDN ativos: 0x00 liga TUDO do par (MICBIAS + PGA + ADC + mod +
+    // VREF). O 0x0F do esp-bsp standalone derruba o MICBIAS — os mics
+    // analogicos deste watch somem (bancada 2026-10-03, ver cabecalho).
+    ok = ok && wr(0x4B, 0x00);            // mic1/2: bias + ADC + PGA on
+    ok = ok && wr(0x4C, 0x00);            // mic3/4: idem
     ok = ok && wr(0x00, 0x71);            // enable
     ok = ok && wr(0x00, 0x41);
     ok = ok && wr(0x1B, 0xBF);            // volume digital ADC1 = 0 dB
@@ -79,12 +97,18 @@ inline bool init() {
     return ok;
 }
 
-/// Derruba o analog e os mics (a proxima captura faz init() de novo).
+/// Derruba de verdade o analog e os mics (a proxima captura faz init()).
+/// Espelha o es7210_stop() do esp_codec_dev: PDN ativos, 0xFF = tudo off.
 inline void shutdown() {
-    wr(0x4B, 0x00);
-    wr(0x4C, 0x00);
-    wr(0x40, 0x00);
-    wr(0x00, 0x32);
+    wr(0x47, 0xFF);                       // mic1 off
+    wr(0x48, 0xFF);                       // mic2
+    wr(0x49, 0xFF);                       // mic3
+    wr(0x4A, 0xFF);                       // mic4
+    wr(0x4B, 0xFF);                       // bias/ADC/PGA do par 1/2 off
+    wr(0x4C, 0xFF);                       // par 3/4
+    wr(0x40, 0xC0);                       // analog off
+    wr(0x01, 0x7F);                       // clocks off
+    wr(0x06, 0x07);                       // power down
 }
 
 }  // namespace Es7210
