@@ -34,3 +34,12 @@ coredump.elf
 
 # binario dos testes host (g++ -o celeros_tests): artefato local
 celeros_tests
+
+# treino do wake word: zips de negativos (~GB) ficam fora do repo
+negative_datasets/
+
+# distribuicao-fonte do Duktape extraida localmente (referencia/debug)
+.duk_src/
+
+# telas tela-*.png que o `celerctl dev` deixa ao lado de cada app
+.dev/
