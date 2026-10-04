@@ -119,7 +119,13 @@ jobs:
           path: dist/
           merge-multiple: true
       - name: SHA256SUMS
-        run: cd dist && sha256sum * > SHA256SUMS && ls -la
+        # cada placa chega como DIRETORIO de stage (firmware/, flash.json,
+        # README.txt) + o .zip: o release publica so os arquivos — os
+        # diretorios derrubavam o sha256sum ("Is a directory") no 1o run (v1.5.0)
+        run: |
+          cd dist
+          rm -rf CelerOS_*/
+          sha256sum * > SHA256SUMS && ls -la
       - name: Criar release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
