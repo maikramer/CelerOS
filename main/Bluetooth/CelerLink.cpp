@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -64,6 +65,12 @@ constexpr uint8_t K_CONN_TERM = 0x13;
 // MTU ATT default (antes da troca) e o pedido (sdkconfig: 256).
 constexpr uint16_t K_MTU_DEFAULT = 23;
 constexpr uint16_t K_MTU_WANT = 256;
+// RAM interna minima para subir o BLE. Medido no 4848 (host NimBLE na
+// PSRAM): o init consome ~38 KB de RAM interna (controller + coexistencia).
+// O piso e o consumo medido, nao uma margem: abaixo dele o init falharia de
+// qualquer jeito (com assert); acima, decide o proprio NimBLE
+constexpr size_t K_BLE_MIN_INTERNAL = 38 * 1024;
+constexpr size_t K_BLE_MIN_BLOCK = 8 * 1024;
 
 // Parametros de conexao do central: intervalo 15..30 ms (resposta de
 // controle remoto) e supervision timeout de 2 s (queda detectada rapido,
@@ -894,6 +901,18 @@ bool CelerLink::ensureStarted() {
         return false;
     }
 
+    // O NimBLE nao devolve erro quando falta RAM interna no init do host: o
+    // os_mempool_init do ble_hs_init cai num SYSINIT_PANIC_ASSERT e o
+    // aparelho REINICIA (Celer Remote derrubava o 4848 no primeiro scan).
+    // Recusar antes, com erro legivel, e o app segue sem link
+    const size_t freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t bigInt = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (freeInt < K_BLE_MIN_INTERNAL || bigInt < K_BLE_MIN_BLOCK) {
+        ESP_LOGE(TAG, "RAM interna insuficiente para o BLE (livre %u, maior bloco %u; precisa %u/%u)",
+                 (unsigned)freeInt, (unsigned)bigInt, (unsigned)K_BLE_MIN_INTERNAL, (unsigned)K_BLE_MIN_BLOCK);
+        s_initFail = true;
+        return false;
+    }
     if (nimble_port_init() != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init falhou");
         s_initFail = true;
@@ -941,7 +960,8 @@ bool CelerLink::ensureStarted() {
     }
     ble_att_set_preferred_mtu(K_MTU_WANT);
     s_started = true;
-    ESP_LOGI(TAG, "Celer Link pronto (NimBLE, \"%s\")", s_advName);
+    ESP_LOGI(TAG, "Celer Link pronto (NimBLE, \"%s\"; RAM interna %u -> %u)", s_advName,
+             (unsigned)freeInt, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return true;
 }
 

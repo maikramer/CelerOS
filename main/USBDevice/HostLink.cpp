@@ -57,7 +57,10 @@ uint8_t s_logFrame[8 + 1 + kLogChunk];
 // frame de saida do debugger Duktape (KL_DEBUG_DATA, binario puro)
 SemaphoreHandle_t s_dbgFrameMutex = nullptr;
 constexpr size_t kDbgChunk = 1024;
-uint8_t s_dbgFrame[8 + kDbgChunk];
+// alocado na 1a sessao de debug (PSRAM quando ha): estatico custava 1 KB
+// de RAM interna em todo boot — a mesma que o BLE precisa
+uint8_t* s_dbgFrame = nullptr;
+constexpr size_t kDbgFrameSize = 8 + kDbgChunk;
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
@@ -1018,10 +1021,14 @@ bool HostLink::sendDebugFrame(const uint8_t* data, size_t n) {
     HostLink* a = s_active;  // leitura simples: trocas de sessao sao raras
     if (a == nullptr || data == nullptr) return false;
     if (s_dbgFrameMutex != nullptr) xSemaphoreTake(s_dbgFrameMutex, portMAX_DELAY);
-    bool ok = true;
+    if (s_dbgFrame == nullptr) {
+        s_dbgFrame = (uint8_t*)heap_caps_malloc(kDbgFrameSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_dbgFrame == nullptr) s_dbgFrame = (uint8_t*)malloc(kDbgFrameSize);
+    }
+    bool ok = s_dbgFrame != nullptr;
     while (ok && n > 0) {
         const size_t part = n > kDbgChunk ? kDbgChunk : n;
-        size_t total = hostframe::build(s_dbgFrame, sizeof(s_dbgFrame), a->m_parser.v2(),
+        size_t total = hostframe::build(s_dbgFrame, kDbgFrameSize, a->m_parser.v2(),
                                         KL_DEBUG_DATA, data, (uint16_t)part);
         ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_dbgFrame, total);
         data += part;
