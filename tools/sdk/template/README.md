@@ -29,6 +29,7 @@ node tools/sdk/celer.js publish {{APP_DIR}} --dry  # conferir antes de publicar
 - Permissoes: funcoes de rede exigem `"net"`, arquivos `"fs"`, gpio `"gpio"`
   em `app.json permissions`.
 - Strings com acentos OK (Latin-1); emoji e aspas curvas nao (fonte do device).
-- `main.js` ate 48KB no hub; acima de 30KB exige `api >= 6`.
+- `main.js` ate 48KB no hub (128KB declarando `"requires": ["psram"]`);
+  acima de 30KB exige `api >= 6`.
 
 Guia completo da API: `Documentation/JS_API_Guide.pt-BR.md`.

@@ -7,6 +7,7 @@
   "type": "Utility",
   "category": "System",
   "api": 20,
+  "requires": ["psram"],
   "permissions": [
     "fs",
     "gpio",

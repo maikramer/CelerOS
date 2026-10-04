@@ -88,6 +88,57 @@ for (const c of CASES) {
   check('app.json invalido', got['erro:appjson'] === 7, 'esperado 7 erros appjson, obtido ' + fmt(got));
 }
 
+// Teto de main.js em 2 niveis (48KB geral; 128KB com "psram" em requires).
+// Fixtures gerados em tmpdir: o tamanho e so um statSync, entao um comentario
+// gigante basta — nada de blobs de padding commitados no repo.
+{
+  const os = require('os');
+  const tmpApp = (parent, appJson, mainBytes) => {
+    fs.mkdirSync(parent, { recursive: true });
+    const dir = fs.mkdtempSync(path.join(parent, 'app-'));
+    const base = {
+      name: 'Teto Teste', packageName: 'celeros.tetoteste', version: '1.0.0',
+      author: 'bench', description: 'fixture do teto', api: 6,
+      permissions: ['fs'],
+    };
+    fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(Object.assign(base, appJson)));
+    fs.writeFileSync(path.join(dir, 'main.js'), '/*' + 'x'.repeat(Math.max(0, mainBytes - 4)) + '*/');
+    return dir;
+  };
+  const countsOf = (dir) => ruleCounts(linter.lintApp(linter.buildManifest(), { dir }).diagnostics);
+
+  let dir = tmpApp(os.tmpdir(), {}, 50 * 1024);
+  let got = countsOf(dir);
+  check('teto: 50KB sem requires = erro pedindo psram',
+    got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 50 * 1024);
+  got = countsOf(dir);
+  check('teto: 50KB com requires psram = limpo', fmt(got) === '{}', fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 130 * 1024);
+  got = countsOf(dir);
+  check('teto: 130KB com requires psram = erro (teto absoluto 128KB)',
+    got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { requires: ['psram', 'bluetooth'] }, 100);
+  got = countsOf(dir);
+  check('requires: valor desconhecido = erro',
+    got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // App de overlay de placa (boards/<b>/data/apps): teto vira aviso, nao erro
+  const broot = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-boards-'));
+  const bdir = tmpApp(path.join(broot, 'boards', 'cyd', 'data', 'apps'), {}, 50 * 1024);
+  got = countsOf(bdir);
+  check('teto: 50KB sem requires em app de placa = aviso',
+    got['aviso:appjson'] === 1 && (got['erro:appjson'] || 0) === 0, fmt(got));
+  fs.rmSync(broot, { recursive: true, force: true });
+}
+
 // Manifest derivado do firmware: sanidade contra o fonte (o numero exato de
 // funcoes varia com WIP do firmware — os invariantes abaixo e que importam)
 {

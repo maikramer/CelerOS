@@ -21,7 +21,7 @@ data/
 
 ## app.json RULES
 - Required: `name`, `packageName` (unique install key, `celeros.<x>` for system apps; the first hub publisher owns it), `version` (semver; the hub rejects a republish of the same version unless `--force` is given), `api` (the minimum `CELEROS_API_LEVEL`).
-- Optional: `author`, `description`, `type` (System|App|Game), `category`, `system`, `order` (launcher sort), `icon` (id in `data/icons/`), `topbar`, `changelog`.
+- Optional: `author`, `description`, `type` (System|App|Game), `category`, `system`, `order` (launcher sort), `icon` (id in `data/icons/`), `topbar`, `changelog`, `requires` (hardware needs; `"psram"` is the only value today — it raises the hub `main.js` ceiling from 48KB to 128KB and the store badges/blocks the app on boards without PSRAM).
 - Never set `size`/`md5` by hand; the hub computes them on publish.
 - Most apps declare `api: 3`. Declare the lowest level whose calls you actually use. CelerLink needs `api >= 9`; the pairing gate (`start` options, `verify`, `unpair`, `status().code`) and the keyboard `hint` option (`prompt`/`keypadOpen` `{hint:"num"}`) need `api >= 11`.
 

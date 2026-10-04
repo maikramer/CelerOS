@@ -47,6 +47,7 @@ function _hubLimit(name, fallback) {
   return Function('"use strict"; return (' + m[1] + ')')() || fallback;
 }
 const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
+const MAX_MAIN_JS_PSRAM = _hubLimit('MAX_MAIN_JS_PSRAM', 128 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
@@ -737,6 +738,7 @@ function lintSource(manifest, src, appInfo) {
 const REQUIRED_FIELDS = ['name', 'packageName', 'version', 'author', 'description'];
 const RESERVED_FIELDS = ['size', 'md5', 'published_at', 'publisher'];
 const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic'];
+const VALID_REQUIRES = ['psram'];
 
 function lintAppJson(dir, manifest) {
   const diags = [];
@@ -784,19 +786,33 @@ function lintAppJson(dir, manifest) {
     // encolhe o dialogo e a superficie concedida.
     d('aviso', 'appjson', 'sem campo permissions: o firmware concede TODAS (fs/net/gpio/system) e o dialogo de consentimento pede as 4 — declare o minimo necessario');
   }
+  // Requisitos de hardware: "psram" e o unico valor hoje e destrava o teto
+  // de 128KB (a loja mostra badge "Requer PSRAM" e bloqueia o install em
+  // placas sem PSRAM — CYD/devkit). Vocabulario casado com celerhub.py.
+  const psramDecl = Array.isArray(app.requires) && app.requires.indexOf('psram') >= 0;
+  if (app.requires !== undefined) {
+    if (!Array.isArray(app.requires)) d('erro', 'appjson', 'requires deve ser array');
+    else for (const rq of app.requires) {
+      if (VALID_REQUIRES.indexOf(rq) < 0) d('erro', 'appjson', 'requisito desconhecido: "' + rq + '" (validos: ' + VALID_REQUIRES.join(', ') + ')');
+    }
+  }
 
   const entry = typeof app.main === 'string' && app.main ? app.main : 'main.js';
   try {
     const st = fs.statSync(path.join(dir, entry));
     const kb = st.size / 1024;
-    // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
-    // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
-    // publicacao), entao o teto do hub vira aviso, nao erro.
-    const boardApp = dir.split(path.sep).indexOf('boards') >= 0;
-    if (kb > MAX_MAIN_JS / 1024) {
-      if (boardApp) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima do teto do hub (' + (MAX_MAIN_JS / 1024) + 'KB) — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica');
-      else d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (MAX_MAIN_JS / 1024) + 'KB');
-    } else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+      // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
+      // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
+      // publicacao), entao o teto do hub vira aviso, nao erro.
+      const boardApp = dir.split(path.sep).indexOf('boards') >= 0;
+      // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish):
+      // 48KB em qualquer placa; com "psram" em requires sobe para 128KB.
+      const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;
+      if (kb > ceiling / 1024) {
+        const hint = psramDecl ? '' : ' — declare "psram" em requires para ate ' + (MAX_MAIN_JS_PSRAM / 1024) + 'KB';
+        if (boardApp) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima do teto (' + (ceiling / 1024) + 'KB' + hint + ') — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica');
+        else d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (ceiling / 1024) + 'KB' + hint);
+      } else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
   } catch (e) {
     d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
   }

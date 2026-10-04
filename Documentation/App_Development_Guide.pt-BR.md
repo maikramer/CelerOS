@@ -67,11 +67,17 @@ segurança.
   qualquer valor, sem restrição.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
-- **Placas sem PSRAM** (ex.: a CYD clássica): apps rodam na RAM interna com o WiFi ligado, inclusive os de rede. O teto prático é um `main.js` de ~60KB (comentários e indentação são removidos antes do compile, não custam nada); a loja calcula o limite por `System.getInfo().appRAM` e marca apps maiores como "Requer PSRAM".
+- **Placas sem PSRAM** (ex.: a CYD clássica): o `main.js` inteiro — mais o heap JS e os temporários do compile — tem que caber na RAM interna; fonte acima de ~60KB não compila nela (comentários e indentação são removidos antes do compile, não custam nada). Apps acima de 48 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
   JS](JS_API_Guide.pt-BR.md) — atualmente `12`). Verificado pelo sistema na
   instalação.
+- **`requires`** (opcional): requisitos de hardware — `"psram"` é o único
+  valor hoje. Sobe o teto do hub para o `main.js` de 48 KB para 128 KB
+  (placas com PSRAM compilam sem limite runtime); a loja marca o app como
+  "Requer PSRAM" e bloqueia o install em placas sem PSRAM (CYD, devkit).
+  Cartão SD **não** sobe o teto: o limite é RAM de compilação, não
+  armazenamento.
 - **`changelog`**: string curta descrevendo o que mudou (uma linha por versão
   funciona bem, ex. `"1.1.0 - conserto de crash\n1.0.0 - primeiro
   lancamento"`). O hub publica junto com o catálogo e a loja do aparelho
@@ -99,10 +105,12 @@ do `app.json` são calculados e gravados pelo servidor — **não escreva à mã
   (`--force` para exceções, ex. republicar um pacote corrigido).
 - **O seu `packageName` tem dono.** Quem publica primeiro vira o dono; só o
   mesmo token (ou o root do hub) atualiza/remove o pacote depois.
-- **Limites de tamanho:** `main.js` ≤ **48 KB** — apps acima de **30 KB**
-  precisam declarar `api: 6` (firmware antigo baixava via `Net.get`, que
-  trunca em 32 KB; o downloader streaming da API 6 não tem teto).
-  `icon.png` ≤ 16 KB.
+- **Limites de tamanho:** `main.js` ≤ **48 KB** em qualquer placa; declarar
+  `"requires": ["psram"]` sobe o teto para **128 KB** (o hub recusa acima
+  disso — placa sem PSRAM não compila fonte desse tamanho). Apps acima de
+  **30 KB** precisam declarar `api: 6` (firmware antigo baixava via
+  `Net.get`, que trunca em 32 KB; o downloader streaming da API 6 não tem
+  teto). `icon.png` ≤ 16 KB.
 - **O ícone viaja com o update:** mantenha um `icon.png` (PNG 64×64, ≤ 16 KB)
   no pacote — a loja baixa na instalação/atualização e o launcher renova o
   cache de ícones sozinho.

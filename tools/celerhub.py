@@ -42,8 +42,15 @@ MAX_API_LEVEL = _read_api_level()
 # Teto do hub (download streaming via Net.download, sem limite de 32KB).
 # Acima de STREAM_SAFE o app precisa declarar api >= 6: firmwares antigos
 # instalavam via Net.get, que trunca o corpo em 32KB.
+# Teto em 2 niveis: sem PSRAM o main.js inteiro (mais o heap Duktape e os
+# temporarios do compile) tem que caber na RAM interna — medido na CYD
+# (ENGINE_NOTES rodada 4): 61KB roda, 82KB nao compila. Declarando
+# "psram" em requires o app sobe para MAX_MAIN_JS_PSRAM: as placas S3
+# com PSRAM (smartdisplay, dog, watch) compilam sem limite runtime.
 MAX_MAIN_JS = 48 * 1024
+MAX_MAIN_JS_PSRAM = 128 * 1024
 STREAM_SAFE_MAIN_JS = 30 * 1024
+VALID_REQUIRES = ("psram",)
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -153,9 +160,19 @@ def validate(folder: Path):
     # Lint estatico (ES5 real + API do firmware): erros bloqueiam o publish
     avisos.extend(run_app_lint(folder))
 
+    # Requisitos de hardware declarados (o app_lint e o servidor validam os
+    # mesmos valores; a loja usa o campo p/ badge "Requer PSRAM" + bloqueio).
+    requires = meta.get("requires") or []
+    if not isinstance(requires, list) or any(r not in VALID_REQUIRES for r in requires):
+        die(f"{folder}: requires invalido (valores: {', '.join(VALID_REQUIRES)})")
+
     size = code_path.stat().st_size
-    if size > MAX_MAIN_JS:
-        die(f"{folder}: main.js tem {size}B (max {MAX_MAIN_JS}B)")
+    if size > MAX_MAIN_JS_PSRAM:
+        die(f"{folder}: main.js tem {size}B (max {MAX_MAIN_JS_PSRAM}B)")
+    if size > MAX_MAIN_JS and "psram" not in requires:
+        die(f"{folder}: main.js tem {size}B: acima de {MAX_MAIN_JS}B exige "
+            f"\"psram\" em requires no app.json (sem PSRAM a RAM interna "
+            f"nao fecha o compile)")
     if size > STREAM_SAFE_MAIN_JS and api < 6:
         die(f"{folder}: main.js > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
             f"app.json (firmware antigo trunca o download em 32KB)")
