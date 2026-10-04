@@ -62,9 +62,22 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
+# Wake word on-device "Hi Celer" (microWakeWord proprio sobre TFLite Micro):
+# detector em task propria + objeto WakeWord + o frontend de features
+# (vendored, mesma pipeline do treino). So no build da placa que ligar.
+if(CONFIG_CELEROS_WAKE_WORD)
+    file(GLOB CELEROS_WAKE_FRONTEND CONFIGURE_DEPENDS
+         "Hardware/Wake/frontend/tensorflow/lite/experimental/microfrontend/lib/*.cc")
+    list(APPEND CELEROS_SRCS "Hardware/WakeWord.cpp" "Runtime/JsWake.cpp"
+         ${CELEROS_WAKE_FRONTEND})
+endif()
 # esp_driver_usb_serial_jtag: so e puxado pelo SerialLink com
 # CELEROS_LINK_ON_USJ (dog); nas demais boards o linker descarta o driver
 set(CELEROS_PRIV_REQUIRES esp_driver_uart esp_driver_usb_serial_jtag)
+# (depois do set acima: um append antes dele era sobrescrito)
+if(CONFIG_CELEROS_WAKE_WORD)
+    list(APPEND CELEROS_PRIV_REQUIRES esp-tflite-micro)
+endif()
 if(CONFIG_CELEROS_USB_NATIVE)
     list(APPEND CELEROS_PRIV_REQUIRES esp_tinyusb)
 else()
@@ -128,6 +141,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
         "Compat"
+        "Hardware/Wake/frontend"
     REQUIRES
         LovyanGFX
         driver

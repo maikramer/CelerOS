@@ -19,6 +19,7 @@
 #include "freertos/semphr.h"
 #include "mbedtls/base64.h"
 #include "../USBDevice/LogSink.h"
+#include "esp_heap_caps.h"
 
 namespace BoardIO {
 
@@ -627,13 +628,19 @@ bool micInitUnlocked() {
         s_micPinsDirty = false;
     }
     if (s_micFail) {
-        if (esp_timer_get_time() - s_micFailAtUs < 3000000LL) return false;
+        if (esp_timer_get_time() - s_micFailAtUs < 3000000LL) {
+            celer_log_printf("[mic] falha recente: nova tentativa em ate 3 s\n");
+            return false;
+        }
         s_micFail = false;
     }
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     cc.dma_desc_num = 6;
     cc.dma_frame_num = 256;
-    if (i2s_new_channel(&cc, nullptr, &s_mic) != ESP_OK) {
+    esp_err_t e = i2s_new_channel(&cc, nullptr, &s_mic);
+    if (e != ESP_OK) {
+        celer_log_printf("[mic] i2s_new_channel: %s (RAM interna %u)\n", esp_err_to_name(e),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         s_mic = nullptr;
         s_micFail = true;
         s_micFailAtUs = esp_timer_get_time();
@@ -649,7 +656,12 @@ bool micInitUnlocked() {
     cfg.gpio_cfg.ws = (gpio_num_t)m.ws;
     cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
     cfg.gpio_cfg.din = (gpio_num_t)m.din;
-    if (i2s_channel_init_std_mode(s_mic, &cfg) != ESP_OK || i2s_channel_enable(s_mic) != ESP_OK) {
+    e = i2s_channel_init_std_mode(s_mic, &cfg);
+    if (e == ESP_OK) e = i2s_channel_enable(s_mic);
+    if (e != ESP_OK) {
+        celer_log_printf("[mic] init/enable do canal: %s (RAM interna %u, DMA %u)\n", esp_err_to_name(e),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
         i2s_del_channel(s_mic);
         s_mic = nullptr;
         s_micFail = true;
@@ -664,6 +676,7 @@ bool micInit() {
     if (s_micChanMux == nullptr) s_micChanMux = xSemaphoreCreateMutex();
     if (s_micChanMux == nullptr) return false;
     if (xSemaphoreTake(s_micChanMux, pdMS_TO_TICKS(500)) != pdTRUE) {
+        celer_log_printf("[mic] canal ocupado por outro leitor (mutex 500 ms)\n");
         return s_mic != nullptr && !s_micPinsDirty;  // leitor segurando: canal vivo
     }
     const bool ok = micInitUnlocked();
@@ -760,16 +773,16 @@ void micChanUnlock() {
 int micReadMonoLocked(int16_t* out, int maxSamples) {
     int16_t buf[512];  // 256 frames stereo = 32 ms
     size_t r = 0;
-    if (!micChanLock(200)) return -1;
+    if (!micChanLock(200)) return -2;  // outro leitor segurando o canal
     // beep/playWav desviou os pinos (ou o canal caiu): o leitor de fundo
     // recria ele mesmo — sem isso o wake word ficava surdo apos qualquer som
     if ((s_mic == nullptr || s_micPinsDirty) && !micInitUnlocked()) {
         micChanUnlock();
-        return -1;
+        return -3;  // canal nao subiu
     }
     const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
     micChanUnlock();
-    if (rr != ESP_OK || r < 4) return -1;
+    if (rr != ESP_OK || r < 4) return rr == ESP_ERR_TIMEOUT ? -4 : -1;  // -4: sem clock/dados
     const int frames = (int)(r / 4);
     const int n = frames < maxSamples ? frames : maxSamples;
     for (int i = 0; i < n; i++) out[i] = buf[2 * i];  // slot L

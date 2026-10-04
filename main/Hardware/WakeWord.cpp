@@ -27,6 +27,8 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps
+#include "esp_heap_caps.h"
 #include "tensorflow/lite/core/c/common.h"
 #include "tensorflow/lite/schema/schema_generated.h"  // tflite::GetModel
 #include "tensorflow/lite/micro/micro_allocator.h"
@@ -51,6 +53,9 @@ constexpr size_t kVarArena = 1024;           // resource variables do modelo
 
 TaskHandle_t s_task = nullptr;
 volatile bool s_stopReq = false;
+volatile bool s_taskDone = false;  // laco da task terminou (o stop libera)
+int s_readFails = 0;                // leituras do mic falhas seguidas (telemetria)
+uint8_t s_maxProb = 0;              // maior probabilidade desde o ultimo batimento
 volatile bool s_detected = false;
 volatile int s_level = -1;
 
@@ -122,6 +127,7 @@ bool inferSlice(const int8_t feats[kFeatureSize]) {
         return false;
     }
     const uint8_t prob = s_interp->output(0)->data.uint8[0];
+    if (prob > s_maxProb) s_maxProb = prob;
     s_lastN = (s_lastN + 1) % kSlidingWindow;
     s_probs[s_lastN] = prob;
     if (prob < kProbCutoff && s_ignoreWindows < 0) s_ignoreWindows++;
@@ -148,11 +154,19 @@ void wakeTask(void*) {
         }
         const int n = BoardIO::micReadMonoLocked(buf, 512);
         if (n <= 0) {
+            // leitura falhando em sequencia: avisa com o motivo (1a vez e a
+            // cada ~100) — sem isto o detector ficava surdo em silencio
+            if (s_readFails++ % 100 == 0) {
+                celer_log_printf("[wakeword] leitura do mic falhou (%d, x%d): %s\n", n, s_readFails,
+                                 n == -2 ? "canal ocupado" : n == -3 ? "canal nao subiu"
+                                 : n == -4 ? "timeout (sem clock?)" : "erro i2s");
+            }
             // leitura falhou (canal ocupado/erro): da passagem de CPU — sem
             // isso um erro instantaneo vira spin que mata o app por prioridade
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+        s_readFails = 0;
         int64_t sum = 0, acc = 0;
         for (int i = 0; i < n; i++) {
             const int32_t v = buf[i];
@@ -165,12 +179,17 @@ void wakeTask(void*) {
         int lvl = (int)sqrtf((float)var) / 60;  // mesma escala do micLevel
         s_level = lvl > 100 ? 100 : lvl;
 
-        size_t used = 0;
-        while (true) {
-            struct FrontendOutput out =
-                FrontendProcessSamples(&s_feState, buf, (size_t)n, &used);
-            (void)used;
-            if (out.size == 0) break;
+        // consome o bloco: cada chamada le ate fechar uma janela e diz quantas
+        // amostras usou (o laco antigo repassava o MESMO bloco e nunca saia)
+        const int16_t* p = buf;
+        size_t left = (size_t)n;
+        while (left > 0) {
+            size_t used = 0;
+            struct FrontendOutput out = FrontendProcessSamples(&s_feState, p, left, &used);
+            if (used == 0 || used > left) break;  // defensivo: sem progresso
+            p += used;
+            left -= used;
+            if (out.size == 0) continue;
             for (int i = 0; i < kFeatureSize && i < (int)out.size; i++)
                 feats[i] = featToInt8(out.values[i]);
             if (inferSlice(feats)) {
@@ -179,7 +198,10 @@ void wakeTask(void*) {
             }
         }
         if (++tele % 300 == 0) {  // batimento no logcat (~10 s)
-            celer_log_printf("[wakeword] vivo lvl=%d\n", s_level);
+            // max = maior probabilidade do modelo na janela (0..255; dispara
+            // com kProbCutoff por kSlidingWindow invokes seguidos)
+            celer_log_printf("[wakeword] vivo lvl=%d max=%u\n", s_level, (unsigned)s_maxProb);
+            s_maxProb = 0;
         }
         // Cede a CPU todo ciclo: leitura que volta na hora (backlog do DMA,
         // I2S mal configurado) + invoke do modelo viravam um laco sem
@@ -189,8 +211,10 @@ void wakeTask(void*) {
         vTaskDelay(1);
     }
     s_level = -1;
-    s_task = nullptr;
-    vTaskDelete(nullptr);
+    // stack na PSRAM (WithCaps): a task nao se autodeleta — avisa e espera
+    // o stop() liberar com vTaskDeleteWithCaps
+    s_taskDone = true;
+    vTaskSuspend(nullptr);
 }
 
 }  // namespace
@@ -198,12 +222,16 @@ void wakeTask(void*) {
 namespace WakeWord {
 
 bool start() {
+    celer_log_printf("[wakeword] start (task=%p modelo=%u B)\n", (void*)s_task, (unsigned)kHiCelerModelLen);
     if (s_task != nullptr) return true;
     if (kHiCelerModelLen == 0) {
-        ESP_LOGE("celer.wake", "modelo hi celer ausente (placeholder) — rode o treino");
+        celer_log_printf("[wakeword] ERRO modelo hi celer ausente (placeholder) — rode o treino\n");
         return false;
     }
-    if (!BoardIO::micEnsureChannel()) return false;
+    if (!BoardIO::micEnsureChannel()) {
+        celer_log_printf("[wakeword] ERRO canal I2S do mic indisponivel (ver [mic] no logcat)\n");
+        return false;
+    }
 
     // frontend: 40 features, janela 30 ms, passo 10 ms, PCAN/noise-reduction
     // (constantes do treino microWakeWord — ver preprocessor_settings ESPHome)
@@ -224,7 +252,7 @@ bool start() {
     s_feCfg.log_scale.enable_log = true;
     s_feCfg.log_scale.scale_shift = 6;
     if (!FrontendPopulateState(&s_feCfg, &s_feState, kSampleRate)) {
-        ESP_LOGE("celer.wake", "frontend nao alocou (RAM?)");
+        celer_log_printf("[wakeword] ERRO frontend nao alocou (RAM?)\n");
         return false;
     }
     s_feInited = true;
@@ -234,7 +262,7 @@ bool start() {
     static tflite::MicroMutableOpResolver<20> resolver;
     static bool opsOk = registerOps(resolver);
     if (!opsOk) {
-        ESP_LOGE("celer.wake", "op resolver falhou");
+        celer_log_printf("[wakeword] ERRO op resolver falhou\n");
         FrontendFreeStateContents(&s_feState);
         s_feInited = false;
         return false;
@@ -249,7 +277,7 @@ bool start() {
         s_feInited = false;
     };
     if (s_arena == nullptr || s_varArena == nullptr) {
-        ESP_LOGE("celer.wake", "arena nao alocou (%d KB)", (int)kTensorArena / 1024);
+        celer_log_printf("[wakeword] ERRO arena nao alocou (%d KB)\n", (int)kTensorArena / 1024);
         falhaArena();
         return false;
     }
@@ -258,7 +286,7 @@ bool start() {
     s_interp = new (s_interpMem) tflite::MicroInterpreter(tflite::GetModel(kHiCelerModel), resolver,
                                                           s_arena, kTensorArena, resVars);
     if (s_interp->AllocateTensors() != kTfLiteOk) {
-        ESP_LOGE("celer.wake", "allocateTensors falhou (arena %d KB pequena?)",
+        celer_log_printf("[wakeword] ERRO allocateTensors falhou (arena %d KB pequena?)\n",
                  (int)kTensorArena / 1024);
         dropInterp();
         falhaArena();
@@ -267,7 +295,7 @@ bool start() {
     const TfLiteTensor* in = s_interp->input(0);
     if (in->dims->size != 3 || in->dims->data[0] != 1 ||
         in->dims->data[2] != kFeatureSize || in->type != kTfLiteInt8) {
-        ESP_LOGE("celer.wake", "tensor de entrada inesperado");
+        celer_log_printf("[wakeword] ERRO tensor de entrada inesperado\n");
         dropInterp();
         falhaArena();
         return false;
@@ -279,8 +307,14 @@ bool start() {
     s_level = -1;
     // ultimo core (convencao do repo: portNUM_PROCESSORS - 1): a inferencia
     // pesa e nao pode disputar o core da main/UI
-    if (xTaskCreatePinnedToCore(wakeTask, "wakeword", 8192, nullptr, 3, &s_task,
-                                portNUM_PROCESSORS - 1) != pdPASS) {
+    // Stack de 8 KB na PSRAM: com Celer Link + DMA do mic a RAM interna nao
+    // tem bloco de 8 KB e a criacao falhava calada (wake word "indisponivel"
+    // so com a Dog Face, que liga o link). A task nao toca a flash.
+    s_taskDone = false;
+    if (xTaskCreatePinnedToCoreWithCaps(wakeTask, "wakeword", 8192, nullptr, 3, &s_task,
+                                        portNUM_PROCESSORS - 1,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        celer_log_printf("[wakeword] ERRO task nao criada (stack 8 KB)\n");
         dropInterp();
         falhaArena();
         s_task = nullptr;
@@ -294,7 +328,9 @@ bool start() {
 void stop() {
     if (s_task != nullptr) {
         s_stopReq = true;
-        while (s_task != nullptr) vTaskDelay(pdMS_TO_TICKS(5));
+        while (!s_taskDone) vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDeleteWithCaps(s_task);
+        s_task = nullptr;
     }
     dropInterp();
     free(s_arena);
