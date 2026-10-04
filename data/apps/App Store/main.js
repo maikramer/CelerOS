@@ -20,18 +20,17 @@
 // duplicatas antigas sao removidas apos o update. X no canto sup. sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
-// Compatibilidade de hardware: sem PSRAM, o main.js (compilado + dados do
-// app) tem que caber na RAM interna. Teto DINAMICO pela RAM que a placa da
-// a um app (getInfo().appRAM: DRAM + IRAM livres no inicio do app — freeRAM
-// agora mede a loja ja carregada). Calibrado na CYD (appRAM ~225KB): app de
-// 61KB roda, de 82KB nao compila -> (appRAM - 60000) * 0,4 = ~66KB.
-// Firmware antigo sem appRAM: formula antiga (heap base de ~52KB).
+// Compatibilidade de hardware: apps com requires ["psram"] sao bloqueados
+// em placa sem PSRAM (badge "Requer PSRAM"). Fallback para catalogo antigo
+// sem o campo: teto DINAMICO pela RAM da placa, calibrado na CYD
+// (61KB roda, 82KB nao compila -> (appRAM - 60000) * 0,4 = ~66KB).
 var HWINFO = System.getInfo ? System.getInfo() : null;
 var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
 var PSRAM_MAX_JS = !NO_PSRAM ? Infinity
     : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 60000) * 0.4))
     : Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7));
-function needsPsram(it) { return (it.size || 0) > PSRAM_MAX_JS; }
+// requires psram declarado vence; heuristica cobre catalogo antigo
+function needsPsram(it) { return (it.req && it.req.indexOf("psram") >= 0) || (it.size || 0) > PSRAM_MAX_JS; }
 
 // Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo
 // legado continua valendo para firmware antigo.
@@ -326,7 +325,8 @@ function entryToItem(pkg, e) {
         changelog: e.changelog || "",
         size: e.size || 0,
         md5: e.md5 || "",
-        published: e.published_at || ""
+        published: e.published_at || "",
+        req: e.requires || []
     };
 }
 function fillItemFromMeta(it) {
@@ -339,6 +339,7 @@ function fillItemFromMeta(it) {
     it.ver = m.version || "1.0.0";
     it.api = m.api || 1;
     it.cat = m.category || "Apps";
+    it.req = m.requires || it.req || [];
     return it;
 }
 function buildCats() {
