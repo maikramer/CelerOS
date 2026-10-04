@@ -455,8 +455,12 @@ static void aiToolCallsFromMessage(duk_context* ctx) {
             } else {
                 duk_pop(ctx);
             }
+            // pilha: [.. out, tool_calls, tc, item] — o item vai para o array
+            // de SAIDA (-4) e so depois sai o tc. (Ate 2026-10 o pop tirava o
+            // item e o tc era gravado de volta em tool_calls: r.toolCalls
+            // chegava SEMPRE vazio com finishReason "tool_calls".)
+            duk_put_prop_index(ctx, -4, nOut++);         // out[nOut] = item
             duk_pop(ctx);                                // tc
-            duk_put_prop_index(ctx, -2, nOut++);         // arr[nOut] = item
         }
     }
     duk_pop(ctx);  // tool_calls — array de saida fica no topo

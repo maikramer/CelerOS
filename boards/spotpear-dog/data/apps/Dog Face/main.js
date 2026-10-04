@@ -811,6 +811,7 @@ var VOICE_GAITS = {
 
 function voiceRunGait(cmd) {
     var name = VOICE_GAITS[String(cmd).toLowerCase()];
+    System.print('[voz] comando "' + cmd + '" -> ' + (name || "desconhecido"));
     if (!name) return false;
     if (name === "stop") { stopGait(); voiceWalkUntil = 0; return true; }
     var cont = (name === "walk" || name === "back" || name === "left" || name === "right");
@@ -840,7 +841,10 @@ function voiceRequest(audioB64) {
         var started = AI.chat({
             provider: "openrouter",
             messages: [
-                { role: "system", content: "Voce comanda um cachorro robotico. Sempre responda chamando a ferramenta dog_command com um unico comando." },
+                { role: "system", content: "Voce comanda um cachorro robotico. O audio e o dono falando um comando " +
+                  "(em portugues ou ingles). Responda SEMPRE chamando a ferramenta dog_command com um unico comando. " +
+                  "Se o audio estiver vazio, for so ruido ou nao for um pedido de movimento, use command none — " +
+                  "nunca invente um movimento." },
                 { role: "user", content: [
                     { type: "input_audio", input_audio: { data: audioB64, format: "wav" } }
                 ]}
@@ -850,7 +854,7 @@ function voiceRequest(audioB64) {
                 description: "Executa um comando de movimento no cachorro",
                 parameters: { type: "object", properties: {
                     command: { type: "string",
-                               enum: ["sit", "lie", "stand", "stretch", "walk", "back", "stop"] }
+                               enum: ["sit", "lie", "stand", "stretch", "walk", "back", "stop", "none"] }
                 }, required: ["command"] }
             } }],
             tool_choice: "auto",
@@ -858,6 +862,12 @@ function voiceRequest(audioB64) {
             reasoning: { effort: "low" }
         }, function (r) {
             var done = false;
+            // o que o modelo respondeu (diagnostico no logcat: sem isto um
+            // "nao deu certo" nao tinha como ser explicado)
+            System.print('[voz] ia: ' + JSON.stringify({
+                ok: r && r.ok, status: r && r.status, fim: r && r.finishReason,
+                tools: r && r.toolCalls, txt: r && r.content ? String(r.content).substring(0, 160) : null,
+                erro: r && r.error ? String(r.error).substring(0, 120) : null }));
             if (r && r.ok && r.toolCalls && r.toolCalls.length) {
                 done = voiceRunGait(r.toolCalls[0].args && r.toolCalls[0].args.command);
             }

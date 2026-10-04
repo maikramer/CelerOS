@@ -64,3 +64,10 @@ CONFIG_CELEROS_WAKE_WORD=y
 # o DMA do I2S do microfone nao alocava mais — wake word surdo e GATT sem
 # resposta (Celer Remote conectava e expirava no MTU/descoberta)
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# AES do TLS por SOFTWARE: o acelerador usa DMA, e dado na PSRAM (o corpo
+# do comando de voz: ~150 KB de WAV em base64) passa por buffers de rebote
+# na RAM INTERNA — com o wake word + BLE + amp a interna fica em ~13 KB e o
+# envio morria no meio ("esp-aes: Failed to allocate memory", write error
+# -0x84). AES em software no S3 custa pouca CPU e nao toca a interna.
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
