@@ -99,7 +99,7 @@ for (const c of CASES) {
 // gigante basta — nada de blobs de padding commitados no repo.
 {
   const os = require('os');
-  const tmpApp = (parent, appJson, mainBytes) => {
+  const tmpApp = (parent, appJson, mainBytes, mainSrc, extraFiles) => {
     fs.mkdirSync(parent, { recursive: true });
     const dir = fs.mkdtempSync(path.join(parent, 'app-'));
     const base = {
@@ -108,7 +108,11 @@ for (const c of CASES) {
       permissions: ['fs'],
     };
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(Object.assign(base, appJson)));
-    fs.writeFileSync(path.join(dir, 'main.js'), '/*' + 'x'.repeat(Math.max(0, mainBytes - 4)) + '*/');
+    fs.writeFileSync(path.join(dir, 'main.js'),
+      mainSrc !== undefined ? mainSrc : '/*' + 'x'.repeat(Math.max(0, mainBytes - 4)) + '*/');
+    for (const [n, c] of Object.entries(extraFiles || {})) {
+      fs.writeFileSync(path.join(dir, n), c);
+    }
     return dir;
   };
   const countsOf = (dir) => ruleCounts(linter.lintApp(linter.buildManifest(), { dir }).diagnostics);
@@ -143,6 +147,53 @@ for (const c of CASES) {
   check('teto: 50KB sem requires em app de placa = aviso',
     got['aviso:appjson'] === 1 && (got['erro:appjson'] || 0) === 0, fmt(got));
   fs.rmSync(broot, { recursive: true, force: true });
+
+  // ---- modulo + assets (multi-arquivo, API 23) ----
+  const MAIN = 'var u = require("util");\nSystem.print("v" + u.dobra(2));\n';
+  const UTIL = 'exports.dobra = function (n) { return n * 2; };\n';
+
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 0, MAIN, { 'util.js': UTIL });
+  got = countsOf(dir);
+  check('modulos: main + util.js com exports = limpo', fmt(got) === '{}', fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 3 }, 0, MAIN, { 'util.js': UTIL });
+  got = countsOf(dir);
+  check('modulos: require exige api 23 (aviso nivel)',
+    got['aviso:nivel'] === 1 && fmt(got) !== '{}' && !got['erro:appjson'], fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 40 * 1024, undefined,
+    { 'mod.js': '/*' + 'y'.repeat(20 * 1024 - 4) + '*/' });
+  got = countsOf(dir);
+  check('modulos: soma 40+20KB sem psram = erro pela soma',
+    got['erro:appjson'] === 1, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 23, requires: ['psram'] }, 40 * 1024, undefined,
+    { 'mod.js': '/*' + 'y'.repeat(20 * 1024 - 4) + '*/' });
+  got = countsOf(dir);
+  check('modulos: soma 60KB com psram = limpo', fmt(got) === '{}', fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 100, undefined,
+    { 'grande.wav': '0'.repeat(150 * 1024) });
+  got = countsOf(dir);
+  check('assets: 150KB em um arquivo = erro (128KB por arquivo)',
+    got['erro:appjson'] === 1, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 100, undefined, { 'meu som.wav': 'RIFF00' });
+  got = countsOf(dir);
+  check('assets: nome com espaco = erro', got['erro:appjson'] === 1, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 100, undefined,
+    Object.fromEntries(Array.from({ length: 17 }, (_, i) =>
+      ['m' + String(i).padStart(2, '0') + '.js', '1'])));
+  got = countsOf(dir);
+  check('assets: 17 arquivos extras = erro (max 16)', got['erro:appjson'] === 1, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 // Manifest derivado do firmware: sanidade contra o fonte (o numero exato de

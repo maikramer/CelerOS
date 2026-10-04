@@ -1383,11 +1383,14 @@ def _lint_app_folder(folder, fatal=True):
 # install nunca mandou)
 _JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 _JUNK_SUFFIX = (".swp", ".swo", ".bak", ".tmp", "~")
+# test.js e dev-only (wire do harness): o publish do hub exclui e o
+# data/AGENTS.md promete que nunca embarca — o install/dev filtram igual
+_DEV_ONLY = {"test.js"}
 
 
 def _is_junk(p):
     name = p.name
-    if name in _JUNK_NAMES or name.startswith(".#") or ".git" in p.parts:
+    if name in _JUNK_NAMES or name in _DEV_ONLY or name.startswith(".#") or ".git" in p.parts:
         return True
     return name.endswith(_JUNK_SUFFIX)
 
@@ -1638,7 +1641,7 @@ def cmd_apps(args):
             base = "/sd/apps" if args.sd else "/local/apps"
             dest = f"{base}/{src.name}"
             files = [f for f in sorted(src.rglob("*"))
-                     if f.is_file() and ".dev" not in f.parts]
+                     if f.is_file() and ".dev" not in f.parts and not _is_junk(f)]
             link.simple("MKDIR", dest.encode() + b"\0")
             for f in files:
                 rel = f.relative_to(src).parent

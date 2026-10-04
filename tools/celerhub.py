@@ -145,13 +145,16 @@ def run_app_lint(folder: Path):
 
 def package_files(folder: Path):
     """Extras do pacote (modulos .js + assets), FLAT: tudo na raiz da pasta
-    que passa nome/extensao e nao e dev-only (test.js) ou lixo de editor.
-    Devolve {nome: Path}. app.json/main.js/icon.png ficam de fora (tem
-    tratamento proprio); o celerctl apps install filtra os mesmos nomes."""
+    que passa nome/extensao e nao e dev-only ou lixo de editor. Devolve
+    {nome: Path}. app.json/main.js/icon.png ficam de fora (tem tratamento
+    proprio); o celerctl apps install e o app_lint excluem os mesmos nomes."""
     out = {}
     for p in sorted(folder.iterdir()):
         n = p.name
         if not p.is_file() or n in ("app.json", "main.js", "icon.png", "test.js"):
+            continue
+        # artefatos do scaffold do SDK (celer.js new): dev-only
+        if n in ("README.md", "jsconfig.json") or n.endswith(".d.ts"):
             continue
         if n.startswith(".") or n.endswith((".dev", ".part", ".new", "~", ".swp")):
             continue

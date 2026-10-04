@@ -49,6 +49,14 @@ function _hubLimit(name, fallback) {
 const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
 const MAX_MAIN_JS_PSRAM = _hubLimit('MAX_MAIN_JS_PSRAM', 128 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
+// Pacote multi-arquivo: mesmos tetos do celerhub.py (fonte unica); a
+// AllowList de extensao e a regex de nome sao casadas a mao (strings nao
+// vem pelo _hubLimit)
+const MAX_ASSET_FILE = _hubLimit('MAX_ASSET_FILE', 128 * 1024);
+const MAX_ASSETS_TOTAL = _hubLimit('MAX_ASSETS_TOTAL', 256 * 1024);
+const MAX_EXTRA_FILES = _hubLimit('MAX_EXTRA_FILES', 16);
+const ASSET_EXTS = ['.js', '.png', '.wav', '.json', '.bin'];
+const FILE_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // Objetos JS da API (raizes validas de cadeia de membro).
 const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'Storage', 'Sensors', 'Phone', 'UI'];
@@ -94,9 +102,9 @@ const BANNED_GLOBALS = {
   Map: 'Map e ES6: nao existe no Duktape do CelerOS',
   Set: 'Set e ES6: nao existe no Duktape do CelerOS',
   WeakMap: 'WeakMap e ES6: nao existe no Duktape do CelerOS',
-  require: 'require nao existe no aparelho: apps sao single-file',
-  module: 'module nao existe no aparelho',
-  exports: 'exports nao existe no aparelho',
+  // require/module/exports SAIRAM daqui: require e global do firmware (API
+  // 23, nivel pela regra "nivel"); module/exports sao parametros do wrapper
+  // do require e entram como globais implicitos so nos .js de modulo
   process: 'process e Node.js: nao existe no aparelho',
   console: 'console nao existe no aparelho: use System.print()',
   Buffer: 'Buffer e Node.js: nao existe no aparelho',
@@ -315,10 +323,15 @@ function parseGuideLevels(filePath) {
     for (const line of text.split('\n')) {
       if (!/^#{3,4}\s/.test(line)) continue;
       const lm = lvl.exec(line);
+      // primeiro identificador do heading (a funcao documentada): unico que
+      // pode ser GLOBAL nua (require). Demais matches so valem pontuados —
+      // mencao em prosa (clearAlarm no texto de outra fn) nao e documento.
+      const head = /^#{3,4}\s+`?([A-Za-z_$][\w$]*)/.exec(line);
+      const primary = head ? head[1] : '';
       let nm;
       nameRe.lastIndex = 0;
       while ((nm = nameRe.exec(line)) !== null) {
-        if (!nm[1].includes('.')) continue;
+        if (!nm[1].includes('.') && nm[1] !== primary) continue;
         if (!out.levels.has(nm[1])) out.levels.set(nm[1], lm ? +lm[1] : null);
       }
     }
@@ -366,7 +379,9 @@ function buildManifest() {
   for (const [objPath, obj] of Object.entries(parsed.objects)) {
     for (const fn of obj.fns) {
       const q = objPath + '.' + fn.name;
-      const lv = guide.levels.get(q);
+      // globais nuas (require/setTimeout): o heading do guia e o nome puro
+      const lv = guide.levels.get(q) ||
+        (objPath === 'global' ? guide.levels.get(fn.name) : null);
       if (lv) { fn.apiLevel = lv; withLevel++; }
     }
   }
@@ -481,7 +496,9 @@ function loc(node) {
   return { line: node.loc.start.line, column: node.loc.start.column + 1 };
 }
 
-function lintSource(manifest, src, appInfo) {
+// `moduleGlobals`: nomes que existem so em arquivos de MODULO (module,
+// exports — parametros do wrapper do require). O main.js nao os tem.
+function lintSource(manifest, src, appInfo, moduleGlobals) {
   const diags = [];
   const d = (node, severity, rule, message) => {
     const l = loc(node);
@@ -508,15 +525,21 @@ function lintSource(manifest, src, appInfo) {
   const typeofTargets = new Set();    // alvos de typeof (feature-detect)
   const permUses = new Map();         // perm -> {node, what}
   const apiFnUses = [];               // {qualified, entry, node}
+  const bareGlobalUses = [];          // globais nuas do firmware chamadas (require, ...)
   const optionalUse = {};             // raiz opcional -> node do primeiro uso
   const reported = new Set();         // chaves de diagnostico unicas
 
   const globalWhitelist = new Set(ES5_GLOBALS.concat(Object.keys(BANNED_GLOBALS)));
   for (const c of manifest.globalConsts) globalWhitelist.add(c.name);
   for (const n of NAMESPACE_ROOTS) globalWhitelist.add(n);
-  // fns registradas direto no global (setTimeout/setInterval/... no init)
-  for (const f of (manifest.objects.global && manifest.objects.global.fns) || [])
+  // fns registradas direto no global (setTimeout/setInterval/require no init)
+  const globalFnByName = {};
+  for (const f of (manifest.objects.global && manifest.objects.global.fns) || []) {
     globalWhitelist.add(f.name);
+    globalFnByName[f.name] = f;
+  }
+  // globais implicitos do modulo (wrapper do require)
+  for (const g of moduleGlobals || []) globalWhitelist.add(g);
 
   // Valida a cadeia contra o manifest. `report` emite o erro de existencia;
   // `record` coleta uso de permissao/nivel (uma vez por cadeia mais externa).
@@ -601,6 +624,10 @@ function lintSource(manifest, src, appInfo) {
         const shadowed = scopeHas(scopeAt, name) || implicitGlobals.has(name);
         if (shadowed || globalWhitelist.has(name)) {
           if (OPTIONAL_ROOTS[name] && !optionalUse[name] && !shadowed) optionalUse[name] = node;
+          // global nua do firmware chamada (require/setTimeout/...): o nivel
+          // dela vale igual ao de System.x — a regra "nivel" consome abaixo
+          if (!shadowed && key === 'callee' && globalFnByName[name])
+            bareGlobalUses.push({ qualified: name, entry: globalFnByName[name], node });
           break;
         }
         if (key === 'callee' || (parent && parent.type === 'NewExpression' && parent.callee === node)) {
@@ -717,7 +744,7 @@ function lintSource(manifest, src, appInfo) {
       }
     }
     const appApi = typeof appInfo.api === 'number' ? appInfo.api : 1;
-    for (const u of apiFnUses) {
+    for (const u of apiFnUses.concat(bareGlobalUses)) {
       if (u.entry.apiLevel && u.entry.apiLevel > appApi && !reported.has('nivel:' + u.qualified)) {
         reported.add('nivel:' + u.qualified);
         d(u.node, 'aviso', 'nivel', u.qualified + ' exige API ' + u.entry.apiLevel + '; o app.json declara api ' + appApi);
@@ -800,23 +827,69 @@ function lintAppJson(dir, manifest) {
   }
 
   const entry = typeof app.main === 'string' && app.main ? app.main : 'main.js';
-  try {
-    const st = fs.statSync(path.join(dir, entry));
-    const kb = st.size / 1024;
-      // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
-      // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
-      // publicacao), entao o teto do hub vira aviso, nao erro.
-      const boardApp = dir.split(path.sep).indexOf('boards') >= 0;
-      // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish):
-      // 48KB em qualquer placa; com "psram" em requires sobe para 128KB.
-      const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;
-      if (kb > ceiling / 1024) {
-        const hint = psramDecl ? '' : ' — declare "psram" em requires para ate ' + (MAX_MAIN_JS_PSRAM / 1024) + 'KB';
-        if (boardApp) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima do teto (' + (ceiling / 1024) + 'KB' + hint + ') — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica');
-        else d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (ceiling / 1024) + 'KB' + hint);
-      } else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
-  } catch (e) {
-    d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
+  // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
+  // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
+  // publicacao), entao o teto do hub vira aviso, nao erro.
+  const boardApp = dir.split(path.sep).indexOf('boards') >= 0;
+  const dsize = (msg) => boardApp
+    ? d('aviso', 'appjson', msg + ' — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica')
+    : d('erro', 'appjson', msg);
+  const kbFmt = (b) => (b / 1024).toFixed(1) + 'KB';
+
+  // Inventario do pacote (flat, mesmo contrato do celerhub.py/servidor):
+  // modulos .js SOMAM no teto de compile (e a soma que ocupa a RAM); assets
+  // (nao-.js) tem tetos proprios. test.js e dev-only/junk de editor ficam
+  // fora do pacote (o publish do celerhub tbm exclui).
+  let jsSum = 0, jsCount = 0, assetsTotal = 0, extras = 0;
+  const jsApiLow = typeof app.api !== 'number' || app.api < 6;
+  const entryPath = path.join(dir, entry);
+  let entrySt = null;
+  try { entrySt = fs.statSync(entryPath); } catch (e) { /* abaixo */ }
+  if (!entrySt) d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
+  else {
+    jsSum += entrySt.size; jsCount++;
+    if (entrySt.size > STREAM_SAFE_MAIN_JS && jsApiLow)
+      d('aviso', 'appjson', entry + ' tem ' + kbFmt(entrySt.size) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+  }
+  let names = [];
+  try { names = fs.readdirSync(dir).sort(); } catch (e) { /* dir listada pelo collectTargets */ }
+  for (const name of names) {
+    // dev-only / artefatos de ferramenta ficam fora do pacote (o publish do
+    // celerhub exclui os mesmos): test.js e wire do harness; README.md,
+    // jsconfig.json e *.d.ts vêm do scaffold do SDK (celer.js new)
+    if (name === 'app.json' || name === entry || name === 'icon.png' || name === 'test.js') continue;
+    if (name === 'README.md' || name === 'jsconfig.json' || name.endsWith('.d.ts')) continue;
+    if (name.startsWith('.') || /\.(dev|part|new|swp|~)$/i.test(name)) continue;
+    let st;
+    try { st = fs.statSync(path.join(dir, name)); } catch (e) { continue; }
+    if (!st.isFile()) continue;
+    extras++;
+    if (!FILE_NAME_RE.test(name)) {
+      d('erro', 'appjson', 'nome de arquivo extra invalido: ' + name + ' (use [A-Za-z0-9._-], ate 64 chars)');
+      continue;
+    }
+    const ext = path.extname(name).toLowerCase();
+    if (ASSET_EXTS.indexOf(ext) < 0) {
+      d('erro', 'appjson', 'extensao nao publicavel: ' + name + ' (permitidas: ' + ASSET_EXTS.join(', ') + ')');
+      continue;
+    }
+    if (ext === '.js') {
+      jsSum += st.size; jsCount++;
+      if (st.size > STREAM_SAFE_MAIN_JS && jsApiLow)
+        d('aviso', 'appjson', name + ' tem ' + kbFmt(st.size) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+    } else {
+      assetsTotal += st.size;
+      if (st.size > MAX_ASSET_FILE) dsize(name + ' tem ' + kbFmt(st.size) + ' (max ' + (MAX_ASSET_FILE / 1024) + 'KB por arquivo)');
+    }
+  }
+  if (extras > MAX_EXTRA_FILES) dsize(extras + ' arquivos extras (max ' + MAX_EXTRA_FILES + ')');
+  if (assetsTotal > MAX_ASSETS_TOTAL) dsize('assets somam ' + kbFmt(assetsTotal) + ' (max ' + (MAX_ASSETS_TOTAL / 1024) + 'KB)');
+  // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish) pela
+  // SOMA dos .js: 48KB em qualquer placa; "psram" em requires sobe p/ 128KB
+  const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;
+  if (jsSum > ceiling) {
+    const hint = psramDecl ? '' : ' — declare "psram" em requires para ate ' + (MAX_MAIN_JS_PSRAM / 1024) + 'KB';
+    dsize('soma dos ' + jsCount + ' arquivos .js: ' + kbFmt(jsSum) + ' acima do teto (' + (ceiling / 1024) + 'KB' + hint + ')');
   }
 
   try {
@@ -901,6 +974,24 @@ function lintApp(manifest, target) {
     }
   }
 
+  // Modulos do pacote (flat): cada .js alem do entry e lintado com o MESMO
+  // appInfo (permissoes/nivel sao do app, nao do arquivo) + module/exports
+  // como globais implicitos (parametros do wrapper do require). test.js e
+  // dev-only (wire do harness): nao faz parte do app.
+  if (!target.singleFile && appInfo) {
+    let names = [];
+    try { names = fs.readdirSync(target.dir).sort(); } catch (e) { names = []; }
+    for (const name of names) {
+      if (!name.endsWith('.js') || name === path.basename(entryRel) || name === 'test.js') continue;
+      let msrc = null;
+      try { msrc = fs.readFileSync(path.join(target.dir, name), 'utf8'); } catch (e) { continue; }
+      const mrel = path.join(target.relDir, name);
+      for (const dg of lintSource(manifest, msrc, appInfo, ['module', 'exports'])) {
+        diagnostics.push({ file: mrel, line: dg.line, col: dg.col, severity: dg.severity, rule: dg.rule, message: dg.message });
+      }
+    }
+  }
+
   diagnostics.sort((a, b) => (a.line - b.line) || (a.col - b.col));
   return { relDir: target.singleFile ? entryRel : target.relDir, diagnostics };
 }
@@ -942,7 +1033,11 @@ function runCheck() {
 
   const codeFns = new Set();
   for (const [objPath, obj] of Object.entries(manifest.objects)) {
-    for (const f of obj.fns) codeFns.add(objPath + '.' + f.name);
+    for (const f of obj.fns) {
+      codeFns.add(objPath + '.' + f.name);
+      // globais nuas: o guia documenta pelo nome puro (require, setTimeout)
+      if (objPath === 'global') codeFns.add(f.name);
+    }
   }
 
   const pt = parseGuideLevels(GUIDE_PT);
