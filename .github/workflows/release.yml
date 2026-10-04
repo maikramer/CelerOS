@@ -131,6 +131,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # checkout raso NAO traz o objeto da tag anotada (so o commit):
+          # sem isto o verify "^{tag}" falha e o preambulo das notas (corpo
+          # da tag) e pulado em silencio — aconteceu no v1.6.0
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
           cat > /tmp/notes.md <<'FIM'
           **Primeiro flash de fabrica.** Atualizacoes futuras chegam por OTA
           (Settings > Atualizacao no aparelho).
