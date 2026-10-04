@@ -51,6 +51,15 @@ MAX_MAIN_JS = 48 * 1024
 MAX_MAIN_JS_PSRAM = 128 * 1024
 STREAM_SAFE_MAIN_JS = 30 * 1024
 VALID_REQUIRES = ("psram",)
+# Pacote multi-arquivo (modulos .js + assets): flat, sem subpastas; mesmas
+# regras do servidor (CelerOS-Server app.py). O hub computa o campo gerenciado
+# "files" {nome: {size, md5}} no publish — nunca setar a mao. Modulos contam
+# na SOMA do teto de compile; assets (nao-.js) tem tetos proprios.
+ASSET_EXTS = (".js", ".png", ".wav", ".json", ".bin")
+FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+MAX_ASSET_FILE = 128 * 1024
+MAX_ASSETS_TOTAL = 256 * 1024
+MAX_EXTRA_FILES = 16
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -134,8 +143,25 @@ def run_app_lint(folder: Path):
     return [f"lint: {d['file']}:{d['line']} {d['message']}" for d in diags]
 
 
+def package_files(folder: Path):
+    """Extras do pacote (modulos .js + assets), FLAT: tudo na raiz da pasta
+    que passa nome/extensao e nao e dev-only (test.js) ou lixo de editor.
+    Devolve {nome: Path}. app.json/main.js/icon.png ficam de fora (tem
+    tratamento proprio); o celerctl apps install filtra os mesmos nomes."""
+    out = {}
+    for p in sorted(folder.iterdir()):
+        n = p.name
+        if not p.is_file() or n in ("app.json", "main.js", "icon.png", "test.js"):
+            continue
+        if n.startswith(".") or n.endswith((".dev", ".part", ".new", "~", ".swp")):
+            continue
+        out[n] = p
+    return out
+
+
 def validate(folder: Path):
-    """Confere o pacote localmente; devolve (meta, avisos). Devolve erros via die."""
+    """Confere o pacote localmente; devolve (meta, avisos, size, extras).
+    Devolve erros via die."""
     avisos = []
     meta_path, code_path, icon_path = (folder / "app.json", folder / "main.js", folder / "icon.png")
     if not meta_path.is_file() or not code_path.is_file():
@@ -151,6 +177,8 @@ def validate(folder: Path):
         die(f"{folder}: packageName invalido (ex.: celeros.meuapp)")
     if not VER_RE.match(meta["version"]):
         die(f"{folder}: version deve ser semver x.y.z")
+    if "files" in meta:
+        die(f"{folder}: campo \"files\" e computado pelo hub: nunca setar a mao")
     api = int(meta.get("api") or 1)
     if api > MAX_API_LEVEL:
         die(f"{folder}: api {api} > {MAX_API_LEVEL} (device nao instala)")
@@ -166,14 +194,37 @@ def validate(folder: Path):
     if not isinstance(requires, list) or any(r not in VALID_REQUIRES for r in requires):
         die(f"{folder}: requires invalido (valores: {', '.join(VALID_REQUIRES)})")
 
-    size = code_path.stat().st_size
-    if size > MAX_MAIN_JS_PSRAM:
-        die(f"{folder}: main.js tem {size}B (max {MAX_MAIN_JS_PSRAM}B)")
-    if size > MAX_MAIN_JS and "psram" not in requires:
-        die(f"{folder}: main.js tem {size}B: acima de {MAX_MAIN_JS}B exige "
+    # Teto em 2 niveis pela SOMA dos .js (main.js + modulos): e a soma que
+    # ocupa a RAM de compile no device. Assets (nao-.js) tem tetos proprios.
+    extras = package_files(folder)
+    if len(extras) > MAX_EXTRA_FILES:
+        die(f"{folder}: {len(extras)} arquivos extras (max {MAX_EXTRA_FILES})")
+    js_sum = code_path.stat().st_size
+    assets_total = 0
+    for n, p in extras.items():
+        if not FILE_NAME_RE.match(n) or p.suffix.lower() not in ASSET_EXTS:
+            die(f"{folder}: arquivo extra invalido: {n} "
+                f"(nome [A-Za-z0-9._-], extensoes: {', '.join(ASSET_EXTS)})")
+        size_n = p.stat().st_size
+        if size_n > MAX_ASSET_FILE:
+            die(f"{folder}: {n} tem {size_n}B (max {MAX_ASSET_FILE}B)")
+        if n.endswith(".js"):
+            js_sum += size_n
+            if size_n > STREAM_SAFE_MAIN_JS and api < 6:
+                die(f"{folder}: {n} > {STREAM_SAFE_MAIN_JS}B exige api >= 6 "
+                    f"(firmware antigo trunca o download em 32KB)")
+        else:
+            assets_total += size_n
+    if assets_total > MAX_ASSETS_TOTAL:
+        die(f"{folder}: assets somam {assets_total}B (max {MAX_ASSETS_TOTAL}B)")
+    if js_sum > MAX_MAIN_JS_PSRAM:
+        die(f"{folder}: soma dos .js ({js_sum}B) acima do teto absoluto "
+            f"({MAX_MAIN_JS_PSRAM}B)")
+    if js_sum > MAX_MAIN_JS and "psram" not in requires:
+        die(f"{folder}: soma dos .js ({js_sum}B): acima de {MAX_MAIN_JS}B exige "
             f"\"psram\" em requires no app.json (sem PSRAM a RAM interna "
             f"nao fecha o compile)")
-    if size > STREAM_SAFE_MAIN_JS and api < 6:
+    if code_path.stat().st_size > STREAM_SAFE_MAIN_JS and api < 6:
         die(f"{folder}: main.js > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
             f"app.json (firmware antigo trunca o download em 32KB)")
     if icon_path.is_file():
@@ -182,7 +233,7 @@ def validate(folder: Path):
             avisos.append(f"icon.png grande ({isz}B); o pipeline gera ~2-5KB")
     else:
         avisos.append("sem icon.png (o launcher usa gradiente+inicial)")
-    return meta, avisos, size
+    return meta, avisos, js_sum, extras
 
 
 # ----------------------------------------------------------------- publish -
@@ -197,7 +248,7 @@ def cmd_publish(args):
     rc = 0
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
-        meta, avisos, size = validate(folder)
+        meta, avisos, js_sum, extras = validate(folder)
         for a in avisos:
             print(f"aviso: {folder.name}: {a}")
         hv = hub_ver.get(meta["packageName"])
@@ -205,7 +256,9 @@ def cmd_publish(args):
             die(f"{folder}: v{meta['version']} <= publicada no hub (v{hv}); "
                 f"suba a version ou use --force")
         if args.dry:
-            print(f"[dry] {meta['packageName']} v{meta['version']} ({size}B) ok")
+            nextra = f" + {len(extras)} extra(s)" if extras else ""
+            print(f"[dry] {meta['packageName']} v{meta['version']} "
+                  f"({js_sum}B de .js{nextra}) ok")
             continue
 
         with tempfile.TemporaryDirectory() as td:
@@ -215,6 +268,8 @@ def cmd_publish(args):
                 zf.write(folder / "main.js", "main.js")
                 if (folder / "icon.png").is_file():
                     zf.write(folder / "icon.png", "icon.png")
+                for n, p in extras.items():
+                    zf.write(p, n)
             blob = zpath.read_bytes()
 
         boundary = "----celeroshub7d1f2c"
