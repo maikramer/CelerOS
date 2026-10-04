@@ -78,6 +78,40 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   Celer Remote/nRF Connect (`{"type":"calib"}`, ajuste fino
   `{"type":"tune"}`) salva em `/local/dogtune.json`; o comando `modes`
   lista os gaits.
+* **[feito]** **Repertório 2.0** (Dog Face 1.7/1.8): um **sequenciador**
+  roda filas de passos `{do:"move"|"pose"|"trick"|"bark"|"leds"|
+  "emotion"|"wait"|"say", ...}` no ritmo do loop, com clamps de segurança
+  (12 passos, 3 s por passo, 12 s de fila, atos fora da whitelist são
+  descartados). Da mesma fila saem:
+  * **Truques nativos**: `dance` (coreografia **sorteada** a cada chamada —
+    nunca a mesma dancinha), `spin`, `shake` (patinha), `pushup`,
+    `excited`, `hello` e `pee` (o clássico de 3 patas); posturas novas
+    `beg` e `pee`.
+  * **Latidos de verdade**: 5 WAVs sintetizados (`woof`, `yip`, `growl`,
+    `whine`, `howl`) embutidos no app — gerados por
+    `tools/dog/barks.py` (síntese aditiva stdlib pura, semente fixa);
+    sem o arquivo cai para melodia em `playTone`.
+  * **Emoções**: `love` (corações), `angry` (sobrancelhas em V), `sad`
+    (lágrima), `sleepy` (Zzz), `curious`/`alert` (pupilas) na cara +
+    animações no anel de LED (arco-íris na dança, pulso rosa do amor,
+    alerta piscando).
+  * **Guardas**: bateria <15% recusa truque pesado com ganido + cara
+    triste + "cansado" no controle; cruzou 20% ganido uma vez (histerese
+    de 25%).
+  * **Protocolo**: `{"type":"trick","name":"dance"}` pelo Celer Link
+    responde `{"type":"trick_res","ok":...}`; "hi celer", D-pad, touch pad
+    e stop interrompem a sequência na hora.
+* **[feito]** **Truques ensináveis** (`/local/dogtricks.json`): o dono
+  cadastra sequências com nome no **mesmo schema que a LLM compõe** —
+  `{"Super Truco":[{"do":"bark","kind":"howl"},{"do":"pose","name":"lie",
+  "ms":400}]}` via `celerctl push` ou editor web. Os nomes (normalizados:
+  "Super Truco" → `super_truco`) entram na tool `dog_trick` e no prompt,
+  então **"hi celer, faz o super truco" funciona**. `{"type":"
+  tricks_reload"}` recarrega pelo link; a telemetria lista `tricks`.
+* **[feito]** **Celer Remote 1.5**: grade de truques na tela de controle
+  (a lista vem do robô via `tel.tricks` — robô antigo não mostra) e as
+  **respostas do cachorro** (`{"type":"say"}` do `dog_say`) aparecem como
+  nota por 6 s.
 * **[feito]** **Watchdog de bateria** no deep sleep: o coprocessador
   ULP-RISC-V (`DogUlp.cpp` + `ulp/ulp_main.c`) lê o ADC da bateria
   (ADC1_CH1, GPIO2, divisor 2:1) a cada ~60 s e acorda os núcleos se a
@@ -92,13 +126,30 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   PSRAM quando disponível, em task própria. JS
   `WakeWord.start()/stop()/poll()/level()/running()` (API 20), com a
   mesma permissão `mic` no app.json do `Mic.*`.
-* **[feito]** **Comandos por voz** (Dog Face 1.5.0): "hi celer" abre a
-  janela de escuta (beep de ack + anel de LED), grava 3 s
-  (`Mic.start({ms:3000})`) e envia ao modelo qwen omni (OpenRouter)
-  declarando a tool `dog_command` — o tool_call dispara o gait. Fallback
-  por palavra-chave PT/EN se a chave/modelo falhar. Comandos: senta,
-  deita, levanta, alonga, anda, trás, para (EN: sit, down, up,
-  bow/stretch, walk, back, stop); andar por voz dura 3 s sem keepalive.
+* **[feito]** **Voz 2.0 — a LLM coreografa** (Dog Face 1.8): "hi celer"
+  abre a janela de escuta (beep + anel de LED), grava até 3,5 s e envia o
+  áudio ao qwen omni (OpenRouter) — que agora recebe **8 tools** e não um
+  enum de 8 comandos:
+  * `dog_move(direction, ms)` — "anda um pouquinho pra frente", "vira à
+    esquerda" viram movimento com duração;
+  * `dog_posture(pose)` — posturas incluindo `beg` e `pee`;
+  * `dog_trick(name)` — truques nativos **e os ensináveis**;
+  * `dog_sequence(steps[])` — **coreografia livre**: a IA compõe até 10
+    passos na hora ("dança e depois late feliz" vira uma fila diferente a
+    cada vez);
+  * `dog_bark(kind, times)` — escolhe woof/yip/growl/whine/howl;
+  * `dog_emotion(mood)` — cara + anel de LED;
+  * `dog_say(text)` — **responde perguntas**: "tudo bem?", "qual sua
+    bateria?" → frase no controle pareado + resumo em sete-segmentos no
+    vidro + yip. A telemetria viva (bateria, postura, marcha) vai no
+    system prompt com a persona **Celercão**, então a resposta sai em uma
+    rodada;
+  * `dog_stop` — para tudo.
+  Fallback offline por palavra-chave (modelo sem tool_call/chave) cobre
+  posturas/marchas **e** truques/latidos/emoções: dança, patinha, xixi,
+  gira, flexão, late, uiva, rosna, te amo, bravo... (PT/EN, com as
+  variantes acentuadas do STT). Andar por voz sem duração explícita
+  continua limitado a 3 s.
 * Pilha de voz na API JS: **18** AI, **19** `Mic.*`, **20** function
   calling + `WakeWord.*`.
 
