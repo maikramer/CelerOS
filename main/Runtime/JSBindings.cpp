@@ -1155,6 +1155,14 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     putFns(ctx, kFnsTimers);
 
+    // Modulos JS (API 23): require("nome") carrega <pasta do app>/nome.js
+    // como funcao(module, exports, require) com cache por app-run (heap
+    // stash). Sem gate de permissao: e codigo do proprio app (JsModules.cpp)
+    static const JsFn kFnsModules[] = {
+        {"require", js_require, 1},
+    };
+    putFns(ctx, kFnsModules);
+
     // Storage (API 12): chave-valor NVS PRIVADO do app (namespace =
     // packageName). Sem permissao: e dado do proprio app, nao do sistema.
     duk_push_object(ctx);  // Storage

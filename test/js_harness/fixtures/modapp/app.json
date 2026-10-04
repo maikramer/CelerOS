@@ -1,0 +1,9 @@
+{
+  "name": "Mod App",
+  "packageName": "celeros.modapp",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "fixture de modulos (require)",
+  "api": 23,
+  "permissions": ["fs"]
+}

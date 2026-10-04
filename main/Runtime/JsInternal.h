@@ -23,6 +23,9 @@ extern bool s_frameDirty;
 // vivem no init da fachada; js_appData (JsFs.cpp) le s_appPkg.
 extern uint32_t s_perms;
 extern std::string s_appPkg;
+// Pasta do app em execucao (dirname do main.js; vazia p/ .js avulso):
+// base do require() de modulos (JsModules.cpp). Alimentada no runFile.
+extern std::string s_appDir;
 inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 // Saida limpa de app (F2): erro MARCADO com a propriedade celerExit — o

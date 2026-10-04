@@ -19,6 +19,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 | `JsSystemApps.cpp` | System-app support (API 3+): brightness, PIN, web auth, OTA, WiFi, time settings |
 | `JsGpio.cpp` | `System.gpio`; compiled only with `CONFIG_CELEROS_JS_GPIO` |
 | `JsSensors.cpp` | `Sensors.*` (IMU hooks of the board profile) |
+| `JsModules.cpp` | Global `require` (API 23): loads `<appDir>/<nome>.js` wrapped as `function(module, exports, require)` with a per-run cache on the heap stash; `s_appDir` fed by `CelerKernel::runFile` (empty for bare `.js`) |
 | `JsPhone.cpp` | `Phone.*`; compiled only with `CONFIG_CELEROS_PHONE_LINK` |
 
 ## WHERE TO LOOK
@@ -26,7 +27,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 |------|----------|
 | Add a binding | define `JSBindings::js_x` in the module file, declare it in `JSBindings.h`, add `{"name", js_x, nargs}` to the right `kFnsN[]` table in `init()` |
 | Per-app reset of all binding state | `JSBindings::init(ctx, tft, appTitle, topbarFixed)`, called by CelerKernel on each app launch |
-| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 22) |
+| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 23) |
 | Streaming download | `Net.download` in `JsNet.cpp` (API 6; older firmware truncated bodies at 32KB) |
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 

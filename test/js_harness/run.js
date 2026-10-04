@@ -751,21 +751,46 @@ function makeEnv() {
     return env;
 }
 
+// require() do host (mesma semantica do firmware, main/Runtime/JsModules.cpp):
+// le .js irmao na pasta do app, embrulha como funcao(module, exports,
+// require), cache compartilhado por rodada (ciclo recebe exports parcial).
+// dir=null => "sem pasta de app", como um .js avulso no device.
+function makeRequire(appDir) {
+    var cache = {};
+    function req(name) {
+        if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
+        var base = String(name).length > 3 && String(name).slice(-3) === '.js'
+            ? String(name).slice(0, -3) : String(name);
+        if (!/^[A-Za-z0-9_-]{1,63}$/.test(base)) throw new Error('require: nome de modulo invalido (use [A-Za-z0-9_-])');
+        if (Object.prototype.hasOwnProperty.call(cache, base)) return cache[base];
+        var mod = { exports: {} };
+        cache[base] = mod.exports;   // parcial: ciclo pega o que ja foi exportado
+        var src = fs.readFileSync(path.join(appDir, base + '.js'), 'utf8');
+        var fn = new Function('module', 'exports', 'require', src);
+        fn(mod, mod.exports, req);
+        cache[base] = mod.exports;
+        return mod.exports;
+    }
+    return req;
+}
+
 function runApp(relPath, wire) {
     var src = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
     var env = makeEnv();
     // packageName do app.json ao lado do main.js (FS.appData e Storage por pkg)
+    var appDir = path.dirname(path.join(ROOT, relPath));
     try {
-        var mf = JSON.parse(fs.readFileSync(path.join(path.dirname(path.join(ROOT, relPath)), 'app.json'), 'utf8'));
+        var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
         if (mf && mf.packageName) env.__pkg = mf.packageName;
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
+           makeRequire(appDir));
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
@@ -776,7 +801,7 @@ function runApp(relPath, wire) {
 // Exporta os stubs para outras ferramentas (ex.: tools/app_lint, modo check).
 // Os testes abaixo rodam apenas quando executado direto:
 //   node test/js_harness/run.js
-module.exports = { makeEnv: makeEnv, runApp: runApp };
+module.exports = { makeEnv: makeEnv, runApp: runApp, makeRequire: makeRequire };
 if (require.main !== module) return;
 
 // ------------------------------------------------------------- testes -----
@@ -795,10 +820,11 @@ function joinLog(log) { return log.join('\n'); }
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
     var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
-                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
+                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
                           (env.__prelude || '') + '\n' + src);
     fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
-       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
+       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
+       env.__require || makeRequire(null));
 }
 
 // --- Terminal ---------------------------------------------------------------
@@ -1763,7 +1789,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('conecta no dog', j.indexOf('< sair') >= 0 && j.indexOf('Celer-Dog') >= 0);
+    check('conecta no dog', j.indexOf('conectado') >= 0 && j.indexOf('Celer-Dog') >= 0);
     check('D-pad envia move up', j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
     var moves = j.split('[link] tx {"type":"move","dir":"up"}').length - 1;
     check('segurar repete o move (keepalive)', moves >= 2, moves + ' moves');
@@ -1809,12 +1835,12 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     check('botao WiFi aparece com tel.wifi', j.indexOf('WiFi') >= 0);
     check('pede o scan ao robo', j.indexOf('[link] tx {"type":"wifi_scan"}') >= 0);
-    check('lista as redes do robo', j.indexOf('* CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
+    check('lista as redes do robo', j.indexOf('CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
     check('pede a senha da rede escolhida', j.indexOf('[prompt] senha de CasaNet') >= 0);
     check('senha vai SELADA (nunca pelo send comum)',
           j.indexOf('[link] txs {"type":"wifi","ssid":"CasaNet","pass":"segredo123"}') >= 0 &&
           !/\[link\] tx \{"type":"wifi","/.test(j));
-    check('mostra o IP do robo', j.indexOf('robo online: 192.168.0.77') >= 0, j.slice(-300));
+    check('mostra o IP do robo', j.indexOf('robô online: 192.168.0.77') >= 0, j.slice(-300));
 })();
 
 (function() {
@@ -1896,7 +1922,7 @@ function holdFrames(x, y, n) {
           j.indexOf('dance') >= 0 && j.indexOf('super_truco') >= 0);
     check('toque manda {type:trick} pelo nome', j.indexOf('[link] tx {"type":"trick","name":"dance"}') >= 0);
     check('trick_res vira nota', j.indexOf('dance!') >= 0, j.slice(-300));
-    check('say do cao aparece na tela', j.indexOf('cao: Sim! Bateria 87%') >= 0);
+    check('say do cao aparece na tela', j.indexOf('cão: Sim! Bateria 87%') >= 0);
 })();
 
 (function() {
@@ -1961,7 +1987,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('pede o codigo (tela de pareamento)', j.indexOf('codigo na tela do robo') >= 0);
+    check('pede o codigo (tela de pareamento)', j.indexOf('código na tela do robô') >= 0);
     check('tenta o codigo errado e o certo',
           j.indexOf('[link] verify 000000') >= 0 && j.indexOf('[link] verify 123456') >= 0);
     check('pareado chega ao D-pad', j.indexOf('pareado!') >= 0 &&
@@ -2709,6 +2735,30 @@ function holdFrames(x, y, n) {
     check('frame apos o dialogo e total', frame(function(f) { return f; }) === true);
     check('mixColor 0/100 devolve as pontas',
           env.System.mixColor(0xF800, 0x001F, 0) === 0xF800 && env.System.mixColor(0xF800, 0x001F, 100) === 0x001F);
+})();
+
+// --- Módulos: require() (API 23) --------------------------------------------
+(function() {
+    console.log('Modulos (require):');
+    var r = runApp('test/js_harness/fixtures/modapp/main.js');
+    var txt = joinLog(r.log);
+    check('app de modulos roda sem erro', r.err === null, r.err || '');
+    [
+        'nota: tocando alerta',            // exports.x
+        'dobra: 42',                       // modulo puro
+        'beep: beep p/tocando x',          // modulo que requer modulo
+        'loads: 1', 'loads pos-cache: 1',  // cache: nao recarrega
+        'deep: profundo',                  // troca de module.exports
+        'ciclo: parcial-ok',               // ciclo ve exports parcial
+        'quebrado capturado',              // erro de sintaxe propagado
+        'fantasma capturado',              // modulo inexistente
+    ].forEach(function (want) {
+        check('require: ' + want, txt.indexOf(want) >= 0, txt);
+    });
+    // .js avulso (sem pasta de app): o mesmo erro do device
+    var threw = false;
+    try { makeRequire(null)('x'); } catch (e) { threw = /sem pasta de app/.test(String(e)); }
+    check('require sem pasta de app erro claro', threw);
 })();
 
 // resumo

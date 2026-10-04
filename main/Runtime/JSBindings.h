@@ -63,6 +63,11 @@ private:
     static void timersTick(duk_context *ctx);   // chamado pelo present()
     static void timersResetAll();               // reset por app
 
+    // Modulos JS (API 23): require("nome") carrega <pasta do app>/nome.js
+    // embrulhado como funcao(module, exports, require) — CommonJS enxuto
+    // (JsModules.cpp)
+    static duk_ret_t js_require(duk_context *ctx);
+
     // GPIO Bindings
     static duk_ret_t js_pinMode(duk_context *ctx);
     static duk_ret_t js_digitalWrite(duk_context *ctx);

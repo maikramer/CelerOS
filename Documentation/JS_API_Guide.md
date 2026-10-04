@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 22
+### API Level: 23
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1761,3 +1761,36 @@ thumb:
 
 #### `System.mixColor(a, b, pct)` (API 22)
 - **Returns:** Number — RGB565 blend (`pct` 0 = `a`, 100 = `b`): pressed states, shadows, manual gradients.
+
+## 28. API Level 23 — JS modules: `require`
+
+An app can be split into several flat `.js` files in its folder (the hub
+publishes them all; see the App_Development_Guide). `require` loads the
+module once per run, executes it wrapped as `function(module, exports,
+require)` and returns `module.exports`. Modules may require modules (same
+folder); cycles receive the partial `exports` (CommonJS behavior). No
+permission needed: it is the app's own code.
+
+#### `require(name)` (API 23)
+- **Parameters:** module `name`, `[A-Za-z0-9_-]` (optional `.js` suffix, no path) — resolves to `<app folder>/name.js`.
+- **Returns:** the module's `module.exports` (`{}` when it exports nothing).
+- **Errors:** module not found, invalid name, syntax/eval error (propagates as a catchable exception), max nesting depth (8).
+
+```js
+// main.js
+var notes = require("notes");        // loads notes.js
+notes.play("alert");
+
+// notes.js
+var audio = require("audio");        // modules require modules
+exports.play = function (n) { audio.beep(n); };
+
+// audio.js
+module.exports = {                   // replacing module.exports also works
+    beep: function (n) { System.playTone([[880, 80]]); }
+};
+```
+
+- Duktape's `line N` in errors matches line N of the module file.
+- The cache lasts for the app run (reopening reloads from disk).
+- A bare `.js` run from the shell has no app folder: `require` throws.

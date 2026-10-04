@@ -102,6 +102,8 @@ const GLOBAL_SIGS = {
     setInterval: { params: ['callback: () => void', 'ms: number'], ret: 'number' },
     clearTimeout: { params: ['id: number'], ret: 'void' },
     clearInterval: { params: ['id: number'], ret: 'void' },
+    // modulos (API 23): devolve o module.exports do modulo (objeto qualquer)
+    require: { params: ['nome: string'], ret: 'any' },
 };
 
 function fnSignature(objPath, fn, guide) {

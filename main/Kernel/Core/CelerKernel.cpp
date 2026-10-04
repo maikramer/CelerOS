@@ -665,6 +665,17 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     JsDebugger::noteApp(filePath);
     if (JsDebugger::requested()) JsDebugger::attach(ctx);
 
+    // Pasta do app p/ require() de modulos (API 23): so quando o entry e o
+    // main.js de uma pasta de app; .js avulso (shell run) nao ganha modulos
+    {
+        extern std::string s_appDir;  // Runtime/JsInternal.h; define JsModules.cpp
+        const char* slash = strrchr(filePath, '/');
+        if (slash && strcmp(slash + 1, "main.js") == 0)
+            s_appDir.assign(filePath, (size_t)(slash - filePath));
+        else
+            s_appDir.clear();
+    }
+
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
     celer_log_printf("[duk] heap base+API: %u B (livre %u, iram %u)\n",
                      (unsigned)(freeBefore - heap_caps_get_free_size(MALLOC_CAP_8BIT)),

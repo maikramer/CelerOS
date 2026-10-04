@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 22
+### API Level: 23
 ### Nível de API: 13
 ---
 
@@ -2038,3 +2038,36 @@ evita o pisca de redesenhar a tela inteira a cada toque. Regras práticas:
 
 #### `System.mixColor(a, b, pct)` (API 22)
 - **Retorna:** Number — mistura RGB565 (`pct` 0 = `a`, 100 = `b`): estados pressionados, sombras, gradientes manuais.
+
+## 28. Nível de API 23 — Módulos JS: `require`
+
+App pode ser separado em vários `.js` chatos na pasta do app (o hub publica
+todos; ver o App_Development_Guide). `require` carrega o módulo UMA vez por
+execução, executa embrulhado como `function(module, exports, require)` e
+devolve `module.exports`. Módulos podem requerer módulos (mesma pasta);
+ciclos recebem `exports` parcial (padrão CommonJS). Sem permissão: é código
+do próprio app.
+
+#### `require(nome)` (API 23)
+- **Parâmetros:** `nome` do módulo `[A-Za-z0-9_-]` (sufixo `.js` opcional, sem caminho) — resolve para `<pasta do app>/nome.js`.
+- **Retorna:** o `module.exports` do módulo (`{}` se o módulo não exportar nada).
+- **Erros:** módulo não encontrado, nome inválido, erro de sintaxe/eval (propaga como exceção — capturável com `try/catch`), profundidade máxima de aninhamento (8).
+
+```js
+// main.js
+var notas = require("notas");        // carrega notas.js
+notas.tocar("alerta");
+
+// notas.js
+var audio = require("audio");        // módulos requerem módulos
+exports.tocar = function (n) { audio.beep(n); };
+
+// audio.js
+module.exports = {                   // trocar module.exports inteiro também vale
+    beep: function (n) { System.playTone([[880, 80]]); }
+};
+```
+
+- O `line N` dos erros do Duktape bate com a linha N do arquivo do módulo.
+- O cache vale por execução do app (reabrir recarrega do disco).
+- `.js` avulso rodado pelo shell não tem pasta de app: `require` devolve erro.

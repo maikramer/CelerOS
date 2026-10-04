@@ -39,6 +39,7 @@ set(CELEROS_SRCS
     "Runtime/JsKeypad.cpp"
     "Runtime/JsSystemApps.cpp"
     "Runtime/JsTimers.cpp"
+    "Runtime/JsModules.cpp"
     "Runtime/JsStorage.cpp"
     "Runtime/JsSensors.cpp"
     "Settings/TouchCalibrator.cpp"
@@ -241,7 +242,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.5.0"
-    CELEROS_API_LEVEL=22
+    CELEROS_API_LEVEL=23
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig
