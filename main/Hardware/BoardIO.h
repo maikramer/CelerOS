@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "driver/i2s_std.h"  // i2s_chan_handle_t do speakerChannel abaixo
+
 // ============================================================================
 // BoardIO — perifericos simples da placa alem da tela: LED RGB de status,
 // sensor de luz (LDR), alto-falante e reles. Os pinos vem do BoardProfile
@@ -20,7 +22,7 @@
 //           placa com buzzer LEDC (ESP32: o backlight fica na alta
 //           velocidade). Ver servoWrite/servoTimer.
 // A SmartDisplay nao usa LEDC para som: o amplificador NS4168 e digital,
-// alimentado por I2S (canal alocado sob demanda durante o tom).
+// alimentado por I2S (canal TX persistente — ver speakerChannel).
 // ============================================================================
 namespace BoardIO {
 
@@ -114,6 +116,28 @@ bool micRecActive();
 // mic e os devolveu soltos no GPIO matrix — o proximo uso recria o I2S1 para
 // re-rotear (placas com codec compartilham os clocks entre os dois canais).
 void micPinsDirty();
+// Canal TX do alto-falante (I2S0) ja HABILITADO na taxa pedida, para o
+// toneI2s/AudioPlayer. Em placa SEM codec (cao/SmartDisplay, amp sem pino de
+// enable) o canal e PERSISTENTE: nasce no primeiro som e nunca e apagado —
+// entre sons o auto_clear mantem o stream de silencio e os clocks correndo,
+// que e o unico repouso comprovadamente frio para o classe D dessas placas.
+// Apagar o canal a cada som (i2s_del_channel) congela bclk/ws/dout no ultimo
+// nivel e deixa o amp sem clock: nessa condicao a bobina do cao cozinhava
+// (bancada 2026-10-03, coletor de amostras do wake word — bips de 70 ms
+// intercalados com idle, alto-falante superaquecendo). Placa COM codec
+// devolve nullptr: la os clocks sao emprestados do I2S1 do mic e o som
+// continua criando/destruindo o canal por uso.
+i2s_chan_handle_t speakerChannel(int sampleRateHz);
+// Desfaz o canal persistente (ritual do deep sleep): estaciona os pinos em
+// nivel baixo e devolve a RAM dos descritores DMA. Em placa sem I2S ou com
+// codec e um no-op.
+void speakerChannelDown();
+// Pinos do alto-falante (I2S0) em nivel BAIXO: usado no teardown do caminho
+// com codec (o watch, cujo PA desce e o codec dorme entre sons) e no deep
+// sleep. Os clocks so estacionam onde nao sao compartilhados com o mic
+// (placas com codec); em placa sem codec os pinos NUNCA estacionam — o canal
+// persistente mantem o amp alimentado de silencio (ver speakerChannel).
+void speakerPinsPark();
 // RMS 0..100 do ultimo chunk (mesma escala do micLevel); -1 = nao gravando
 int micRecLevel();
 // Descarta a gravacao em curso (exit do app inclusive)

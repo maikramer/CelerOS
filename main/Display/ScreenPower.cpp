@@ -379,6 +379,9 @@ void deepSleepNow() {
     // Ritual da placa: passos no NVS, IMU fora, perifericos da board
     if (bp.sleepPrep) bp.sleepPrep();
 
+    // Canal TX do amp (placa sem codec): dorme com os pinos em nivel baixo
+    BoardIO::speakerChannelDown();
+
     // Radio fora (desconecta limpo; ao acordar e reboot, tudo re-sobe)
     esp_wifi_stop();
 

@@ -94,33 +94,45 @@ WavError playWav(const char* path) {
         return WavError::BadHeader;
     }
 
-    i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (mesma regra do
-    // toneI2s — NUM_AUTO podia roubar o canal RX dele)
-    chanCfg.auto_clear = true;
-    // DMA enxuto (4 descritores ~3,8 KB internos em vez dos 6 default):
-    // com a RAM interna apertada (sdkconfig regenerado + API 17) o default
-    // falhava em "allocate DMA buffer failed" e TODO playWav vinha false
-    // (bancada 2026-10-02). 4 descritores bastam para o stream de 16 kHz.
-    chanCfg.dma_desc_num = 4;
+    // Sem codec o canal e PERSISTENTE (BoardIO::speakerChannel): o amp dessas
+    // placas nao tem pino de enable e so descansa frio recebendo silencio com
+    // os clocks correndo — apaga-lo por som deixou a bobina do cao cozinhando
+    // (bancada 2026-10-03). Com codec, o canal nasce por som e morre no fim
+    // (clocks emprestados do I2S1 do mic + micPinsDirty no teardown).
+    const bool hasCodec = bp.audioCodecWake != nullptr;
     i2s_chan_handle_t tx = nullptr;
-    if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) { fclose(f); return WavError::NoAudio; }
+    bool txKeep = false;  // canal persistente: fica ligado no silencio no fim
+    if (hasCodec) {
+        i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (mesma regra do
+        // toneI2s — NUM_AUTO podia roubar o canal RX dele)
+        chanCfg.auto_clear = true;
+        // DMA enxuto (4 descritores ~3,8 KB internos em vez dos 6 default):
+        // com a RAM interna apertada (sdkconfig regenerado + API 17) o default
+        // falhava em "allocate DMA buffer failed" e TODO playWav vinha false
+        // (bancada 2026-10-02). 4 descritores bastam para o stream de 16 kHz.
+        chanCfg.dma_desc_num = 4;
+        if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) { fclose(f); return WavError::NoAudio; }
 
-    i2s_std_config_t stdCfg = {};
-    stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(wi.sampleRate);
-    stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    stdCfg.gpio_cfg.mclk = p.mclk >= 0 ? (gpio_num_t)p.mclk : I2S_GPIO_UNUSED;
-    stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
-    stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
-    stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
-    stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
-    if (i2s_channel_init_std_mode(tx, &stdCfg) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
-        i2s_del_channel(tx);
-        fclose(f);
-        return WavError::NoAudio;
+        i2s_std_config_t stdCfg = {};
+        stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(wi.sampleRate);
+        stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+        stdCfg.gpio_cfg.mclk = p.mclk >= 0 ? (gpio_num_t)p.mclk : I2S_GPIO_UNUSED;
+        stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
+        stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
+        stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
+        stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
+        if (i2s_channel_init_std_mode(tx, &stdCfg) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
+            i2s_del_channel(tx);
+            fclose(f);
+            return WavError::NoAudio;
+        }
+    } else {
+        tx = BoardIO::speakerChannel((int)wi.sampleRate);
+        if (tx == nullptr) { fclose(f); return WavError::NoAudio; }
+        txKeep = true;
     }
 
-    const bool hasCodec = bp.audioCodecWake != nullptr;
     if (hasCodec) bp.audioCodecWake();
     if (bp.audioPaPin >= 0) {
         pinMode(bp.audioPaPin, OUTPUT);
@@ -159,8 +171,11 @@ WavError playWav(const char* path) {
 
     if (bp.audioPaPin >= 0) digitalWrite(bp.audioPaPin, LOW);
     if (hasCodec) bp.audioCodecSleep();
-    i2s_channel_disable(tx);
-    i2s_del_channel(tx);
+    if (!txKeep) {  // persistente: auto_clear segue mandando silencio
+        i2s_channel_disable(tx);
+        i2s_del_channel(tx);
+        BoardIO::speakerPinsPark();
+    }
     if (hasCodec) BoardIO::micPinsDirty();  // pins do I2S1 voltam mortos
     fclose(f);
     return WavError::None;

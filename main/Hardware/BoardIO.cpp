@@ -132,27 +132,38 @@ bool toneI2s(int freqHz, int ms) {
     // tom segue normal.
     if (hasCodec && micRecActive()) return false;
 
-    i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (BoardIO::micLevel
-    // mantem um canal RX persistente la — NUM_AUTO podia rouba-lo).
-    chanCfg.auto_clear = true;  // DMA manda silencio apos o ultimo bloco
-    // DMA enxuto: idem AudioPlayer — o default de 6 descritores falha em
-    // "allocate DMA buffer failed" com a RAM interna apertada (bancada)
-    chanCfg.dma_desc_num = 4;
+    // Sem codec o canal e PERSISTENTE (speakerChannel): o amp dessas placas
+    // nao tem pino de enable e so descansa frio recebendo silencio com os
+    // clocks correndo. Com codec, o canal nasce por som e morre no fim
+    // (clocks emprestados do I2S1 do mic + micPinsDirty no teardown).
     i2s_chan_handle_t tx = nullptr;
-    if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) return false;
+    bool txKeep = false;  // canal persistente: fica ligado no silencio no fim
+    if (hasCodec) {
+        i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (BoardIO::micLevel
+        // mantem um canal RX persistente la — NUM_AUTO podia rouba-lo).
+        chanCfg.auto_clear = true;  // DMA manda silencio apos o ultimo bloco
+        // DMA enxuto: idem AudioPlayer — o default de 6 descritores falha em
+        // "allocate DMA buffer failed" com a RAM interna apertada (bancada)
+        chanCfg.dma_desc_num = 4;
+        if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) return false;
 
-    i2s_std_config_t stdCfg = {};
-    stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
-    stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    stdCfg.gpio_cfg.mclk = p.mclk >= 0 ? (gpio_num_t)p.mclk : I2S_GPIO_UNUSED;  // ES8311: 256x fs
-    stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
-    stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
-    stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
-    stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
-    if (i2s_channel_init_std_mode(tx, &stdCfg) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
-        i2s_del_channel(tx);
-        return false;
+        i2s_std_config_t stdCfg = {};
+        stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
+        stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+        stdCfg.gpio_cfg.mclk = p.mclk >= 0 ? (gpio_num_t)p.mclk : I2S_GPIO_UNUSED;  // ES8311: 256x fs
+        stdCfg.gpio_cfg.bclk = (gpio_num_t)p.bclk;
+        stdCfg.gpio_cfg.ws = (gpio_num_t)p.lrc;
+        stdCfg.gpio_cfg.dout = (gpio_num_t)p.dout;
+        stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
+        if (i2s_channel_init_std_mode(tx, &stdCfg) != ESP_OK || i2s_channel_enable(tx) != ESP_OK) {
+            i2s_del_channel(tx);
+            return false;
+        }
+    } else {
+        tx = speakerChannel((int)kSampleRate);
+        if (tx == nullptr) return false;
+        txKeep = true;
     }
 
     // Codec no I2C (ES8311): acorda, PA sobe, toca, PA desce, dorme
@@ -196,8 +207,10 @@ bool toneI2s(int freqHz, int ms) {
     }
     if (bp.audioPaPin >= 0) digitalWrite(bp.audioPaPin, LOW);
     if (hasCodec) bp.audioCodecSleep();
+    if (txKeep) return true;  // persistente: auto_clear segue mandando silencio
     i2s_channel_disable(tx);
     i2s_del_channel(tx);
+    speakerPinsPark();
     if (hasCodec) micPinsDirty();  // pins do I2S1 voltam mortos
     return true;
 }
@@ -758,6 +771,100 @@ void micRecTask(void*) {
 }  // namespace
 
 void micPinsDirty() { s_micPinsDirty = true; }
+
+// ---- alto-falante: canal TX persistente das placas sem codec ---------------
+//
+// O amp classe D do cao (e o NS4168 da SmartDisplay) nao tem pino de enable:
+// ele fica interpretando o I2S0 para sempre. Apagar o canal a cada som congela
+// bclk/ws/dout no ultimo nivel (o i2s_del_channel nao devolve os pinos) e o
+// chip passa a viver SEM clock — nessa condicao a saida nao e silencio e a
+// bobina cozinha devagar (bancada 2026-10-03: o coletor de amostras do wake
+// word, bips de 70 ms intercalados com idle, deixou o alto-falante do cao
+// queimando de morno; o mesmo hardware nunca esquentou com o firmware do
+// fornecedor, que mantem o canal habilitado mandando zeros). O canal aqui
+// nasce no PRIMEIRO som (o heap apertado do boot do cao nao paga os ~3,8 KB
+// dos descritores DMA por antecipacao), reconfigura a taxa quando ela muda e
+// nao morre mais: entre sons o auto_clear mantem clocks + silencio, que e o
+// unico repouso comprovadamente frio. Placas com codec (watch) nao passam
+// por aqui: os clocks sao emprestados do I2S1 do mic e o canal segue
+// nascendo/morrendo por som, com o PA descido e o codec dormindo no meio.
+namespace {
+i2s_chan_handle_t s_spk = nullptr;  // canal TX persistente (sem codec)
+int s_spkRate = 0;                  // taxa atual do canal (0 = ainda nao usado)
+bool s_spkOn = false;               // canal habilitado (reconfig exige desabilitar)
+}  // namespace
+
+i2s_chan_handle_t speakerChannel(int sampleRateHz) {
+    const BoardProfile& bp = Board::profile();
+    if (bp.audioCodecWake != nullptr || bp.i2s.dout < 0) return nullptr;
+    if (s_spk != nullptr && s_spkRate != sampleRateHz) {
+        // taxa nova (ex.: tom 44,1 kHz -> WAV 16 kHz): reconfigura o clock
+        if (s_spkOn) {
+            i2s_channel_disable(s_spk);  // reconfig so vale canal desabilitado
+            s_spkOn = false;
+        }
+        i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG((uint32_t)sampleRateHz);
+        if (i2s_channel_reconfig_std_clock(s_spk, &clk) == ESP_OK) {
+            s_spkRate = sampleRateHz;
+        } else {  // taxa nao pegou: recria o canal inteiro
+            i2s_del_channel(s_spk);
+            s_spk = nullptr;
+            s_spkRate = 0;
+        }
+    }
+    if (s_spk == nullptr) {
+        i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+        // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (mesma regra do
+        // toneI2s/gravador)
+        chanCfg.auto_clear = true;  // silencio entre sons: o repouso do amp
+        // DMA enxuto (4 descritores ~3,8 KB internos em vez dos 6 default):
+        // com a RAM interna apertada o default falhava em "allocate DMA
+        // buffer failed" (bancada) — e agora a alocacao e vitalicia
+        chanCfg.dma_desc_num = 4;
+        if (i2s_new_channel(&chanCfg, &s_spk, nullptr) != ESP_OK) {
+            s_spk = nullptr;
+            return nullptr;
+        }
+        i2s_std_config_t stdCfg = {};
+        stdCfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG((uint32_t)sampleRateHz);
+        stdCfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+        stdCfg.gpio_cfg.mclk = bp.i2s.mclk >= 0 ? (gpio_num_t)bp.i2s.mclk : I2S_GPIO_UNUSED;
+        stdCfg.gpio_cfg.bclk = (gpio_num_t)bp.i2s.bclk;
+        stdCfg.gpio_cfg.ws = (gpio_num_t)bp.i2s.lrc;
+        stdCfg.gpio_cfg.dout = (gpio_num_t)bp.i2s.dout;
+        stdCfg.gpio_cfg.din = I2S_GPIO_UNUSED;
+        if (i2s_channel_init_std_mode(s_spk, &stdCfg) != ESP_OK) {
+            i2s_del_channel(s_spk);
+            s_spk = nullptr;
+            return nullptr;
+        }
+        s_spkRate = sampleRateHz;
+    }
+    if (!s_spkOn && i2s_channel_enable(s_spk) == ESP_OK) s_spkOn = true;
+    return s_spkOn ? s_spk : nullptr;
+}
+
+void speakerChannelDown() {
+    if (s_spk == nullptr) return;
+    if (s_spkOn) i2s_channel_disable(s_spk);
+    i2s_del_channel(s_spk);
+    s_spk = nullptr;
+    s_spkRate = 0;
+    s_spkOn = false;
+    speakerPinsPark();  // dormindo: pinos em nivel definido, amp sem input solto
+}
+
+void speakerPinsPark() {
+    const BoardProfile& bp = Board::profile();
+    const bool hasCodec = bp.audioCodecWake != nullptr;
+    const int pins[3] = {bp.i2s.dout, hasCodec ? -1 : bp.i2s.bclk, hasCodec ? -1 : bp.i2s.lrc};
+    for (int pin : pins) {
+        if (pin < 0) continue;
+        gpio_reset_pin((gpio_num_t)pin);
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)pin, 0);
+    }
+}
 
 bool micEnsureChannel() { return micInit(); }
 

@@ -500,6 +500,7 @@ duk_ret_t JSBindings::js_deepSleep(duk_context *ctx) {
     const BoardProfile& bp = Board::profile();
     if (bp.screenSleep != nullptr) bp.screenSleep();
     if (bp.sleepPrep != nullptr) bp.sleepPrep();
+    BoardIO::speakerChannelDown();  // canal TX do amp: dorme com pinos em nivel baixo
     esp_wifi_stop();
     if (bp.ulpArm != nullptr) bp.ulpArm();
     if (duk_is_number(ctx, 1)) {
