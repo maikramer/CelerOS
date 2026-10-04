@@ -789,8 +789,14 @@ function lintAppJson(dir, manifest) {
   try {
     const st = fs.statSync(path.join(dir, entry));
     const kb = st.size / 1024;
-    if (kb > MAX_MAIN_JS / 1024) d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (MAX_MAIN_JS / 1024) + 'KB');
-    else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+    // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
+    // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
+    // publicacao), entao o teto do hub vira aviso, nao erro.
+    const boardApp = dir.split(path.sep).indexOf('boards') >= 0;
+    if (kb > MAX_MAIN_JS / 1024) {
+      if (boardApp) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima do teto do hub (' + (MAX_MAIN_JS / 1024) + 'KB) — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica');
+      else d('erro', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: o hub recusa acima de ' + (MAX_MAIN_JS / 1024) + 'KB');
+    } else if (kb > STREAM_SAFE_MAIN_JS / 1024 && (typeof app.api !== 'number' || app.api < 6)) d('aviso', 'appjson', entry + ' tem ' + kb.toFixed(1) + 'KB: acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
   } catch (e) {
     d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
   }
