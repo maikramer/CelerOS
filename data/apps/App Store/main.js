@@ -278,7 +278,8 @@ function entryToItem(pkg, e) {
         size: e.size || 0,
         md5: e.md5 || "",
         published: e.published_at || "",
-        req: e.requires || []
+        req: e.requires || [],
+        files: e.files || null
     };
 }
 
@@ -293,6 +294,7 @@ function fillItemFromMeta(it) {
     it.api = m.api || 1;
     it.cat = m.category || "Apps";
     it.req = m.requires || it.req || [];
+    it.files = m.files || it.files || null;
     return it;
 }
 
@@ -781,11 +783,31 @@ function screenWifi() {
 }
 
 // ---- instalacao (logica) ---------------------------------------------------
-// Update in-place: main.js novo entra como <pkg>/main.js.new (staging de um
-// arquivo dentro do proprio pacote), MD5 do catalogo conferido e rename
-// atomico por cima do antigo; app.json e icon.png vem depois. A pasta alvo e
-// a que o launcher executa (resolveInstalledDir) e duplicatas sombreadas do
-// mesmo pkg sao removidas no fim. Falha no meio nao quebra a versao ativa.
+// Update in-place: cada arquivo do pacote entra como <pkg>/<nome>.new
+// (staging dentro do proprio pacote), MD5 do catalogo conferido POR ARQUIVO
+// e o rename em LOTE so depois de 100% dos downloads ok — falha no meio
+// apaga os .new e a versao ativa continua a antiga. O pacote pode ter
+// modulos .js e assets (campo files do catalogo, hub 0.5.0); no fim,
+// arquivos que sairam do pacote sao removidos (update sem o asset nao deixa
+// orfao). A pasta alvo e a que o launcher executa (resolveInstalledDir) e
+// duplicatas sombreadas do mesmo pkg sao removidas no fim.
+function pkgFiles(it) {
+    // tudo que vem do hub: main.js + extras do files; icon.png tem tratamento
+    // proprio (nao-fatal) e fica fora. Sem files (catalogo antigo) = so main.
+    var out = [{ name: "main.js", url: it.appUrl, md5: it.md5 }];
+    var base = "";
+    if (it.appUrl) base = it.appUrl.substring(0, it.appUrl.lastIndexOf("/") + 1);
+    for (var n in (it.files || {})) {
+        if (n === "icon.png" || n === "main.js" || n === "app.json") continue;
+        out.push({ name: n, url: base + n, md5: (it.files[n] || {}).md5 || "" });
+    }
+    return out;
+}
+function pkgTotal(it) {
+    var t = it.size || 0;
+    for (var n in (it.files || {})) t += (it.files[n] || {}).size || 0;
+    return t;
+}
 function installApp() {
     var it = selIt;
     if (it && stateInfo(it).code === "hw") {
@@ -802,12 +824,11 @@ function installApp() {
     var dir = resolveInstalledDir(it.pkg);
     if (!dir) dir = (installOnSd() ? "/sd/apps" : "/local/apps") + "/" + it.pkg;
     var root = dirName(dir);
-    var tmp = dir + "/main.js.new";
 
     if (!Net.isConnected()) {
         fail = "Sem conexão WiFi";
     } else {
-        var need = (it.size || 0) + 16384;
+        var need = pkgTotal(it) + 16384;
         var free = 0;
         try { free = FS.getFreeSpace(root); } catch (e) { free = 0; }
         if (free > 0 && free < need) fail = "Sem espaço no disco";
@@ -824,30 +845,46 @@ function installApp() {
     if (!fail && !FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
     if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
 
+    var staged = [];
     if (!fail) {
-        drawDownload(it.name, "main.js");  // chrome+barra uma vez (era por KB)
-        System.delay(30);
-        var okDL = false;
-        try {
-            okDL = Net.download(it.appUrl, tmp, function (got, total) {
-                drawProgress(got, total);  // delta interno decide se desenha
-            });
-        } catch (e) { okDL = false; }
-        if (!okDL) fail = "Erro ao baixar main.js";
-    }
-
-    if (!fail && it.md5) {
-        var md = "";
-        try { md = FS.getFileMD5(tmp); } catch (e2) { md = ""; }
-        if (md !== it.md5) {
-            FS.deleteFile(tmp);
-            fail = "Verificação falhou (md5)";
+        var files = pkgFiles(it);
+        for (var fi = 0; fi < files.length && !fail; fi++) {
+            var fe = files[fi];
+            var ftmp = dir + "/" + fe.name + ".new";
+            drawDownload(it.name, fe.name);  // chrome+barra uma vez por arquivo
+            System.delay(30);
+            var okDL = false;
+            try {
+                okDL = Net.download(fe.url, ftmp, function (got, total) {
+                    drawProgress(got, total);  // delta interno decide se desenha
+                });
+            } catch (e) { okDL = false; }
+            if (!okDL) { fail = "Erro ao baixar " + fe.name; break; }
+            if (fe.md5) {
+                var md = "";
+                try { md = FS.getFileMD5(ftmp); } catch (e2) { md = ""; }
+                if (md !== fe.md5) {
+                    try { FS.deleteFile(ftmp); } catch (e9) {}
+                    fail = "Verificação falhou (md5)";
+                    break;
+                }
+            }
+            staged.push({ tmp: ftmp, dst: dir + "/" + fe.name });
+        }
+        if (fail) {
+            // nada de meia versao: .new fora e a ativa segue sendo a antiga
+            for (var si = 0; si < staged.length; si++) {
+                try { FS.deleteFile(staged[si].tmp); } catch (e3) {}
+            }
+            try { FS.deleteFile(dir + "/main.js.new"); } catch (e4) {}
         }
     }
 
-    if (!fail && !FS.renameFile(tmp, dir + "/main.js")) {
-        FS.deleteFile(tmp);
-        fail = "Erro ao gravar main.js";
+    if (!fail) {
+        for (var ri = 0; ri < staged.length && !fail; ri++) {
+            if (!FS.renameFile(staged[ri].tmp, staged[ri].dst))
+                fail = "Erro ao gravar " + baseName(staged[ri].dst);
+        }
     }
     if (!fail && json && !FS.writeTextFile(dir + "/app.json", json)) {
         fail = "Erro ao gravar app.json";
@@ -858,15 +895,27 @@ function installApp() {
             drawDownload(it.name, "icon.png", false);
             System.delay(30);
             var iconOk = false;
-            try { iconOk = Net.download(it.icon, iconTmp); } catch (e3) { iconOk = false; }
+            try { iconOk = Net.download(it.icon, iconTmp); } catch (e5) { iconOk = false; }
             if (iconOk && FS.renameFile(iconTmp, dir + "/icon.png")) {
                 // icone novo no lugar; o rescan revalida o cache
             } else {
-                try { FS.deleteFile(iconTmp); } catch (e4) {}
+                try { FS.deleteFile(iconTmp); } catch (e6) {}
             }
         } else if (FS.exists(dir + "/icon.png")) {
             FS.deleteFile(dir + "/icon.png");  // versao nova sem icone
         }
+        // orfaos: a pasta e espelho do pacote — update que removeu um
+        // modulo/asset (ou .new de tentativa antiga) nao deixa lixo
+        try {
+            var keep = { "app.json": 1, "main.js": 1, "icon.png": 1 };
+            for (var fn in (it.files || {})) keep[fn] = 1;
+            var listing = FS.listDir(dir) || [];
+            for (var li = 0; li < listing.length; li++) {
+                var p = listing[li];
+                if (FS.isDirectory(p)) continue;
+                if (!keep[baseName(p)]) FS.deleteFile(p);
+            }
+        } catch (e7) {}
     }
 
     if (fail) {
@@ -874,7 +923,7 @@ function installApp() {
         errHint = it.name;
         return "err";
     }
-    try { removeShadowed(it.pkg, dir); } catch (e5) {}
+    try { removeShadowed(it.pkg, dir); } catch (e8) {}
     System.rescanApps();
     refresh();
     if (it.pkg === STORE_PKG) selfUpdated = true;

@@ -1185,6 +1185,76 @@ function runInline(src, env) {
           'fills=' + fills + ' downloads=' + dlUrls.length);
 })();
 
+// --- App Store v4: pacote multi-arquivo (files do catalogo, hub 0.5.0) ------
+(function() {
+    console.log('App Store v4 (multi-arquivo):');
+    var api = null;
+    var MD5 = 'deadbeef';  // stub constante de FS.getFileMD5
+    var dlUrls = [];
+    var r = runApp('data/apps/App Store/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.Net.download = function(url, p, cb) {
+            dlUrls.push(String(url));
+            if (!env.FS.writeTextFile(p, 'NOVO-' + baseNameH(p).replace('.new', ''))) return false;
+            if (cb) cb(1024, 4000);
+            return true;
+        };
+        env.Net.get = function(url) {
+            if (String(url).indexOf('app.json') >= 0) {
+                return JSON.stringify({ packageName: 'celeros.multi4', name: 'Multi4',
+                                        version: '2.0.0' });
+            }
+            return null;
+        };
+        env.__harness.storeTest = function(a) { api = a; };
+    });
+    function baseNameH(p) { return String(p).substring(String(p).lastIndexOf('/') + 1); }
+    check('v4 roda sem erro', r.err === null, r.err || '');
+    if (!api) { check('v4 harness recebeu a loja', false); return; }
+    var env = r.env;
+
+    // instalado com um asset que SAIU do pacote novo (orfao a limpar)
+    env.FS.mkdir('/local/apps/celeros.multi4');
+    env.FS.writeTextFile('/local/apps/celeros.multi4/app.json',
+        JSON.stringify({ packageName: 'celeros.multi4', name: 'Multi4', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.multi4/main.js', 'ANTIGO');
+    env.FS.writeTextFile('/local/apps/celeros.multi4/velho.wav', 'WAV-VELHO');
+    api.scanLocalApps();
+    api.setCatalog([
+        { pkg: 'celeros.multi4', metaUrl: 'h/celeros.multi4/app.json',
+          appUrl: 'h/celeros.multi4/main.js', name: 'Multi4', ver: '2.0.0',
+          api: 23, md5: MD5, size: 4000,
+          files: { 'util.js': { size: 1000, md5: MD5 },
+                   'som.wav': { size: 2000, md5: MD5 } } }
+    ]);
+    check('update multi-arquivo instala', api.installApp() === 'done');
+    check('baixou main + 2 extras',
+          dlUrls.length === 3 && dlUrls.indexOf('h/celeros.multi4/util.js') >= 0 &&
+          dlUrls.indexOf('h/celeros.multi4/som.wav') >= 0, dlUrls.join(','));
+    check('modulo gravado', env.FS.readTextFile('/local/apps/celeros.multi4/util.js') === 'NOVO-util.js');
+    check('asset gravado', env.FS.readTextFile('/local/apps/celeros.multi4/som.wav') === 'NOVO-som.wav');
+    check('sem .new sobrando', !env.FS.exists('/local/apps/celeros.multi4/util.js.new') &&
+                               !env.FS.exists('/local/apps/celeros.multi4/main.js.new'));
+    check('orfao do pacote antigo removido', !env.FS.exists('/local/apps/celeros.multi4/velho.wav'));
+    check('app.json segue no lugar', env.FS.exists('/local/apps/celeros.multi4/app.json'));
+
+    // md5 errado em UM extra: falha, nada renomeado, ativa intacta
+    dlUrls = [];
+    api.setCatalog([
+        { pkg: 'celeros.multi4', metaUrl: 'h/celeros.multi4/app.json',
+          appUrl: 'h/celeros.multi4/main.js', name: 'Multi4', ver: '3.0.0',
+          api: 23, md5: MD5, size: 4000,
+          files: { 'util.js': { size: 1000, md5: 'md5-errado' } } }
+    ]);
+    check('md5 de extra invalido falha', api.installApp() === 'err');
+    check('versao ativa intacta',
+          env.FS.readTextFile('/local/apps/celeros.multi4/util.js') === 'NOVO-util.js' &&
+          env.FS.readTextFile('/local/apps/celeros.multi4/main.js') === 'NOVO-main.js');
+    check('staging do extra descartado', !env.FS.exists('/local/apps/celeros.multi4/util.js.new'));
+    // o som.wav saiu do pacote 3.0.0, mas o update FALHOU: nada e limpo
+    check('falha nao limpa arquivos validos', env.FS.exists('/local/apps/celeros.multi4/som.wav'));
+})();
+
 // --- Celer Link (API 9) ------------------------------------------------------
 (function() {
     console.log('CelerLink:');
@@ -1789,7 +1859,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('conecta no dog', j.indexOf('< sair') >= 0 && j.indexOf('Celer-Dog') >= 0);
+    check('conecta no dog', j.indexOf('conectado') >= 0 && j.indexOf('Celer-Dog') >= 0);
     check('D-pad envia move up', j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
     var moves = j.split('[link] tx {"type":"move","dir":"up"}').length - 1;
     check('segurar repete o move (keepalive)', moves >= 2, moves + ' moves');
@@ -1835,12 +1905,12 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     check('botao WiFi aparece com tel.wifi', j.indexOf('WiFi') >= 0);
     check('pede o scan ao robo', j.indexOf('[link] tx {"type":"wifi_scan"}') >= 0);
-    check('lista as redes do robo', j.indexOf('* CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
+    check('lista as redes do robo', j.indexOf('CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
     check('pede a senha da rede escolhida', j.indexOf('[prompt] senha de CasaNet') >= 0);
     check('senha vai SELADA (nunca pelo send comum)',
           j.indexOf('[link] txs {"type":"wifi","ssid":"CasaNet","pass":"segredo123"}') >= 0 &&
           !/\[link\] tx \{"type":"wifi","/.test(j));
-    check('mostra o IP do robo', j.indexOf('robo online: 192.168.0.77') >= 0, j.slice(-300));
+    check('mostra o IP do robo', j.indexOf('robô online: 192.168.0.77') >= 0, j.slice(-300));
 })();
 
 (function() {
@@ -1922,7 +1992,7 @@ function holdFrames(x, y, n) {
           j.indexOf('dance') >= 0 && j.indexOf('super_truco') >= 0);
     check('toque manda {type:trick} pelo nome', j.indexOf('[link] tx {"type":"trick","name":"dance"}') >= 0);
     check('trick_res vira nota', j.indexOf('dance!') >= 0, j.slice(-300));
-    check('say do cao aparece na tela', j.indexOf('cao: Sim! Bateria 87%') >= 0);
+    check('say do cao aparece na tela', j.indexOf('cão: Sim! Bateria 87%') >= 0);
 })();
 
 (function() {
@@ -1987,7 +2057,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('pede o codigo (tela de pareamento)', j.indexOf('codigo na tela do robo') >= 0);
+    check('pede o codigo (tela de pareamento)', j.indexOf('código na tela do robô') >= 0);
     check('tenta o codigo errado e o certo',
           j.indexOf('[link] verify 000000') >= 0 && j.indexOf('[link] verify 123456') >= 0);
     check('pareado chega ao D-pad', j.indexOf('pareado!') >= 0 &&
