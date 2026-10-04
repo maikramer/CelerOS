@@ -102,7 +102,7 @@ function makeUI(env) {
     }
 
     // ------------------------------------------------------- pintores (Kui)
-    function paintButton(x, y, w, h, label, style, pressed) {
+    function paintButton(x, y, w, h, label, style, pressed, font) {
         const th = T(), Sys = S();
         let fill, tc, stroke = null;
         if (style === 'danger') { fill = pressed ? Sys.mixColor(th.err, 0, 27) : th.err; tc = 0xFFFF; }
@@ -111,7 +111,8 @@ function makeUI(env) {
         Sys.fillRoundRect(x, y, w, h, 8, fill);
         if (stroke !== null) Sys.drawRoundRect(x, y, w, h, 8, stroke);
         bgStack.push(fill);
-        text(ellipsize(label, 2, w - 8), x + (w >> 1), y + (h >> 1), 2, tc, 4);
+        const f = font || 2;
+        text(ellipsize(label, f, w - 8), x + (w >> 1), y + (h >> 1), f, tc, 4);
         bgStack.pop();
     }
 
@@ -340,7 +341,7 @@ function makeUI(env) {
                     text(ellipsize(label, roleFont(role), w - 8), x + (w >> 1), y + (h >> 1), roleFont(role), cText, 4);
                     bgStack.pop();
                 } else {
-                    paintButton(x, y, w, h, label, style, pressed);
+                    paintButton(x, y, w, h, label, style, pressed, roleFont(role));
                 }
                 if (disabled) {
                     const th = T();

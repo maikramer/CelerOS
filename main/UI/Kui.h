@@ -199,7 +199,9 @@ enum ButtonStyle { BtnPrimary, BtnGhost, BtnDanger };
 // Cabecalho (faixa de altura h com marcador de acento + titulo). sub opcional
 // (legenda a direita); back desenha a seta de voltar e desloca o titulo.
 void header(Canvas& c, const Rect& r, const char* title, const char* sub, bool back, bool backPressed);
-void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed);
+// font nullptr = type::body()
+void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed,
+            const lgfx::IFont* font = nullptr);
 void toggle(Canvas& c, const Rect& r, bool on, bool pressed);
 // value 0..100
 void slider(Canvas& c, const Rect& r, int value, bool active);

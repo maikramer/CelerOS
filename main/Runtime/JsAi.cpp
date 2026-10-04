@@ -278,14 +278,18 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "AI: opts.messages deve ser um array");
     }
     duk_pop(ctx);
-    const char* encoded = duk_json_encode(ctx, -1);
-    std::string payload = encoded ? encoded : "{}";
-    duk_pop(ctx);  // opts ja codificado
+    // JSON codificado fica na pilha ate o malloc do slot: sem std::string
+    // intermediaria (o audio base64 do Qwen chega a centenas de KB — eram
+    // tres copias vivas no pico: string do duk, std::string e o malloc)
+    duk_size_t encLen = 0;
+    duk_json_encode(ctx, -1);
+    const char* encoded = duk_get_lstring(ctx, -1, &encLen);
 
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) { duk_push_boolean(ctx, 0); return 1; }
+    if (!aiMuxTake(s)) { duk_pop(ctx); duk_push_boolean(ctx, 0); return 1; }
     if (s.state == 1) {  // requisicao em curso (ou zumbi cancelado)
         xSemaphoreGive(s.mux);
+        duk_pop(ctx);
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -296,7 +300,7 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     aiFreeBody(s);
     s.error[0] = '\0';
     free(s.payload);
-    s.payload = aiDupBuf(payload.data(), payload.size());
+    s.payload = aiDupBuf(encoded ? encoded : "{}", encoded ? encLen : 2);
     free(s.key);
     s.key = aiDupBuf(key.data(), key.size());
     if (s.payload == nullptr || s.key == nullptr) {
@@ -305,7 +309,8 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
         xSemaphoreGive(s.mux);
         duk_error(ctx, DUK_ERR_ERROR, "AI: sem RAM para montar o pedido");
     }
-    s.payloadLen = payload.size();
+    s.payloadLen = encoded ? encLen : 2;
+    duk_pop(ctx);  // JSON copiado para o slot: a string do heap JS pode ir
     s.prov = &prov;
     s.state = 1;
     xSemaphoreGive(s.mux);

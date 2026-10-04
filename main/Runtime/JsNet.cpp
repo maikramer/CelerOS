@@ -92,14 +92,14 @@ static bool netFetch(duk_context *ctx, bool isPost) {
     // Componente Http (esp_http_client): https usa o cert bundle do sistema
     NetBody got;
     bool ok;
-    const char* failWhy = "";
+    char failWhy[64] = "";  // copia: o HttpResponse morre no fim do bloco
     {
         HttpClient http;
         http.setTimeout(10000);
         http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
         HttpResponse resp = isPost ? http.post(url, body, contentType) : http.get(url);
         ok = resp.isOk();
-        if (!ok) failWhy = resp.errorMessage.c_str();  // diagnostico (log)
+        if (!ok) snprintf(failWhy, sizeof(failWhy), "%s", resp.errorMessage.c_str());  // diagnostico (log)
     }  // TLS/cliente liberados antes de copiar o corpo para o heap JS
     if (!ok) {
         celer_log_printf("[net] get falhou: why=%s internal=%u\n",

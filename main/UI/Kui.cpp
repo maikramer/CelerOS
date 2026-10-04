@@ -342,7 +342,8 @@ void header(Canvas& c, const Rect& r, const char* title, const char* sub, bool b
     c.text(c.ellipsize(title, type::title(), right - tx), tx, r.y + h / 2, type::title(), THEME_TEXT, ML_DATUM);
 }
 
-void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed) {
+void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed,
+            const lgfx::IFont* font) {
     uint32_t fillc, textc, stroke = 0;
     int rad = UI::sx(8);
     switch (style) {
@@ -362,7 +363,7 @@ void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool
     }
     c.fillRoundRect(r, rad, fillc);
     if (stroke) c.drawRoundRect(r, rad, stroke);
-    const lgfx::IFont* f = type::body();
+    const lgfx::IFont* f = font ? font : type::body();
     c.text(c.ellipsize(label, f, r.w - UI::sx(8)), r.x + r.w / 2, r.y + r.h / 2, f, textc, MC_DATUM);
 }
 

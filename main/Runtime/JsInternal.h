@@ -86,6 +86,14 @@ inline uint32_t jsc(uint32_t c) {
     uint32_t r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
     return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
 }
+// Fonte numerica do JS (drawString/textWidth/fontHeight): so 1..8 existem
+// no fontdata[] do LovyanGFX (9 = nullptr, >9/negativo = alem do fim do
+// array, e o CelerFont(uint8_t) truncava 300 em 44) — drawString(s, x, y,
+// 9) derrubava o aparelho. Fora da faixa vira a fonte padrao (2).
+inline const lgfx::IFont* jsFont(int f) {
+    if (f < 1 || f > 8) f = 2;
+    return CelerFont(UI::font(f));
+}
 inline int jsx(int v) { return UI::sx(v); }
 inline int appSh(int v) {
     return s_topbarFixed ? (v * (UI::H - UI::topbarH()) / 320) : v * UI::H / 320;

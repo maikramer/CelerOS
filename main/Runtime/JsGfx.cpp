@@ -84,8 +84,10 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
 
     void* ptr = nullptr;
 
-    // First try 16-bit color if we have plenty of contiguous RAM
-    if (ESP.getMaxAllocHeap() > (uint32_t)(pw * ph * 2 + 10000)) {
+    // 16 bits primeiro: com PSRAM o buffer vai para la (o teste de bloco
+    // INTERNO derrubava sprites grandes do S3 para 8 bits a toa); sem PSRAM
+    // so com folga contigua no heap interno
+    if (Board::profile().hasPsram || ESP.getMaxAllocHeap() > (uint32_t)(pw * ph * 2 + 10000)) {
         spr->setColorDepth(16);
         ptr = spr->createSprite(pw, ph);
     }
@@ -355,7 +357,7 @@ duk_ret_t JSBindings::js_drawString(duk_context *ctx) {
     int font = duk_get_int_default(ctx, 3, 2); // default to font 2
     // datum = o do System.setTextDatum (API 12; TL por padrao, resetado a
     // cada app). Antes era forcado TL aqui e o setTextDatum nao fazia nada.
-    gfx()->drawString(str, jsx(x), jsy(y), CelerFont(UI::font(font)));
+    gfx()->drawString(str, jsx(x), jsy(y), jsFont(font));
     return 0;
 }
 
@@ -375,6 +377,8 @@ duk_ret_t JSBindings::js_setTextColor(duk_context *ctx) {
 duk_ret_t JSBindings::js_setTextSize(duk_context *ctx) {
     if (!tftInstance) return 0;
     int size = duk_require_int(ctx, 0);
+    if (size < 1) size = 1;   // 0/negativo: glifo degenerado
+    if (size > 10) size = 10; // enorme: cada glifo varre a tela inteira (lento)
     gfx()->setTextSize(size);
     return 0;
 }

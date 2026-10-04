@@ -174,6 +174,13 @@ static bool s_frameSuppressed = false;  // AOD/off: vidro mostrou outra coisa
 // acende a pastilha — feedback antes de soltar.
 static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot);
 
+// Tira o ultimo CARACTERE (UTF-8): pop_back puro deixava o byte inicial de
+// "a"/"c" com acento sozinho e a faixa desenhava um glifo lixo
+static void popUtf8(std::string& s) {
+    while (!s.empty() && ((uint8_t)s.back() & 0xC0) == 0x80) s.pop_back();  // continuacoes
+    if (!s.empty()) s.pop_back();
+}
+
 // A faixa e desenhada no MESMO alvo do app (quadro/display): o estado de
 // texto (cor, datum, tamanho) e o recorte do app nao podem vazar para ela
 // (setTextSize(2) do app dobrava o titulo; setClip cortava a faixa) nem ela
@@ -192,7 +199,7 @@ static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
         g.fillRect(0, 0, UI::W, h, THEME_WARN);
         std::string label = s_bannerText;
         while (!label.empty() && g.textWidth(label.c_str(), kui::type::caption()) > UI::W - UI::sx(12)) {
-            label.pop_back();
+            popUtf8(label);
         }
         g.setTextDatum(MC_DATUM);
         g.setTextColor(THEME_BG);
@@ -239,7 +246,7 @@ static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
     if (!s_tbButtons.empty()) rightLimit = UI::sx(s_tbButtons.back().x);
     while (!label.empty() &&
            g.textWidth(label.c_str(), kui::type::caption()) > rightLimit - UI::sx(10)) {
-        label.pop_back();
+        popUtf8(label);
     }
     g.setTextDatum(ML_DATUM);
     g.setTextColor(THEME_TEXT);
@@ -618,9 +625,7 @@ duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
     int font = duk_get_int_default(ctx, 1, 2);
     // mede no ALVO do desenho (sprite > quadro > display), onde o
     // setTextSize do app vale — o display cru ignorava o tamanho no S3
-    lgfx::LGFXBase* g = (useSprite && tftSprite) ? (lgfx::LGFXBase*)tftSprite
-                        : s_frame ? (lgfx::LGFXBase*)s_frame : (lgfx::LGFXBase*)tftInstance;
-    int w = g->textWidth(str, CelerFont(UI::font(font)));
+    int w = gfx()->textWidth(str, jsFont(font));
     // devolve no espaco virtual 240x320 (inverso do jsx())
     duk_push_int(ctx, (int)((long)w * 240 / tftInstance->width()));
     return 1;
@@ -631,9 +636,7 @@ duk_ret_t JSBindings::js_fontHeight(duk_context *ctx) {
     // as fontes proporcionais nao tem a altura fixa das numericas antigas)
     if (!tftInstance) { duk_push_int(ctx, 0); return 1; }
     int font = duk_get_int_default(ctx, 0, 2);
-    lgfx::LGFXBase* g = (useSprite && tftSprite) ? (lgfx::LGFXBase*)tftSprite
-                        : s_frame ? (lgfx::LGFXBase*)s_frame : (lgfx::LGFXBase*)tftInstance;
-    int h = g->fontHeight(CelerFont(UI::font(font)));
+    int h = gfx()->fontHeight(jsFont(font));
     duk_push_int(ctx, (int)(h / appScaleY()));
     return 1;
 }
@@ -667,6 +670,9 @@ duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
     const char* name = duk_require_string(ctx, 0);
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
+    // caminho de arquivo: canonico em /local ou /sd (como drawPNG/drawBMP);
+    // antes "/local/../x" ou qualquer ponto do VFS ia direto ao decoder
+    if (name[0] == '/' && !imagePathOk(name)) return 0;
     Icon::draw(gfx(), name, jsx(x), jsy(y));
     return 0;
 }
@@ -739,6 +745,7 @@ static bool removeTree(const std::string& dir) {
         int n = FileSystem::listDirectory(dir.c_str(), entries, 50);
         if (n < 0) n = 0;
         if (n == 0) break;
+        int removed = 0;
         for (int i = 0; i < n; i++) {
             if (!fsWriteAllowed(entries[i].path.c_str())) continue;  // jail: nao e dono
             if (entries[i].isDir) {
@@ -746,8 +753,11 @@ static bool removeTree(const std::string& dir) {
             } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
                 return false;
             }
+            removed++;
         }
-        if (n < 50) break;
+        // re-lista so se este lote removeu algo: entradas negadas pelo jail
+        // voltam iguais e, com 50+, o for(;;) nunca terminava (WDT)
+        if (n < 50 || removed == 0) break;
     }
     return FileSystem::rmdir(dir.c_str());
 }

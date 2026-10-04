@@ -606,7 +606,7 @@ duk_ret_t JSBindings::js_uiButton(duk_context* ctx) {
                 if (pressed) c.drawRoundRect(r, UI::sx(8), THEME_ACCENT);
                 c.text(c.ellipsize(label, f, r.w - UI::sx(8)), r.x + r.w / 2, r.y + r.h / 2, f, customText, MC_DATUM);
             } else {
-                kui::paint::button(c, r, label, style, pressed);
+                kui::paint::button(c, r, label, style, pressed, roleFont(role));
             }
             if (disabled) {
                 // rotulo apagado por cima do ghost (sem estado no pintor)
