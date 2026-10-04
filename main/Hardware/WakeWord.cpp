@@ -44,7 +44,7 @@ constexpr int kStepMs = 10;         // passo entre slices
 constexpr int kSampleRate = 16000;
 
 // ---- deteccao (semantica do ESPHome streaming_model) ----
-constexpr uint8_t kProbCutoff = 190;         // ~0.74 em uint8 (tunavel)
+constexpr uint8_t kProbCutoff = 217;         // ~0.85: 0 falsos/h no ambiente do teste (v2)
 constexpr int kSlidingWindow = 5;            // invokes na janela mobivel
 constexpr int kSlicesAfterDetection = 100;   // ~1 s de refractario
 

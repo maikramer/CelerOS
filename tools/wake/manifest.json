@@ -1,22 +1,25 @@
 {
-  "type": "microWakeWord V1 (stream_state_internal_quant)",
+  "type": "microWakeWord (stream_state_internal_quant) — v2",
   "wake_word": "hi celer",
-  "language": "multi (en libritts_r + pt_BR faber; dono brasileiro)",
+  "language": "multi (en libritts_r/lessac/alan + pt_BR faber/cadu/jeff/edresson + voz real do dono)",
   "author": "CelerOS (treino proprio, tools/wake/)",
   "model": "hi_celer.tflite",
   "model_bytes": 60968,
   "trained_at": "2026-10-03",
   "firmware": {
     "header": "main/Assets/Wake/HiCelerModel.h (gerado por tflite_to_header.py)",
-    "probability_cutoff": 190,
+    "probability_cutoff": 217,
     "sliding_window_size": 5,
     "slices_after_detection": 100,
     "tensor_arena_bytes": 32768
   },
   "gate": {
-    "testing_set": "230 amostras de vozes NUNCA vistas (libritts_r speakers 850+ + leituras pt_BR diferentes)",
-    "false_rejection_rate": 0.0,
-    "ambient_false_accepts_per_hour": 0.0,
-    "note": "teste do proprio treinador (quantizado, streaming); palavra final e a sonda no cao"
+    "real_heldout": "10 'hi celer' + 10 outras falas do dono pelo microfone do cao, fora do treino",
+    "recall_real": 0.9,
+    "false_real": "1/10",
+    "adversarial_synthetic_false": "2-4/100 (cutoff 190-230)",
+    "ambient_faph_at_0.85": 0.0,
+    "v1_baseline": "recall real 0/25; adversariais sinteticos 27% falsos (atalho do TTS)",
+    "note": "eval_device.py reproduz a cadeia do firmware; palavra final e a bancada"
   }
 }

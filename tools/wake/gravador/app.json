@@ -1,0 +1,1 @@
+{ "name": "gravador", "packageName": "celeros.gravador", "version": "1.0.0", "api": 20, "main": "main.js", "author": "bench", "description": "grava amostras do wake word", "permissions": ["mic", "fs"] }
