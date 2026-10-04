@@ -1,5 +1,5 @@
 // Previsao — previsão do tempo via Open-Meteo (API 16)
-// ES5 puro (Duktape). Busca o tempo atual + 4 dias, grava o cache no appData
+// ES5 puro (Duktape), toolkit UI (API 22). Busca o tempo atual + 4 dias, grava o cache no appData
 // e instala o plugin do watchface (appData/watchface.js) na primeira
 // execução — o relógio passa a mostrar a linha do tempo e o toque nela abre
 // este app (System.launchApp, API 16). Sem WiFi, cai para o clima do
@@ -8,8 +8,6 @@
 var T = System.theme();
 var INFO = {};
 try { INFO = System.getInfo() || {}; } catch (e) { INFO = {}; }
-// vidro grande (watch/4"): digito grande na fonte 8; senao a 24 px (4)
-var BIGF = (INFO.screenW || 240) >= 400 ? 8 : 4;
 var HAS_PHONE = typeof Phone !== "undefined" && Phone && typeof Phone.weather === "function";
 
 var DATA = FS.appData();              // "/local/data/celeros.previsao/"
@@ -66,11 +64,6 @@ function wmo(c) {
     return "-";
 }
 
-function ctext(s, y, f, col) {
-    System.setTextColor(col);
-    System.drawString(s, Math.round((240 - System.textWidth(s, f)) / 2), y, f);
-}
-
 // ---- cache -------------------------------------------------------------------
 var d = null;
 var msg = "";
@@ -100,7 +93,7 @@ function velho() {
 function busca() {
     var c = cidade();
     msg = "Atualizando...";
-    draw();
+    frameAvulso();
     var url = "https://api.open-meteo.com/v1/forecast?latitude=" + c.la + "&longitude=" + c.lo +
         "&current=temperature_2m,relative_humidity_2m,weather_code" +
         "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
@@ -122,6 +115,7 @@ function busca() {
         }
         gravaCache();
         msg = "";
+        UI.invalidate();
         return true;
     }
     if (HAS_PHONE) {
@@ -135,11 +129,13 @@ function busca() {
                 };
                 gravaCache();
                 msg = "";
+                UI.invalidate();
                 return true;
             }
         } catch (e2) { }
     }
     msg = "Sem conexao";
+    UI.invalidate();
     return false;
 }
 
@@ -226,48 +222,40 @@ function instalaPlugin() {
 }
 
 // ---- UI -----------------------------------------------------------------------
-var BTN = { upd: { x: 20, y: 276, w: 112, h: 32 }, city: { x: 144, y: 276, w: 76, h: 32 } };
 var view = "main";  // main | cidades
+var LX = 8, LW = 224;
 
-function button(c, label) {
-    var pr = c.pressed;
-    System.fillRoundRect(c.x, c.y, c.w, c.h, 10, pr ? T.raised : T.card);
-    System.setTextColor(pr ? T.accent : T.text);
-    System.drawString(label, c.x + Math.round((c.w - System.textWidth(label, 2)) / 2), c.y + 8, 2);
-}
-
-function drawMain() {
-    System.fillRect(0, 0, 240, 320, T.bg);
+function drawMain(full) {
     var c = cidade();
-    ctext(c ? c.n : "?", 40, 2, T.textDim);
+    UI.text(c ? c.n : "?", 120, 12, { align: "center", color: T.textDim, id: 1 });
     if (!d) {
-        ctext("Sem dados ainda", 120, 2, T.textDim);
-        ctext(msg || "Toque em Atualizar", 152, 1, T.stroke);
+        UI.card(LX, 44, LW, 120);
+        UI.text("Sem dados ainda", 120, 76, { role: "title", align: "center", color: T.textDim });
+        UI.text(msg || "Toque em Atualizar", 120, 112, { role: "caption", align: "center", color: T.textDim });
+        UI.cardEnd();
     } else {
-        ctext(d.t + " C", 76, BIGF, d.t >= 30 ? T.warn : T.text);
-        ctext(d.txt, BIGF === 8 ? 168 : 140, 2, T.accent);
-        if (d.hum >= 0) ctext("umidade " + d.hum + "%", BIGF === 8 ? 204 : 176, 1, T.textDim);
+        // cartao principal: gradiente + temperatura grande
+        // (desenho proprio so no frame total: os textos por cima mudam com a busca,
+        // que marca o proximo frame como total)
+        if (full) System.fillGradient(LX, 40, LW, 124, T.accentD, T.card, 14);
+        UI.text(d.t + " C", 120, 54, { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
+        UI.text(d.txt, 120, 104, { role: "title", align: "center", color: T.accent });
+        if (d.hum >= 0) UI.text("umidade " + d.hum + "%", 120, 136, { role: "caption", align: "center", color: T.textDim });
         // proximos dias
-        var rowsTop = BIGF === 8 ? 216 : 206;
-        var rowStep = BIGF === 8 ? 16 : 20;
+        var rows = [];
         for (var i = 1; i < d.days.length && i < 4; i++) {
             var f = d.days[i];
-            var y = rowsTop + (i - 1) * rowStep;
-            System.setTextColor(T.textDim);
-            System.drawString(diaLabel(f.dt, i), 28, y, 1);
-            var mm = f.tn + "/" + f.tx;
-            System.setTextColor(T.text);
-            System.drawString(mm, 120 - Math.round(System.textWidth(mm, 1) / 2), y, 1);
-            System.setTextColor(T.textDim);
-            System.drawString(f.txt, 212 - System.textWidth(f.txt, 1), y, 1);
+            rows.push({ label: diaLabel(f.dt, i), sub: f.txt, right: f.tn + "° / " + f.tx + "°" });
         }
+        if (rows.length) UI.list("dias", LX, 172, LW, 3 * 30 + 4, rows, { rowH: 30 });
     }
-    if (msg) ctext(msg, 258, 1, msg === "Sem conexao" ? T.err : T.stroke);
-    else if (d && BIGF !== 8) ctext(velho() ? "dados de " + d.date : "de hoje, " + d.hour + "h", 258, 1, T.stroke);
-    BTN.upd.pressed = false;
-    BTN.city.pressed = false;
-    button(BTN.upd, "Atualizar");
-    button(BTN.city, "Cidade");
+    var info = msg || (d ? (velho() ? "dados de " + d.date : "de hoje, " + d.hour + "h") : "");
+    UI.text(info, 120, 268, { role: "caption", align: "center", color: msg === "Sem conexao" ? T.err : T.textDim, id: 2 });
+    if (UI.button("Atualizar", LX, 282, 132, 32)) busca();
+    if (UI.button("Cidade", LX + 140, 282, LW - 140, 32, { style: "ghost" })) {
+        view = "cidades";
+        UI.invalidate();
+    }
 }
 
 function rowsCidades() {
@@ -278,40 +266,22 @@ function rowsCidades() {
 }
 
 function drawCidades() {
-    System.fillRect(0, 0, 240, 320, T.bg);
-    ctext("Cidade", 30, 2, T.textDim);
-    var rows = rowsCidades();
-    for (var i = 0; i < rows.length; i++) {
-        var y = 64 + i * 24;
-        var on = (sel === i) || (sel === -1 && i === rows.length - 1);
-        System.setTextColor(on ? T.accent : T.text);
-        System.drawString((on ? "> " : "") + rows[i], 40, y, 2);
+    if (UI.header("Cidade", { back: true })) {
+        view = "main";
+        UI.invalidate();
+        return;
     }
-    ctext("toque numa cidade para escolher", 296, 1, T.stroke);
-}
-
-function draw() {
-    if (view === "cidades") drawCidades();
-    else drawMain();
-}
-
-function tapMain(x, y) {
-    function in_(r) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
-    if (in_(BTN.upd)) { busca(); return; }
-    if (in_(BTN.city)) { view = "cidades"; draw(); return; }
-}
-
-function tapCidades(y) {
     var rows = rowsCidades();
-    var i = Math.floor((y - 64) / 24);
-    if (!(i >= 0 && i < rows.length)) return;
+    var i = UI.list("cidades", LX, 48, LW, 264, rows, { selected: sel >= 0 ? sel : rows.length - 1 });
+    if (i < 0) return;
     if (i === rows.length - 1) {
         var s = "";
         try { s = System.prompt("Latitude,longitude:", "-23.55,-46.64") || ""; } catch (e) { s = ""; }
-        if (!s) { draw(); return; }
+        UI.invalidate();
+        if (!s) return;
         var ll = s.split(",");
         var la = parseFloat(ll[0]), lo = parseFloat(ll[1] || "0");
-        if (!(isFinite(la) && isFinite(lo))) { msg = "Coordenada invalida"; draw(); return; }
+        if (!(isFinite(la) && isFinite(lo))) { UI.toast("Coordenada inválida"); return; }
         custom = { n: "Custom", la: la, lo: lo };
         sel = -1;
     } else {
@@ -323,25 +293,23 @@ function tapCidades(y) {
     busca();
 }
 
+// frame avulso (antes da busca bloqueante): mostra o "Atualizando..."
+function frameAvulso() {
+    UI.invalidate();
+    UI.begin(T.bg);
+    drawMain(true);
+    UI.end();
+}
+
 // ---- laco -----------------------------------------------------------------------
 instalaPlugin();
 leCache();
 if (!d || velho()) busca();  // cache frio: ja atualiza ao abrir
-draw();
+UI.invalidate();
 
-var ty0 = -1, tlX = -1, tlY = -1, moved = false;
 while (true) {
-    var tp = System.getTouch();
-    if (tp.touched) {
-        if (ty0 < 0) { ty0 = tp.y; tlX = tp.x; tlY = tp.y; moved = false; }
-        if (Math.abs(tp.y - ty0) > 12) moved = true;
-        tlX = tp.x; tlY = tp.y;
-    } else if (ty0 >= 0) {
-        if (!moved) {
-            if (view === "cidades") tapCidades(tlY);
-            else tapMain(tlX, tlY);
-        }
-        ty0 = -1;
-    }
-    System.delay(250);
+    var full = UI.begin(T.bg);
+    if (view === "cidades") drawCidades();
+    else drawMain(full);
+    UI.end(10);
 }

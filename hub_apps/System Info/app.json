@@ -1,12 +1,12 @@
 {
   "name": "System Info",
   "packageName": "celeros.sysinfo",
-  "version": "1.2.1",
-  "api": 3,
+  "version": "1.3.0",
+  "api": 22,
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Painel do aparelho: chip, memoria RAM/PSRAM, armazenamento, rede, bateria e sensores (no watch) com valores ao vivo.",
-  "changelog": "1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem",
+  "changelog": "1.3.0 - cards e barra de RAM com o toolkit UI (API 22); valores ao vivo sem piscar\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem",
   "permissions": ["fs"]
 }

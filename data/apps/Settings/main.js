@@ -1,23 +1,15 @@
 // CelerOS Settings — app de sistema (W8): PIN, Wi-Fi, apps, hora, seguranca,
-// tela, som, relogio, OTA, sobre e reset. Canvas 240x320, tema do OS.
+// tela, som, relogio, OTA, sobre e reset. Canvas 240x320, toolkit UI (API 22):
+// cabecalho/listas/toggles/sliders/dialogos nativos do sistema.
 
 var T = System.theme();
 var INSTALL_SD = "/local/config_install_sd.txt";
 
-// ---- helpers de UI (padrao dos apps de sistema) ---------------------------
+var TOP = 48;          // conteudo abaixo do UI.header (40) + respiro
+var LX = 8, LW = 224;  // coluna das listas e cards
 
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
-}
-function hit(t, x, y, w, h) {
-    return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
-}
-function header(title) {
-    // titulo na faixa do sistema (API 6)
-    if (System.topbarText) System.topbarText(title);
-}
+// ---- helpers ---------------------------------------------------------------
+
 function trimStr(s) {
     return String(s).replace(/^\s+|\s+$/g, "");
 }
@@ -41,63 +33,32 @@ function fmtUptime(ms) {
     if (h > 0) return h + "h " + m + "m";
     return m + "m";
 }
-function trunc(s, maxW, f) {
-    if (System.textWidth(s, f) <= maxW) return s;
-    while (s.length > 1 && System.textWidth(s + "...", f) > maxW) {
-        s = s.substring(0, s.length - 1);
-    }
-    return s + "...";
+// Linha "rotulo ........ valor" dentro de um card
+function infoRow(label, value, y, col) {
+    UI.text(label, LX + 12, y, { role: "caption", color: T.textDim });
+    UI.text(String(value), LX + LW - 12, y, { role: "caption", color: col || T.text, align: "right", w: 140 });
 }
-function wrapLines(s, maxW, f) {
-    var out = [];
-    if (!s) return out;
-    var words = String(s).split(" ");
-    var line = "";
-    for (var i = 0; i < words.length; i++) {
-        var w = words[i];
-        var cand = line === "" ? w : line + " " + w;
-        if (line !== "" && System.textWidth(cand, f) > maxW) {
-            out.push(line);
-            line = w;
-        } else {
-            line = cand;
-        }
-    }
-    if (line !== "") out.push(line);
-    return out;
-}
-// Tela-cheia de aviso rapido (substitui o toast do Kui).
-function note(title, msg, ms) {
-    System.fillScreen(T.bg);
-    header(title);
-    var ls = wrapLines(msg, 208, 1);
-    var y = 150 - (ls.length * 8);
-    for (var i = 0; i < ls.length; i++, y += 16) {
-        ctext(ls[i], 120, y, 1, T.text, T.bg);
-    }
-    System.delay(ms || 900);
+// Linha "rotulo ......... [toggle]" dentro de um card; devolve o novo estado
+function toggleRow(label, y, on) {
+    UI.text(label, LX + 12, y + 4, { w: 150 });
+    return UI.toggle(LX + LW - 56, y, on);
 }
 
-// ---- maquina de estados ----------------------------------------------------
+// ---- estado ----------------------------------------------------------------
 
 var tela = "menu";
-var items = [];        // linhas da tela atual: {l, v, a, i, cur, d}
-var scroll = 0;
-var listBottom = 276;  // limite inferior da lista (apps reserva espaco p/ info)
-var ROW_H = 38, PITCH = 44, TOP = 52;
-
+var rows = [];         // linhas da lista da tela atual: {label, right, sub, enabled, a}
 var appsArr = [];      // apps encontrados em /local/apps e /sd/apps
 var selApp = 0;
 var otaState = "idle"; // idle|checking|nowifi|failed|uptodate|avail|installing|done
 var otaInfo = null;
 var otaErrTitle = "";
 var otaErr = "";
-var otaLines = [];     // bloco rolavel (changelog + guia): {t, h, y}
-var otaLinesH = 0;
-var blLvl = 60;
-var modal = null;      // {t, b, y, f} — confirmacao em 2 botoes
-var pressIdx = -1;     // linha sob o dedo (feedback visual antes do tap)
-var itemsSig = "";     // assinatura das linhas desenhadas (evita redesenho inutil)
+var otaPct = 0;
+var otaBodyH = 0;      // altura do changelog (medida no ultimo desenho)
+var blLvl = 60, blSaved = 60;
+var volLvl = 50, volSaved = 50;
+var lastAuto = 0;
 
 var TZS = [
     ["UTC-12 Baker Is", "UTC12"], ["UTC-11 Midway", "UTC11"],
@@ -124,236 +85,91 @@ function tzLabel(tz) {
     return tz;
 }
 
-// ---- lista generica (linhas h=38, pitch 44, rolagem por arraste) -----------
-
-function listMax() {
-    var n = items.length * PITCH - (listBottom - TOP);
-    return n > 0 ? n : 0;
-}
-function otaRegionH() {
-    // janela 98..202: abaixo ficam o aviso/botao (ou o hint sem firmware)
-    return 104;
-}
-function scrollMax() {
-    if (tela === "update" && otaState === "avail") {
-        var n = otaLinesH - otaRegionH();
-        return n > 0 ? n : 0;
-    }
-    return listMax();
-}
-function clampScroll() {
-    if (scroll < 0) scroll = 0;
-    var m = scrollMax();
-    if (scroll > m) scroll = m;
-}
-function hasScroll() {
-    return scrollMax() > 0;
-}
-function setItems(a) {
-    items = a;
-    scroll = 0;
-}
-function drawRows() {
-    var first = Math.floor(scroll / PITCH) - 1;
-    if (first < 0) first = 0;
-    var y = TOP + first * PITCH - scroll;
-    // linhas parciais nas bordas: recortadas na janela da lista (sem o
-    // recorte elas invadiam o cabecalho ao rolar)
-    var clip = typeof System.setClip === "function";
-    if (clip) System.setClip(0, TOP - 4, 240, listBottom - TOP + 4);
-    for (var i = first; i < items.length; i++, y += PITCH) {
-        if (y >= listBottom) break;
-        if (!clip && y + ROW_H > listBottom) break;
-        if (y < TOP - ROW_H) continue;
-        if (!clip && y < TOP) continue;
-        var it = items[i];
-        var bgc = (i === pressIdx && !it.i && !it.d) ? T.raised : T.card;
-        System.fillRoundRect(8, y, 224, ROW_H, 8, bgc);
-        System.drawRoundRect(8, y, 224, ROW_H, 8, i === pressIdx ? T.accent : T.stroke);
-        if (it.cur) System.fillRect(8, y + 6, 4, ROW_H - 12, T.accent);
-        var labCol = (it.i || it.d) ? T.textDim : (it.cur ? T.accent : T.text);
-        System.setTextColor(labCol, bgc);
-        System.drawString(trunc(it.l, it.v ? 128 : 200, 2), 20, y + 11, 2);
-        if (it.v) {
-            System.setTextColor(it.cur ? T.accent : T.textDim, bgc);
-            System.drawString(it.v, 220 - System.textWidth(it.v, 1), y + 14, 1);
-        }
-    }
-    if (clip) System.clearClip();
-}
-
-function rowsVisible() {
-    return tela === "menu" || tela === "tz" || tela === "security" || tela === "about" ||
-        tela === "apps" || tela === "time" || tela === "watch";
-}
-function rowAt(t) {
-    if (t.y < TOP || t.y >= listBottom) return -1;
-    var idx = Math.floor((t.y - TOP + scroll) / PITCH);
-    if (idx < 0 || idx >= items.length) return -1;
-    var ry = TOP + idx * PITCH - scroll;
-    if (t.y < ry || t.y > ry + ROW_H) return -1;  // no vao entre linhas
-    return idx;
-}
-
 // ---- PIN (nativo desde a 1.3: System.setPin/verifyPin — salt SHA-256 no
 // firmware, substitui o md5 solto em settings_pin.txt) -----------------------
 
-function pinOk(p) {
-    return System.verifyPin(p);
-}
 function validPin(p) {
     return /^[0-9]{4,6}$/.test(p);
 }
 function flowNewPin() {
     var p1 = System.prompt("Novo PIN (4-6 dígitos)", "", {hint: "num", mask: true});
     if (!validPin(p1)) {
-        note("Segurança", "PIN inválido: use 4 a 6 dígitos", 1200);
+        UI.alert("Segurança", "PIN inválido: use 4 a 6 dígitos");
         return false;
     }
     var p2 = System.prompt("Confirmar PIN", "", {hint: "num", mask: true});
     if (p1 !== p2) {
-        note("Segurança", "PINs não conferem", 1200);
+        UI.alert("Segurança", "Os PINs não conferem");
         return false;
     }
     if (!System.setPin(p1)) {
-        note("Segurança", "Falha ao salvar o PIN", 1200);
+        UI.alert("Segurança", "Falha ao salvar o PIN");
         return false;
     }
-    note("Segurança", "PIN salvo", 1000);
+    UI.toast("PIN salvo");
+    return true;
+}
+function askPin(title) {
+    var cur = System.prompt(title, "", {hint: "num", mask: true});
+    if (cur === null || cur === "") return false;
+    if (!System.verifyPin(cur)) {
+        UI.alert("Segurança", "PIN incorreto");
+        return false;
+    }
     return true;
 }
 
 // ---- navegacao -------------------------------------------------------------
 
 function titleNow() {
-    if (tela === "appdetail" && appsArr[selApp]) return trunc(appsArr[selApp].name, 216, 2);
-    if (tela === "manual") return "Ajuste manual";
-    if (tela === "time") return "Hora e fuso";
-    if (tela === "tz") return "Fuso horário";
-    if (tela === "security") return "Segurança";
-    if (tela === "display") return "Tela";
-    if (tela === "som") return "Som";
-    if (tela === "sensors") return "Sensores";
-    if (tela === "update") return "Atualização";
-    if (tela === "about") return "Sobre";
-    if (tela === "wifi") return "Wi-Fi";
-    if (tela === "apps") return "Aplicativos";
-    if (tela === "reset") return "Reset";
-    if (tela === "notif") return "Notificações";
-    if (tela === "watch") return "Relógio";
-    return "Settings";
+    if (tela === "appdetail" && appsArr[selApp]) return appsArr[selApp].name;
+    var map = {
+        time: "Hora e fuso", tz: "Fuso horário", security: "Segurança", display: "Tela",
+        som: "Som", sensors: "Sensores", update: "Atualização", about: "Sobre", wifi: "Wi-Fi",
+        apps: "Aplicativos", reset: "Reset", notif: "Notificações", watch: "Relógio"
+    };
+    return map[tela] || "Ajustes";
 }
-function rebuildItems() {
-    listBottom = 276;
-    if (tela === "menu") setItems(buildMenu());
-    else if (tela === "apps") { listBottom = 248; setItems(buildApps()); }
-    else if (tela === "time") setItems(buildTime());
-    else if (tela === "tz") setItems(buildTz());
-    else if (tela === "security") setItems(buildSec());
-    else if (tela === "about") setItems(buildAbout());
-    else if (tela === "notif") setItems(buildNotif());
-    else if (tela === "watch") setItems(buildWatch());
-    else setItems([]);
+function rebuildRows() {
+    if (tela === "menu") rows = buildMenu();
+    else if (tela === "apps") rows = buildApps();
+    else if (tela === "tz") rows = buildTz();
+    else if (tela === "security") rows = buildSec();
+    else if (tela === "about") rows = buildAbout();
+    else if (tela === "notif") rows = buildNotif();
+    else if (tela === "watch") rows = buildWatch();
+    else if (tela === "time") rows = buildTimeNav();
+    else rows = [];
 }
 function go(s) {
     tela = s;
-    scroll = 0;
     if (s === "display") {
-        blLvl = System.getBrightness();
-        if (blLvl < 5) blLvl = 5;
+        blLvl = blSaved = Math.max(5, System.getBrightness());
     } else if (s === "som") {
-        volLvl = System.getVolume ? System.getVolume() : 50;
+        volLvl = volSaved = System.getVolume ? System.getVolume() : 50;
     } else if (s === "update") {
         otaState = "idle";
         otaInfo = null;
         otaErr = "";
         otaErrTitle = "";
-        otaLines = [];
-        otaLinesH = 0;
+        UI.resetScroll("ota");
     }
-    rebuildItems();
-    drawAll();
+    UI.resetScroll("list:" + s);
+    rebuildRows();
+    UI.invalidate();
 }
-function footerBack() {
+function back() {
     if (tela === "appdetail") go("apps");
     else if (tela === "tz") go("time");
     else if (tela === "menu") System.exitApp();
     else go("menu");
 }
 
-// ---- confirmacao modal (2 botoes) ------------------------------------------
-
-function askConfirm(title, body, yesLabel, fn) {
-    modal = { t: title, b: body, y: yesLabel, f: fn };
-    drawAll();
-}
-function drawModal() {
-    System.fillRoundRect(16, 92, 208, 156, 10, T.raised);
-    System.drawRoundRect(16, 92, 208, 156, 10, T.stroke);
-    System.setTextColor(T.text, T.raised);
-    System.drawString(trunc(modal.t, 188, 2), 26, 104, 2);
-    var ls = wrapLines(modal.b, 184, 1);
-    var y = 130;
-    for (var i = 0; i < ls.length && i < 5; i++, y += 14) {
-        System.setTextColor(T.textDim, T.raised);
-        System.drawString(ls[i], 26, y, 1);
-    }
-    System.fillRoundRect(28, 208, 84, 28, 8, T.card);
-    System.drawRoundRect(28, 208, 84, 28, 8, T.stroke);
-    ctext("Cancelar", 70, 222, 1, T.text, T.card);
-    System.fillRoundRect(128, 208, 84, 28, 8, T.err);
-    ctext(modal.y, 170, 222, 1, T.text, T.err);
-}
-
-// ---- desenho das telas -----------------------------------------------------
-
-function drawAll() {
-    System.fillScreen(T.bg);
-    header(titleNow());
-    drawContent();
-    var doneOta = (tela === "update" && otaState === "done");
-    if (!doneOta) {
-        if (tela !== "menu") {
-            System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
-            System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
-            ctext("< Voltar", 50, 297, 2, T.text, T.raised);
-        }
-        if (tela === "update" && (otaState === "nowifi" || otaState === "failed" ||
-            otaState === "uptodate" || otaState === "avail")) {
-            System.fillRoundRect(140, 282, 92, 30, 8, T.raised);
-            System.drawRoundRect(140, 282, 92, 30, 8, T.stroke);
-            ctext("Verificar", 186, 297, 1, T.text, T.raised);
-        }
-    }
-    if (modal) drawModal();
-}
-
-function drawContent() {
-    if (tela === "menu" || tela === "tz" || tela === "security" ||
-        tela === "about" || tela === "notif" || tela === "watch") {
-        drawRows();
-    } else if (tela === "wifi") {
-        drawWifi();
-    } else if (tela === "apps") {
-        drawRows();
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Interno: " + spaceStr("/local"), 12, 252, 1);
-        System.drawString("SD: " + spaceStr("/sd"), 12, 266, 1);
-    } else if (tela === "appdetail") {
-        drawAppDetail();
-    } else if (tela === "time") {
-        drawRows();
-    } else if (tela === "display") {
-        drawDisplay();
-    } else if (tela === "som") {
-        drawSom();
-    } else if (tela === "sensors") {
-        drawSensors();
-    } else if (tela === "update") {
-        drawUpdate();
-    } else if (tela === "reset") {
-        drawReset();
-    }
+// Lista padrao da tela (ocupa ate `bottom`); devolve a linha tocada ou null
+function listRows(bottom, selected) {
+    var i = UI.list("list:" + tela, LX, TOP, LW, (bottom || 312) - TOP, rows,
+                    { selected: selected === undefined ? -1 : selected });
+    return i >= 0 ? rows[i] : null;
 }
 
 // ---- menu principal --------------------------------------------------------
@@ -362,13 +178,52 @@ function drawContent() {
 function watchSupported() {
     try { return typeof System.batteryInfo === "function" && !!System.getInfo().hasImu; } catch (e) { return false; }
 }
+// Brilho automatico (API 7): so em placa com sensor de luz
+function autoBriSupported() {
+    return typeof System.getAutoBrightness === "function" && System.getAutoBrightness() !== null;
+}
+function notifSupported() {
+    return typeof System.notifications === "function";
+}
+function notifList() {
+    var l = [];
+    try { l = System.notifications() || []; } catch (e) {}
+    return l;
+}
+
+function buildMenu() {
+    var w = System.wifiStatus();
+    var a = [];
+    a.push({ label: "Wi-Fi", right: w.connected ? "Conectado" : "Desligado", a: "wifi" });
+    a.push({ label: "Aplicativos", a: "apps" });
+    a.push({ label: "Hora e fuso", right: System.getTime(), a: "time" });
+    a.push({ label: "Segurança", right: System.pinState() > 0 ? "PIN" : "", a: "security" });
+    a.push({
+        label: "Tela",
+        right: System.backlightSupported()
+            ? System.getBrightness() + "%" + (autoBriSupported() && System.getAutoBrightness() ? " auto" : "")
+            : "",
+        a: "display"
+    });
+    if (typeof System.getVolume === "function") a.push({ label: "Som", right: System.getVolume() + "%", a: "som" });
+    if (typeof Sensors !== "undefined" && Sensors && Sensors.accel) a.push({ label: "Sensores", a: "sensors" });
+    if (watchSupported()) a.push({ label: "Relógio", a: "watch" });
+    a.push({ label: "Atualização", a: "update" });
+    a.push({ label: "Sobre", right: "v" + System.getOSVersion(), a: "about" });
+    if (notifSupported()) a.push({ label: "Notificações", right: String(notifList().length), a: "notif" });
+    a.push({ label: "Reset", a: "reset" });
+    return a;
+}
+
+// ---- Relogio (watch) -------------------------------------------------------
+
 var WOPT = [
     "raise_wake|1|Levantar p/ acordar|1:Sim,0:Não",
     "raise_sens|1|Sensibilidade|0:Baixa,1:Média,2:Alta",
     "glance_sec|5|Olhadinha|3:3 s,5:5 s,8:8 s",
     "aod|1|Sempre ligada|1:Sim,0:Não",
     "screen_off_min|3|Tela apaga em|1:1 min,2:2 min,3:3 min,5:5 min",
-"deep_sleep_min|15|Sono profundo em|5:5,15:15,30:30,0:Nunca",
+    "deep_sleep_min|15|Sono profundo em|5:5,15:15,30:30,0:Nunca",
     "home_idle_s|30|Voltar ao relógio|15:15 s,30:30 s,60:1 min,0:Nunca",
     "step_goal|8000|Meta de passos|5000:5000,8000:8000,10000:10000,12000:12000",
     "wifi_sleep_min|10|WiFi dorme após|5:5 min,10:10 min,30:30 min,0:Nunca",
@@ -383,7 +238,7 @@ function buildWatch() {
     var a = [];
     for (var i = 0; i < WOPT.length; i++) {
         var w = wOpt(i);
-        a.push({ l: w.label, v: w.o[w.k].split(":")[1], a: "w" + i });
+        a.push({ label: w.label, right: w.o[w.k].split(":")[1], a: "w" + i });
     }
     return a;
 }
@@ -392,16 +247,8 @@ function watchTap(act) {
     System.setting(w.key, w.o[(w.k + 1) % w.o.length].split(":")[0]);
 }
 
-// Notificacoes (API 12): historico do System.notify
-function notifSupported() {
-    return typeof System.notifications === "function";
-}
-function notifList() {
-    var l = [];
-    try { l = System.notifications() || []; } catch (e) {}
-    return l;
-}
-function notifCount() { return notifList().length; }
+// ---- Notificacoes (API 12) -------------------------------------------------
+
 function notifWhen(ep) {
     if (!ep) return "";
     var d = new Date(ep * 1000);
@@ -412,38 +259,10 @@ function buildNotif() {
     var a = [];
     var l = notifList();
     for (var i = l.length - 1; i >= 0; i--) {
-        a.push({ l: trunc(l[i].title, 150, 1), v: notifWhen(l[i].epoch), i: 1 });
+        a.push({ label: l[i].title, sub: l[i].msg || "", right: notifWhen(l[i].epoch), enabled: false });
     }
-    if (l.length === 0) a.push({ l: "Nenhuma notificação", i: 1 });
-    a.push({ l: "Limpar notificações", a: "clearnot" });
-    return a;
-}
-
-function buildMenu() {
-    var w = System.wifiStatus();
-    var a = [];
-    a.push({ l: "Wi-Fi", v: w.connected ? "ON" : "OFF", a: "wifi" });
-    a.push({ l: "Aplicativos", a: "apps" });
-    a.push({ l: "Hora e fuso", a: "time" });
-    a.push({ l: "Segurança", v: System.pinState() > 0 ? "PIN" : "--", a: "sec" });
-    a.push({
-        l: "Tela",
-        v: System.backlightSupported()
-            ? System.getBrightness() + "%" + (autoBriSupported() && System.getAutoBrightness() ? " auto" : "")
-            : "--",
-        a: "display"
-    });
-    if (typeof System.getVolume === "function") {
-        a.push({ l: "Som", v: System.getVolume() + "%", a: "som" });
-    }
-    if (typeof Sensors !== "undefined" && Sensors && Sensors.accel) {
-        a.push({ l: "Sensores", a: "sensors" });
-    }
-    if (watchSupported()) a.push({ l: "Relógio", a: "watch" });
-    a.push({ l: "Atualização", a: "ota" });
-    a.push({ l: "Sobre", v: "v" + System.getOSVersion(), a: "about" });
-    if (notifSupported()) a.push({ l: "Notificações", v: String(notifCount()), a: "notif" });
-    a.push({ l: "Reset", a: "reset" });
+    if (l.length === 0) a.push({ label: "Nenhuma notificação", enabled: false });
+    a.push({ label: "Limpar notificações", a: "clearnot" });
     return a;
 }
 
@@ -451,30 +270,20 @@ function buildMenu() {
 
 function drawWifi() {
     var w = System.wifiStatus();
-    System.fillRoundRect(8, 52, 224, 76, 10, T.card);
-    System.drawRoundRect(8, 52, 224, 76, 10, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Estado", 20, 60, 1);
-    System.setTextColor(w.connected ? T.ok : T.warn, T.card);
-    System.drawString(w.connected ? "Conectado" : "Desconectado",
-        220 - System.textWidth(w.connected ? "Conectado" : "Desconectado", 1), 60, 1);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("IP", 20, 80, 2);
-    System.setTextColor(T.accent, T.card);
-    System.drawString(w.connected && w.ip ? w.ip : "--", 52, 80, 2);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Redes salvas", 20, 104, 1);
-    System.setTextColor(T.text, T.card);
-    System.drawString(w.savedNetworks ? "sim" : "nenhuma",
-        220 - System.textWidth(w.savedNetworks ? "sim" : "nenhuma", 1), 104, 1);
+    UI.card(LX, TOP, LW, 92);
+    infoRow("Estado", w.connected ? "Conectado" : "Desconectado", TOP + 12, w.connected ? T.ok : T.warn);
+    UI.text("IP", LX + 12, TOP + 36, { color: T.textDim });
+    UI.text(w.connected && w.ip ? w.ip : "--", LX + LW - 12, TOP + 36, { color: T.accent, align: "right" });
+    infoRow("Redes salvas", w.savedNetworks ? "sim" : "nenhuma", TOP + 66);
+    UI.cardEnd();
 
-    System.fillRoundRect(48, 150, 144, 36, 8, T.accent);
-    ctext("Configurar", 120, 168, 2, T.onAccent, T.accent);
-
-    System.setTextColor(T.textDim, T.bg);
-    System.drawString("Abre o assistente nativo de conexão", 12, 208, 1);
-    System.drawString("(scan + senha + portal). Este app sai", 12, 222, 1);
-    System.drawString("para dar lugar ao assistente.", 12, 236, 1);
+    if (UI.button("Configurar Wi-Fi", LX, TOP + 104, LW, 44)) {
+        // abre a tela NATIVA de Wi-Fi; este app precisa sair na sequencia
+        System.openWifiSetup();
+        System.exitApp();
+    }
+    UI.text("Abre o assistente nativo de conexão (redes, senha e portal). O Settings fecha para dar lugar a ele.",
+            LX + 4, TOP + 160, { role: "caption", color: T.textDim, w: LW - 8, lines: 4 });
 }
 
 // ---- Aplicativos -----------------------------------------------------------
@@ -485,7 +294,7 @@ function installSd() {
 function spaceStr(drive) {
     var tot = FS.getTotalSpace(drive);
     if (!tot || tot <= 0) return "ausente";
-    return fmtBytes(FS.getFreeSpace(drive)) + " livre / " + fmtBytes(tot);
+    return fmtBytes(FS.getFreeSpace(drive)) + " livres de " + fmtBytes(tot);
 }
 function collectApps(dir, out, sd) {
     var list = FS.listDir(dir);
@@ -525,84 +334,94 @@ function scanApps() {
 function buildApps() {
     appsArr = scanApps();
     var a = [];
-    a.push({ l: "Instalar em", v: installSd() ? "SD" : "Interno", a: "dest" });
+    a.push({ label: "Instalar em", right: installSd() ? "Cartão SD" : "Interno", a: "dest" });
     for (var i = 0; i < appsArr.length; i++) {
         var ap = appsArr[i];
-        a.push({ l: ap.name, v: (ap.sd ? "[SD] " : "") + (ap.ver ? "v" + ap.ver : ""), a: "app:" + i });
+        a.push({ label: ap.name, right: (ap.sd ? "SD " : "") + (ap.ver ? "v" + ap.ver : ""), a: "app:" + i });
     }
-    if (appsArr.length === 0) a.push({ l: "Nenhum app instalado", i: 1 });
+    if (appsArr.length === 0) a.push({ label: "Nenhum app instalado", enabled: false });
     return a;
 }
-function infoLine(l, v, y) {
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(l, 20, y, 1);
-    System.setTextColor(T.text, T.card);
-    System.drawString(String(v), 220 - System.textWidth(String(v), 1), y, 1);
+function drawApps() {
+    var r = listRows(270);
+    UI.text("Interno: " + spaceStr("/local"), LX + 4, 278, { role: "caption", color: T.textDim });
+    UI.text("SD: " + spaceStr("/sd"), LX + 4, 296, { role: "caption", color: T.textDim });
+    if (!r) return;
+    if (r.a === "dest") {
+        if (installSd()) FS.deleteFile(INSTALL_SD);
+        else FS.writeTextFile(INSTALL_SD, "1");
+        rebuildRows();
+    } else if (r.a && r.a.indexOf("app:") === 0) {
+        selApp = parseInt(r.a.substring(4), 10);
+        go("appdetail");
+    }
 }
 function drawAppDetail() {
     var ap = appsArr[selApp];
     if (!ap) return;
-    System.fillRoundRect(8, 52, 224, 76, 10, T.card);
-    System.drawRoundRect(8, 52, 224, 76, 10, T.stroke);
-    infoLine("Versão", ap.ver ? "v" + ap.ver : "--", 60);
-    infoLine("API", ap.api ? ap.api : "--", 76);
-    infoLine("Tipo", ap.sys ? "app do sistema" : "comum", 92);
-    infoLine("Origem", ap.sd ? "cartão SD" : "interno", 108);
-
-    System.setTextColor(T.textDim, T.bg);
-    System.drawString("Descrição", 12, 140, 1);
-    var ls = wrapLines(ap.desc, 216, 1);
-    var y = 156;
-    for (var i = 0; i < ls.length && y < 244; i++, y += 14) {
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString(ls[i], 12, y, 1);
-    }
-
-    System.fillRoundRect(48, 246, 144, 32, 8, T.err);
-    ctext("Desinstalar", 120, 262, 2, T.text, T.err);
+    UI.card(LX, TOP, LW, 96);
+    infoRow("Versão", ap.ver ? "v" + ap.ver : "--", TOP + 10);
+    infoRow("API", ap.api ? ap.api : "--", TOP + 30);
+    infoRow("Tipo", ap.sys ? "app do sistema" : "comum", TOP + 50);
+    infoRow("Origem", ap.sd ? "cartão SD" : "interno", TOP + 70);
+    UI.cardEnd();
+    UI.text("Descrição", LX + 4, TOP + 108, { role: "caption", color: T.accent });
+    UI.text(ap.desc || "Sem descrição.", LX + 4, TOP + 126,
+            { role: "caption", color: T.textDim, w: LW - 8, lines: 6 });
+    if (UI.button("Desinstalar", LX, 268, LW, 40, { style: "danger" })) askUninstall();
 }
-function askUninstall(i) {
-    selApp = i;
-    var ap = appsArr[i];
-    var body = "Remover " + ap.name + "?";
-    if (ap.sys) {
-        askConfirm("App do sistema", "Este app faz parte do sistema. Remover app do sistema?",
-            "Continuar", function () {
-                askConfirm("Desinstalar?", body, "Remover", function () { doUninstall(); });
-            });
-    } else {
-        askConfirm("Desinstalar?", body, "Remover", function () { doUninstall(); });
-    }
-}
-function doUninstall() {
+function askUninstall() {
     var ap = appsArr[selApp];
-    note("Aplicativos", "Removendo " + ap.name + "...", 500);
+    if (ap.sys && !UI.confirm("App do sistema", "Este app faz parte do sistema. Remover mesmo assim?",
+                              { yes: "Continuar" })) return;
+    if (!UI.confirm("Desinstalar?", "Remover " + ap.name + "?", { yes: "Remover", danger: true })) return;
     if (FS.isDirectory(ap.dir)) FS.removeDirectory(ap.dir);
     else FS.deleteFile(ap.dir);
     System.rescanApps();
-    note("Aplicativos", "App removido", 900);
+    UI.toast(ap.name + " removido");
     go("apps");
 }
 
 // ---- Hora e fuso -----------------------------------------------------------
 
-function buildTime() {
-    var a = [];
-    a.push({ l: "Agora", v: System.getTime(), i: 1 });
-    a.push({ l: "Data", v: System.getDate(), i: 1 });
-    a.push({ l: "NTP (internet)", v: System.getNtpEnabled() ? "ON" : "OFF", a: "ntp" });
-    a.push({ l: "Fuso", v: tzLabel(System.getTimezone()), a: "tz" });
-    a.push({ l: "Formato", v: System.get24hFormat() ? "24h" : "12h", a: "fmt" });
-    a.push({ l: "Ajuste manual", a: "manual", d: System.getNtpEnabled() ? 1 : 0 });
-    return a;
+function buildTimeNav() {
+    return [
+        { label: "Fuso horário", right: tzLabel(System.getTimezone()), a: "tz" },
+        { label: "Ajuste manual", enabled: !System.getNtpEnabled(), a: "manual" }
+    ];
+}
+function drawTime() {
+    UI.card(LX, TOP, LW, 64);
+    UI.text(System.getTime(), LX + 12, TOP + 8, { role: "title" });
+    UI.text(System.getDate(), LX + 12, TOP + 38, { role: "caption", color: T.textDim });
+    UI.cardEnd();
+
+    UI.card(LX, TOP + 72, LW, 84);
+    var ntp = !!System.getNtpEnabled();
+    var nNtp = toggleRow("Hora pela internet", TOP + 84, ntp);
+    if (nNtp !== ntp) {
+        System.setNtpEnabled(nNtp);
+        rebuildRows();
+    }
+    var h24 = !!System.get24hFormat();
+    var n24 = toggleRow("Formato 24 horas", TOP + 122, h24);
+    if (n24 !== h24) System.set24hFormat(n24);
+    UI.cardEnd();
+
+    var r = UI.list("list:time", LX, TOP + 164, LW, 76, rows);
+    if (r < 0) return;
+    if (rows[r].a === "tz") go("tz");
+    else if (rows[r].a === "manual") runManual();
 }
 function buildTz() {
-    var cur = System.getTimezone();
     var a = [];
-    for (var i = 0; i < TZS.length; i++) {
-        a.push({ l: TZS[i][0], a: "tz:" + i, cur: TZS[i][1] === cur });
-    }
+    for (var i = 0; i < TZS.length; i++) a.push({ label: TZS[i][0] });
     return a;
+}
+function tzIndex() {
+    var cur = System.getTimezone();
+    for (var i = 0; i < TZS.length; i++) if (TZS[i][1] === cur) return i;
+    return -1;
 }
 function nowHM() {
     var s = System.getTime();
@@ -613,22 +432,23 @@ function nowHM() {
     if (s.indexOf("AM") >= 0 && h === 12) h = 0;
     return [h, mi];
 }
+// Tela entre os prompts do ajuste manual (fora do laco principal)
 function drawManual(step, vals) {
-    System.fillScreen(T.bg);
-    header("Ajuste manual");
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.header("Ajuste manual", { sub: "campo " + Math.min(step + 1, 5) + " de 5" });
     var names = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
-    var y = 64;
-    for (var i = 0; i < 5; i++, y += 28) {
+    UI.card(LX, TOP, LW, 5 * 34 + 12);
+    for (var i = 0; i < 5; i++) {
         var col = i < step ? T.text : (i === step ? T.accent : T.textDim);
-        System.setTextColor(col, T.bg);
-        System.drawString(names[i] + ": " + vals[i], 40, y, 2);
+        UI.text(names[i], LX + 12, TOP + 10 + i * 34, { color: col });
+        UI.text(String(vals[i]), LX + LW - 12, TOP + 10 + i * 34, { color: col, align: "right" });
     }
-    ctext("campo " + (step + 1) + " de 5", 120, 226, 1, T.textDim, T.bg);
+    UI.cardEnd();
 }
 function askNum(label, cur, lo, hi) {
     while (true) {
-        var init = "" + cur;
-        if (cur < 10) init = "0" + cur;
+        var init = (cur < 10 ? "0" : "") + cur;
         var s = System.prompt(label + " (" + lo + " a " + hi + ")", init, {hint: "num"});
         if (s === null || s === "") return null;
         s = trimStr(s);
@@ -636,7 +456,7 @@ function askNum(label, cur, lo, hi) {
             var n = parseInt(s, 10);
             if (n >= lo && n <= hi) return n;
         }
-        note(label, "Valor inválido", 700);
+        UI.alert(label, "Valor inválido: use " + lo + " a " + hi);
     }
 }
 function runManual() {
@@ -645,16 +465,14 @@ function runManual() {
     var labels = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
     var lo = [2000, 1, 1, 0, 0];
     var hi = [2100, 12, 31, 23, 59];
-    tela = "manual";
     for (var i = 0; i < 5; i++) {
         drawManual(i, vals);
         var n = askNum(labels[i], vals[i], lo[i], hi[i]);
         if (n === null) { go("time"); return; }
         vals[i] = n;
     }
-    drawManual(5, vals);
     System.setManualTime(vals[0], vals[1], vals[2], vals[3], vals[4]);
-    note("Ajuste manual", "Hora ajustada", 900);
+    UI.toast("Hora ajustada");
     go("time");
 }
 
@@ -663,250 +481,238 @@ function runManual() {
 function buildSec() {
     var st = System.pinState();  // 0 sem, 1 ativo, 2 corrompido
     var a = [];
-    a.push({ l: "PIN do Settings", v: st === 1 ? "ativo" : (st === 2 ? "corrompido" : "desativado"), i: 1 });
+    a.push({ label: "PIN do Ajustes", right: st === 1 ? "ativo" : (st === 2 ? "corrompido" : "desativado"), enabled: false });
     if (st === 1) {
-        a.push({ l: "Trocar PIN", a: "chg" });
-        a.push({ l: "Remover PIN", a: "rm" });
+        a.push({ label: "Trocar PIN", a: "chg" });
+        a.push({ label: "Remover PIN", a: "rm" });
     } else {
-        a.push({ l: "Definir PIN", a: "set" });
+        a.push({ label: "Definir PIN", a: "set" });
     }
-    a.push({ l: "Senha web", v: System.webAuthInfo().pass, i: 1 });
-    a.push({ l: "Trocar senha web", a: "wpw" });
+    a.push({ label: "Senha web", right: System.webAuthInfo().pass, enabled: false });
+    a.push({ label: "Trocar senha web", a: "wpw" });
     return a;
 }
-
-// ---- Tela (brilho) ---------------------------------------------------------
-
-// Brilho automatico (API 7): so em placa com sensor de luz (getAutoBrightness
-// devolve null sem sensor; firmware antigo nem tem a funcao)
-function autoBriSupported() {
-    return typeof System.getAutoBrightness === "function" && System.getAutoBrightness() !== null;
+function secTap(a) {
+    if (a === "set") {
+        flowNewPin();
+    } else if (a === "chg") {
+        if (askPin("PIN atual")) flowNewPin();
+    } else if (a === "rm") {
+        if (!askPin("PIN atual")) return;
+        System.pinClear();
+        UI.toast("PIN removido");
+    } else if (a === "wpw") {
+        var np = System.prompt("Nova senha web (6+ chars)", "");
+        if (np === null || np === "") return;
+        if (!System.webAuthSetPass(np)) {
+            UI.alert("Segurança", "Use de 6 a 31 caracteres");
+            return;
+        }
+        UI.toast("Senha web alterada");
+    }
+    rebuildRows();
+    UI.invalidate();
 }
 
-// Tempo de tela (API 12): 0 = sempre ligada; cicla no toque
-var TMOPTS = [[0, "sempre ligada"], [30000, "30 s"], [60000, "1 min"],
-              [300000, "5 min"], [600000, "10 min"]];
+// ---- Tela (brilho, automatico, tempo de tela) ---------------------------------
+
+// Tempo de tela (API 12): 0 = sempre ligada
+var TMOPTS = [[0, "Sempre"], [30000, "30 s"], [60000, "1 min"], [300000, "5 min"], [600000, "10 min"]];
 function screenTimeoutSupported() {
     return typeof System.setScreenTimeout === "function";
 }
-function tmoLabel() {
+function tmoIndex() {
     var v = System.screenTimeout();
-    for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) return TMOPTS[i][1];
-    return TMOPTS[0][1];
+    for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) return i;
+    return 0;
 }
-function tmoY() { return autoBriSupported() ? 250 : 212; }
-
 function drawDisplay() {
+    var y = TOP;
     if (!System.backlightSupported()) {
-        ctext("Backlight fixo", 120, 120, 2, T.warn, T.bg);
-        ctext("nesta placa.", 120, 146, 2, T.textDim, T.bg);
-        ctext("Controle de brilho indisponível", 120, 190, 1, T.textDim, T.bg);
-        ctext("neste hardware.", 120, 204, 1, T.textDim, T.bg);
-        return;
-    }
-    ctext("Brilho", 120, 84, 2, T.text, T.bg);
-    ctext("arraste o trilho", 120, 104, 1, T.textDim, T.bg);
-    ctext(blLvl + "%", 120, 134, 2, T.accent, T.bg);
-
-    System.fillRoundRect(24, 160, 192, 12, 6, T.card);
-    System.drawRoundRect(24, 160, 192, 12, 6, T.stroke);
-    var fw = Math.round(192 * blLvl / 100);
-    if (fw > 4) System.fillRoundRect(24, 160, fw, 12, 6, T.accent);
-    System.fillCircle(24 + fw, 166, 7, T.text);
-
-    if (autoBriSupported()) {
-        var on = System.getAutoBrightness();
-        var bg = on ? T.accent : T.card;
-        System.fillRoundRect(24, 212, 192, 30, 8, bg);
-        System.drawRoundRect(24, 212, 192, 30, 8, T.stroke);
-        ctext("Brilho automático: " + (on ? "ligado" : "desligado"), 120, 227, 1,
-              on ? T.onAccent : T.text, bg);
+        UI.card(LX, y, LW, 70);
+        UI.text("Brilho fixo nesta placa", 120, y + 14, { align: "center", color: T.warn });
+        UI.text("O hardware não controla o backlight.", 120, y + 42, { role: "caption", align: "center", color: T.textDim });
+        UI.cardEnd();
+        y += 82;
+    } else {
+        UI.card(LX, y, LW, 84);
+        UI.text("Brilho", LX + 12, y + 10);
+        UI.text(blLvl + "%", LX + LW - 12, y + 10, { color: T.accent, align: "right" });
+        blLvl = UI.slider(LX + 20, y + 44, LW - 40, blLvl, { min: 5, max: 100 });
+        UI.cardEnd();
+        // persiste ao soltar o dedo (setBrightness grava na NVS)
+        if (blLvl !== blSaved && !UI.touch().down) {
+            System.setBrightness(blLvl);
+            blSaved = blLvl;
+        }
+        y += 92;
+        if (autoBriSupported()) {
+            UI.card(LX, y, LW, 44);
+            var on = !!System.getAutoBrightness();
+            var nv = toggleRow("Brilho automático", y + 10, on);
+            if (nv !== on) System.setAutoBrightness(nv);
+            UI.cardEnd();
+            y += 52;
+        }
     }
     if (screenTimeoutSupported()) {
-        var ty = tmoY();
-        System.fillRoundRect(24, ty, 192, 30, 8, T.card);
-        System.drawRoundRect(24, ty, 192, 30, 8, T.stroke);
-        ctext("Tela apaga: " + tmoLabel(), 120, ty + 15, 1, T.text, T.card);
+        UI.text("Tela apaga após", LX + 4, y + 4, { role: "caption", color: T.textDim });
+        var labels = [];
+        for (var i = 0; i < TMOPTS.length; i++) labels.push(TMOPTS[i][1]);
+        var cur = tmoIndex();
+        var sel = UI.tabs(LX, y + 24, LW, 34, labels, cur);
+        if (sel !== cur) System.setScreenTimeout(TMOPTS[sel][0]);
     }
 }
 
 // ---- Som (API 13) ------------------------------------------------------------
 
-var volLvl = 50;
-var dragVol = false;
-
 function drawSom() {
-    ctext("Volume", 120, 84, 2, T.text, T.bg);
-    ctext("arraste o trilho", 120, 104, 1, T.textDim, T.bg);
-    ctext(volLvl + "%", 120, 134, 2, T.accent, T.bg);
-
-    System.fillRoundRect(24, 160, 192, 12, 6, T.card);
-    System.drawRoundRect(24, 160, 192, 12, 6, T.stroke);
-    var fw = Math.round(192 * volLvl / 100);
-    if (fw > 4) System.fillRoundRect(24, 160, fw, 12, 6, T.accent);
-    System.fillCircle(24 + fw, 166, 7, T.text);
-
-    System.fillRoundRect(24, 212, 192, 30, 8, T.card);
-    System.drawRoundRect(24, 212, 192, 30, 8, T.stroke);
-    ctext("Testar som", 120, 227, 1, T.text, T.card);
+    UI.card(LX, TOP, LW, 84);
+    UI.text("Volume", LX + 12, TOP + 10);
+    UI.text(volLvl + "%", LX + LW - 12, TOP + 10, { color: T.accent, align: "right" });
+    volLvl = UI.slider(LX + 20, TOP + 44, LW - 40, volLvl);
+    UI.cardEnd();
+    if (volLvl !== volSaved && !UI.touch().down && typeof System.setVolume === "function") {
+        System.setVolume(volLvl);  // aplica e persiste
+        volSaved = volLvl;
+    }
+    if (typeof System.playTone === "function" &&
+        UI.button("Testar som", LX, TOP + 96, LW, 40, { style: "ghost" })) {
+        System.playTone([[784, 90], [988, 90], [1319, 140]]);
+    }
 }
 
 // ---- Sensores (API 13, watch) ---------------------------------------------------
 
-function drawSensors() {
+function drawSensors(full) {
     var a = Sensors.accel();
-    System.fillRoundRect(8, 52, 224, 88, 10, T.card);
-    System.drawRoundRect(8, 52, 224, 88, 10, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("acelerômetro (g)", 20, 60, 1);
+    UI.card(LX, TOP, LW, 96);
+    UI.text("Acelerômetro (g)", LX + 12, TOP + 8, { role: "caption", color: T.textDim });
     if (a) {
-        System.setTextColor(T.text, T.card);
-        System.drawString("x " + a.x.toFixed(2), 20, 78, 2);
-        System.drawString("y " + a.y.toFixed(2), 20, 98, 2);
-        System.drawString("z " + a.z.toFixed(2), 20, 118, 2);
-        // barra horizontal por eixo: -2g..+2g
-        var cols = [T.err, T.ok, T.accent];
-        var vals = [a.x, a.y, a.z];
+        var vals = [a.x, a.y, a.z], names = ["x", "y", "z"], cols = [T.err, T.ok, T.accent];
         for (var i = 0; i < 3; i++) {
-            var v = vals[i];
-            if (v > 2) v = 2;
-            if (v < -2) v = -2;
-            System.fillRect(150, 84 + i * 18, 64, 8, T.raised);
-            var cx = 150 + 32 + Math.round(v * 16);
-            if (cx < 151) cx = 151;
-            if (cx > 213) cx = 213;
-            System.fillRect(cx - 2, 82 + i * 18, 4, 12, cols[i]);
+            var yy = TOP + 28 + i * 22;
+            UI.text(names[i] + " " + vals[i].toFixed(2), LX + 12, yy);
+            // barra horizontal por eixo: -2g..+2g (desenho proprio, so no frame total)
+            if (full) {
+                var v = Math.max(-2, Math.min(2, vals[i]));
+                System.fillRoundRect(140, yy + 4, 72, 8, 4, T.raised);
+                var cx = Math.max(141, Math.min(211, 176 + Math.round(v * 17)));
+                System.fillRoundRect(cx - 3, yy + 1, 6, 14, 3, cols[i]);
+            }
         }
     } else {
-        System.setTextColor(T.warn, T.card);
-        System.drawString("indisponível", 20, 82, 2);
+        UI.text("indisponível", LX + 12, TOP + 34, { color: T.warn });
     }
+    UI.cardEnd();
 
-    System.fillRoundRect(8, 152, 224, 74, 10, T.card);
-    System.drawRoundRect(8, 152, 224, 74, 10, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("passos", 20, 160, 1);
-    System.setTextColor(T.text, T.card);
-    System.drawString(String(Sensors.steps ? Sensors.steps() : "-"), 20, 176, 2);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("temperatura", 20, 198, 1);
-    System.setTextColor(T.text, T.card);
-    System.drawString(Sensors.temp ? Sensors.temp().toFixed(1) + " °C" : "-", 20, 210, 2);
-    ctext("atualiza ao vivo", 120, 246, 1, T.textDim, T.bg);
+    UI.card(LX, TOP + 104, LW, 76);
+    infoRow("Passos hoje", String(Sensors.steps ? Sensors.steps() : "-"), TOP + 116);
+    infoRow("Temperatura", Sensors.temp ? Sensors.temp().toFixed(1) + " °C" : "-", TOP + 146);
+    UI.cardEnd();
+    UI.text("atualiza ao vivo", 120, TOP + 192, { role: "caption", align: "center", color: T.textDim });
 }
 
 // ---- Atualizacao (OTA) -----------------------------------------------------
 
-function buildOtaLines() {
-    otaLines = [];
-    var y = 0;
-    function addHdr(s) {
-        otaLines.push({ t: s, h: 1, y: y });
-        y += 18;
-    }
-    function addBody(s) {
-        var ls = wrapLines(s, 216, 1);
-        for (var i = 0; i < ls.length; i++) {
-            otaLines.push({ t: ls[i], h: 0, y: y });
-            y += 14;
-        }
-        y += 4;
-    }
-    if (otaInfo.changelog) { addHdr("Novidades:"); addBody(otaInfo.changelog); }
-    if (otaInfo.guide) { addHdr("Como instalar:"); addBody(otaInfo.guide); }
-    otaLinesH = y;
+function otaText() {
+    var s = "";
+    if (otaInfo.changelog) s += "Novidades: " + otaInfo.changelog;
+    if (otaInfo.guide) s += (s ? "  " : "") + "Como instalar: " + otaInfo.guide;
+    return s;
 }
-function drawUpdate() {
+function drawUpdate(full) {
+    var ver = "CelerOS v" + System.getOSVersion();
     if (otaState === "idle") {
-        ctext("Versão atual", 120, 92, 1, T.textDim, T.bg);
-        ctext("CelerOS v" + System.getOSVersion(), 120, 116, 2, T.text, T.bg);
-        System.fillRoundRect(48, 150, 144, 36, 8, T.accent);
-        ctext("Verificar", 120, 168, 2, T.onAccent, T.accent);
-        ctext("requer Wi-Fi conectado", 120, 205, 1, T.textDim, T.bg);
+        UI.card(LX, TOP, LW, 70);
+        UI.text("Versão atual", 120, TOP + 10, { role: "caption", align: "center", color: T.textDim });
+        UI.text(ver, 120, TOP + 32, { role: "title", align: "center" });
+        UI.cardEnd();
+        if (UI.button("Procurar atualização", LX, TOP + 84, LW, 44)) doCheck();
+        UI.text("Requer Wi-Fi conectado", 120, TOP + 140, { role: "caption", align: "center", color: T.textDim });
     } else if (otaState === "checking") {
-        ctext("Verificando atualizações...", 120, 150, 1, T.textDim, T.bg);
-    } else if (otaState === "nowifi") {
-        ctext("Sem conexão Wi-Fi.", 120, 116, 2, T.err, T.bg);
-        ctext("Conecte em Wi-Fi primeiro", 120, 146, 1, T.textDim, T.bg);
-        ctext("e toque em Verificar.", 120, 160, 1, T.textDim, T.bg);
-    } else if (otaState === "failed") {
-        ctext(trunc(otaErrTitle, 216, 2), 120, 92, 2, T.err, T.bg);
-        var ls = wrapLines(otaErr, 216, 1);
-        var y = 122;
-        for (var i = 0; i < ls.length && i < 7; i++, y += 14) {
-            ctext(ls[i], 120, y, 1, T.textDim, T.bg);
-        }
-    } else if (otaState === "uptodate") {
-        ctext("Sistema atualizado!", 120, 110, 2, T.ok, T.bg);
-        ctext("CelerOS v" + System.getOSVersion(), 120, 140, 1, T.textDim, T.bg);
-    } else if (otaState === "avail") {
-        ctext(trunc(otaInfo.type || "Atualização disponível", 224, 1), 120, 60, 1, T.accent, T.bg);
-        ctext(trunc("v" + System.getOSVersion() + " -> v" + otaInfo.version, 224, 2), 120, 78, 2, T.text, T.bg);
-        // bloco rolavel (changelog + guia), janela 98..(98+otaRegionH)
-        var yEnd = 98 + otaRegionH();
-        for (var j = 0; j < otaLines.length; j++) {
-            var ln = otaLines[j];
-            var y2 = 98 + ln.y - scroll;
-            if (y2 < 92 || y2 + 12 > yEnd) continue;
-            if (ln.h) {
-                System.setTextColor(T.text, T.bg);
-                System.drawString(ln.t, 12, y2, 1);
-            } else {
-                System.setTextColor(T.textDim, T.bg);
-                System.drawString(ln.t, 12, y2, 1);
-            }
-        }
-        if (otaInfo.hasFirmware) {
-            ctext("não desligue na atualização", 120, 208, 1, T.err, T.bg);
-            System.fillRoundRect(60, 222, 120, 32, 8, T.ok);
-            ctext("Instalar", 120, 238, 2, T.text, T.ok);
-        } else {
-            ctext("Canal sem firmware:", 120, 210, 1, T.textDim, T.bg);
-            ctext("siga o guia acima.", 120, 224, 1, T.textDim, T.bg);
-        }
+        UI.spinner(120, 150, 18);
+        UI.text("Verificando atualizações...", 120, 182, { align: "center", color: T.textDim });
     } else if (otaState === "installing") {
-        ctext("Atualizando sistema", 120, 96, 2, T.text, T.bg);
-        ctext("Não desligue a alimentação!", 120, 118, 1, T.err, T.bg);
-        System.drawRoundRect(30, 158, 180, 18, 4, T.stroke);
+        UI.text("Atualizando o sistema", 120, TOP + 30, { role: "title", align: "center" });
+        UI.text("Não desligue a alimentação!", 120, TOP + 62, { role: "caption", align: "center", color: T.err });
+        UI.text(otaPct + "%", 120, TOP + 96, { align: "center", color: T.accent });
+        UI.progress(LX + 16, TOP + 124, LW - 32, 14, otaPct);
     } else if (otaState === "done") {
-        ctext("Atualização concluída!", 120, 104, 2, T.ok, T.bg);
-        ctext("Reinicie para concluir.", 120, 132, 1, T.textDim, T.bg);
-        System.fillRoundRect(60, 170, 120, 36, 8, T.accent);
-        ctext("Reiniciar", 120, 188, 2, T.onAccent, T.accent);
+        UI.text("Atualização concluída!", 120, TOP + 40, { role: "title", align: "center", color: T.ok });
+        UI.text("Reinicie para concluir.", 120, TOP + 74, { role: "caption", align: "center", color: T.textDim });
+        if (UI.button("Reiniciar agora", LX, TOP + 110, LW, 44)) System.restart();
+        return;
+    } else if (otaState === "avail") {
+        UI.badge(otaInfo.type || "Atualização disponível", LX + 4, TOP);
+        UI.text("v" + System.getOSVersion() + "  >  v" + otaInfo.version, LX + 4, TOP + 24, { role: "title", w: LW - 8 });
+        // bloco rolavel (changelog + guia)
+        var top = TOP + 56, h = 140;
+        var off = UI.scrollBegin("ota", LX, top, LW, h, Math.max(h, otaBodyH));
+        if (full) {
+            otaBodyH = UI.text(otaText(), LX + 4, top - off,
+                               { role: "caption", color: T.textDim, w: LW - 12, lines: 40, id: off }) + 8;
+        }
+        UI.scrollEnd();
+        if (otaInfo.hasFirmware) {
+            if (UI.button("Instalar", LX, 252, 108, 40, { style: "primary" })) startInstall();
+        } else {
+            UI.text("Canal sem firmware: siga o guia.", LX + 4, 262, { role: "caption", color: T.textDim, w: 108, lines: 2 });
+        }
+        if (UI.button("Verificar", LX + 116, 252, 108, 40, { style: "ghost" })) doCheck();
+        return;
+    } else {
+        // nowifi | failed | uptodate
+        var title = otaState === "nowifi" ? "Sem conexão Wi-Fi" : (otaState === "uptodate" ? "Sistema atualizado!" : otaErrTitle);
+        var col = otaState === "uptodate" ? T.ok : T.err;
+        var msg = otaState === "nowifi" ? "Conecte-se a uma rede Wi-Fi e tente de novo."
+            : (otaState === "uptodate" ? ver : otaErr);
+        UI.text(title, 120, TOP + 30, { role: "title", align: "center", color: col, w: LW });
+        UI.text(msg, 120, TOP + 66, { role: "caption", align: "center", color: T.textDim, w: LW - 16, lines: 5 });
+        if (UI.button("Verificar de novo", LX, 252, LW, 40, { style: "ghost" })) doCheck();
     }
 }
 function doCheck() {
     otaState = "checking";
-    drawAll();
+    UI.invalidate();
+    // mostra o "verificando" antes do otaCheck bloqueante
+    UI.begin(T.bg);
+    UI.header(titleNow(), { back: true });
+    drawUpdate(true);
+    UI.end();
     if (!Net.isConnected()) {
         otaState = "nowifi";
-        drawAll();
-        return;
-    }
-    var info = System.otaCheck();
-    otaInfo = info;
-    if (info.fetchFailed) {
-        otaState = "failed";
-        otaErrTitle = "Falha na verificação";
-        otaErr = "Confira a conexão e tente de novo.";
-    } else if (!info.available) {
-        otaState = "uptodate";
     } else {
-        otaState = "avail";
-        scroll = 0;
-        buildOtaLines();
+        var info = System.otaCheck();
+        otaInfo = info;
+        if (info.fetchFailed) {
+            otaState = "failed";
+            otaErrTitle = "Falha na verificação";
+            otaErr = "Confira a conexão e tente de novo.";
+        } else if (!info.available) {
+            otaState = "uptodate";
+        } else {
+            otaState = "avail";
+            otaBodyH = 0;
+            UI.resetScroll("ota");
+        }
     }
-    drawAll();
+    UI.invalidate();
 }
 function startInstall() {
+    if (!UI.confirm("Instalar atualização?", "O aparelho não pode desligar durante a gravação.", { yes: "Instalar" })) return;
     otaState = "installing";
-    drawAll();
-    // cb desenha o progresso direto no display (mesma geometria do draw)
+    otaPct = 0;
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.header(titleNow());
+    drawUpdate(true);
+    // o callback roda dentro do otaStart: atualiza so os widgets do progresso
     var res = System.otaStart(otaInfo.url, function (p) {
-        System.fillRect(50, 126, 140, 22, T.bg);  // limpa o % anterior
-        ctext(p + "%", 120, 140, 2, T.text, T.bg);
-        var fw = Math.round(176 * p / 100) - 4;
-        if (fw > 0) System.fillRect(32, 160, fw, 14, T.accent);
+        otaPct = p;
+        UI.text(p + "%", 120, TOP + 96, { align: "center", color: T.accent });
+        UI.progress(LX + 16, TOP + 124, LW - 32, 14, p);
     });
     if (res && res.ok) {
         otaState = "done";
@@ -915,7 +721,7 @@ function startInstall() {
         otaErrTitle = "Falha na instalação";
         otaErr = (res && res.error) ? res.error : "erro desconhecido";
     }
-    drawAll();
+    UI.invalidate();
 }
 
 // ---- Sobre -----------------------------------------------------------------
@@ -924,387 +730,162 @@ function buildAbout() {
     var inf = System.getInfo();
     var sdTot = FS.getTotalSpace("/sd");
     var a = [];
-    a.push({ l: "Versão", v: "v" + System.getOSVersion(), i: 1 });
-    a.push({ l: "API", v: "" + System.getAPILevel(), i: 1 });
-    a.push({ l: "Chip", v: inf.chipModel || "--", i: 1 });
-    a.push({ l: "CPU", v: inf.cpuFreqMHz + " MHz x" + inf.chipCores, i: 1 });
-    a.push({ l: "RAM livre", v: fmtBytes(inf.freeRAM), i: 1 });
-    a.push({ l: "Flash", v: fmtBytes(inf.flashSize), i: 1 });
-    a.push({ l: "IP", v: System.getIPAddress() || "--", i: 1 });
-    a.push({ l: "Interno", v: fmtBytes(FS.getFreeSpace("/local")) + " / " + fmtBytes(FS.getTotalSpace("/local")), i: 1 });
-    a.push({ l: "SD", v: (sdTot > 0) ? (fmtBytes(FS.getFreeSpace("/sd")) + " / " + fmtBytes(sdTot)) : "ausente", i: 1 });
-    a.push({ l: "Uptime", v: fmtUptime(inf.uptimeMs), i: 1 });
+    a.push({ label: "Versão", right: "v" + System.getOSVersion() });
+    a.push({ label: "API", right: "" + System.getAPILevel() });
+    a.push({ label: "Chip", right: inf.chipModel || "--" });
+    a.push({ label: "CPU", right: inf.cpuFreqMHz + " MHz x" + inf.chipCores });
+    a.push({ label: "RAM livre", right: fmtBytes(inf.freeRAM) });
+    a.push({ label: "Flash", right: fmtBytes(inf.flashSize) });
+    a.push({ label: "IP", right: System.getIPAddress() || "--" });
+    a.push({ label: "Interno", right: fmtBytes(FS.getFreeSpace("/local")) + " / " + fmtBytes(FS.getTotalSpace("/local")) });
+    a.push({ label: "SD", right: (sdTot > 0) ? (fmtBytes(FS.getFreeSpace("/sd")) + " / " + fmtBytes(sdTot)) : "ausente" });
+    a.push({ label: "Ligado há", right: fmtUptime(inf.uptimeMs) });
     return a;
 }
 
 // ---- Reset -----------------------------------------------------------------
 
 function drawReset() {
-    System.fillRoundRect(8, 52, 224, 76, 10, T.card);
-    System.drawRoundRect(8, 52, 224, 76, 10, T.stroke);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Limpar configurações", 20, 62, 2);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Apaga Wi-Fi, PIN, brilho e outras", 20, 88, 1);
-    System.drawString("configurações. Apps são mantidos.", 20, 102, 1);
-    System.fillRoundRect(48, 136, 144, 32, 8, T.err);
-    ctext("Limpar", 120, 152, 2, T.text, T.err);
+    UI.card(LX, TOP, LW, 116);
+    UI.text("Limpar configurações", LX + 12, TOP + 10);
+    UI.text("Apaga Wi-Fi, PIN, brilho e outras configurações. Apps são mantidos.", LX + 12, TOP + 34,
+            { role: "caption", color: T.textDim, w: LW - 24, lines: 2 });
+    var a = UI.button("Limpar", LX + 12, TOP + 70, LW - 24, 36, { style: "danger" });
+    UI.cardEnd();
 
-    System.fillRoundRect(8, 180, 224, 76, 10, T.card);
-    System.drawRoundRect(8, 180, 224, 76, 10, T.stroke);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Reset total", 20, 190, 2);
-    System.setTextColor(T.warn, T.card);
-    System.drawString("APAGA TUDO: apps, ícones e configs.", 20, 216, 1);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Recuperação exige cabo USB.", 20, 230, 1);
-    System.fillRoundRect(48, 258, 144, 32, 8, T.err);
-    ctext("Reset total", 120, 274, 2, T.text, T.err);
+    UI.card(LX, TOP + 126, LW, 116);
+    UI.text("Reset total", LX + 12, TOP + 136);
+    UI.text("APAGA TUDO: apps, ícones e configurações. A recuperação exige cabo USB.", LX + 12, TOP + 160,
+            { role: "caption", color: T.warn, w: LW - 24, lines: 2 });
+    var b = UI.button("Reset total", LX + 12, TOP + 196, LW - 24, 36, { style: "danger" });
+    UI.cardEnd();
+
+    if (a && UI.confirm("Limpar configurações?",
+                        "Redes Wi-Fi, PIN e brilho serão apagados. Apps e ícones ficam.", { yes: "Continuar" }) &&
+        UI.confirm("Confirmar limpeza", "Limpar todas as configurações agora?", { yes: "Apagar", danger: true })) {
+        doReset("configs");
+    }
+    if (b && UI.confirm("Reset total?", "APAGA TUDO: apps, ícones e configurações.", { yes: "Continuar" }) &&
+        UI.confirm("Apagar tudo?", "O armazenamento interno será formatado. Os apps somem!",
+                   { yes: "Formatar", danger: true })) {
+        doReset("total");
+    }
 }
 function doReset(mode) {
-    System.fillScreen(T.bg);
-    header("Reset");
-    ctext(mode === "total" ? "Formatando..." : "Limpando...", 120, 150, 2, T.text, T.bg);
-    ctext("o aparelho vai reiniciar", 120, 176, 1, T.textDim, T.bg);
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.header("Reset");
+    UI.spinner(120, 140, 18);
+    UI.text(mode === "total" ? "Formatando..." : "Limpando...", 120, 172, { role: "title", align: "center" });
+    UI.text("o aparelho vai reiniciar", 120, 204, { role: "caption", align: "center", color: T.textDim });
+    UI.end();
     System.delay(400);
     System.factoryReset(mode);
     System.delay(600);
     System.restart();
 }
 
-// ---- toques ----------------------------------------------------------------
-
-function onTap() {
-    var t = { x: lastX, y: lastY };
-    if (modal) {
-        if (hit(t, 28, 208, 84, 28)) {
-            modal = null;
-            drawAll();
-        } else if (hit(t, 128, 208, 84, 28)) {
-            var f = modal.f;
-            modal = null;
-            f();
-        }
-        return;
-    }
-    if (tela !== "update" || otaState !== "done") {
-        if (tela !== "menu" && hit(t, 8, 282, 84, 30)) { footerBack(); return; }
-    }
-    if (tela === "update" && (otaState === "nowifi" || otaState === "failed" ||
-        otaState === "uptodate" || otaState === "avail")) {
-        if (hit(t, 140, 282, 92, 30)) { doCheck(); return; }
-    }
-
-    if (tela === "display" && autoBriSupported() && hit(t, 24, 212, 192, 30)) {
-        System.setAutoBrightness(!System.getAutoBrightness());
-        drawAll();
-        return;
-    }
-    if (tela === "display" && screenTimeoutSupported() && hit(t, 24, tmoY(), 192, 30)) {
-        var v = System.screenTimeout();
-        var idx = 0;
-        for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) idx = i;
-        System.setScreenTimeout(TMOPTS[(idx + 1) % TMOPTS.length][0]);
-        drawAll();
-        return;
-    }
-    if (tela === "som" && typeof System.playTone === "function" &&
-        hit(t, 24, 212, 192, 30)) {
-        System.playTone([[784, 90], [988, 90], [1319, 140]]);
-        return;
-    }
-
-    if (tela === "menu") {
-        var idx = rowAt(t);
-        if (idx < 0) return;
-        var a = items[idx].a;
-        if (a === "wifi") go("wifi");
-        else if (a === "apps") go("apps");
-        else if (a === "time") go("time");
-        else if (a === "sec") go("security");
-        else if (a === "display") go("display");
-        else if (a === "som") go("som");
-        else if (a === "sensors") go("sensors");
-        else if (a === "ota") go("update");
-        else if (a === "about") go("about");
-        else if (a === "notif") go("notif");
-        else if (a === "watch") go("watch");
-        else if (a === "reset") go("reset");
-    } else if (tela === "wifi") {
-        if (hit(t, 48, 150, 144, 36)) {
-            // abre a tela NATIVA de Wi-Fi; este app precisa sair na sequencia
-            System.openWifiSetup();
-            System.exitApp();
-        }
-    } else if (tela === "apps") {
-        var idx2 = rowAt(t);
-        if (idx2 < 0) return;
-        var a2 = items[idx2].a;
-        if (a2 === "dest") {
-            if (installSd()) FS.deleteFile(INSTALL_SD);
-            else FS.writeTextFile(INSTALL_SD, "1");
-            rebuildItems();
-            drawAll();
-        } else if (a2 && a2.indexOf("app:") === 0) {
-            selApp = parseInt(a2.substring(4), 10);
-            go("appdetail");
-        }
-    } else if (tela === "appdetail") {
-        if (hit(t, 48, 246, 144, 32)) askUninstall(selApp);
-    } else if (tela === "watch") {
-        var idxW = rowAt(t);
-        if (idxW < 0) return;
-        watchTap(items[idxW].a);
-        rebuildItems();
-        drawAll();
-    } else if (tela === "notif") {
-        var idxN = rowAt(t);
-        if (idxN < 0) return;
-        if (items[idxN].a === "clearnot") {
-            System.notificationsClear();
-            note("Notificações", "Histórico apagado.");
-            go("menu");
-        }
-    } else if (tela === "time") {
-        var idx3 = rowAt(t);
-        if (idx3 < 0) return;
-        var a3 = items[idx3].a;
-        if (a3 === "ntp") {
-            System.setNtpEnabled(!System.getNtpEnabled());
-            rebuildItems();
-            drawAll();
-        } else if (a3 === "fmt") {
-            System.set24hFormat(!System.get24hFormat());
-            rebuildItems();
-            drawAll();
-        } else if (a3 === "tz") {
-            go("tz");
-        } else if (a3 === "manual") {
-            if (System.getNtpEnabled()) note("Hora e fuso", "Desligue o NTP antes de ajustar", 1100);
-            else runManual();
-        }
-    } else if (tela === "tz") {
-        var idx4 = rowAt(t);
-        if (idx4 < 0) return;
-        System.setTimezone(TZS[idx4][1]);
-        note("Fuso horário", "Fuso aplicado", 800);
-        go("time");
-    } else if (tela === "security") {
-        var idx5 = rowAt(t);
-        if (idx5 < 0) return;
-        var a5 = items[idx5].a;
-        if (a5 === "set") {
-            if (flowNewPin()) { rebuildItems(); drawAll(); }
-        } else if (a5 === "chg") {
-            var cur = System.prompt("PIN atual", "", {hint: "num", mask: true});
-            if (cur === null || cur === "") return;
-            if (!pinOk(cur)) { note("Segurança", "PIN incorreto", 1100); return; }
-            if (flowNewPin()) { rebuildItems(); drawAll(); }
-        } else if (a5 === "rm") {
-            var cur2 = System.prompt("PIN atual", "", {hint: "num", mask: true});
-            if (cur2 === null || cur2 === "") return;
-            if (!pinOk(cur2)) { note("Segurança", "PIN incorreto", 1100); return; }
-            System.pinClear();
-            note("Segurança", "PIN removido", 1000);
-            rebuildItems();
-            drawAll();
-        } else if (a5 === "wpw") {
-            var np = System.prompt("Nova senha web (6+ chars)", "");
-            if (np === null || np === "") return;
-            if (!System.webAuthSetPass(np)) {
-                note("Segurança", "Use 6 a 31 caracteres", 1200);
-                return;
-            }
-            note("Segurança", "Senha web alterada", 1000);
-            rebuildItems();
-            drawAll();
-        }
-    } else if (tela === "update") {
-        if (otaState === "idle" && hit(t, 48, 150, 144, 36)) doCheck();
-        else if (otaState === "avail" && otaInfo.hasFirmware && hit(t, 60, 222, 120, 32)) startInstall();
-        else if (otaState === "done" && hit(t, 60, 170, 120, 36)) System.restart();
-    } else if (tela === "reset") {
-        if (hit(t, 48, 136, 144, 32)) {
-            askConfirm("Limpar configurações?",
-                "Apaga redes Wi-Fi, PIN, brilho e outras configurações. Apps e ícones são mantidos.",
-                "Continuar", function () {
-                    askConfirm("Confirmar limpeza", "Limpar todas as configurações agora?", "Apagar",
-                        function () { doReset("configs"); });
-                });
-        } else if (hit(t, 48, 258, 144, 32)) {
-            askConfirm("Reset total?",
-                "APAGA TUDO: apps, ícones e configurações. A recuperação exige cabo USB.",
-                "Continuar", function () {
-                    askConfirm("Apagar tudo?",
-                        "O armazenamento interno será formatado. Os apps somem!",
-                        "Formatar", function () { doReset("total"); });
-                });
-        }
-    }
-}
-
 // ---- gate de PIN na entrada ------------------------------------------------
 
-function drawPinGate(triesLeft) {
-    System.fillScreen(T.bg);
-    header("Settings");
-    ctext("App protegido por PIN", 120, 108, 2, T.text, T.bg);
-    ctext("Digite o PIN para continuar", 120, 138, 1, T.textDim, T.bg);
-    ctext("Tentativas: " + triesLeft, 120, 168, 1, T.accent, T.bg);
+function drawGate(title, line1, line2, col) {
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.header("Ajustes");
+    UI.text(title, 120, 110, { role: "title", align: "center", color: col || T.text });
+    UI.text(line1, 120, 146, { role: "caption", align: "center", color: T.textDim, w: LW });
+    if (line2) UI.text(line2, 120, 168, { role: "caption", align: "center", color: T.accent });
+    UI.end();
 }
 function pinGate() {
-    var ok = false;
-    for (var attempt = 0; attempt < 3 && !ok; attempt++) {
-        drawPinGate(3 - attempt);
-        var pin = System.prompt("PIN do Settings", "", {hint: "num", mask: true});
+    for (var attempt = 0; attempt < 3; attempt++) {
+        drawGate("App protegido por PIN", "Digite o PIN para continuar", "Tentativas: " + (3 - attempt));
+        var pin = System.prompt("PIN do Ajustes", "", {hint: "num", mask: true});
         if (pin === null || pin === "") System.exitApp();  // cancelou: volta
-        if (pinOk(pin)) ok = true;
-        else note("PIN", "PIN incorreto", 900);
+        if (System.verifyPin(pin)) return;
+        UI.alert("PIN", "PIN incorreto");
     }
-    if (!ok) {
-        note("PIN", "Acesso negado", 1200);
-        System.exitApp();
-    }
+    UI.alert("PIN", "Acesso negado");
+    System.exitApp();
 }
-
 // Flag NVS diz que ha PIN mas o arquivo nao existe (apagaram por fora):
 // exigir redefinicao em vez de abrir destravado.
 function pinCorruptGate() {
-    System.fillScreen(T.bg);
-    header("Settings");
-    ctext("PIN corrompido", 120, 100, 2, T.warn, T.bg);
-    ctext("O arquivo do PIN foi apagado.", 120, 130, 1, T.textDim, T.bg);
-    ctext("Defina um novo PIN para continuar.", 120, 144, 1, T.textDim, T.bg);
+    drawGate("PIN corrompido", "O arquivo do PIN foi apagado. Defina um novo PIN.", "", T.warn);
     if (!flowNewPin()) System.exitApp();
 }
 
 // ---- loop principal --------------------------------------------------------
 
+function frame(full) {
+    if (UI.header(titleNow(), { back: true })) {
+        back();
+        return;
+    }
+    var r;
+    if (tela === "menu") {
+        r = listRows();
+        if (r) go(r.a);
+    } else if (tela === "wifi") {
+        drawWifi();
+    } else if (tela === "apps") {
+        drawApps();
+    } else if (tela === "appdetail") {
+        drawAppDetail();
+    } else if (tela === "time") {
+        drawTime();
+    } else if (tela === "tz") {
+        var i = UI.list("list:tz", LX, TOP, LW, 312 - TOP, rows, { selected: tzIndex() });
+        if (i >= 0) {
+            System.setTimezone(TZS[i][1]);
+            UI.toast("Fuso: " + tzLabel(TZS[i][1]));
+            go("time");
+        }
+    } else if (tela === "security") {
+        r = listRows();
+        if (r) secTap(r.a);
+    } else if (tela === "display") {
+        drawDisplay();
+    } else if (tela === "som") {
+        drawSom();
+    } else if (tela === "sensors") {
+        drawSensors(full);
+    } else if (tela === "update") {
+        drawUpdate(full);
+    } else if (tela === "about") {
+        listRows();
+    } else if (tela === "notif") {
+        r = listRows();
+        if (r && r.a === "clearnot" &&
+            UI.confirm("Limpar notificações?", "O histórico será apagado.", { yes: "Limpar", danger: true })) {
+            System.notificationsClear();
+            UI.toast("Histórico apagado");
+            rebuildRows();
+        }
+    } else if (tela === "watch") {
+        r = listRows();
+        if (r) {
+            watchTap(r.a);
+            rebuildRows();
+        }
+    } else if (tela === "reset") {
+        drawReset();
+    }
+}
+
 var pinSt0 = System.pinState();
 if (pinSt0 === 1) pinGate();
 else if (pinSt0 === 2) pinCorruptGate();
 
-var down = false;
-var lastX = 0, lastY = 0, movedPx = 0;
-var dragBri = false, scrolled = false;
-var lastScrollDraw = 0;
-var lastAuto = 0;
-var lastClock = "";
-
 go("menu");
 while (true) {
-    var t = System.getTouch();  // canto sup. direito sai (exit nativo)
-    if (t.touched) {
-        if (!down) {
-            down = true;
-            lastX = t.x; lastY = t.y;
-            movedPx = 0;
-            if (!modal && rowsVisible()) {
-                pressIdx = rowAt(t);
-                if (pressIdx >= 0 && (items[pressIdx].i || items[pressIdx].d)) pressIdx = -1;
-                if (pressIdx >= 0) drawAll();
-            }
-        } else {
-            var dx = t.x - lastX;
-            var dy = t.y - lastY;
-            movedPx += (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
-            lastX = t.x; lastY = t.y;
-            if (pressIdx >= 0 && movedPx >= 12) {
-                pressIdx = -1;
-                drawAll();
-            }
-            // rolagem por arraste (listas e changelog da OTA)
-            if (!dragBri && !modal && hasScroll() && (dy > 2 || dy < -2)) {
-                scroll -= dy;
-                clampScroll();
-                scrolled = true;
-                if (System.millis() - lastScrollDraw > 40) {
-                    lastScrollDraw = System.millis();
-                    drawAll();
-                }
-            }
-        }
-        // slider de brilho: arrastar ajusta, soltar persiste
-        if (tela === "display" && System.backlightSupported()) {
-            if (!dragBri && t.x >= 10 && t.x <= 230 && t.y >= 138 && t.y <= 196) {
-                dragBri = true;
-                movedPx = 99;
-            }
-            if (dragBri) {
-                var lv = Math.round((t.x - 24) * 100 / 192);
-                if (lv < 5) lv = 5;
-                if (lv > 100) lv = 100;
-                if (lv !== blLvl) {
-                    blLvl = lv;
-                    drawAll();
-                }
-            }
-        }
-        // slider de volume (API 13): arrastar ajusta, soltar persiste
-        if (tela === "som" && typeof System.setVolume === "function") {
-            if (!dragVol && t.x >= 10 && t.x <= 230 && t.y >= 138 && t.y <= 196) {
-                dragVol = true;
-                movedPx = 99;
-            }
-            if (dragVol) {
-                var vv = Math.round((t.x - 24) * 100 / 192);
-                if (vv < 0) vv = 0;
-                if (vv > 100) vv = 100;
-                if (vv !== volLvl) {
-                    volLvl = vv;
-                    drawAll();
-                }
-            }
-        }
-    } else if (down) {
-        down = false;
-        var wasPressed = pressIdx >= 0;
-        pressIdx = -1;
-        if (dragBri) {
-            dragBri = false;
-            System.setBrightness(blLvl);  // persiste (grava sozinho)
-        } else if (dragVol) {
-            dragVol = false;
-            System.setVolume(volLvl);     // aplica e persiste
-        } else if (scrolled) {
-            scrolled = false;
-            drawAll();  // posicao final da rolagem
-        } else if (movedPx < 12) {
-            onTap();  // tap: usa a ultima posicao tocada
-        }
-        // tira o destaque da linha (so vai ao vidro no proximo yield: um
-        // redesenho extra depois do onTap nao pisca)
-        if (wasPressed) drawAll();
-    }
-
-    // atualizacao periodica (Wi-Fi do menu/estado, relogio da tela Hora)
+    var full = UI.begin(T.bg);
+    frame(full);
+    // atualizacao periodica: valores vivos (Wi-Fi, hora, brilho, sensores);
+    // a lista e o UI.text se redesenham sozinhos quando o conteudo muda
     if (System.millis() - lastAuto > 1000) {
         lastAuto = System.millis();
-        if (!modal && !down) {
-            if (tela === "menu" || tela === "wifi") {
-                var s = scroll;
-                rebuildItems();
-                scroll = s;
-                clampScroll();
-                var sig = JSON.stringify(items) + (tela === "wifi" ? JSON.stringify(System.wifiStatus()) : "");
-                if (sig !== itemsSig) {
-                    itemsSig = sig;
-                    drawAll();
-                }
-            } else if (tela === "time") {
-                var tm = System.getTime();
-                if (tm !== lastClock) {
-                    lastClock = tm;
-                    var s2 = scroll;
-                    rebuildItems();
-                    scroll = s2;
-                    clampScroll();
-                    drawAll();
-                }
-            } else if (tela === "sensors") {
-                drawAll();          // valores vivos (accel/passos/temp)
-            }
-        }
+        if (tela === "menu" || tela === "about" || tela === "time") rebuildRows();
+        else if (tela === "sensors") UI.invalidate();  // barras desenhadas a mao
     }
-    System.delay(20);
+    UI.end();
 }

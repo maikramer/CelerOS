@@ -1,5 +1,5 @@
-// Breakout — quebre os tijolos, arraste a raquete (API 3)
-// ES5 puro (Duktape). Fisica delta-time com sub-passos; recorde em
+// Breakout — quebre os tijolos, arraste a raquete. ES5 puro (Duktape);
+// placar e dialogos do toolkit UI (API 22). Fisica delta-time com sub-passos; recorde em
 // /local/config_breakout_hi.txt.
 
 var T = System.theme();
@@ -133,8 +133,9 @@ function collide() {
             resetBall();
             drawStatic();
             drawHeader();
-            ctext("NIVEL " + level + "!", 120, 160, 2, T.warn, T.bg);
+            UI.text("Nível " + level + "!", 120, 152, { role: "title", align: "center", color: T.warn });
             System.delay(900);
+            drawStatic();
         }
         break;
     }
@@ -162,7 +163,7 @@ function drawStatic() {
     for (var i = 0; i < bricks.length; i++) {
         var b = bricks[i];
         if (!b.alive) continue;
-        System.fillRect(b.x, b.y, BRICK_W - 2, BRICK_H, ROW_COLORS[b.r]);
+        System.fillGradient(b.x, b.y, BRICK_W - 2, BRICK_H, ROW_COLORS[b.r], System.mixColor(ROW_COLORS[b.r], 0, 35), 3);
     }
 }
 
@@ -171,7 +172,7 @@ function drawBall() {
     if (pbx !== undefined) {
         System.fillCircle(pbx, pby, BALL_R + 1, T.bg);
     }
-    if (state !== "over") System.fillCircle(ball.x, ball.y, BALL_R, T.text);
+    if (state !== "over") System.fillSmoothCircle(ball.x, ball.y, BALL_R, T.text);
     pbx = ball.x;
     pby = ball.y;
 }
@@ -180,35 +181,18 @@ function drawPaddle() {
     if (ppx !== undefined) {
         System.fillRect(ppx - 2, PADDLE_Y, PADDLE_W + 4, PADDLE_H, T.bg);
     }
-    System.fillRoundRect(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H, 4, T.accent);
+    System.fillGradient(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H, T.accent, T.accentD, 4);
     ppx = paddleX;
 }
 
 function drawHeader() {
     // o nome vive na faixa do sistema (retratil); aqui e so o placar
-    System.fillRoundRect(0, 0, W, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Pontos " + score, 10, 5, 2);
-    var right = "Vidas " + lives + "  Rec " + hi;
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(right, W - 10 - System.textWidth(right, 1), 8, 1);
-    var sub = "Nivel " + level + (state === "serve" ? "  -  toque para lancar" : "");
-    System.setTextColor(T.accent, T.card);
-    System.drawString(sub, 10, 24, 1);
-    System.fillRect(0, 40, W, 3, T.accent);
-}
-
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
-}
-
-function drawOver() {
-    System.fillRoundRect(25, 110, 190, 96, 10, T.card);
-    System.drawRoundRect(25, 110, 190, 96, 10, T.err);
-    ctext("Fim de jogo", 120, 130, 2, T.warn, T.card);
-    ctext("Pontos: " + score + "  Rec: " + hi, 120, 154, 2, T.text, T.card);
-    ctext("toque para jogar de novo", 120, 184, 1, T.accent, T.card);
+    System.fillRect(0, 0, W, 40, T.card);
+    UI.text("Pontos " + score, 10, 4, { role: "title", bg: T.card });
+    UI.text("Vidas " + lives + "  ·  Rec " + hi, W - 10, 6, { role: "caption", align: "right", color: T.textDim, bg: T.card });
+    UI.text("Nível " + level + (state === "serve" ? "  ·  toque para lançar" : ""), 10, 24,
+            { role: "caption", color: T.accent, bg: T.card });
+    System.fillRect(0, 40, W, 2, T.accent);
 }
 
 // -------------------------------------------------------------- entrada ----
@@ -228,7 +212,7 @@ function pollInput() {
     } else if (touched) {
         touched = false;
         if (state === "serve") launch();
-        else if (state === "over") { newGame(); }
+
     }
 }
 
@@ -245,6 +229,11 @@ while (true) {
     step(dt);
     drawPaddle();
     drawBall();
-    if (state === "over") drawOver();
+    if (state === "over") {
+        // dialogo nativo sobre o campo; ao voltar, partida nova
+        UI.alert("Fim de jogo", "Pontos: " + score + "   Recorde: " + hi, "Jogar de novo");
+        newGame();
+        lastTick = System.millis();
+    }
     System.delay(10);
 }

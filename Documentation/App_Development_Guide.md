@@ -87,32 +87,35 @@ Because CelerOS handles the underlying C++ translation, you can write simple, hi
 ### The app model
 
 * **ES5 only**: no arrow functions, `let`/`const`, `class` or template literals — the engine is Duktape. Use `var` + `function`.
-* Your app is a **blocking `while` loop** with `System.delay()` — there are no events or callbacks. Everything is polling: `System.getTouch()`, `System.keypadPoll()`, `CelerLink.poll()`.
+* Your app is a **blocking `while` loop** paced by `UI.end()` (or `System.delay()`) — there are no events or callbacks. Everything is polling: `System.getTouch()`, `System.keypadPoll()`, `CelerLink.poll()`.
 * All coordinates live in the **virtual 240x320 canvas** (`System.screenWidth()` is 240 everywhere); the OS scales to the physical glass. Pick colors from `System.theme()` instead of hardcoding.
 * Exit with `System.exitApp()`. State you want to keep goes in `FS.appData()` (a private folder per app).
 
 ### Your First App (`main.js`)
 
-Paints the background, writes a centered message, waits for a touch and
-exits — with the real API (`System.*`, theme colors):
+Since API 22 the interface comes from the `UI` toolkit — the same widgets
+the system screens use (fonts, buttons with a pressed state, inertial
+lists, dialogs), with no hand-written hit-tests:
 
 ```javascript
 var T = System.theme();
+var taps = 0;
 
-System.fillScreen(T.bg);
-System.setTextColor(T.text);
-var msg = "Hello CelerOS!";
-System.drawString(msg, 120 - (System.textWidth(msg) >> 1), 150, 2);
-
-// Wait for a touch (yielding shows the frame on the glass)
-var t;
-do {
-    t = System.getTouch();
-    System.delay(20);
-} while (!t.touched);
-
-System.exitApp();   // back to the Launcher
+while (true) {
+    UI.begin(T.bg);                          // reads touch; paints the background on a full frame
+    UI.header("My App");
+    UI.text("Hello CelerOS!", 120, 90, { role: "title", align: "center" });
+    UI.text("taps: " + taps, 120, 130, { align: "center", color: T.accent });
+    if (UI.button("Tap", 20, 200, 200, 44)) taps++;
+    if (UI.button("Exit", 20, 254, 200, 44, { style: "ghost" })) System.exitApp();
+    UI.end();                                // shows the frame and holds ~30 fps
+}
 ```
+
+Custom drawing (games, charts, clock faces) still uses the `System.*`
+primitives, inside `if (full)` — `full` is what `UI.begin()` returned. See
+section 27 of the [JS API Guide](JS_API_Guide.md) for the redraw model and
+the widget list.
 
 ### Feature detection across boards
 

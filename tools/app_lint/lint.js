@@ -51,7 +51,7 @@ const MAX_MAIN_JS_PSRAM = _hubLimit('MAX_MAIN_JS_PSRAM', 128 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'Storage', 'Sensors', 'Phone'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'Storage', 'Sensors', 'Phone', 'UI'];
 // Objetos que so existem com o Kconfig da placa: uso sem typeof vira aviso
 const OPTIONAL_ROOTS = {
   CelerLink: 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar',
@@ -569,6 +569,8 @@ function lintSource(manifest, src, appInfo) {
           const ch = memberChain(c);
           if (ch && ch.root === 'System' && ch.parts.length === 1 &&
               (ch.parts[0] === 'delay' || ch.parts[0] === 'prompt')) { found = true; return; }
+          // UI.end (API 22) espera pelo ritmo de frames via o mesmo caminho do delay
+          if (ch && ch.root === 'UI' && ch.parts.length === 1 && ch.parts[0] === 'end') { found = true; return; }
         } else if (c.type === 'Identifier' && (scopeHas(scopeAt, c.name) || implicitGlobals.has(c.name))) {
           found = true; return;
         }
@@ -681,7 +683,7 @@ function lintSource(manifest, src, appInfo) {
               (test.type === 'UnaryExpression' && test.operator === '!' && test.argument.type === 'Literal' && test.argument.value === 0)
             ));
         if (infinite && !loopYields(node.body)) {
-          d(node, 'aviso', 'loop', 'loop infinito sem System.delay() no corpo: o GC do Duktape roda dentro de delay; sem ele o app trava o aparelho');
+          d(node, 'aviso', 'loop', 'loop infinito sem System.delay() (ou UI.end()) no corpo: o GC do Duktape roda dentro de delay; sem ele o app trava o aparelho');
         }
         break;
       }

@@ -1,14 +1,14 @@
 {
   "name": "Qwen",
   "packageName": "celeros.qwen",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Assistente de voz: fale no microfone e leia a resposta",
   "type": "App",
   "category": "Utility",
-  "api": 19,
+  "api": 22,
   "permissions": ["net", "fs", "mic"],
   "icon": "qwen",
   "topbar": false,
-  "changelog": "1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
+  "changelog": "1.1.0 - conversa em baloes e botao de voz redesenhado (toolkit UI, API 22)\n1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
 }

@@ -1,81 +1,20 @@
 // CelerOS Installer — app de sistema (W8). Porte do InstallerUI.cpp:
 // escaneia /sd/apps/, mostra detalhes dos pacotes e instala na flash
 // (/local/apps) ou no proprio SD (flag /local/config_install_sd.txt).
-// X no canto sup. direito sai.
+// Interface no toolkit UI (API 22). X no canto sup. direito sai.
 
 var T = System.theme();
 
 var SD_FLAG = "/local/config_install_sd.txt";
 var SD_APPS = "/sd/apps";
 var LCL_APPS = "/local/apps";
-var ROW_H = 44;   // altura das linhas da lista
-var PITCH = 50;   // linha + gap
-var VIS = 4;      // linhas visiveis
-var TOP = 80;     // topo da lista
-
-// ---- helpers de UI (padrao dos apps de sistema) ---------------------------
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
-    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
-}
-function lcenter(s, cx, y, f, col, bg) {
-    System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
-}
-function hit(t, x, y, w, h) {
-    return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
-}
-function header(title) {
-    // titulo na faixa do sistema (API 6) — sem cabecalho desenhado
-    if (System.topbarText) System.topbarText(title);
-}
-// voltar so existe onde ha navegacao real (detail -> list); nas listas o X
-// da faixa sai do app
-function footer() {
-    if (state !== "detail") return;
-    System.fillRoundRect(8, 282, 84, 30, 8, T.raised);
-    System.drawRoundRect(8, 282, 84, 30, 8, T.stroke);
-    ctext("< Voltar", 50, 297, 2, T.text, T.raised);
-}
-function trunc(s, maxw, f) {
-    if (System.textWidth(s, f) <= maxw) return s;
-    while (s.length > 1 && System.textWidth(s + "...", f) > maxw) {
-        s = s.substring(0, s.length - 1);
-    }
-    return s + "...";
-}
-function wrap(s, maxChars, maxLines) {
-    var out = [];
-    if (!s || s.length === 0) return out;
-    var words = s.split(" ");
-    var cur = "";
-    for (var i = 0; i < words.length; i++) {
-        var w = words[i];
-        if (w.length > maxChars) w = w.substring(0, maxChars);
-        if (cur.length === 0) cur = w;
-        else if (cur.length + 1 + w.length <= maxChars) cur = cur + " " + w;
-        else {
-            out[out.length] = cur;
-            if (out.length >= maxLines) return out;
-            cur = w;
-        }
-    }
-    if (cur.length > 0 && out.length < maxLines) out[out.length] = cur;
-    return out;
-}
+var LX = 8, LW = 224, TOP = 48;
 
 // ---- estado ----------------------------------------------------------------
-var state = "boot"; // list | empty | detail | alert
+var state = "list"; // list | detail
 var apps = [];
 var sdOk = false;
-var scroll = 0;
-var sel = 0;
 var detail = null;
-var alertTitle = "";
-var alertLines = [];
-var alertErr = false;
 
 // ---- logica de instalacao ---------------------------------------------------
 function baseName(p) {
@@ -94,8 +33,7 @@ function toggleDest() {
     if (flagSD()) FS.deleteFile(SD_FLAG);
     else FS.writeTextFile(SD_FLAG, "sd\n");
     refreshInstalled();
-    if (state === "list") drawList();
-    else if (state === "detail") drawDetail();
+    UI.invalidate();
 }
 function verParts(v) {
     var p = [0, 0, 0];
@@ -180,204 +118,127 @@ function scanApps() {
 }
 
 // ---- telas ------------------------------------------------------------------
-function drawState() {
-    if (state === "list") drawList();
-    else if (state === "empty") drawEmpty();
-    else if (state === "detail") drawDetail();
-    else if (state === "alert") drawAlert();
+function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB"; }
+
+// Frame avulso (fora do laco): "buscando" e "instalando" antes das chamadas
+// bloqueantes de FS
+function busyFrame(title, sub) {
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.header("Installer");
+    UI.spinner(120, 132, 18);
+    UI.text(title, 120, 166, { role: "title", align: "center", w: LW });
+    if (sub) UI.text(sub, 120, 198, { role: "caption", align: "center", color: T.textDim, w: LW });
+    UI.end();
 }
-function drawBusy() {
-    System.fillScreen(T.bg);
-    header("Installer");
-    ctext("Buscando apps...", 120, 158, 2, T.textDim, T.bg);
-}
-function drawEmpty() {
-    System.fillScreen(T.bg);
-    header("Installer");
-    System.fillRoundRect(8, 56, 224, 150, 10, T.card);
-    System.drawRoundRect(8, 56, 224, 150, 10, T.stroke);
-    ctext("SD sem apps", 120, 92, 2, T.warn, T.card);
-    var y = 122;
-    if (sdOk) lcenter("Nenhum app em /sd/apps", 120, y, 1, T.text, T.card);
-    else lcenter("Cartão SD não encontrado", 120, y, 1, T.text, T.card);
-    y += 20;
-    lcenter("Copie apps para o cartão ou", 120, y, 1, T.textDim, T.card);
-    y += 14;
-    lcenter("use o celerctl / App Store.", 120, y, 1, T.textDim, T.card);
-    System.fillRoundRect(8, 230, 224, 32, 8, T.accent);
-    ctext("Reescanear", 120, 246, 2, T.onAccent, T.accent);
-    footer();
+function rows() {
+    var out = [];
+    for (var i = 0; i < apps.length; i++) {
+        var app = apps[i];
+        out.push({ label: app.name, sub: "v" + app.version + " · API " + app.api,
+                   right: app.inst ? "instalado" : "", rightColor: T.ok });
+    }
+    return out;
 }
 function drawList() {
-    System.fillScreen(T.bg);
-    header("Installer");
+    UI.header("Installer", { sub: apps.length ? apps.length + " no SD" : "" });
+    // destino (toque alterna flash/SD)
+    UI.card(LX, TOP, LW, 44);
+    UI.text("Instalar no cartão SD", LX + 12, TOP + 14, { w: 150 });
+    var sd = destBase() === SD_APPS;
+    if (UI.toggle(LX + LW - 56, TOP + 10, sd) !== sd) toggleDest();
+    UI.cardEnd();
 
-    // faixa de destino (toque para alternar flash/SD)
-    System.fillRoundRect(8, 48, 224, 26, 8, T.card);
-    System.drawRoundRect(8, 48, 224, 26, 8, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Destino:", 16, 57, 1);
-    System.setTextColor(T.accent, T.card);
-    System.drawString(destLabel(), 16 + System.textWidth("Destino: ", 1), 57, 1);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(">", 216, 57, 1);
-
-    for (var v = 0; v < VIS; v++) {
-        var i = scroll + v;
-        if (i >= apps.length) break;
-        var app = apps[i];
-        var y = TOP + v * PITCH;
-        var isSel = (i === sel);
-        var bg = isSel ? T.raised : T.card;
-        System.fillRoundRect(8, y, 224, ROW_H, 8, bg);
-        System.drawRoundRect(8, y, 224, ROW_H, 8, T.stroke);
-        if (isSel) System.fillRect(8, y + 6, 4, ROW_H - 12, T.accent);
-        System.setTextColor(T.text, bg);
-        System.drawString(trunc(app.name, 192, 2), 18, y + 5, 2);
-        System.setTextColor(T.textDim, bg);
-        System.drawString("v" + app.version + "  -  API " + app.api, 18, y + 28, 1);
-        if (app.inst) {
-            var s = "instalado";
-            System.setTextColor(T.ok, bg);
-            System.drawString(s, 220 - System.textWidth(s, 1), y + 28, 1);
-        }
+    if (apps.length === 0) {
+        UI.card(LX, TOP + 56, LW, 140);
+        UI.text("SD sem apps", 120, TOP + 76, { role: "title", align: "center", color: T.warn });
+        UI.text(sdOk ? "Nenhum app em /sd/apps." : "Cartão SD não encontrado.", 120, TOP + 108,
+                { align: "center", w: LW - 16 });
+        UI.text("Copie apps para o cartão ou use o celerctl / App Store.", 120, TOP + 136,
+                { role: "caption", align: "center", color: T.textDim, w: LW - 24, lines: 2 });
+        UI.cardEnd();
+        if (UI.button("Procurar de novo", LX, 268, LW, 40)) rescan();
+        return;
     }
-    if (apps.length > VIS) {
-        lcenter((scroll + 1) + "-" + Math.min(scroll + VIS, apps.length) + " de " + apps.length,
-                120, 278, 1, T.textDim, T.bg);
-    }
-    footer();
+    var i = UI.list("apps", LX, TOP + 52, LW, 312 - TOP - 52, rows(), { rowH: 48 });
+    if (i >= 0) openApp(i);
 }
 function drawDetail() {
     var app = detail;
     var inst = installedMeta(app);
     var isUpd = (inst !== null && inst.version && verGreater(app.version, inst.version));
-
-    System.fillScreen(T.bg);
-    header(trunc(app.name, 200, 2));
-
-    System.fillRoundRect(8, 48, 224, 150, 10, T.card);
-    System.drawRoundRect(8, 48, 224, 150, 10, T.stroke);
-    System.setTextColor(T.text, T.card);
-    System.drawString(trunc(app.name, 208, 2), 16, 56, 2);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("v" + app.version + "  -  API " + app.api, 16, 76, 1);
+    if (UI.header(app.name, { back: true })) {
+        state = "list";
+        UI.invalidate();
+        return;
+    }
+    UI.card(LX, TOP, LW, 150);
+    UI.text("v" + app.version + "  ·  API " + app.api, LX + 12, TOP + 10, { role: "caption", color: T.textDim });
+    var y = TOP + 30;
     if (app.author.length > 0) {
-        System.drawString("Autor: " + trunc(app.author, 28, 1), 16, 90, 1);
+        UI.text("Autor: " + app.author, LX + 12, y, { role: "caption", color: T.textDim, w: LW - 24 });
+        y += 20;
     }
-    var lines = wrap(app.desc, 34, 4);
-    var ly = app.author.length > 0 ? 108 : 96;
-    for (var i = 0; i < lines.length; i++) {
-        System.drawString(lines[i], 16, ly, 1);
-        ly += 12;
-    }
+    UI.text(app.desc || "Sem descrição.", LX + 12, y, { role: "caption", w: LW - 24, lines: 5 });
+    UI.cardEnd();
 
-    // faixa de status
-    System.fillRoundRect(8, 204, 224, 22, 8, T.card);
-    System.drawRoundRect(8, 204, 224, 22, 8, T.stroke);
-    var stTxt;
-    var stCol;
+    var stTxt, stCol;
     if (inst === null) { stTxt = "Não instalado"; stCol = T.textDim; }
     else if (isUpd) { stTxt = "Nova versão: v" + app.version; stCol = T.warn; }
     else { stTxt = "Instalado v" + (inst.version ? String(inst.version) : "?"); stCol = T.ok; }
-    System.setTextColor(stCol, T.card);
-    System.drawString(stTxt, 16, 210, 1);
+    UI.badge(stTxt, LX, TOP + 160, { color: T.raised, textColor: stCol });
 
-    System.setTextColor(T.textDim, T.bg);
-    System.drawString(trunc("Instalar em: " + destBase() + "/" + app.pkg, 216, 1), 12, 230, 1);
-    var kb = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.round(n / 1024) + "KB"; };
     var need = 0;
     try {
         need = (FS.getFileSize(app.folder + "/main.js") || 0) +
                (FS.getFileSize(app.folder + "/app.json") || 0) +
                (FS.getFileSize(app.folder + "/icon.png") || 0);
     } catch (e2) { need = 0; }
-    System.drawString("Pacote: " + kb(need) + "  -  Livre: " + kb(FS.getFreeSpace(destBase())), 12, 244, 1);
+    UI.text("Destino: " + destBase() + "/" + app.pkg, LX + 2, TOP + 188, { role: "caption", color: T.textDim, w: LW - 4 });
+    UI.text("Pacote: " + kb(need) + "  ·  Livre: " + kb(FS.getFreeSpace(destBase())), LX + 2, TOP + 206,
+            { role: "caption", color: T.textDim });
 
     var lbl = "Instalar";
     if (inst !== null) lbl = isUpd ? "Atualizar" : "Reinstalar";
-    System.fillRoundRect(8, 248, 224, 32, 8, T.accent);
-    ctext(lbl, 120, 264, 2, T.onAccent, T.accent);
-
-    footer();
-}
-function drawAlert() {
-    System.fillScreen(T.bg);
-    header("Installer");
-    System.fillRoundRect(8, 64, 224, 146, 10, T.card);
-    System.drawRoundRect(8, 64, 224, 146, 10, T.stroke);
-    ctext(trunc(alertTitle, 208, 4), 120, 100, 4, alertErr ? T.err : T.ok, T.card);
-    var y = 132;
-    for (var i = 0; i < alertLines.length; i++) {
-        lcenter(alertLines[i], 120, y, 1, T.text, T.card);
-        y += 15;
-    }
-    System.fillRoundRect(73, 222, 94, 32, 8, T.accent);
-    ctext("OK", 120, 238, 2, T.onAccent, T.accent);
-    footer();
-}
-function drawInstalling(app) {
-    System.fillScreen(T.bg);
-    header("Installer");
-    System.fillRoundRect(20, 90, 200, 130, 10, T.card);
-    System.drawRoundRect(20, 90, 200, 130, 10, T.stroke);
-    ctext("Instalando...", 120, 118, 2, T.text, T.card);
-    lcenter(trunc(app.name, 30, 1), 120, 136, 1, T.textDim, T.card);
-    System.drawRoundRect(40, 160, 160, 14, 7, T.stroke);
-    System.fillRoundRect(41, 161, 94, 12, 6, T.accent);
-    lcenter("Não desligue o aparelho", 120, 186, 1, T.textDim, T.card);
-    System.delay(250); // garante o render antes da copia bloqueante
+    if (UI.button(lbl, LX, 268, LW, 40)) tryInstall(detail);
 }
 
 // ---- fluxo -------------------------------------------------------------------
+var BAD_PKG = "packageName incorreto: use minúsculas, sem espaços e com ponto (a.b.c).";
 function showAlert(title, lines, isErr) {
-    state = "alert";
-    alertTitle = title;
-    alertLines = lines;
-    alertErr = isErr;
-    drawAlert();
+    UI.alert(title, lines.join(" "));
+    if (!isErr) state = "list";
+    refreshInstalled();
+    UI.invalidate();
 }
 function openApp(i) {
     var app = apps[i];
-    sel = i;
     var lvl = System.getAPILevel();
     if (app.api > lvl) {
-        showAlert("Incompatível",
-                  ["O app requer API " + app.api + ".",
-                   "Este OS tem API " + lvl + ".",
-                   "Atualize o CelerOS."], true);
+        showAlert("Incompatível", ["O app requer API " + app.api + "; este sistema tem API " + lvl + ". Atualize o CelerOS."], true);
         return;
     }
     if (!validPkg(app.pkg)) {
-        showAlert("Pacote inválido",
-                  ["packageName incorreto.",
-                   "Use minúsculas, sem espaços",
-                   "e com ponto (a.b.c)."], true);
+        showAlert("Pacote inválido", [BAD_PKG], true);
         return;
     }
     var inst = installedMeta(app);
     if (inst !== null && inst.author && app.author && inst.author !== app.author) {
-        showAlert("Conflito",
-                  ["Autor diferente do instalado:",
-                   "Instalado: " + trunc(String(inst.author), 24, 1),
-                   "Novo: " + trunc(app.author, 24, 1)], true);
+        showAlert("Conflito", ["Autor diferente do instalado (" + String(inst.author) + " / " + app.author + ")."], true);
         return;
     }
     detail = app;
     state = "detail";
-    drawDetail();
+    UI.invalidate();
 }
 function tryInstall(app) {
     if (!validPkg(app.pkg)) {
-        showAlert("Pacote inválido",
-                  ["packageName incorreto.",
-                   "Use minúsculas, sem espaços",
-                   "e com ponto (a.b.c)."], true);
+        showAlert("Pacote inválido", [BAD_PKG], true);
         return;
     }
     var base = destBase();
     var dest = base + "/" + app.pkg;
-    drawInstalling(app); // copia e bloqueante, sem callback de progresso
+    busyFrame("Instalando...", app.name + " - não desligue o aparelho");  // copia bloqueante
     FS.mkdir(base);
     // Transacional: copia para <pkg>.inst e so entao troca pela versao antiga.
     // Antes a antiga era apagada ANTES da copia — disco cheio no meio deixava
@@ -400,88 +261,27 @@ function tryInstall(app) {
         if (typeof System.playTone === "function") {
             try { System.playTone([[784, 80], [1047, 110]]); } catch (e1) {}
         }
-        showAlert("Instalado!",
-                  [trunc(app.name, 34, 1),
-                   "v" + app.version,
-                   "Em " + trunc(dest, 26, 1)], false);
+        showAlert("Instalado!", [app.name + " v" + app.version + " em " + dest + "."], false);
     } else {
         var livre = Math.round(FS.getFreeSpace(base) / 1024);
-        showAlert("Falhou",
-                  ["Não foi possível copiar o app.",
-                   "Espaço livre: " + livre + " KB"], true);
-    }
-}
-function maxScroll() {
-    var m = apps.length - VIS;
-    return m > 0 ? m : 0;
-}
-function onTap(x, y) {
-    var pt = { x: x, y: y };
-    if (state === "list") {
-        if (hit(pt, 8, 48, 224, 26)) { toggleDest(); return; }
-        if (y >= TOP && y < 278) {
-            var i = scroll + Math.floor((y - TOP) / PITCH);
-            if (i >= 0 && i < apps.length) openApp(i);
-        }
-    } else if (state === "empty") {
-        if (hit(pt, 8, 230, 224, 32)) rescan();
-    } else if (state === "detail") {
-        if (hit(pt, 8, 282, 84, 30)) { state = "list"; drawList(); return; }  // navegacao real
-        if (hit(pt, 8, 248, 224, 32)) tryInstall(detail);
-    } else if (state === "alert") {
-        if (hit(pt, 8, 282, 84, 30) || hit(pt, 73, 222, 94, 32)) {
-            state = "list";
-            refreshInstalled();
-            drawList();
-        }
+        showAlert("Falhou", ["Não foi possível copiar o app. Espaço livre: " + livre + " KB."], true);
     }
 }
 function rescan() {
-    drawBusy();
+    busyFrame("Buscando apps...", "");
     scanApps();
     refreshInstalled();
-    scroll = 0;
-    sel = 0;
+    UI.resetScroll("apps");
     detail = null;
-    state = apps.length > 0 ? "list" : "empty";
-    drawState();
+    state = "list";
+    UI.invalidate();
 }
 
 // ---- inicializacao + loop -----------------------------------------------------
-drawBusy();
-scanApps();
-refreshInstalled();
-state = apps.length > 0 ? "list" : "empty";
-drawState();
-
-var down = false;
-var downX = 0;
-var downY = 0;
-var moved = false;
+rescan();
 while (true) {
-    var t = System.getTouch(); // canto sup. direito sai automaticamente
-    if (t.touched) {
-        if (!down) {
-            down = true;
-            moved = false;
-            downX = t.x;
-            downY = t.y;
-        } else if (state === "list") {
-            // rolagem por drag vertical (1 linha a cada 30 px)
-            var dy = t.y - downY;
-            if (dy >= 30) {
-                moved = true;
-                downY = t.y;
-                if (scroll > 0) { scroll--; drawList(); }
-            } else if (dy <= -30) {
-                moved = true;
-                downY = t.y;
-                if (scroll < maxScroll()) { scroll++; drawList(); }
-            }
-        }
-    } else {
-        if (down && !moved) onTap(downX, downY);
-        down = false;
-    }
-    System.delay(20);
+    UI.begin(T.bg);
+    if (state === "detail") drawDetail();
+    else drawList();
+    UI.end();
 }

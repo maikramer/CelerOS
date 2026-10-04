@@ -73,41 +73,36 @@ function btnRect(b) {
     };
 }
 
-// ---- desenho -------------------------------------------------------------------
+// cauda que cabe na largura (o fim da conta e o que importa)
+function tail(s, role, maxW) {
+    while (s.length > 0 && UI.measure(s, role) > maxW) s = s.substring(1);
+    return s;
+}
+
+// ---- desenho (toolkit UI, API 22): visor em card + teclado de botoes --------
 function drawDisplay() {
-    System.fillRoundRect(8, 30, SW - 16, 74, 10, T.card);
-    System.drawRoundRect(8, 30, SW - 16, 74, 10, T.stroke);
-
+    UI.card(8, 8, SW - 16, 96);
     // historico: ultimas contas em cima, apagando
-    System.setTextColor(T.textDim, T.card);
-    var hy = 38;
-    for (var i = Math.max(0, history.length - MAXHIST); i < history.length; i++) {
-        System.drawString(history[i], 16, hy, 1);
-        hy += 10;
+    var hs = history.slice(Math.max(0, history.length - MAXHIST));
+    for (var i = 0; i < MAXHIST; i++) {
+        UI.text(hs[i] || "", 16, 14 + i * 12, { role: "caption", color: T.textDim, w: SW - 40, id: i });
     }
-
-    // expressao corrente (fonte 2, cauda visivel)
-    var e = expression;
-    while (e.length > 0 && System.textWidth(e, 2) > SW - 40) e = e.substring(1);
-    System.setTextColor(T.text, T.card);
-    System.drawString(e || "0", 16, 62, 2);
-
-    // resultado: previa viva (dim) ou fechado (accent, fonte grande)
+    // expressao corrente (cauda visivel)
+    UI.text(tail(expression || "0", "body", SW - 40), 16, 52, { w: SW - 40 });
+    // resultado: fechado (accent, grande) ou previa viva (dim)
+    var big = "", col = T.accent;
     if (result !== "") {
-        var rTxt = result;
-        while (rTxt.length > 0 && System.textWidth(rTxt, 3) > SW - 40) rTxt = rTxt.substring(1);
-        var isErr = result === "erro";
-        System.setTextColor(isErr ? T.err : T.accent, T.card);
-        System.drawString(rTxt, 16, 80, 3);
+        big = tail(result, "display", SW - 40);
+        col = result === "erro" ? T.err : T.accent;
     } else {
         var prev = preview();
         if (prev !== null && expression !== "") {
-            System.setTextColor(T.textDim, T.card);
-            var p2 = "= " + fmtNum(prev);
-            while (p2.length > 0 && System.textWidth(p2, 2) > SW - 40) p2 = p2.substring(1);
-            System.drawString(p2, 16, 86, 2);
+            big = tail("= " + fmtNum(prev), "display", SW - 40);
+            col = T.textDim;
         }
     }
+    UI.text(big, SW - 20, 70, { role: "display", color: col, align: "right" });
+    UI.cardEnd();
 }
 
 function preview() {
@@ -125,26 +120,6 @@ function preview() {
         var v = eval(expression);
         return (typeof v === "number" && !isNaN(v) && isFinite(v)) ? v : null;
     } catch (e) { return null; }
-}
-
-function drawUI() {
-    System.fillScreen(T.bg);
-    drawDisplay();
-    for (var i = 0; i < buttons.length; i++) {
-        var b = buttons[i];
-        var p = btnRect(b);
-        var bg, fg;
-        if (b.type === "eq") { bg = T.accent; fg = T.onAccent; }
-        else if (b.type === "op") { bg = T.raised; fg = T.accent; }
-        else if (b.type === "clear" || b.type === "del" || b.type === "ans") { bg = T.raised; fg = T.warn; }
-        else { bg = T.card; fg = T.text; }
-        System.fillRoundRect(p.x, p.y, btnW, btnH, 8, bg);
-        System.drawRoundRect(p.x, p.y, btnW, btnH, 8, T.stroke);
-        var f = b.l.length > 1 ? 2 : 3;
-        System.setTextColor(fg, bg);
-        System.drawString(b.l, p.x + (btnW - System.textWidth(b.l, f)) / 2,
-                          p.y + (btnH - (f === 3 ? 20 : 14)) / 2, f);
-    }
 }
 
 // ---- logica --------------------------------------------------------------------
@@ -177,31 +152,24 @@ function handleButton(b) {
             result = "erro";
         }
     }
-    drawDisplay();
 }
 
-drawUI();
-
-var lastTouch = false;
+// ---- laco: um frame por giro; tap no botao chama a logica ----------------------
+function keyColors(b) {
+    if (b.type === "eq") return { color: T.accent, textColor: T.onAccent };
+    if (b.type === "op") return { color: T.raised, textColor: T.accent };
+    if (b.type === "clear" || b.type === "del") return { color: T.raised, textColor: T.warn };
+    return { color: T.card, textColor: T.text };
+}
 while (true) {
-    var t = System.getTouch();
-    var isTapped = t.touched && !lastTouch;
-
-    if (isTapped && t.y >= startY) {
-        for (var i = 0; i < buttons.length; i++) {
-            var b = buttons[i];
-            var p = btnRect(b);
-            if (t.x >= p.x && t.x <= p.x + btnW && t.y >= p.y && t.y <= p.y + btnH) {
-                // flash de toque: realca e devolve a moldura do tema
-                System.drawRoundRect(p.x, p.y, btnW, btnH, 8, T.text);
-                System.delay(60);
-                System.drawRoundRect(p.x, p.y, btnW, btnH, 8, T.stroke);
-                handleButton(b);
-                break;
-            }
-        }
+    UI.begin(T.bg);
+    drawDisplay();
+    for (var i = 0; i < buttons.length; i++) {
+        var b = buttons[i];
+        var p = btnRect(b);
+        var o = keyColors(b);
+        o.role = b.l.length > 1 ? "body" : "title";
+        if (UI.button(b.l, p.x, p.y, btnW, btnH, o)) handleButton(b);
     }
-
-    lastTouch = t.touched;
-    System.delay(15);
+    UI.end();
 }

@@ -1,12 +1,12 @@
 {
   "name": "Clock",
   "packageName": "celeros.clock",
-  "version": "1.2.1",
-  "api": 7,
+  "version": "1.3.0",
+  "api": 22,
   "permissions": [],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Relogio completo: hora com segundos, fuso, horas do mundo, cronometro, timer e alarme que dispara pelo sistema (vale ate com o app fechado).",
-  "changelog": "1.2.1 - alarme reprogramado ao mudar a hora com ele ligado; permissoes declaradas (nenhuma). 1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer"
+  "changelog": "1.3.0 - visual novo com o toolkit UI (API 22): abas no topo, anel de segundos, relogio mundial em lista e controles nativos\n1.2.1 - alarme reprogramado ao mudar a hora com ele ligado; permissoes declaradas (nenhuma). 1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer"
 }

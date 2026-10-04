@@ -1,12 +1,12 @@
 {
   "name": "Tic Tac Toe",
   "packageName": "celeros.tictactoe",
-  "version": "1.2.1",
-  "api": 3,
+  "version": "1.3.0",
+  "api": 22,
   "permissions": ["fs"],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Jogo da velha: 1 jogador com tres niveis (minimax no impossivel) ou 2 jogadores no mesmo aparelho. Placar salvo e linha de vitoria riscada.",
-  "changelog": "1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons"
+  "changelog": "1.3.0 - visual novo com o toolkit UI (API 22): menu com abas de modo/nivel, marcas suavizadas e dialogo de fim de jogo\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons"
 }

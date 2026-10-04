@@ -189,6 +189,40 @@ void releaseCanvasBuffer();
 int headerHeight();
 void drawHeader(Canvas& c, const char* title);
 
+// ---------------------------------------------------------------- paint ----
+// Pintores puros dos widgets: geometria + estado visual entram por parametro
+// (nada de isPressed/estado do Navigator). Os widgets Kui e o toolkit `UI`
+// dos apps JS (Runtime/JsUi.cpp) desenham pelos MESMOS pintores — o app JS
+// fica com o mesmo visual das telas do sistema. Coordenadas fisicas.
+namespace paint {
+enum ButtonStyle { BtnPrimary, BtnGhost, BtnDanger };
+// Cabecalho (faixa de altura h com marcador de acento + titulo). sub opcional
+// (legenda a direita); back desenha a seta de voltar e desloca o titulo.
+void header(Canvas& c, const Rect& r, const char* title, const char* sub, bool back, bool backPressed);
+void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed);
+void toggle(Canvas& c, const Rect& r, bool on, bool pressed);
+// value 0..100
+void slider(Canvas& c, const Rect& r, int value, bool active);
+void progress(Canvas& c, const Rect& r, int value);
+void spinner(Canvas& c, const Rect& r, uint32_t color);
+// Fundo do card da lista + indicador de scroll (contentH = altura total)
+void listFrame(Canvas& c, const Rect& r, int scroll, int contentH);
+void signalBars(Canvas& c, int right, int cy, int level, uint32_t on, uint32_t off);
+// Uma linha de lista; sub (2a linha, caption) opcional; last = sem separador
+void listRow(Canvas& c, const Rect& row, const char* label, const char* sub, const char* right, int bars,
+             bool enabled, bool pressed, bool selected, bool last, uint32_t rightColor = THEME_TEXT_DIM);
+// Controle segmentado: n rotulos, sel = indice ativo, pressed = indice sob o dedo (-1)
+void tabs(Canvas& c, const Rect& r, const char* const* labels, int n, int sel, int pressed);
+// Card de dialogo centrado em area (corpo com quebra de linha); botoes na base
+Rect dialogCard(const Rect& area, int nButtons);
+void dialog(Canvas& c, const Rect& card, const char* title, const char* body, const char* const* buttons,
+            const ButtonStyle* styles, int n, int pressed);
+// Retangulo do i-esimo botao do dialogo (desenho e hit-test da mesma geometria)
+Rect dialogButton(const Rect& card, int i, int n);
+// Pilula com texto (caption); devolve a largura
+int badge(Canvas& c, int x, int y, const char* text, uint32_t color, uint32_t textColor);
+}  // namespace paint
+
 // ---------------------------------------------------------------- Screen ----
 class Screen {
 public:

@@ -270,6 +270,20 @@ function makeEnv() {
         fillTriangle: function() {},
         drawRoundRect: function() {},
         fillRoundRect: function() {},
+        // API 22: AA, gradiente, arco (no-op no host) e mistura de cor (real)
+        fillGradient: function() {},
+        fillArc: function() {},
+        fillSmoothCircle: function() {},
+        fillSmoothRoundRect: function() {},
+        drawWideLine: function() {},
+        mixColor: function(a, b, p) {
+            p = Math.max(0, Math.min(100, p | 0));
+            function ch(sh, m) {
+                var ca = (a >> sh) & m, cb = (b >> sh) & m;
+                return ((ca + Math.trunc((cb - ca) * p / 100)) & m) << sh;
+            }
+            return ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F);
+        },
         drawFastVLine: function() {},
         drawFastHLine: function() {},
         drawBMP: function() { return true; },
@@ -713,6 +727,9 @@ function makeEnv() {
         temp: function() { return 30; },
         stepHistory: function() { return [{ date: 20261001, steps: 6543 }]; }
     };
+    // UI (API 22): espelho JS do JsUi.cpp sobre as primitivas acima (o
+    // renderer do emulador sobrepoe as primitivas e o UI pinta de verdade)
+    env.UI = require(path.join(ROOT, 'tools', 'sdk', 'lib', 'ui_host.js')).makeUI(env);
     env.__storage = storageMap;
     env.__alarms = [];
     // Phone (API 15): celular do Gadgetbridge — host simula pareado
@@ -745,10 +762,10 @@ function runApp(relPath, wire) {
     wire && wire(env);
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
@@ -778,10 +795,10 @@ function joinLog(log) { return log.join('\n'); }
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
     var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
-                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                           (env.__prelude || '') + '\n' + src);
     fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
-       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
 }
 
 // --- Terminal ---------------------------------------------------------------
@@ -1163,10 +1180,10 @@ function runInline(src, env) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -1958,7 +1975,7 @@ function holdFrames(x, y, n) {
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('menu desenha as secoes', j.indexOf('Wi-Fi') >= 0 && j.indexOf('Aplicativos') >= 0);
-    check('estado do Wi-Fi e PIN no menu', j.indexOf('OFF') >= 0 && j.indexOf('--') >= 0);
+    check('estado do Wi-Fi no menu', j.indexOf('Desligado') >= 0);
 })();
 
 (function() {
@@ -1967,15 +1984,15 @@ function holdFrames(x, y, n) {
     var r = runApp('data/apps/Settings/main.js', function(env) {
         var orig = env.System.setNtpEnabled;
         env.System.setNtpEnabled = function(v) { calls.push(v); return orig(v); };
-        // 1) abre "Hora e fuso" (linha 2 do menu), 2) toggle NTP (linha 2
-        // da tela de hora), 3) "< Voltar" (rodape) volta ao menu
-        env.__harness.tap(120, 159);
-        env.__harness.tap(120, 159);
-        env.__harness.tap(50, 297);
+        // 1) abre "Hora e fuso" (linha 2 da lista: y 48 + 2*36 + 18),
+        // 2) toggle "Hora pela internet" (card em 132), 3) seta do cabecalho
+        env.__harness.tap(120, 138);
+        env.__harness.tap(198, 144);
+        env.__harness.tap(20, 20);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('tela de hora desenha NTP', j.indexOf('NTP (internet)') >= 0);
+    check('tela de hora desenha NTP', j.indexOf('Hora pela internet') >= 0);
     check('toggle NTP chama setNtpEnabled', calls.length === 1, 'calls=' + JSON.stringify(calls));
     check('voltar redesenha o menu', j.indexOf('Wi-Fi') >= 0);
 })();
@@ -1986,8 +2003,8 @@ function holdFrames(x, y, n) {
     var r = runApp('data/apps/Settings/main.js', function(env) {
         var orig = env.System.getBrightness;
         env.System.getBrightness = function() { gets++; return orig(); };
-        // abre "Tela" (linha 4 do menu)
-        env.__harness.tap(120, 247);
+        // abre "Tela" (linha 4 da lista: y 48 + 4*36 + 18)
+        env.__harness.tap(120, 210);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
@@ -2013,10 +2030,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -2037,10 +2054,10 @@ function holdFrames(x, y, n) {
         var src = 'setTimeout(function () { throw new Error("bug no timer"); }, 10);' +
                   'System.delay(20); System.delay(20);';
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         err = e && (e.stack || String(e)) || String(e);  // QUALQUER throw vira erro do app
     }
@@ -2063,10 +2080,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -2090,10 +2107,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -2105,16 +2122,15 @@ function holdFrames(x, y, n) {
 (function() {
     console.log('Settings (tempo de tela):');
     var r = runApp('data/apps/Settings/main.js', function(env) {
-        // abre "Tela" (linha 4) e toca na linha do timeout duas vezes
-        env.__harness.tap(120, 247);
-        var ty = env.System.getAutoBrightness() !== null ? 250 : 212;
-        env.__harness.tap(120, ty + 15);
-        env.__harness.tap(120, ty + 15);
+        // abre "Tela" (linha 4) e toca na aba "1 min" (3a de 5) do tempo de tela
+        env.__harness.tap(120, 210);
+        var ty = env.System.getAutoBrightness() !== null ? 192 : 140;
+        env.__harness.tap(123, ty + 24 + 17);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('linha do timeout desenha', j.indexOf('Tela apaga:') >= 0);
-    check('dois toques avancam 2 opcoes (sempre -> 1 min)', r.env.__scrTmo === 60000, 'tmo=' + r.env.__scrTmo);
+    check('linha do timeout desenha', j.indexOf('Tela apaga após') >= 0);
+    check('aba "1 min" aplica o tempo de tela', r.env.__scrTmo === 60000, 'tmo=' + r.env.__scrTmo);
 })();
 
 (function() {
@@ -2131,10 +2147,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -2157,10 +2173,10 @@ function holdFrames(x, y, n) {
     var err = null;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval);
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
     }
@@ -2334,8 +2350,8 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     if (process.env.DEBUG_LOG) console.log('---- log ----\n' + j);
     check('header Chat IA', j.indexOf('Chat IA') >= 0, j);
-    check('mensagem do usuario ecoada', j.indexOf('você: oi') >= 0, j);
-    check('resposta da IA desenhada', j.indexOf('IA: Ola! Sou o assistente do') >= 0 && j.indexOf('CelerOS.') >= 0, j);
+    check('mensagem do usuario ecoada', r.log.indexOf('oi') >= 0, j);
+    check('resposta da IA desenhada', j.indexOf('Ola! Sou o') >= 0 && j.indexOf('CelerOS.') >= 0, j);
     check('tokens da resposta', j.indexOf('(42 tokens)') >= 0, j);
     var req = r.env.__harness.aiChats[0] || '';
     check('payload vai ao DeepSeek', req.indexOf('deepseek-flash') >= 0 && req.indexOf('"stream":false') >= 0, req);
@@ -2375,37 +2391,52 @@ function holdFrames(x, y, n) {
           joinLog(r2.log).indexOf('sem chave') >= 0, r2.err || joinLog(r2.log));
 })();
 
-// --- Chat IA: arrasto rever o transcript ---------------------------------------
+// --- Chat IA: arrasto rever a conversa (area rolavel do toolkit UI) -----------
 (function() {
     console.log('Chat IA (arrasto):');
+    var seen = { min: 1e9 };
     var r = runApp('data/apps/Chat IA/main.js', function(env) {
         // historico pre-carregado: o boot renderiza a conversa anterior
-        // (transcript maior que a janela => maxBack > 0 sem digitar nada)
+        // (maior que a janela) e segue o FIM
         var hist = [];
         for (var i = 0; i < 30; i++) {
             hist.push({ r: i % 2 ? 'assistant' : 'user', s: 'mensagem numero ' + i });
         }
         env.FS.appData();  // cria a pasta privada no stub antes de gravar
         env.FS.writeTextFile('/local/data/celeros.chatai/historico.json', JSON.stringify(hist));
-        // 4 arrastos pra cima (5 linhas cada) ate o comeco do transcript...
-        for (var d = 0; d < 4; d++) {
-            env.__harness.pushTouch([{ x: 120, y: 60, touched: 1 }, { x: 120, y: 10, touched: 1 }, { x: 0, y: 0, touched: 0 }]);
-            for (var m = 0; m < 4; m++) env.__harness.System.delay(20);
+        // amostra o deslocamento a cada frame (o app roda depois do wire)
+        var origDelay = env.System.delay;
+        env.System.delay = function(ms) {
+            var o = env.__harness.chatOff;
+            if (typeof o === 'number') {
+                if (seen.first === undefined) { seen.first = o; seen.max = env.__harness.chatMax; }
+                if (o < seen.min) seen.min = o;
+            }
+            return origDelay(ms);
+        };
+        var q = [];
+        for (var k = 0; k < 4; k++) q.push({ x: 0, y: 0, touched: 0 });
+        // dedo desce (conteudo desce): revela mensagens antigas...
+        for (var d = 0; d < 3; d++) {
+            q.push({ x: 120, y: 20, touched: 1 }, { x: 120, y: 60, touched: 1 },
+                   { x: 120, y: 100, touched: 1 }, { x: 0, y: 0, touched: 0 });
+            for (var m = 0; m < 6; m++) q.push({ x: 0, y: 0, touched: 0 });
         }
-        // ...e 4 de volta ao vivo
-        for (var d2 = 0; d2 < 4; d2++) {
-            env.__harness.pushTouch([{ x: 120, y: 10, touched: 1 }, { x: 120, y: 60, touched: 1 }, { x: 0, y: 0, touched: 0 }]);
-            for (var n = 0; n < 4; n++) env.__harness.System.delay(20);
+        // ...e o dedo sobe: volta ao fim
+        for (var d2 = 0; d2 < 8; d2++) {
+            q.push({ x: 120, y: 100, touched: 1 }, { x: 120, y: 60, touched: 1 },
+                   { x: 120, y: 20, touched: 1 }, { x: 0, y: 0, touched: 0 });
+            for (var n = 0; n < 6; n++) q.push({ x: 0, y: 0, touched: 0 });
         }
+        env.__harness.pushTouch(q);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    // sem rolar, a janela mostra o FIM da conversa (as ultimas mensagens)
-    check('historico renderizado no boot', j.indexOf('mensagem numero 28') >= 0, j.slice(0, 400));
-    // so o arrasto revela o comeco do transcript
-    check('arrasto recua o transcript', j.indexOf('mensagem numero 0') >= 0, j.indexOf('mensagem numero 0'));
-    check('arrasto marcou recuo', (r.env.__harness.chatScrollMax || 0) > 0, r.env.__harness.chatScrollMax);
-    check('arrasto oposto volta ao vivo', r.env.__harness.chatScroll === 0, r.env.__harness.chatScroll);
+    check('historico renderizado no boot (fim da conversa)', j.indexOf('mensagem numero 29') >= 0, j.slice(0, 400));
+    check('abre no fim da conversa', seen.first === seen.max && seen.max > 0, JSON.stringify(seen));
+    check('arrasto recua a conversa', seen.min < seen.max, JSON.stringify(seen));
+    check('arrasto oposto volta ao fim', r.env.__harness.chatOff === r.env.__harness.chatMax,
+          r.env.__harness.chatOff + '/' + r.env.__harness.chatMax);
 })();
 
 // --- Qwen (API 19): voz no touch — hold no botao, input_audio no payload ------
@@ -2426,8 +2457,8 @@ function holdFrames(x, y, n) {
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('header Qwen', j.indexOf('Qwen ') >= 0, j.slice(0, 200));
-    check('pergunta (voz) no transcript', j.indexOf('você: (voz)') >= 0, j);
-    check('resposta desenhada', j.indexOf('Q: Ouvi voce dizer oi.') >= 0, j);
+    check('pergunta (voz) na conversa', r.log.indexOf('(voz)') >= 0, j);
+    check('resposta desenhada', j.indexOf('Ouvi voce dizer') >= 0, j);
     check('tokens da resposta', j.indexOf('(120 tokens)') >= 0, j);
     check('mic usado com teto de 8 s', r.env.__harness.mic.ms === 8000, r.env.__harness.mic.ms);
     var req = r.env.__harness.aiChats[0] || '';
@@ -2520,7 +2551,7 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     check('aviso de sem microfone', j.indexOf('sem microfone aqui') >= 0, j.slice(0, 300));
     check('teclado aberto sozinho e resposta chega',
-          j.indexOf('você: ola') >= 0 && j.indexOf('Q: Oi do servidor.') >= 0, j);
+          r.log.indexOf('ola') >= 0 && j.indexOf('Oi do servidor.') >= 0, j);
     var req = r.env.__harness.aiChats[0] || '';
     check('payload de texto puro (sem input_audio)',
           req.indexOf('input_audio') < 0 && req.indexOf('qwen/qwen3.8-omni-flash') >= 0, req.slice(0, 200));
@@ -2598,6 +2629,86 @@ function holdFrames(x, y, n) {
 
     check('fontHeight segue o renderer (2->8, 4->16)', S.fontHeight(2) === 8 && S.fontHeight(4) === 16);
     check('temperatura com sensor', S.getTemperature() === 30 && S.hasTemperatureSensor() === true);
+})();
+
+// --- UI toolkit (API 22): semantica do espelho host do JsUi.cpp ----------------
+(function() {
+    console.log('UI (API 22):');
+    var env = makeEnv();
+    var UI = env.UI, H = env.__harness;
+    function frame(fn) { var full = UI.begin(0); var r = fn(full); UI.end(); return r; }
+
+    check('1o frame e total, o seguinte parcial',
+          frame(function(f) { return f; }) === true && frame(function(f) { return f; }) === false);
+
+    // tap: pousa num frame, solta no seguinte -> dispara 1x no release
+    H.tap(50, 50);
+    var hits = [], fulls = [];
+    for (var i = 0; i < 3; i++) hits.push(frame(function(f) { fulls.push(f); return UI.button('OK', 20, 30, 100, 40); }));
+    check('button dispara so no frame do release', hits.join(',') === 'false,true,false', hits.join(','));
+    check('tap marca o proximo frame como total', fulls.join(',') === 'false,false,true', fulls.join(','));
+
+    // tap fora nao dispara; um tap vale para um widget so
+    H.tap(50, 50);
+    var a = [], b = [];
+    for (i = 0; i < 2; i++) frame(function() {
+        a.push(UI.button('A', 20, 30, 100, 40));
+        b.push(UI.button('B', 20, 30, 100, 40, { id: 2 }));
+    });
+    check('tap consumido pelo primeiro widget', a[1] === true && b[1] === false, a + '|' + b);
+
+    // toggle alterna no tap
+    H.tap(190, 100);
+    var on = false;
+    for (i = 0; i < 2; i++) on = frame(function() { return UI.toggle(176, 94, on); });
+    check('toggle alterna no tap', on === true);
+
+    // lista: tap na 2a linha (rowH 36) devolve 1; arrasto rola e nao seleciona
+    var items = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    H.tap(60, 30 + 36 + 10);
+    var sel = [];
+    for (i = 0; i < 2; i++) sel.push(frame(function() { return UI.list('L', 0, 30, 240, 120, items); }));
+    check('list devolve o indice tocado', sel[1] === 1, sel.join(','));
+    H.swipe(60, 140, 60, 40);
+    sel = [];
+    for (i = 0; i < 4; i++) sel.push(frame(function() { return UI.list('L', 0, 30, 240, 120, items); }));
+    check('arrasto na lista nao seleciona', sel.join(',') === '-1,-1,-1,-1', sel.join(','));
+    H.tap(60, 30 + 10);
+    sel = [];
+    for (i = 0; i < 2; i++) sel.push(frame(function() { return UI.list('L', 0, 30, 240, 120, items); }));
+    check('rolagem desloca o indice do tap', sel[1] > 0, sel.join(','));
+
+    // lista nova com selected fora da janela abre rolada ate ele: tap no
+    // topo da janela cai perto do selecionado, nao na linha 0
+    var many = [];
+    for (i = 0; i < 30; i++) many.push('item ' + i);
+    H.tap(60, 30 + 5);
+    sel = [];
+    for (i = 0; i < 2; i++) sel.push(frame(function() { return UI.list('S', 0, 30, 240, 120, many, { selected: 20 }); }));
+    check('lista abre rolada ate o selecionado', sel[1] >= 17 && sel[1] <= 20, sel.join(','));
+
+    // slider sem toque; texto se redesenha so quando muda
+    var v = frame(function() { return UI.slider(20, 100, 200, 10); });
+    check('slider sem toque mantem o valor', v === 10);
+    var drawn = 0;
+    var origDraw = env.System.drawString;
+    env.System.drawString = function(s) { drawn++; return origDraw(s); };
+    frame(function() { UI.text('x=1', 10, 10); });
+    var d1 = drawn;
+    frame(function() { UI.text('x=1', 10, 10); });
+    var d2 = drawn;
+    frame(function() { UI.text('x=2', 10, 10); });
+    check('UI.text redesenha so na mudanca', d2 === d1 && drawn === d2 + 1, [d1, d2, drawn].join(','));
+
+    // confirm bloqueante: tap no botao da direita (OK) do card centrado
+    var by = ((320 - 150) >> 1) + 150 - 44 + 10;
+    H.tap(170, by);
+    check('confirm devolve true no botao OK', UI.confirm('Apagar?', 'Sem volta', { danger: true }) === true);
+    H.tap(60, by);
+    check('confirm devolve false no Cancelar', UI.confirm('Apagar?') === false);
+    check('frame apos o dialogo e total', frame(function(f) { return f; }) === true);
+    check('mixColor 0/100 devolve as pontas',
+          env.System.mixColor(0xF800, 0x001F, 0) === 0xF800 && env.System.mixColor(0xF800, 0x001F, 100) === 0x001F);
 })();
 
 // resumo

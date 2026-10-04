@@ -19,6 +19,42 @@ const RETURNS = {
     'System.textWidth': 'number',
     'FS.readTextFile': 'string | null',
     'FS.listDir': 'string[]',
+    'System.mixColor': 'number',
+    // UI (API 22)
+    'UI.begin': 'boolean',
+    'UI.touch': 'UITouch',
+    'UI.header': 'boolean',
+    'UI.button': 'boolean',
+    'UI.toggle': 'boolean',
+    'UI.confirm': 'boolean',
+    'UI.text': 'number',
+    'UI.measure': 'number',
+    'UI.lineHeight': 'number',
+    'UI.measureWrap': 'number',
+    'UI.slider': 'number',
+    'UI.list': 'number',
+    'UI.tabs': 'number',
+    'UI.scrollBegin': 'number',
+    'UI.badge': 'number',
+};
+
+// Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
+const PARAM_TYPES = {
+    'UI.text.opts': 'UITextOpts',
+    'UI.header.opts': '{ sub?: string; back?: boolean }',
+    'UI.button.opts': '{ style?: "primary" | "ghost" | "danger"; disabled?: boolean; id?: number; color?: number; textColor?: number; role?: UITextRole }',
+    'UI.toggle.opts': '{ id?: number }',
+    'UI.slider.opts': '{ min?: number; max?: number; step?: number; id?: number }',
+    'UI.list.items': 'Array<string | UIListItem>',
+    'UI.list.opts': '{ rowH?: number; selected?: number }',
+    'UI.tabs.labels': 'string[]',
+    'UI.card.opts': '{ color?: number; radius?: number; stroke?: boolean }',
+    'UI.badge.opts': '{ color?: number; textColor?: number }',
+    'UI.confirm.opts': '{ yes?: string; no?: string; danger?: boolean }',
+    'UI.alert.ok': 'string',
+    'UI.measure.role': 'UITextRole',
+    'UI.lineHeight.role': 'UITextRole',
+    'UI.measureWrap.role': 'UITextRole',
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e
@@ -77,7 +113,8 @@ function fnSignature(objPath, fn, guide) {
         const nm = g && g.args[i] ? g.args[i].replace(/[\[\]=]/g, '') : ('arg' + i);
         names.push({ name: nm || ('arg' + i), optional: i >= (fn.min || 0) });
     }
-    const params = names.map((n) => n.name + (n.optional ? '?' : '') + ': ' + argType(n.name));
+    const params = names.map((n) => n.name + (n.optional ? '?' : '') + ': ' +
+        (PARAM_TYPES[objPath + '.' + fn.name + '.' + n.name] || argType(n.name)));
     let ret = 'void';
     if (fn.returns) ret = RETURNS[objPath + '.' + fn.name] || 'any';
     return { params, ret, doc: g ? g.doc : '', api: g ? g.api : (fn.apiLevel || null) };
@@ -127,6 +164,14 @@ function generate() {
     out.push('}');
     out.push('');
     out.push('interface TouchPoint { x: number; y: number; touched: boolean; }');
+    out.push('');
+    out.push('type UITextRole = "caption" | "body" | "title" | "display";');
+    out.push('interface UITextOpts {');
+    out.push('    role?: UITextRole; color?: number; align?: "left" | "center" | "right";');
+    out.push('    w?: number; lines?: number; bg?: number; id?: number;');
+    out.push('}');
+    out.push('interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }');
+    out.push('interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }');
     out.push('');
     // funcoes globais (ex.: timers API 12): setTimeout e irmãos no escopo global
     if (manifest.objects.global) {

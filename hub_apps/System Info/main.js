@@ -1,97 +1,84 @@
 // CelerOS System Info — painel do aparelho no tema do OS.
 // Cards de dispositivo, memoria, flash/armazenamento, rede, energia e
-// sensores (quando a placa tem). Uptime e RAM ao vivo (1s). ES5 (Duktape).
+// sensores (quando a placa tem). Uptime e RAM ao vivo (1s). ES5 (Duktape),
+// toolkit UI (API 22): UI.text redesenha so o valor que mudou.
 
 var T = System.theme();
-var W = 240;
-
-function ctext(s, cx, y, f, col) {
-    System.setTextColor(col);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
-}
+var W = 240, LX = 8, LW = W - 16;
 
 var kb = function (n) {
-    if (n >= 1048576) return (n / 1048576).toFixed(1) + "MB";
-    if (n >= 1024) return Math.round(n / 1024) + "KB";
-    return n + "B";
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+    if (n >= 1024) return Math.round(n / 1024) + " KB";
+    return n + " B";
 };
+function fmtUptime(ms) {
+    var s = Math.floor(ms / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return (h > 0 ? h + "h " : "") + m + "m " + (s % 60) + "s";
+}
 
 function card(y, h, titulo) {
-    System.fillRoundRect(8, y, W - 16, h, 10, T.card);
-    System.drawRoundRect(8, y, W - 16, h, 10, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(titulo, 16, y + 7, 1);
-    return y + 22;              // y da primeira linha de dados
+    UI.card(LX, y, LW, h);
+    UI.text(titulo, LX + 10, y + 6, { role: "caption", color: T.accent });
+    return y + 24;              // y da primeira linha de dados
 }
-
 function row(y, label, value, col) {
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(label, 16, y, 1);
-    System.setTextColor(col || T.text, T.card);
-    var v = String(value);
-    while (v.length > 0 && System.textWidth(v, 1) > 136) v = v.substring(1);
-    System.drawString(v, 224 - System.textWidth(v, 1), y, 1);
+    UI.text(label, LX + 10, y, { role: "caption", color: T.textDim });
+    UI.text(String(value), LX + LW - 10, y, { role: "caption", color: col || T.text, align: "right", w: 140 });
 }
 
-function draw() {
-    var i = System.getInfo();
-    System.fillScreen(T.bg);
+var i = System.getInfo();
+var lastPoll = 0;
+var hasSensors = typeof Sensors !== "undefined" && !!Sensors.accel;
+while (true) {
+    UI.begin(T.bg);
+    if (System.millis() - lastPoll > 1000) {
+        lastPoll = System.millis();
+        i = System.getInfo();
+    }
 
     // dispositivo
-    var y = card(34, 56, "dispositivo");
+    var y = card(6, 70, "Dispositivo");
     row(y, "chip", i.chipModel + " r" + i.chipRevision);
-    row(y + 12, "CPU", i.chipCores + "x " + i.cpuFreqMHz + " MHz");
-    row(y + 24, "firmware", "CelerOS " + System.getOSVersion() + " (API " + System.getAPILevel() + ")");
+    row(y + 14, "CPU", i.chipCores + "x " + i.cpuFreqMHz + " MHz");
+    row(y + 28, "firmware", "CelerOS " + System.getOSVersion() + " · API " + System.getAPILevel());
+    UI.cardEnd();
 
-    // memoria
-    y = card(96, 68, "memoria");
+    // memoria: barra de uso da RAM interna
+    y = card(82, 80, "Memória");
+    var used = i.totalRAM ? Math.round((i.totalRAM - i.freeRAM) * 100 / i.totalRAM) : 0;
     row(y, "RAM livre", kb(i.freeRAM) + " de " + kb(i.totalRAM), i.freeRAM < 20000 ? T.warn : T.text);
-    row(y + 12, "pico alocado", kb(i.maxAllocRAM));
-    row(y + 24, "menor livre", kb(i.minFreeRAM));
-    row(y + 36, "PSRAM", i.totalPSRAM ? kb(i.freePSRAM) + " de " + kb(i.totalPSRAM) : "nao");
+    UI.progress(LX + 10, y + 16, LW - 20, 8, used);
+    row(y + 28, "maior bloco", kb(i.maxAllocRAM));
+    row(y + 42, "PSRAM", i.totalPSRAM ? kb(i.freePSRAM) + " de " + kb(i.totalPSRAM) : "não");
+    UI.cardEnd();
 
     // armazenamento
-    y = card(170, 44, "armazenamento");
+    y = card(168, 52, "Armazenamento");
     row(y, "flash", kb(i.flashSize));
-    row(y + 12, "/local livre", kb(FS.getFreeSpace("/local")));
+    row(y + 14, "/local livre", kb(FS.getFreeSpace("/local")));
+    UI.cardEnd();
 
     // rede + energia
-    y = card(220, 46, "rede e energia");
+    y = card(226, 52, "Rede e energia");
     var w = System.wifiStatus();
-    row(y, "wifi", w.connected ? System.getIPAddress() : "desligado",
-        w.connected ? T.ok : T.warn);
+    row(y, "Wi-Fi", w.connected ? System.getIPAddress() : "desligado", w.connected ? T.ok : T.warn);
     var energia = "--";
     if (typeof System.battery === "function") {
         var mv = System.battery();
-        energia = mv >= 0 ? (mv / 1000).toFixed(2) + "V" : "sem sensor";
+        energia = mv >= 0 ? (mv / 1000).toFixed(2) + " V" : "sem sensor";
     }
-    row(y + 12, "bateria", energia);
-}
+    row(y + 14, "bateria", energia);
+    UI.cardEnd();
 
-// sensores: so na placa watch (API 13) — painel proprio embaixo quando ha
-function drawSensors() {
-    if (typeof Sensors === "undefined" || !Sensors.accel) {
-        ctext("uptime " + Math.floor(System.getInfo().uptimeMs / 1000) +
-              "s - atualiza ao vivo", 120, 300, 1, T.textDim);
-        return;
+    // rodape: sensores (watch, API 13) ou uptime ao vivo
+    if (hasSensors) {
+        var a = Sensors.accel();
+        UI.text("acel " + (a ? a.x.toFixed(1) + ", " + a.y.toFixed(1) + ", " + a.z.toFixed(1) : "--") +
+                "  ·  passos " + (Sensors.steps ? Sensors.steps() : "--"), 120, 290,
+                { role: "caption", align: "center", color: T.textDim });
+    } else {
+        UI.text("ligado há " + fmtUptime(i.uptimeMs), 120, 290, { role: "caption", align: "center", color: T.textDim });
     }
-    var y = card(272, 44, "sensores");
-    var a = Sensors.accel();
-    row(y, "acel", a ? (a.x.toFixed(1) + ", " + a.y.toFixed(1) + ", " + a.z.toFixed(1)) : "--");
-    row(y + 12, "passos", Sensors.steps ? Sensors.steps() : "--");
-}
-
-draw();
-drawSensors();
-
-var lastDraw = System.millis();
-while (true) {
-    var t = System.getTouch();
-    if (t.touched && t.y < 30) break;   // X da faixa sai sozinho; toque no topo tambem
-    if (System.millis() - lastDraw > 1000) {
-        lastDraw = System.millis();
-        draw();
-        drawSensors();
-    }
-    System.delay(50);   // cede: GC e watchdog
+    UI.end(10);
 }

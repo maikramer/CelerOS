@@ -1,13 +1,13 @@
 {
   "name": "Chat IA",
   "packageName": "celeros.chatai",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "Assistente com IA (DeepSeek) direto no aparelho",
   "type": "App",
   "category": "Utility",
-  "api": 18,
+  "api": 22,
   "permissions": ["net", "fs"],
   "topbar": true,
-  "changelog": "1.1.0 - arrasto para rever, detalhe do erro da API, tokens da resposta, bip na chegada"
+  "changelog": "1.2.0 - conversa em baloes com rolagem por inercia que segue o fim (toolkit UI, API 22)\n1.1.0 - arrasto para rever, detalhe do erro da API, tokens da resposta, bip na chegada"
 }

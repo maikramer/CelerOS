@@ -306,27 +306,51 @@ int Canvas::height() const { return m_dev.height(); }
 int headerHeight() { return UI::sy(52); }
 
 void drawHeader(Canvas& c, const char* title) {
-    int h = headerHeight();
-    c.fillRect({0, 0, UI::W, h}, THEME_CARD);
-    c.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
-    // marcador de acento a esquerda do titulo
-    int mh = h / 3;
-    c.fillRoundRect({UI::sx(12), (h - mh) / 2, UI::sx(4), mh}, UI::sx(2), THEME_ACCENT);
-    c.text(title, UI::sx(24), h / 2, type::title(), THEME_TEXT, ML_DATUM);
+    paint::header(c, {0, 0, UI::W, headerHeight()}, title, nullptr, false, false);
 }
 
-// ============================================================ Widgets ======
+// ============================================================ Pintores =====
 
-void Button::draw(Canvas& c) {
-    bool pressed = isPressed(rect);
+namespace paint {
+
+void header(Canvas& c, const Rect& r, const char* title, const char* sub, bool back, bool backPressed) {
+    const int h = r.h;
+    c.fillRect(r, THEME_CARD);
+    c.drawFastHLine(r.x, r.y + h - 1, r.w, THEME_STROKE);
+    int tx = r.x + UI::sx(24);
+    if (back) {
+        // seta "<" num alvo quadrado de altura h (toque largo, desenho discreto)
+        int cx = r.x + h / 2, cy = r.y + h / 2, a = h / 6;
+        if (backPressed) c.fillRoundRect({r.x + UI::sx(4), r.y + UI::sy(4), h - UI::sx(8), h - UI::sy(8)}, UI::sx(8),
+                                         THEME_RAISED);
+        uint32_t col = backPressed ? THEME_TEXT : THEME_ACCENT;
+        for (int t = -1; t <= 1; t++) {  // 3px de espessura sem drawWideLine
+            c.drawLine(cx + a / 2 + t, cy - a, cx - a / 2 + t, cy, col);
+            c.drawLine(cx - a / 2 + t, cy, cx + a / 2 + t, cy + a, col);
+        }
+        tx = r.x + h;
+    } else {
+        // marcador de acento a esquerda do titulo
+        int mh = h / 3;
+        c.fillRoundRect({r.x + UI::sx(12), r.y + (h - mh) / 2, UI::sx(4), mh}, UI::sx(2), THEME_ACCENT);
+    }
+    int right = r.x + r.w - UI::sx(12);
+    if (sub && *sub) {
+        c.text(sub, right, r.y + h / 2, type::caption(), THEME_TEXT_DIM, MR_DATUM);
+        right -= c.textWidth(sub, type::caption()) + UI::sx(8);
+    }
+    c.text(c.ellipsize(title, type::title(), right - tx), tx, r.y + h / 2, type::title(), THEME_TEXT, ML_DATUM);
+}
+
+void button(Canvas& c, const Rect& r, const char* label, ButtonStyle style, bool pressed) {
     uint32_t fillc, textc, stroke = 0;
-    int r = UI::sx(8);
+    int rad = UI::sx(8);
     switch (style) {
-        case Primary:
+        case BtnPrimary:
             fillc = pressed ? Icon::mix(THEME_ACCENT, 0x000000, 70) : THEME_ACCENT;
             textc = THEME_ON_ACCENT;
             break;
-        case Danger:
+        case BtnDanger:
             fillc = pressed ? Icon::mix(THEME_ERR, 0x000000, 70) : THEME_ERR;
             textc = 0xFFFFFF;
             break;
@@ -336,11 +360,195 @@ void Button::draw(Canvas& c) {
             stroke = pressed ? THEME_ACCENT : THEME_STROKE;
             break;
     }
-    c.fillRoundRect(rect, r, fillc);
-    if (stroke) c.drawRoundRect(rect, r, stroke);
+    c.fillRoundRect(r, rad, fillc);
+    if (stroke) c.drawRoundRect(r, rad, stroke);
     const lgfx::IFont* f = type::body();
-    c.text(c.ellipsize(label, f, rect.w - UI::sx(8)), rect.x + rect.w / 2, rect.y + rect.h / 2, f, textc,
-           MC_DATUM);
+    c.text(c.ellipsize(label, f, r.w - UI::sx(8)), r.x + r.w / 2, r.y + r.h / 2, f, textc, MC_DATUM);
+}
+
+void toggle(Canvas& c, const Rect& r, bool on, bool pressed) {
+    int h = r.h, w = h * 2;                 // pilula 2:1 dentro do rect
+    if (w > r.w) { w = r.w; h = w / 2; }
+    int x = r.x + (r.w - w) / 2, y = r.y + (r.h - h) / 2;
+    int rad = h / 2;
+    uint32_t fillc = on ? THEME_ACCENT : (pressed ? THEME_RAISED : THEME_CARD);
+    c.fillRoundRect(Rect{x, y, w, h}, rad, fillc);
+    c.drawRoundRect(Rect{x, y, w, h}, rad, THEME_STROKE);
+    int knob = h - UI::sy(6);
+    c.fillCircle(x + (on ? w - knob / 2 - UI::sx(3) : knob / 2 + UI::sx(3)), y + h / 2, knob / 2,
+                 pressed ? THEME_TEXT_DIM : THEME_TEXT);
+}
+
+void slider(Canvas& c, const Rect& r, int value, bool active) {
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    int h = UI::sy(12);
+    int y = r.y + (r.h - h) / 2;
+    int rad = h / 2;
+    c.fillRoundRect(Rect{r.x, y, r.w, h}, rad, THEME_CARD);
+    c.drawRoundRect(Rect{r.x, y, r.w, h}, rad, THEME_STROKE);
+    int fw = (int)((long)r.w * value / 100);
+    if (fw > rad * 2) c.fillRoundRect(Rect{r.x, y, fw, h}, rad, active ? THEME_ACCENT_D : THEME_ACCENT);
+    c.fillCircle(r.x + fw, y + h / 2, UI::sy(9), THEME_TEXT);
+}
+
+void progress(Canvas& c, const Rect& r, int value) {
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    int h = UI::sy(10);
+    if (h > r.h) h = r.h;
+    int y = r.y + (r.h - h) / 2;
+    int rad = h / 2;
+    c.fillRoundRect(Rect{r.x, y, r.w, h}, rad, THEME_CARD);
+    c.drawRoundRect(Rect{r.x, y, r.w, h}, rad, THEME_STROKE);
+    int fw = (int)((long)r.w * value / 100);
+    if (fw > rad * 2) c.fillRoundRect(Rect{r.x, y, fw, h}, rad, THEME_ACCENT);
+}
+
+void spinner(Canvas& c, const Rect& r, uint32_t color) {
+    // arco de 90 graus girando ~360 graus/s — barato e sem alocar
+    uint32_t ms = millis() % 1000;
+    int a = (int)(ms * 360 / 1000);
+    int rad = (r.h < r.w ? r.h : r.w) / 2 - UI::sy(2);
+    if (rad < UI::sy(4)) rad = UI::sy(4);
+    c.fillArc(r.x + r.w / 2, r.y + r.h / 2, rad - UI::sy(3), rad, (float)a, (float)a + 90, color);
+}
+
+void listFrame(Canvas& c, const Rect& r, int scroll, int contentH) {
+    int radius = UI::sx(10);
+    c.fillRoundRect(r, radius, THEME_CARD);
+    // indicador de scroll (so quando o conteudo excede a area)
+    if (contentH > r.h) {
+        int maxScroll = contentH - r.h;
+        int trackH = r.h - 2 * radius;
+        int barH = trackH * r.h / contentH;
+        if (barH < UI::sy(16)) barH = UI::sy(16);
+        int barY = r.y + radius + (trackH - barH) * scroll / maxScroll;
+        c.fillRoundRect({r.x + r.w - UI::sx(5), barY, UI::sx(3), barH}, UI::sx(1), THEME_STROKE);
+    }
+}
+
+void signalBars(Canvas& c, int right, int cy, int level, uint32_t on, uint32_t off) {
+    int bw = UI::sx(3), gap = UI::sx(2), maxH = UI::sy(14);
+    int x = right - 4 * bw - 3 * gap;
+    for (int i = 0; i < 4; i++) {
+        int h = maxH * (i + 1) / 4;
+        c.fillRect({x + i * (bw + gap), cy + maxH / 2 - h, bw, h}, i < level ? on : off);
+    }
+}
+
+void listRow(Canvas& c, const Rect& row, const char* label, const char* sub, const char* right, int bars,
+             bool enabled, bool pressed, bool selected, bool last, uint32_t rightColor) {
+    const int rh = row.h;
+    const int padX = UI::sx(12);
+    const int y = row.y;
+    if (selected) {
+        c.fillRoundRect({row.x + UI::sx(4), y + UI::sy(2), row.w - UI::sx(8), rh - UI::sy(4)}, UI::sx(6),
+                        THEME_ACCENT_D);
+    } else if (enabled && pressed) {
+        c.fillRoundRect({row.x + UI::sx(4), y + UI::sy(2), row.w - UI::sx(8), rh - UI::sy(4)}, UI::sx(6),
+                        THEME_RAISED);
+    }
+    // separador entre linhas
+    if (!last) c.drawFastHLine(row.x + padX, y + rh - 1, row.w - 2 * padX, THEME_BG);
+
+    int rx = row.x + row.w - padX;
+    if (bars >= 0) {
+        signalBars(c, rx, y + rh / 2, bars, enabled ? THEME_ACCENT : THEME_TEXT_DIM, THEME_STROKE);
+        rx -= UI::sx(26);
+    }
+    if (right && *right) {
+        c.text(right, rx, y + rh / 2, type::caption(), rightColor, MR_DATUM);
+        rx -= c.textWidth(right, type::caption()) + UI::sx(8);
+    }
+    const lgfx::IFont* f = type::body();
+    uint32_t color = enabled ? THEME_TEXT : THEME_TEXT_DIM;
+    int maxW = rx - row.x - padX;
+    if (sub && *sub) {
+        // duas linhas: rotulo acima do centro, legenda abaixo
+        c.text(c.ellipsize(label, f, maxW), row.x + padX, y + rh / 2 - UI::sy(1), f, color, BL_DATUM);
+        c.text(c.ellipsize(sub, type::caption(), maxW), row.x + padX, y + rh / 2 + UI::sy(2), type::caption(),
+               THEME_TEXT_DIM, TL_DATUM);
+    } else {
+        c.text(c.ellipsize(label, f, maxW), row.x + padX, y + rh / 2, f, color, ML_DATUM);
+    }
+}
+
+void tabs(Canvas& c, const Rect& r, const char* const* labels, int n, int sel, int pressed) {
+    if (n <= 0) return;
+    int rad = r.h / 2;
+    c.fillRoundRect(r, rad, THEME_CARD);
+    c.drawRoundRect(r, rad, THEME_STROKE);
+    int pad = UI::sx(3);
+    int segW = (r.w - 2 * pad) / n;
+    const lgfx::IFont* f = type::body();
+    for (int i = 0; i < n; i++) {
+        Rect s{r.x + pad + i * segW, r.y + pad, segW, r.h - 2 * pad};
+        uint32_t tc = THEME_TEXT_DIM;
+        if (i == sel) {
+            c.fillRoundRect(s, s.h / 2, THEME_ACCENT);
+            tc = THEME_ON_ACCENT;
+        } else if (i == pressed) {
+            c.fillRoundRect(s, s.h / 2, THEME_RAISED);
+            tc = THEME_TEXT;
+        }
+        c.text(c.ellipsize(labels[i], f, s.w - UI::sx(6)), s.x + s.w / 2, s.y + s.h / 2, f, tc, MC_DATUM);
+    }
+}
+
+Rect dialogCard(const Rect& area, int nButtons) {
+    (void)nButtons;
+    int w = area.w - UI::sx(40);
+    int h = UI::sy(150);
+    if (h > area.h) h = area.h;
+    return {area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h};
+}
+
+Rect dialogButton(const Rect& card, int i, int n) {
+    int gap = UI::sx(10);
+    int bw = (card.w - gap * (n + 1)) / (n > 0 ? n : 1);
+    int by = card.y + card.h - UI::sy(44);
+    return {card.x + gap + i * (bw + gap), by, bw, UI::sy(34)};
+}
+
+void dialog(Canvas& c, const Rect& card, const char* title, const char* body, const char* const* buttons,
+            const ButtonStyle* styles, int n, int pressed) {
+    int r = UI::sx(12);
+    c.fillRoundRect(card, r, THEME_CARD);
+    c.drawRoundRect(card, r, THEME_STROKE);
+    c.text(c.ellipsize(title, type::title(), card.w - UI::sx(24)), card.x + card.w / 2, card.y + UI::sy(24),
+           type::title(), THEME_TEXT, MC_DATUM);
+    if (body && *body) {
+        // corpo em ate 2 linhas centradas em torno do meio do card
+        auto lines = c.wrapText(body, type::body(), card.w - UI::sx(20), 2);
+        int lh = c.fontHeight(type::body()) + UI::sy(2);
+        int y0 = card.y + UI::sy(62) - (int)(lines.size() - 1) * lh / 2;
+        for (size_t i = 0; i < lines.size(); i++) {
+            c.text(lines[i], card.x + card.w / 2, y0 + (int)i * lh, type::body(), THEME_TEXT_DIM, MC_DATUM);
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        button(c, dialogButton(card, i, n), buttons[i], styles ? styles[i] : BtnPrimary, i == pressed);
+    }
+}
+
+int badge(Canvas& c, int x, int y, const char* text, uint32_t color, uint32_t textColor) {
+    const lgfx::IFont* f = type::caption();
+    int h = c.fontHeight(f) + UI::sy(6);
+    int w = c.textWidth(text, f) + UI::sx(14);
+    c.fillRoundRect({x, y, w, h}, h / 2, color);
+    c.text(text, x + w / 2, y + h / 2, f, textColor, MC_DATUM);
+    return w;
+}
+
+}  // namespace paint
+
+// ============================================================ Widgets ======
+
+void Button::draw(Canvas& c) {
+    paint::ButtonStyle st = style == Primary ? paint::BtnPrimary : style == Danger ? paint::BtnDanger
+                                                                                     : paint::BtnGhost;
+    paint::button(c, rect, label.c_str(), st, isPressed(rect));
 }
 
 bool Button::onTouch(const TouchEvent& ev, Rect myRect) {
@@ -389,25 +597,12 @@ void List::ensureVisible(int idx) {
     clampScroll();
 }
 
-static void drawSignalBars(Canvas& c, int right, int cy, int level, uint32_t on, uint32_t off) {
-    int bw = UI::sx(3), gap = UI::sx(2), maxH = UI::sy(14);
-    int x = right - 4 * bw - 3 * gap;
-    for (int i = 0; i < 4; i++) {
-        int h = maxH * (i + 1) / 4;
-        c.fillRect({x + i * (bw + gap), cy + maxH / 2 - h, bw, h}, i < level ? on : off);
-    }
-}
-
 void List::draw(Canvas& c) {
-    int radius = UI::sx(10);
-    c.fillRoundRect(rect, radius, THEME_CARD);
     clampScroll();
-
-    const lgfx::IFont* f = type::body();
     const int rh = rowH();
     const int scroll = (int)m_scroll;
     const int first = scroll / rh;
-    const int padX = UI::sx(12);
+    paint::listFrame(c, rect, scroll, (int)items.size() * rh);
 
     c.setClip({rect.x, rect.y + UI::sy(2), rect.w, rect.h - UI::sy(4)});
     for (int idx = first; idx < (int)items.size(); idx++) {
@@ -416,42 +611,11 @@ void List::draw(Canvas& c) {
         Rect row{rect.x, y, rect.w, rh};
         if (!c.visible(row)) continue;  // faixa atual nao cruza a linha
         const Item& it = items[idx];
-
-        if (idx == selected) {
-            c.fillRoundRect({row.x + UI::sx(4), y + UI::sy(2), row.w - UI::sx(8), rh - UI::sy(4)}, UI::sx(6),
-                            THEME_ACCENT_D);
-        } else if (it.enabled && !m_dragging && isPressed(row) && rect.contains(s_touch.x, s_touch.y)) {
-            c.fillRoundRect({row.x + UI::sx(4), y + UI::sy(2), row.w - UI::sx(8), rh - UI::sy(4)}, UI::sx(6),
-                            THEME_RAISED);
-        }
-        // separador entre linhas
-        if (idx + 1 < (int)items.size()) {
-            c.drawFastHLine(row.x + padX, y + rh - 1, row.w - 2 * padX, THEME_BG);
-        }
-
-        int right = row.x + row.w - padX;
-        if (it.bars >= 0) {
-            drawSignalBars(c, right, y + rh / 2, it.bars, it.enabled ? THEME_ACCENT : THEME_TEXT_DIM, THEME_STROKE);
-            right -= UI::sx(26);
-        }
-        if (!it.right.empty()) {
-            c.text(it.right, right, y + rh / 2, type::caption(), THEME_TEXT_DIM, MR_DATUM);
-            right -= c.textWidth(it.right.c_str(), type::caption()) + UI::sx(8);
-        }
-        uint32_t color = it.enabled ? THEME_TEXT : THEME_TEXT_DIM;
-        c.text(c.ellipsize(it.label, f, right - row.x - padX), row.x + padX, y + rh / 2, f, color, ML_DATUM);
+        bool pressed = !m_dragging && isPressed(row) && rect.contains(s_touch.x, s_touch.y);
+        paint::listRow(c, row, it.label.c_str(), nullptr, it.right.c_str(), it.bars, it.enabled, pressed,
+                       idx == selected, idx + 1 >= (int)items.size());
     }
     c.clearClip();
-
-    // indicador de scroll (so quando o conteudo excede a area)
-    int total = (int)items.size() * rh;
-    if (total > rect.h) {
-        int trackH = rect.h - 2 * radius;
-        int barH = trackH * rect.h / total;
-        if (barH < UI::sy(16)) barH = UI::sy(16);
-        int barY = rect.y + radius + (trackH - barH) * scroll / maxScroll();
-        c.fillRoundRect({rect.x + rect.w - UI::sx(5), barY, UI::sx(3), barH}, UI::sx(1), THEME_STROKE);
-    }
 }
 
 bool List::onTouch(const TouchEvent& ev, Rect myRect) {
@@ -525,17 +689,7 @@ bool List::tick(uint32_t dtMs) {
 // ---- Switch / Slider / ProgressBar / Spinner (API 12 do toolkit) --------
 
 void Switch::draw(Canvas& c) {
-    bool pressed = isPressed(rect);
-    int h = rect.h, w = h * 2;                 // pilula 2:1 dentro do rect
-    if (w > rect.w) { w = rect.w; h = w / 2; }
-    int x = rect.x + (rect.w - w) / 2, y = rect.y + (rect.h - h) / 2;
-    int r = h / 2;
-    uint32_t fillc = on ? THEME_ACCENT : (pressed ? THEME_RAISED : THEME_CARD);
-    c.fillRoundRect(Rect{x, y, w, h}, r, fillc);
-    c.drawRoundRect(Rect{x, y, w, h}, r, THEME_STROKE);
-    int knob = h - UI::sy(6);
-    c.fillCircle(x + (on ? w - knob / 2 - UI::sx(3) : knob / 2 + UI::sx(3)), y + h / 2, knob / 2,
-                 pressed ? THEME_TEXT_DIM : THEME_TEXT);
+    paint::toggle(c, rect, on, isPressed(rect));
 }
 
 bool Switch::onTouch(const TouchEvent& ev, Rect myRect) {
@@ -552,14 +706,7 @@ bool Switch::onTouch(const TouchEvent& ev, Rect myRect) {
 void Slider::draw(Canvas& c) {
     if (value < 0) value = 0;
     if (value > 100) value = 100;
-    int h = UI::sy(12);
-    int y = rect.y + (rect.h - h) / 2;
-    int r = h / 2;
-    c.fillRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_CARD);
-    c.drawRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_STROKE);
-    int fw = (int)((long)rect.w * value / 100);
-    if (fw > r * 2) c.fillRoundRect(Rect{rect.x, y, fw, h}, r, isPressed(rect) ? THEME_ACCENT_D : THEME_ACCENT);
-    c.fillCircle(rect.x + fw, y + h / 2, UI::sy(9), THEME_TEXT);
+    paint::slider(c, rect, value, isPressed(rect));
 }
 
 bool Slider::onTouch(const TouchEvent& ev, Rect myRect) {
@@ -586,54 +733,37 @@ bool Slider::onTouch(const TouchEvent& ev, Rect myRect) {
 void ProgressBar::draw(Canvas& c) {
     if (value < 0) value = 0;
     if (value > 100) value = 100;
-    int h = UI::sy(10);
-    int y = rect.y + (rect.h - h) / 2;
-    int r = h / 2;
-    c.fillRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_CARD);
-    c.drawRoundRect(Rect{rect.x, y, rect.w, h}, r, THEME_STROKE);
-    int fw = (int)((long)rect.w * value / 100);
-    if (fw > r * 2) c.fillRoundRect(Rect{rect.x, y, fw, h}, r, THEME_ACCENT);
+    paint::progress(c, rect, value);
 }
 
 void Spinner::draw(Canvas& c) {
-    // arco de 90 graus girando ~360 graus/s — barato e sem alocar
-    uint32_t ms = millis() % 1000;
-    int a = (int)(ms * 360 / 1000);
-    int r = rect.h / 2 - UI::sy(2);
-    if (r < UI::sy(4)) r = UI::sy(4);
-    c.fillArc(rect.x + rect.w / 2, rect.y + rect.h / 2, r - UI::sy(3), r, (float)a, (float)a + 90, color);
+    paint::spinner(c, rect, color);
 }
 
 // ---- Dialog -------------------------------------------------------------
 
 Rect Dialog::cardRect() const {
-    int w = UI::W - UI::sx(40);
-    int h = UI::sy(150);
-    return {UI::sx(20), (UI::H - h) / 2, w, h};
+    return paint::dialogCard({0, 0, UI::W, UI::H}, (int)buttons.size());
 }
 
 void Dialog::draw(Canvas& c) {
     // tela de baixo escurecida (buffer) + card central
     c.dim();
     Rect card = cardRect();
-    int r = UI::sx(12);
-    c.fillRoundRect(card, r, THEME_CARD);
-    c.drawRoundRect(card, r, THEME_STROKE);
-    c.text(c.ellipsize(title, type::title(), card.w - UI::sx(24)), card.x + card.w / 2, card.y + UI::sy(24),
-           type::title(), THEME_TEXT, MC_DATUM);
-    c.text(c.ellipsize(body, type::body(), card.w - UI::sx(20)), card.x + card.w / 2, card.y + UI::sy(62),
-           type::body(), THEME_TEXT_DIM, MC_DATUM);
-
-    // botoes lado a lado na base do card
     int n = (int)buttons.size();
-    if (n == 0) return;
-    int gap = UI::sx(10);
-    int bw = (card.w - gap * (n + 1)) / n;
-    int by = card.y + card.h - UI::sy(44);
+    const char* labels[4];
+    paint::ButtonStyle styles[4];
+    int pressed = -1;
+    if (n > 4) n = 4;
     for (int i = 0; i < n; i++) {
-        buttons[i].rect = {card.x + gap + i * (bw + gap), by, bw, UI::sy(34)};
-        buttons[i].draw(c);
+        buttons[i].rect = paint::dialogButton(card, i, n);
+        labels[i] = buttons[i].label.c_str();
+        styles[i] = buttons[i].style == Button::Primary  ? paint::BtnPrimary
+                    : buttons[i].style == Button::Danger ? paint::BtnDanger
+                                                         : paint::BtnGhost;
+        if (isPressed(buttons[i].rect)) pressed = i;
     }
+    paint::dialog(c, card, title.c_str(), body.c_str(), labels, styles, n, pressed);
 }
 
 bool Dialog::onTouch(const TouchEvent& ev, Rect myRect) {

@@ -838,6 +838,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     WakeWord::stop();
 #endif
 
+    // Toolkit UI (API 22): slots/toque/fundo do app anterior nao atravessam
+    uiReset();
+
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
     s_barOnGlass = false;
@@ -935,6 +938,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"fillTriangle", js_fillTriangle, 7},
         {"drawRoundRect", js_drawRoundRect, 6},
         {"fillRoundRect", js_fillRoundRect, 6},
+        // API 22: AA, gradiente, arco e mistura de cor
+        {"fillGradient", js_fillGradient, 7},
+        {"fillArc", js_fillArc, 7},
+        {"fillSmoothCircle", js_fillSmoothCircle, 4},
+        {"fillSmoothRoundRect", js_fillSmoothRoundRect, 6},
+        {"drawWideLine", js_drawWideLine, 6},
+        {"mixColor", js_mixColor, 3},
     };
     putFns(ctx, kFns3);
     
@@ -1173,6 +1183,39 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     putFns(ctx, kFnsSensors);
     duk_put_prop_string(ctx, -2, "Sensors");
+
+    // UI (API 22): toolkit imediato com o visual do Kui (JsUi.cpp)
+    duk_push_object(ctx);  // UI
+    static const JsFn kFnsUi[] = {
+        {"begin", js_uiBegin, 1},            // ([bg]) -> true = frame total
+        {"end", js_uiEnd, 1},                // ([fps]) present + ritmo
+        {"invalidate", js_uiInvalidate, 0},  // proximo frame total
+        {"touch", js_uiTouch, 0},            // {down,x,y,tap,released,moved} do frame
+        {"toast", js_uiToast, 2},            // (msg, [ms]) aviso curto dentro do app
+        {"text", js_uiText, 4},              // (s, x, y, {role,color,align,w,lines,bg}) -> altura
+        {"measure", js_uiMeasure, 2},        // (s, role) -> largura
+        {"lineHeight", js_uiLineHeight, 1},  // (role) -> altura da linha
+        {"measureWrap", js_uiMeasureWrap, 3},  // (s, w, [role]) -> altura do texto quebrado
+        {"header", js_uiHeader, 2},          // (title, {sub,back}) -> voltar?
+        {"button", js_uiButton, 6},          // (label, x, y, w, h, {style,disabled,id}) -> tap?
+        {"toggle", js_uiToggle, 4},          // (x, y, on, {id}) -> on
+        {"slider", js_uiSlider, 5},          // (x, y, w, v, {min,max,step}) -> v
+        {"progress", js_uiProgress, 5},      // (x, y, w, h, pct)
+        {"spinner", js_uiSpinner, 4},        // (cx, cy, r, [color])
+        {"list", js_uiList, 7},              // (id, x, y, w, h, items, {rowH,selected}) -> idx|-1
+        {"tabs", js_uiTabs, 6},              // (x, y, w, h, labels, sel) -> sel
+        {"card", js_uiCard, 5},              // (x, y, w, h, {color,radius,stroke})
+        {"cardEnd", js_uiCardEnd, 0},
+        {"scrollBegin", js_uiScrollBegin, 6},  // (id, x, y, w, h, contentH) -> off
+        {"scrollEnd", js_uiScrollEnd, 0},
+        {"resetScroll", js_uiResetScroll, 1},
+        {"scrollTo", js_uiScrollTo, 2},      // (id, y) posiciona (y grande = fim)
+        {"badge", js_uiBadge, 4},            // (text, x, y, {color,textColor}) -> largura
+        {"confirm", js_uiConfirm, 3},        // (title, body, {yes,no,danger}) -> bool (bloqueia)
+        {"alert", js_uiAlert, 3},            // (title, body, [ok]) (bloqueia)
+    };
+    putFns(ctx, kFnsUi);
+    duk_put_prop_string(ctx, -2, "UI");
 
     // --- Net Object (HTTP para apps, API level 2) — capability "net" (F4) ---
     if (perm(celer::PERM_NET)) {

@@ -36,34 +36,41 @@
 // Touch Input
 // =====================================================
 
-// Returns an object { x, y, touched } 
-duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
+// Leitura de toque de app (getTouch e UI.begin): cede o quadro ao vidro,
+// trata a topbar (X de sair lanca a saida do app) e devolve o ponto no espaco
+// virtual 240x320 (vertical descontando a topbar fixa). false = sem dedo.
+bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     uint16_t tx = 0, ty = 0;
     bool touched = false;
     checkRemoteAppExit(ctx);  // shell "exit": encerra antes de tocar no hardware
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
-    if (tftInstance) {
-        touched = kui::readTouch(&tx, &ty);
+    *jx = 0;
+    *jy = 0;
+    if (!tftInstance) return false;
+    touched = kui::readTouch(&tx, &ty);
 
-        // Topbar (X de sair): dispara so no release; toque na faixa e chrome
-        if (pollAppChrome(touched, tx, ty)) {
-            throwAppExit(ctx);  // nao retorna // Unreachable, but good practice
-        }
+    // Topbar (X de sair): dispara so no release; toque na faixa e chrome
+    if (pollAppChrome(touched, tx, ty)) {
+        throwAppExit(ctx);  // nao retorna
     }
+    if (!touched) return false;
 
     // Coordenadas no espaco de projeto 240x320 (hit-zones dos apps batem);
-    // vertical desconta a topbar do sistema
-    int jx = tftInstance ? ((int)tx * 240 / tftInstance->width()) : 0;
-    int jy = 0;
-    if (tftInstance) {
-        // fixo: vertical desconta a topbar; retratil: tela cheia 1:1
-        int offY = s_topbarFixed ? UI::topbarH() : 0;
-        jy = ((int)ty - offY) * 320 / ((int)tftInstance->height() - offY);
-    }
+    // fixo: vertical desconta a topbar; retratil: tela cheia 1:1
+    *jx = (int)tx * 240 / tftInstance->width();
+    int offY = s_topbarFixed ? UI::topbarH() : 0;
+    *jy = ((int)ty - offY) * 320 / ((int)tftInstance->height() - offY);
+    return true;
+}
+
+// Returns an object { x, y, touched } 
+duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
+    int jx = 0, jy = 0;
+    bool touched = readAppTouch(ctx, &jx, &jy);
     duk_push_object(ctx);
-    duk_push_int(ctx, touched ? jx : 0);
+    duk_push_int(ctx, jx);
     duk_put_prop_string(ctx, -2, "x");
-    duk_push_int(ctx, touched ? jy : 0);
+    duk_push_int(ctx, jy);
     duk_put_prop_string(ctx, -2, "y");
     duk_push_boolean(ctx, touched ? 1 : 0);
     duk_put_prop_string(ctx, -2, "touched");
@@ -101,7 +108,13 @@ duk_ret_t JSBindings::js_micros(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_delay(duk_context *ctx) {
-    int ms = duk_require_int(ctx, 0);
+    appWait(ctx, duk_require_int(ctx, 0));
+    return 0;
+}
+
+// Espera de app (System.delay, UI.end): present + GC espacado + fatias com
+// WDT e "exit" remoto
+void JSBindings::appWait(duk_context *ctx, int ms) {
     checkRemoteAppExit(ctx);  // shell "exit": app parado num delay longo tambem sai
     present();
     uint32_t t0 = millis();
@@ -130,7 +143,6 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
             checkRemoteAppExit(ctx);  // delay de ate 30s tambem responde ao "exit"
         }
     }
-    return 0;
 }
 
 duk_ret_t JSBindings::js_delayMicroseconds(duk_context *ctx) {

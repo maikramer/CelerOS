@@ -58,6 +58,12 @@ const CASES = [
     expect: { 'aviso:loop': 2, 'aviso:charset': 1 },
   },
   {
+    name: 'toolkit UI: UI.end cede, aridade e nivel',
+    file: 'ui_toolkit.js',
+    appInfo: { api: 21, permissions: [] },
+    expect: { 'aviso:aridade': 1, 'aviso:nivel': 4 },  // nivel: 1 por funcao UI.*
+  },
+  {
     name: 'API gated: permissao/nivel/feature',
     file: 'gated.js',
     appInfo: { api: 2, permissions: ['fs'] },

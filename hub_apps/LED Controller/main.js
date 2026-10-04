@@ -1,6 +1,6 @@
 // CelerOS LED Controller — controla um LED/fita por GPIO direto.
 // Pino escolhivel, liga/desliga, brilho PWM (analogWrite) e modo piscar.
-// Requer permissao gpio no app.json. ES5 (Duktape).
+// Requer permissao gpio no app.json. ES5 (Duktape), toolkit UI (API 22).
 
 var T = System.theme();
 var W = 240;
@@ -11,7 +11,7 @@ var pin = 2;                    // LED onboard classico do ESP32
 var on = false;
 var duty = 100;                 // 0..100 (PWM quando < 100)
 var mode = 0;                   // 0 fixo | 1 pisca lento | 2 pisca rapido
-var MODES = [["fixo", 0], ["pisca", 700], ["rapido", 220]];
+var MODES = [["Fixo", 0], ["Pisca", 700], ["Rápido", 220]];
 
 function apply(level) {         // level 0..100 no pino
     if (level <= 0) {
@@ -30,88 +30,52 @@ function setupPin() {
     apply(on ? duty : 0);
 }
 
-function ctext(s, cx, y, f, col, bg) {
-    System.setTextColor(col, bg || T.bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
-}
-
-function draw() {
-    System.fillScreen(T.bg);
-
-    // seletor de pino
-    System.fillRoundRect(8, 34, W - 16, 36, 10, T.card);
-    System.drawRoundRect(8, 34, W - 16, 36, 10, T.stroke);
-    System.fillRoundRect(16, 42, 28, 20, 6, T.raised);
-    ctext("-", 30, 47, 2, T.text, T.raised);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("GPIO", 56, 47, 1);
-    System.setTextColor(T.accent, T.card);
-    System.drawString(String(pin), 88, 44, 2);
-    System.fillRoundRect(196, 42, 28, 20, 6, T.raised);
-    ctext("+", 210, 47, 2, T.text, T.raised);
-
-    // botao grande
-    var bg = on ? T.ok : T.err;
-    System.fillRoundRect(40, 84, 160, 100, 16, bg);
-    System.drawRoundRect(40, 84, 160, 100, 16, T.stroke);
-    ctext(on ? "LIGADO" : "DESLIGADO", 120, 116, 3, T.bg, bg);
-    ctext("toque para alternar", 120, 152, 1, T.bg, bg);
-
-    // brilho (PWM)
-    System.setTextColor(T.textDim, T.bg);
-    System.drawString("brilho " + duty + "%", 16, 200, 1);
-    System.fillRoundRect(16, 212, 208, 10, 5, T.card);
-    System.drawRoundRect(16, 212, 208, 10, 5, T.stroke);
-    var fw = Math.round(208 * duty / 100);
-    if (fw > 3) System.fillRoundRect(16, 212, fw, 10, 5, T.accent);
-    System.fillCircle(16 + fw, 217, 6, T.text);
-
-    // modo (toque cicla)
-    System.fillRoundRect(16, 236, 208, 30, 8, T.card);
-    System.drawRoundRect(16, 236, 208, 30, 8, T.stroke);
-    ctext("modo: " + MODES[mode][0], 120, 245, 1, T.text, T.card);
-
-    ctext("GPIO " + pin + (on ? " - duty " + duty + "%" : " - nivel 0"),
-          120, 282, 1, T.textDim);
-    ctext("confira o pino antes de ligar", 120, 296, 1, T.textDim);
-}
-
 setupPin();
-draw();
 
-var lastTouch = false;
 var blinkOn = true;
 var lastBlink = System.millis();
 while (true) {
-    var t = System.getTouch();
-    var tap = t.touched && !lastTouch;
-    var hold = t.touched && t.y >= 205 && t.y <= 228;   // arrastar no trilho
+    UI.begin(T.bg);
 
-    if (hold) {
-        var d = Math.round((t.x - 16) * 100 / 208);
-        if (d < 0) d = 0;
-        if (d > 100) d = 100;
-        if (d !== duty) {
-            duty = d;
-            if (on && mode === 0) apply(duty);
-            draw();
-        }
-    } else if (tap) {
-        if (t.y >= 40 && t.y <= 64) {
-            if (t.x < 50 && pin > PIN_MIN) { pin--; setupPin(); }
-            else if (t.x > 190 && pin < PIN_MAX) { pin++; setupPin(); }
-            draw();
-        } else if (t.y >= 84 && t.y <= 184 && t.x >= 40 && t.x <= 200) {
-            on = !on;
-            apply(on ? duty : 0);
-            draw();
-        } else if (t.y >= 236 && t.y <= 266) {
-            mode = (mode + 1) % MODES.length;
-            if (mode === 0) apply(on ? duty : 0);
-            draw();
-        }
+    // seletor de pino
+    UI.card(8, 8, W - 16, 48);
+    if (UI.button("-", 16, 16, 40, 32, { style: "ghost", role: "title", disabled: pin <= PIN_MIN }) && pin > PIN_MIN) {
+        pin--;
+        setupPin();
     }
-    lastTouch = t.touched;
+    UI.text("GPIO " + pin, W / 2, 20, { role: "title", align: "center", color: T.accent });
+    if (UI.button("+", W - 56, 16, 40, 32, { style: "ghost", role: "title", disabled: pin >= PIN_MAX }) && pin < PIN_MAX) {
+        pin++;
+        setupPin();
+    }
+    UI.cardEnd();
+
+    // botao grande liga/desliga
+    if (UI.button(on ? "LIGADO" : "DESLIGADO", 24, 68, W - 48, 92,
+                  { color: on ? T.ok : T.raised, textColor: on ? T.onAccent : T.textDim, role: "title" })) {
+        on = !on;
+        apply(on ? duty : 0);
+    }
+
+    // brilho (PWM): aplica ao vivo no modo fixo
+    UI.card(8, 172, W - 16, 74);
+    UI.text("Brilho", 20, 182);
+    UI.text(duty + "%", W - 20, 182, { align: "right", color: T.accent });
+    var d = UI.slider(24, 208, W - 48, duty);
+    if (d !== duty) {
+        duty = d;
+        if (on && mode === 0) apply(duty);
+    }
+    UI.cardEnd();
+
+    // modo
+    var labels = [MODES[0][0], MODES[1][0], MODES[2][0]];
+    var m = UI.tabs(8, 256, W - 16, 32, labels, mode);
+    if (m !== mode) {
+        mode = m;
+        if (mode === 0) apply(on ? duty : 0);
+    }
+    UI.text("confira o pino antes de ligar", W / 2, 300, { role: "caption", align: "center", color: T.textDim });
 
     // modo piscar: alterna o nivel no ritmo do modo
     if (on && mode > 0 && System.millis() - lastBlink >= MODES[mode][1]) {
@@ -119,6 +83,5 @@ while (true) {
         blinkOn = !blinkOn;
         apply(blinkOn ? duty : 0);
     }
-
-    System.delay(20);
+    UI.end();
 }

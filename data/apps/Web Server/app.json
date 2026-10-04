@@ -1,16 +1,16 @@
 {
   "name": "Web Server",
   "packageName": "celeros.webserver",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "CelerOS",
   "description": "Liga e desliga o servidor web (file manager, upload de arquivos e de firmware na porta 80) e mostra o IP e a senha de acesso.",
   "type": "System",
   "category": "System",
-  "api": 3,
+  "api": 22,
   "system": true,
   "order": 50,
   "icon": "web",
   "topbar": true,
   "permissions": ["fs", "system"],
-  "changelog": "1.3.0 - card de armazenamento (/local e /sd) sob o status do servidor\n1.2.0 - toggle ao vivo via webSetActive"
+  "changelog": "1.4.0 - visual novo com o toolkit UI (API 22): toggle do servidor, cards de acesso e armazenamento\n1.3.0 - card de armazenamento (/local e /sd) sob o status do servidor\n1.2.0 - toggle ao vivo via webSetActive"
 }

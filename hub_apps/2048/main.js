@@ -1,5 +1,5 @@
-// 2048 — deslize, junte iguais, chegue no 2048 (API 3)
-// ES5 puro (Duktape). Swipe para mover; recorde em /local/config_2048_hi.txt.
+// 2048 — deslize, junte iguais, chegue no 2048. ES5 puro (Duktape), toolkit
+// UI (API 22). Swipe para mover; recorde em /local/config_2048_hi.txt.
 
 var T = System.theme();
 var W = 240, H = 320;
@@ -105,9 +105,7 @@ function undo() {
     score = prevScore;
     over = false;
     won = false;
-    drawHeader();
-    drawBoard();
-    drawHint();
+    UI.invalidate();
 }
 
 function canMove() {
@@ -131,8 +129,8 @@ function saveHi() {
 
 // -------------------------------------------------------------- desenho ----
 function tileColors(v) {
-    if (v <= 2)   return { bg: T.card,   fg: T.text };
-    if (v <= 4)   return { bg: T.raised, fg: T.text };
+    if (v <= 2)   return { bg: T.raised, fg: T.text };
+    if (v <= 4)   return { bg: T.stroke, fg: T.text };
     if (v <= 8)   return { bg: T.accentD, fg: T.text };
     if (v <= 16)  return { bg: T.accent, fg: T.onAccent };
     if (v <= 32)  return { bg: T.warn,   fg: T.onAccent };
@@ -140,138 +138,78 @@ function tileColors(v) {
     return { bg: T.ok, fg: T.onAccent };              // 128+
 }
 
-function drawTile(x, y, v) {
-    var px = GX + x * (CELL + GAP), py = GY + y * (CELL + GAP);
-    if (!v) {
-        System.fillRoundRect(px, py, CELL, CELL, 6, T.bg);
-        return;
-    }
-    var c = tileColors(v);
-    System.fillRoundRect(px, py, CELL, CELL, 6, c.bg);
-    var s = String(v);
-    var font = s.length <= 2 ? 2 : 1;
-    System.setTextColor(c.fg, c.bg);
-    System.drawString(s, px + (CELL - System.textWidth(s, font)) / 2,
-                      py + (CELL - (font === 2 ? 16 : 8)) / 2 + 1, font);
-}
-
+// Tabuleiro (desenho proprio): so no frame total; jogada chama invalidate
 function drawBoard() {
+    System.fillSmoothRoundRect(GX - 6, GY - 6, N * CELL + (N - 1) * GAP + 12, N * CELL + (N - 1) * GAP + 12, 10, T.card);
     for (var y = 0; y < N; y++) {
-        for (var x = 0; x < N; x++) drawTile(x, y, board[idx(x, y)]);
+        for (var x = 0; x < N; x++) {
+            var v = board[idx(x, y)];
+            var px = GX + x * (CELL + GAP), py = GY + y * (CELL + GAP);
+            if (!v) {
+                System.fillSmoothRoundRect(px, py, CELL, CELL, 8, T.bg);
+                continue;
+            }
+            var c = tileColors(v);
+            System.fillSmoothRoundRect(px, py, CELL, CELL, 8, c.bg);
+            var s = String(v);
+            UI.text(s, px + CELL / 2, py + (CELL - UI.lineHeight(s.length <= 2 ? "title" : "body")) / 2,
+                    { role: s.length <= 2 ? "title" : "body", align: "center", color: c.fg, bg: c.bg, id: 100 + idx(x, y) });
+        }
     }
-}
-
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - 8, f);
 }
 
 function drawHeader() {
-    System.fillRoundRect(0, 0, W, 40, 0, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString("2048", 12, 12, 2);
-    var right = "PONTOS " + score + "  Rec " + hi;
-    System.setTextColor(score > 0 && score >= hi ? T.ok : T.textDim, T.card);
-    System.drawString(right, W - 12 - System.textWidth(right, 1), 15, 1);
-    System.fillRect(0, 40, W, 3, T.accent);
+    UI.text("2048", 12, 10, { role: "title" });
+    UI.text("PONTOS " + score, W - 12, 8, { role: "caption", align: "right",
+            color: score > 0 && score >= hi ? T.ok : T.text, id: 1 });
+    UI.text("Rec " + hi, W - 12, 24, { role: "caption", align: "right", color: T.textDim, id: 2 });
 }
 
-function drawBtn(bx, bw, label) {
-    System.fillRoundRect(bx, 288, bw, 24, 8, T.raised);
-    System.drawRoundRect(bx, 288, bw, 24, 8, T.stroke);
-    ctext(label, bx + bw / 2, 300, 1, T.text, T.raised);
-}
-
-function drawHint() {
-    System.fillRect(0, 266, W, H - 266, T.bg);
-    ctext("deslize para mover", 120, 278, 1, T.textDim, T.bg);
-    drawBtn(12, 100, "Desfazer");
-    drawBtn(128, 100, "Novo jogo");
-}
-
-function drawOver() {
-    System.fillRoundRect(25, 110, 190, 96, 10, T.card);
-    System.drawRoundRect(25, 110, 190, 96, 10, T.err);
-    ctext("Sem movimentos!", 120, 130, 2, T.warn, T.card);
-    ctext("Pontos: " + score, 120, 154, 2, T.text, T.card);
-    ctext("toque para jogar de novo", 120, 184, 1, T.accent, T.card);
-}
-
-function drawWin() {
-    System.fillRoundRect(25, 110, 190, 96, 10, T.card);
-    System.drawRoundRect(25, 110, 190, 96, 10, T.ok);
-    ctext("Voce chegou ao 2048!", 120, 130, 2, T.ok, T.card);
-    ctext("Pontos: " + score, 120, 154, 2, T.text, T.card);
-    ctext("toque para continuar", 120, 184, 1, T.accent, T.card);
-}
-
-function drawAll() {
-    System.fillScreen(T.bg);
-    drawHeader();
-    drawBoard();
-    drawHint();
-    if (won) drawWin();
-    if (over) drawOver();
-}
-
-// -------------------------------------------------------------- entrada ----
-var press = null, lastP = null;
-
-// devolve null, {kind:"tap",x,y} ou {kind:"swipe",dir:"L"|"R"|"U"|"D"}
-function pollGesture() {
-    var t = System.getTouch();
-    if (t.touched) {
-        if (!press) { press = { x: t.x, y: t.y }; lastP = { x: t.x, y: t.y }; }
-        else { lastP.x = t.x; lastP.y = t.y; }
-        return null;
-    }
-    if (press) {
-        var dx = lastP.x - press.x, dy = lastP.y - press.y;
-        var pt = { x: lastP.x, y: lastP.y };
-        press = null;
-        if (Math.abs(dx) < 15 && Math.abs(dy) < 15) return { kind: "tap", x: pt.x, y: pt.y };
-        if (Math.abs(dx) > Math.abs(dy)) return { kind: "swipe", dir: dx > 0 ? "R" : "L" };
-        return { kind: "swipe", dir: dy > 0 ? "D" : "U" };
-    }
-    return null;
-}
-
-function inNewGame(x, y) {
-    return y >= 288 && y <= 312 && x >= 128 && x <= 228;
-}
-
-function inUndo(x, y) {
-    return y >= 288 && y <= 312 && x >= 12 && x <= 112;
+// devolve "L" | "R" | "U" | "D" no frame em que um arrasto termina
+function swipeDir() {
+    var t = UI.touch();
+    if (!t.released || !t.moved) return null;
+    var dx = t.x - t.sx, dy = t.y - t.sy;
+    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) return null;
+    if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "R" : "L";
+    return dy > 0 ? "D" : "U";
 }
 
 // ------------------------------------------------------------------ main ---
 reset();
-drawAll();
-
 while (true) {
-    var g = pollGesture();
+    var full = UI.begin(T.bg);
+    drawHeader();
+    if (full) drawBoard();
+    UI.text("deslize para mover", 120, 268, { role: "caption", align: "center", color: T.textDim });
+    if (UI.button("Desfazer", 12, 284, 104, 30, { style: "ghost", disabled: !prevBoard })) {
+        undo();
+        UI.invalidate();
+    }
+    if (UI.button("Novo jogo", 124, 284, 104, 30, { style: "ghost" })) {
+        saveHi();
+        reset();
+        UI.invalidate();
+    }
+    var dir = swipeDir();
+    UI.end();
 
-    if (g && g.kind === "tap") {
-        if (over || inNewGame(g.x, g.y)) {
-            saveHi();
-            reset();
-            drawAll();
-        } else if (inUndo(g.x, g.y)) {
-            undo();
-        } else if (won) {
-            won = false;               // fecha o aviso e segue jogando
-            drawAll();
-        }
-    } else if (g && g.kind === "swipe" && !over && !won) {
-        if (move(g.dir)) {
-            spawn();
-            saveHi();
+    if (dir && move(dir)) {
+        spawn();
+        saveHi();
+        UI.invalidate();
+        if (!canMove()) {
+            over = true;
+            UI.begin(T.bg);  // tabuleiro final por baixo do dialogo
             drawHeader();
             drawBoard();
-            if (!canMove()) { over = true; drawOver(); }
-            else if (won) drawWin();
+            UI.end();
+            UI.alert("Sem movimentos!", "Pontos: " + score, "Jogar de novo");
+            saveHi();
+            reset();
+        } else if (won) {
+            UI.alert("Você chegou ao 2048!", "Pontos: " + score, "Continuar");
+            won = false;
         }
     }
-
-    System.delay(20);
 }

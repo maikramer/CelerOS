@@ -1,6 +1,7 @@
 // CelerOS Cubo 3D — renderizador 3D em JavaScript.
 // Cubo solido (algoritmo do pintor) ou em arestas, rotacao por arrasto,
-// giro automatico e contador de FPS. Render por fatias em sprite (RAM 16-bit).
+// giro automatico e contador de FPS. Render por fatias em sprite (RAM 16-bit);
+// menu no toolkit UI (API 22).
 
 var T = System.theme();
 var SW = System.screenWidth();
@@ -46,28 +47,22 @@ var frames = 0;
 var fpsWin = System.millis();
 var fps = 0;
 
-function ctext(s, cx, y, f, col, bg) {
-    System.setTextColor(col, bg || T.bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
-}
-
-function drawMenu() {
-    System.fillScreen(T.bg);
-
-    System.drawRect(10, 10, SW - 20, SH - 20, T.accent);
-    System.drawRect(12, 12, SW - 24, SH - 24, T.stroke);
-
-    ctext("Cubo 3D", SW / 2, 56, 4, T.text);
-    ctext("renderizador interativo", SW / 2, 100, 2, T.textDim);
-
-    System.fillRoundRect(45, 132, 150, 34, 8, T.card);
-    System.drawRoundRect(45, 132, 150, 34, 8, T.stroke);
-    ctext(wireframe ? "modo: arestas" : "modo: solido", SW / 2, 141, 1, T.accent, T.card);
-
-    System.fillRoundRect(50, 180, 140, 50, 10, T.accent);
-    ctext("GIRAR", SW / 2, 196, 4, T.onAccent, T.accent);
-
-    ctext("arraste o dedo para girar o cubo", SW / 2, 266, 1, T.textDim);
+// Menu no toolkit UI (API 22): bloqueia ate "Girar"; o render 3D segue o
+// laco proprio (sprite por fatias)
+function menuLoop() {
+    UI.invalidate();
+    while (true) {
+        var full = UI.begin(T.bg);
+        if (full) System.fillGradient(16, 16, SW - 32, 116, T.accentD, T.bg, 14);
+        UI.text("Cubo 3D", SW / 2, 40, { role: "display", align: "center" });
+        UI.text("renderizador interativo", SW / 2, 92, { role: "caption", align: "center", color: T.textDim });
+        var m = UI.tabs(24, 146, SW - 48, 34, ["Sólido", "Arestas"], wireframe ? 1 : 0);
+        wireframe = m === 1;
+        if (UI.button("Girar", 24, 196, SW - 48, 52, { role: "title" })) return;
+        UI.text("arraste o dedo para girar; toque no topo volta ao menu", SW / 2, 266,
+                { role: "caption", align: "center", color: T.textDim, w: SW - 32, lines: 2 });
+        UI.end();
+    }
 }
 
 function draw3DFrame() {
@@ -166,42 +161,34 @@ function draw3DFrame() {
     }
 }
 
-drawMenu();
+menuLoop();
+state = STATE_PLAYING;
+System.fillScreen(T.bg);
 
 while (true) {
     var t = System.getTouch();
 
-    if (t.touched && t.x < 200) {          // X da faixa fecha sozinho
-        if (state === STATE_MENU) {
-            if (t.y >= 132 && t.y <= 166 && t.x >= 45 && t.x <= 195) {
-                wireframe = !wireframe;
-                drawMenu();
-                System.delay(250);
-            } else if (t.y >= 180 && t.y <= 230 && t.x >= 50 && t.x <= 190) {
-                state = STATE_PLAYING;
-                System.delay(200);
+    if (t.touched && t.y < 30 && t.x < 200 && !isDragging) {
+        // toque no topo (fora do X da faixa): volta ao menu. Antes o teste
+        // era feito SEM dedo (getTouch devolve y=0 solto) e o app voltava ao
+        // menu a cada quadro em que nao havia toque.
+        menuLoop();
+        System.fillScreen(T.bg);
+    } else if (t.touched && t.x < 200) {
+        if (!isDragging) {
+            isDragging = true;
+            lastTouchX = t.x;
+            lastTouchY = t.y;
+        } else {
+            var dx = t.x - lastTouchX;
+            var dy = t.y - lastTouchY;
+            if (Math.abs(dx) < 80 && Math.abs(dy) < 80) {
+                angleY += dx * 0.02;
+                angleX += dy * 0.02;
             }
-        } else if (state === STATE_PLAYING) {
-            if (!isDragging) {
-                isDragging = true;
-                lastTouchX = t.x;
-                lastTouchY = t.y;
-            } else {
-                var dx = t.x - lastTouchX;
-                var dy = t.y - lastTouchY;
-                if (Math.abs(dx) < 80 && Math.abs(dy) < 80) {
-                    angleY += dx * 0.02;
-                    angleX += dy * 0.02;
-                }
-                lastTouchX = t.x;
-                lastTouchY = t.y;
-            }
+            lastTouchX = t.x;
+            lastTouchY = t.y;
         }
-    } else if (t.y < 30 && state === STATE_PLAYING) {
-        // toque no titulo: volta ao menu
-        state = STATE_MENU;
-        isDragging = false;
-        drawMenu();
     } else {
         isDragging = false;
     }

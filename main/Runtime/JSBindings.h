@@ -36,6 +36,10 @@ public:
     // y fisico do desenho no alvo corrente (quadro/display descontam a topbar
     // do sistema; o sprite do app e canvas proprio, origem em 0)
     static int mapY(int v);
+    // Toque do app no espaco virtual (present + topbar + exit); false = sem dedo
+    static bool readAppTouch(duk_context *ctx, int *jx, int *jy);
+    // Espera de app (System.delay / UI.end): present, GC, WDT, exit remoto
+    static void appWait(duk_context *ctx, int ms);
 
 private:
     static CelerDisplay *tftInstance;
@@ -136,6 +140,43 @@ private:
     // Touch Input
     static duk_ret_t js_getTouch(duk_context *ctx);
     static duk_ret_t js_button(duk_context *ctx);  // API 17: botao fisico (buttonToApp)
+
+    // Primitivas extras (API 22)
+    static duk_ret_t js_fillGradient(duk_context *ctx);
+    static duk_ret_t js_fillArc(duk_context *ctx);
+    static duk_ret_t js_fillSmoothCircle(duk_context *ctx);
+    static duk_ret_t js_fillSmoothRoundRect(duk_context *ctx);
+    static duk_ret_t js_drawWideLine(duk_context *ctx);
+    static duk_ret_t js_mixColor(duk_context *ctx);
+
+    // Toolkit UI imediato (API 22, JsUi.cpp): mesmo visual do Kui
+    static duk_ret_t js_uiBegin(duk_context *ctx);
+    static duk_ret_t js_uiEnd(duk_context *ctx);
+    static duk_ret_t js_uiInvalidate(duk_context *ctx);
+    static duk_ret_t js_uiTouch(duk_context *ctx);
+    static duk_ret_t js_uiToast(duk_context *ctx);
+    static duk_ret_t js_uiText(duk_context *ctx);
+    static duk_ret_t js_uiMeasure(duk_context *ctx);
+    static duk_ret_t js_uiLineHeight(duk_context *ctx);
+    static duk_ret_t js_uiMeasureWrap(duk_context *ctx);
+    static duk_ret_t js_uiScrollTo(duk_context *ctx);
+    static duk_ret_t js_uiHeader(duk_context *ctx);
+    static duk_ret_t js_uiButton(duk_context *ctx);
+    static duk_ret_t js_uiToggle(duk_context *ctx);
+    static duk_ret_t js_uiSlider(duk_context *ctx);
+    static duk_ret_t js_uiProgress(duk_context *ctx);
+    static duk_ret_t js_uiSpinner(duk_context *ctx);
+    static duk_ret_t js_uiList(duk_context *ctx);
+    static duk_ret_t js_uiTabs(duk_context *ctx);
+    static duk_ret_t js_uiCard(duk_context *ctx);
+    static duk_ret_t js_uiCardEnd(duk_context *ctx);
+    static duk_ret_t js_uiScrollBegin(duk_context *ctx);
+    static duk_ret_t js_uiScrollEnd(duk_context *ctx);
+    static duk_ret_t js_uiResetScroll(duk_context *ctx);
+    static duk_ret_t js_uiBadge(duk_context *ctx);
+    static duk_ret_t js_uiConfirm(duk_context *ctx);
+    static duk_ret_t js_uiAlert(duk_context *ctx);
+    static void uiReset();  // reset por app (init)
 
     // System Utilities
     static duk_ret_t js_millis(duk_context *ctx);

@@ -142,7 +142,7 @@ componentes de UI.
 
 * **Só ES5**: sem arrow functions, `let`/`const`, `class` ou template
   literals — a engine é Duktape. Use `var` + `function`.
-* O app é um **loop `while` bloqueante** com `System.delay()` — não existem
+* O app é um **loop `while` bloqueante** ritmado por `UI.end()` (ou `System.delay()`) — não existem
   eventos nem callbacks. Tudo é polling: `System.getTouch()`,
   `System.keypadPoll()`, `CelerLink.poll()`.
 * Todas as coordenadas vivem no **canvas virtual 240x320**
@@ -153,26 +153,29 @@ componentes de UI.
 
 ### Seu Primeiro App (`main.js`)
 
-Pinta o fundo, escreve uma mensagem centralizada, espera um toque e sai —
-com a API de verdade (`System.*`, cores do tema):
+Desde a API 22 a interface sai do toolkit `UI` — os mesmos widgets das telas
+do sistema (fontes, botões com estado pressionado, listas com inércia,
+diálogos), sem hit-test à mão:
 
 ```javascript
 var T = System.theme();
+var toques = 0;
 
-System.fillScreen(T.bg);
-System.setTextColor(T.text);
-var msg = "Olá CelerOS!";
-System.drawString(msg, 120 - (System.textWidth(msg) >> 1), 150, 2);
-
-// Espera um toque (ceder mostra o quadro no vidro)
-var t;
-do {
-    t = System.getTouch();
-    System.delay(20);
-} while (!t.touched);
-
-System.exitApp();   // volta ao Launcher
+while (true) {
+    UI.begin(T.bg);                          // lê o toque; pinta o fundo no frame total
+    UI.header("Meu App");
+    UI.text("Olá CelerOS!", 120, 90, { role: "title", align: "center" });
+    UI.text("toques: " + toques, 120, 130, { align: "center", color: T.accent });
+    if (UI.button("Tocar", 20, 200, 200, 44)) toques++;
+    if (UI.button("Sair", 20, 254, 200, 44, { style: "ghost" })) System.exitApp();
+    UI.end();                                // mostra o quadro e segura ~30 fps
+}
 ```
+
+Desenho próprio (jogos, gráficos, mostradores) continua com as primitivas
+`System.*`, dentro de `if (full)` — `full` é o retorno do `UI.begin()`. Veja
+a seção 27 do [Guia da API JS](JS_API_Guide.pt-BR.md) para o modelo de
+redesenho e a lista de widgets.
 
 ### Detecção de recursos entre placas
 

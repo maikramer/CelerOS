@@ -1,6 +1,8 @@
 // CelerOS Tic Tac Toe — jogo da velha no tema do OS.
 // 1 jogador (3 niveis de bot, minimax no impossivel) ou 2 jogadores no mesmo
-// aparelho. Placar persistido no FS e linha de vitoria destacada. ES5.
+// aparelho. Placar persistido no FS e linha de vitoria destacada. ES5,
+// toolkit UI (API 22): menu, placar e fim de jogo nativos; tabuleiro com
+// marcas suavizadas (drawWideLine / fillSmoothCircle).
 
 var T = System.theme();
 var W = 240;
@@ -34,7 +36,7 @@ var winner = 0;                             // 0 ninguem | 1 X | 2 O | 3 empate
 var winLine = -1;                           // indice do trio vencedor
 var twoPlayers = false;
 var difficulty = 1;                         // 0 facil | 1 medio | 2 impossivel
-var diffNames = ["facil", "medio", "impossivel"];
+var diffNames = ["Fácil", "Médio", "Impossível"];
 
 var CELL = 62, OX = 27, OY = 88;
 
@@ -43,11 +45,6 @@ var WINS = [
     0, 3, 6, 1, 4, 7, 2, 5, 8,
     0, 4, 8, 2, 4, 6
 ];
-
-function ctext(s, cx, y, f, col, bg) {
-    System.setTextColor(col, bg || T.bg);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), y, f);
-}
 
 function checkBoard(b) {
     for (var m = 0; m < 24; m += 3) {
@@ -120,97 +117,75 @@ function cellCenter(idx) {
     };
 }
 
-function drawMark(idx, ghost) {
+function drawMark(idx) {
     var c = cellCenter(idx);
     var v = board[idx];
-    var col = ghost ? T.textDim : (v === 1 ? T.accent : T.warn);
     if (v === 1) {
-        var r = 16;
-        System.drawLine(c.x - r, c.y - r, c.x + r, c.y + r, col);
-        System.drawLine(c.x - r + 1, c.y - r, c.x + r + 1, c.y + r, col);
-        System.drawLine(c.x - r, c.y + r, c.x + r, c.y - r, col);
-        System.drawLine(c.x - r + 1, c.y + r, c.x + r + 1, c.y - r, col);
+        var r = 15;
+        System.drawWideLine(c.x - r, c.y - r, c.x + r, c.y + r, 5, T.accent);
+        System.drawWideLine(c.x - r, c.y + r, c.x + r, c.y - r, 5, T.accent);
     } else if (v === 2) {
-        System.drawCircle(c.x, c.y, 17, col);
-        System.drawCircle(c.x, c.y, 16, col);
+        System.fillSmoothCircle(c.x, c.y, 18, T.warn);
+        System.fillSmoothCircle(c.x, c.y, 13, T.card);
     }
 }
 
-function drawBoard() {
-    System.fillScreen(T.bg);
-
-    System.fillRoundRect(0, 0, W, 26, 0, T.card);
-    System.setTextColor(turn === 1 ? T.accent : T.warn, T.card);
-    var vez = twoPlayers ? ("vez: " + (turn === 1 ? "X" : "O"))
-                         : (turn === 1 ? "sua vez (X)" : "bot pensando...");
-    System.drawString(vez, 10, 8, 2);
-    System.setTextColor(T.textDim, T.card);
-    var sc = "V" + score.v + " D" + score.d + " E" + score.e;
-    System.drawString(sc, 228 - System.textWidth(sc, 1), 10, 1);
-    System.fillRect(0, 26, W, 2, T.accent);
-
-    System.fillRoundRect(OX - 6, OY - 6, CELL * 3 + 12, CELL * 3 + 12, 10, T.card);
+// Tabuleiro (desenho proprio): so no frame total — jogada/fim de jogo
+// chamam UI.invalidate()
+function drawBoard(full) {
+    var vez = twoPlayers ? ("Vez do " + (turn === 1 ? "X" : "O"))
+                         : (turn === 1 ? "Sua vez (X)" : "Bot pensando...");
+    UI.text(vez, 12, 12, { role: "title", color: turn === 1 ? T.accent : T.warn, id: 1 });
+    UI.badge("V" + score.v + " D" + score.d + " E" + score.e, 168, 14);
+    if (!full) return;
+    System.fillSmoothRoundRect(OX - 8, OY - 8, CELL * 3 + 16, CELL * 3 + 16, 14, T.card);
     for (var k = 1; k < 3; k++) {
-        System.fillRect(OX + k * CELL - 1, OY, 2, CELL * 3, T.stroke);
-        System.fillRect(OX, OY + k * CELL - 1, CELL * 3, 2, T.stroke);
+        System.fillRoundRect(OX + k * CELL - 2, OY + 4, 4, CELL * 3 - 8, 2, T.stroke);
+        System.fillRoundRect(OX + 4, OY + k * CELL - 2, CELL * 3 - 8, 4, 2, T.stroke);
     }
-    for (var idx = 0; idx < 9; idx++) drawMark(idx, false);
-
+    for (var idx = 0; idx < 9; idx++) drawMark(idx);
     // linha de vitoria riscando o trio
     if (winLine >= 0) {
         var base = winLine * 3;
         var a = cellCenter(WINS[base]);
         var b = cellCenter(WINS[base + 2]);
-        System.drawLine(a.x, a.y, b.x, b.y, T.ok);
-        System.drawLine(a.x + 1, a.y, b.x + 1, b.y, T.ok);
+        System.drawWideLine(a.x, a.y, b.x, b.y, 6, T.ok);
     }
 }
 
-function drawMenu() {
-    System.fillScreen(T.bg);
-    ctext("Jogo da Velha", 120, 44, 3, T.text);
-
+function menu() {
+    UI.text("Jogo da Velha", 120, 28, { role: "title", align: "center" });
     // placar
-    System.fillRoundRect(28, 76, 184, 40, 10, T.card);
-    System.drawRoundRect(28, 76, 184, 40, 10, T.stroke);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("voce", 48, 88, 1);
-    System.drawString("empates", 120, 88, 1);
-    System.drawString("bot", 192, 88, 1);
-    System.setTextColor(T.ok, T.card);
-    System.drawString(String(score.v), 48, 100, 2);
-    System.setTextColor(T.text, T.card);
-    System.drawString(String(score.e), 120, 100, 2);
-    System.setTextColor(T.err, T.card);
-    System.drawString(String(score.d), 192, 100, 2);
-
-    // alternador de modo
-    System.fillRoundRect(16, 136, 208, 34, 8, T.card);
-    System.drawRoundRect(16, 136, 208, 34, 8, T.stroke);
-    ctext(twoPlayers ? "2 jogadores (mesmo aparelho)" :
-                       "1 jogador  -  nivel: " + diffNames[difficulty],
-          120, 145, 1, T.accent, T.card);
-
-    System.fillRoundRect(16, 186, 208, 44, 10, T.accent);
-    ctext("Jogar", 120, 201, 3, T.onAccent, T.accent);
-
-    ctext("toque no seletor para mudar o modo", 120, 252, 1, T.textDim);
-    ctext("X comeca; placar fica salvo no aparelho", 120, 268, 1, T.textDim);
+    UI.card(16, 66, 208, 64);
+    var cols = [[52, "você", score.v, T.ok], [120, "empates", score.e, T.text], [188, "bot", score.d, T.err]];
+    for (var i = 0; i < 3; i++) {
+        UI.text(cols[i][1], cols[i][0], 74, { role: "caption", align: "center", color: T.textDim });
+        UI.text(String(cols[i][2]), cols[i][0], 92, { role: "title", align: "center", color: cols[i][3] });
+    }
+    UI.cardEnd();
+    // modo: 1 jogador (3 niveis) ou 2 jogadores
+    var m = UI.tabs(16, 144, 208, 32, ["1 jogador", "2 jogadores"], twoPlayers ? 1 : 0);
+    twoPlayers = m === 1;
+    if (!twoPlayers) difficulty = UI.tabs(16, 186, 208, 32, diffNames, difficulty);
+    else UI.text("X e O no mesmo aparelho", 120, 194, { role: "caption", align: "center", color: T.textDim });
+    if (UI.button("Jogar", 16, 236, 208, 48, { role: "title" })) resetGame();
+    UI.text("X começa; o placar fica salvo no aparelho", 120, 296, { role: "caption", align: "center", color: T.textDim, w: 224 });
 }
 
-function drawOver() {
-    var msg, col;
-    if (winner === 3) { msg = "Empate!"; col = T.textDim; }
-    else if (twoPlayers) { msg = (winner === 1 ? "X" : "O") + " venceu!"; col = T.accent; }
-    else if (winner === 1) { msg = "Voce venceu!"; col = T.ok; }
-    else { msg = "Bot venceu!"; col = T.err; }
-
-    System.fillRoundRect(20, 96, 200, 128, 10, T.card);
-    System.drawRoundRect(20, 96, 200, 128, 10, col);
-    ctext(msg, 120, 118, 3, col, T.card);
-    ctext("V " + score.v + "  E " + score.e + "  D " + score.d, 120, 150, 2, T.text, T.card);
-    System.fillRoundRect(45, 176, 150, 34, 8, T.accent);
-    ctext("Jogar de novo", 120, 188, 2, T.onAccent, T.accent);
+function over() {
+    var msg;
+    if (winner === 3) msg = "Empate!";
+    else if (twoPlayers) msg = (winner === 1 ? "X" : "O") + " venceu!";
+    else if (winner === 1) msg = "Você venceu!";
+    else msg = "Bot venceu!";
+    // o dialogo nativo vai por cima do tabuleiro escurecido
+    var again = UI.confirm(msg, "V " + score.v + "  E " + score.e + "  D " + score.d,
+                           { yes: "Jogar de novo", no: "Menu" });
+    if (again) resetGame();
+    else {
+        state = STATE_MENU;
+        UI.invalidate();
+    }
 }
 
 // ------------------------------------------------------------------ fluxo ----
@@ -232,8 +207,7 @@ function finishTurn() {
         tone(196, 200);
     }
     saveScore();
-    drawBoard();
-    drawOver();
+    UI.invalidate();
     return true;
 }
 
@@ -243,56 +217,40 @@ function resetGame() {
     winner = 0;
     winLine = -1;
     state = STATE_PLAYING;
-    drawBoard();
+    UI.invalidate();
 }
 
-drawMenu();
-
-var lastTouch = false;
+var overShown = false;
 while (true) {
-    var t = System.getTouch();
-    var tap = t.touched && !lastTouch;
-
-    if (tap && t.x < 210) {                 // X da faixa fecha o app sozinho
-        if (state === STATE_MENU) {
-            if (t.y >= 136 && t.y <= 170) {          // seletor de modo/nivel
-                if (twoPlayers) twoPlayers = false;
-                else if (difficulty < 2) difficulty++;
-                else { difficulty = 0; twoPlayers = true; }
-                drawMenu();
-            } else if (t.y >= 186 && t.y <= 230) {   // jogar
-                resetGame();
-            }
-        } else if (state === STATE_PLAYING && (turn === 1 || twoPlayers)) {
-            if (t.x >= OX && t.x <= OX + CELL * 3 && t.y >= OY && t.y <= OY + CELL * 3) {
-                var col2 = Math.floor((t.x - OX) / CELL);
-                var row2 = Math.floor((t.y - OY) / CELL);
-                var idx = row2 * 3 + col2;
-                if (board[idx] === 0) {
-                    board[idx] = turn;
-                    drawBoard();
-                    if (!finishTurn()) {
-                        tone(523, 35);
-                        turn = turn === 1 ? 2 : 1;
-                        drawBoard();
-                    }
+    var full = UI.begin(T.bg);
+    if (state === STATE_MENU) {
+        menu();
+    } else {
+        drawBoard(full);
+        var t = UI.touch();
+        if (state === STATE_PLAYING && (turn === 1 || twoPlayers) && t.tap &&
+            t.x >= OX && t.x < OX + CELL * 3 && t.y >= OY && t.y < OY + CELL * 3) {
+            var idx = Math.floor((t.y - OY) / CELL) * 3 + Math.floor((t.x - OX) / CELL);
+            if (board[idx] === 0) {
+                board[idx] = turn;
+                UI.invalidate();
+                if (!finishTurn()) {
+                    tone(523, 35);
+                    turn = turn === 1 ? 2 : 1;
                 }
-            }
-        } else if (state === STATE_OVER) {
-            if (t.y >= 176 && t.y <= 210 && t.x >= 45 && t.x <= 195) {
-                resetGame();
             }
         }
     }
-    lastTouch = t.touched;
+    UI.end();
 
     if (state === STATE_PLAYING && !twoPlayers && turn === 2) {
         botMove();
-        if (!finishTurn()) {
-            turn = 1;
-            drawBoard();
-        }
+        if (!finishTurn()) turn = 1;
+        UI.invalidate();
     }
-
-    System.delay(10);
+    // fim de jogo: mostra o tabuleiro final num frame e entao o dialogo
+    if (state === STATE_OVER) {
+        if (overShown) { overShown = false; over(); }
+        else overShown = true;
+    }
 }

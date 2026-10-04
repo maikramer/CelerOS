@@ -1,114 +1,73 @@
 // CelerOS Web Server — app de sistema (W8). Liga/desliga o servidor web e
-// mostra o IP de acesso (porta 80). UI no tema do OS (System.theme), toggle
-// ao vivo via System.webSetActive (sem reboot). X no canto sup. direito sai.
+// mostra o IP de acesso (porta 80). Toolkit UI (API 22), toggle ao vivo via
+// System.webSetActive (sem reboot). X no canto sup. direito sai.
 
 var T = System.theme();
+var LX = 8, LW = 224;
 
-// ---- helpers de UI (padrao dos apps de sistema) ---------------------------
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    // centro vertical pela altura real da fonte (API 3+: System.fontHeight)
-    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
-}
-function hit(t, x, y, w, h) {
-    return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
-}
-function waitRelease() {
-    var guard = 0;
-    while (guard < 200) {
-        var t = System.getTouch();
-        if (!t.touched) return;
-        System.delay(10);
-        guard++;
+function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB"; }
+
+var st = System.wifiStatus();
+var lastPoll = 0;
+while (true) {
+    UI.begin(T.bg);
+    // IP e estado podem chegar async: relidos a cada segundo; UI.text
+    // redesenha so o que mudou
+    if (System.millis() - lastPoll > 1000) {
+        lastPoll = System.millis();
+        var ns = System.wifiStatus();
+        if (ns.connected !== st.connected || ns.webServer !== st.webServer) UI.invalidate();
+        st = ns;
     }
-}
 
-var st;  // status atual (wifi/ip/servidor)
-
-function draw() {
-    st = System.wifiStatus();
-
-    // o titulo vive na faixa do sistema; o app comeca direto no conteudo
-    System.fillScreen(T.bg);
-
-    var y = 12;
-    var sp = 22;
+    UI.card(LX, 8, LW, 56);
+    UI.text("Servidor web", LX + 12, 18);
+    var on = !!st.webServer;
+    if (UI.toggle(LX + LW - 56, 24, on) !== on) {
+        System.webSetActive(!on);
+        st = System.wifiStatus();
+        UI.invalidate();
+    }
+    UI.text(on ? "rodando na porta 80" : "desligado", LX + 12, 42,
+            { role: "caption", color: on ? T.ok : T.textDim });
+    UI.cardEnd();
 
     if (!st.connected) {
-        System.setTextColor(T.warn, T.bg);
-        System.drawString("WiFi desconectado", 12, y, 2); y += sp + 4;
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Conecte o WiFi para usar", 12, y, 2); y += sp;
-        System.drawString("o gerenciador web.", 12, y, 2);
-    } else if (!st.webServer) {
-        System.setTextColor(T.warn, T.bg);
-        System.drawString("Servidor desligado", 12, y, 2); y += sp + 4;
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Ligue para acessar arquivos", 12, y, 2); y += sp;
-        System.drawString("e OTA pelo navegador.", 12, y, 2);
+        UI.card(LX, 74, LW, 96);
+        UI.text("Wi-Fi desconectado", 120, 90, { role: "title", align: "center", color: T.warn });
+        UI.text("Conecte o Wi-Fi para usar o gerenciador web.", 120, 124,
+                { role: "caption", align: "center", color: T.textDim, w: LW - 24, lines: 2 });
+        UI.cardEnd();
+    } else if (!on) {
+        UI.card(LX, 74, LW, 96);
+        UI.text("Servidor desligado", 120, 90, { role: "title", align: "center", color: T.warn });
+        UI.text("Ligue para acessar arquivos e OTA pelo navegador.", 120, 124,
+                { role: "caption", align: "center", color: T.textDim, w: LW - 24, lines: 2 });
+        UI.cardEnd();
     } else {
-        // card de status
-        var url = "http://" + st.ip;
         var auth = System.webAuthInfo();
-        System.fillRoundRect(8, y, 224, 108, 10, T.card);
-        System.drawRoundRect(8, y, 224, 108, 10, T.stroke);
-        System.fillCircle(22, y + 16, 4, T.ok);
-        System.setTextColor(T.textDim, T.card);
-        System.drawString("rodando - porta 80", 34, y + 11, 1);
-        System.setTextColor(T.accent, T.card);
-        var show = url;
-        while (show.length > 3 && System.textWidth(show, 2) > 200) show = show.substring(1);
-        System.drawString(show, 20, y + 30, 2);
-        System.setTextColor(T.text, T.card);
-        System.drawString("login: " + auth.user, 20, y + 58, 1);
-        System.drawString("senha: " + auth.pass, 20, y + 72, 1);
-        System.setTextColor(T.textDim, T.card);
-        System.drawString("acesso protegido - arquivos e OTA", 20, y + 92, 1);
-        y += 108 + 10;
+        UI.card(LX, 74, LW, 112);
+        UI.text("Abra no navegador", LX + 12, 84, { role: "caption", color: T.textDim });
+        UI.text("http://" + st.ip, LX + 12, 104, { role: "title", color: T.accent, w: LW - 24 });
+        UI.text("login", LX + 12, 140, { role: "caption", color: T.textDim });
+        UI.text(auth.user, LX + LW - 12, 140, { role: "caption", align: "right" });
+        UI.text("senha", LX + 12, 160, { role: "caption", color: T.textDim });
+        UI.text(auth.pass, LX + LW - 12, 160, { role: "caption", align: "right" });
+        UI.cardEnd();
 
-        // card de armazenamento (onde os uploads e backups vao parar)
-        var kb = function (n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.round(n / 1024) + "KB"; };
-        System.fillRoundRect(8, y, 224, 52, 10, T.card);
-        System.drawRoundRect(8, y, 224, 52, 10, T.stroke);
-        System.setTextColor(T.textDim, T.card);
-        System.drawString("armazenamento", 20, y + 8, 1);
-        System.setTextColor(T.text, T.card);
+        // armazenamento (onde os uploads e backups vao parar)
+        UI.card(LX, 196, LW, 84);
+        UI.text("Armazenamento", LX + 12, 206, { role: "caption", color: T.textDim });
         var loc = FS.getFreeSpace("/local"), tot = FS.getTotalSpace("/local");
-        System.drawString("/local  " + kb(loc) + " livres de " + kb(tot), 20, y + 24, 1);
-        if (FS.getTotalSpace("/sd")) {
-            System.drawString("/sd     " + kb(FS.getFreeSpace("/sd")) + " livres", 20, y + 38, 1);
-        } else {
-            System.setTextColor(T.textDim, T.card);
-            System.drawString("/sd     sem cartao", 20, y + 38, 1);
-        }
-        y += 52 + 10;
+        UI.text("Interno", LX + 12, 228, { role: "caption" });
+        UI.text(kb(loc) + " livres de " + kb(tot), LX + LW - 12, 228, { role: "caption", align: "right" });
+        UI.progress(LX + 12, 246, LW - 24, 8, tot ? Math.round((tot - loc) * 100 / tot) : 0);
+        var sd = FS.getTotalSpace("/sd");
+        UI.text("Cartão SD", LX + 12, 260, { role: "caption" });
+        UI.text(sd ? kb(FS.getFreeSpace("/sd")) + " livres" : "sem cartão", LX + LW - 12, 260,
+                { role: "caption", align: "right", color: sd ? T.text : T.textDim });
+        UI.cardEnd();
+        UI.text("Acesso protegido: arquivos e OTA.", 120, 292, { role: "caption", align: "center", color: T.textDim });
     }
-
-    // botao toggle (o X da faixa do sistema sai do app)
-    if (st.webServer) {
-        System.fillRoundRect(30, 262, 180, 40, 10, T.err);
-        ctext("Desligar", 120, 282, 2, T.text, T.err);
-    } else {
-        System.fillRoundRect(30, 262, 180, 40, 10, T.accent);
-        ctext("Ligar", 120, 282, 2, T.onAccent, T.accent);
-    }
-}
-
-draw();
-var lastDraw = 0;
-while (true) {
-    var t = System.getTouch();  // canto sup. direito => OS_EXIT automatico
-    if (t.touched) {
-        if (hit(t, 30, 262, 180, 40)) {
-            System.webSetActive(!st.webServer);
-            waitRelease();
-            draw();
-        }
-    }
-    if (System.millis() - lastDraw > 1000) {  // IP pode chegar async
-        lastDraw = System.millis();
-        draw();
-    }
-    System.delay(20);
+    UI.end(10);
 }

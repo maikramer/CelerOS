@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 21
+### API Level: 22
 ### Nível de API: 13
 ---
 
@@ -1884,3 +1884,157 @@ var s = CelerLink.pollSealed();
 if (s) { var m = JSON.parse(s); if (m.type === "wifi") Net.wifiConnect(m.ssid, m.pass); }
 // controle: CelerLink.sendSealed({type: "wifi", ssid: ssid, pass: senha});
 ```
+
+## 27. Nível de API 22 — Toolkit de UI: objeto `UI` + primitivas novas
+
+Até a API 21 cada app desenhava a própria interface com primitivas
+(`fillRoundRect` + `drawString` + hit-test à mão). O objeto `UI` expõe os
+**widgets nativos do sistema** (os mesmos das telas do CelerOS: fontes
+FreeSans, botões com estado afundado, listas com rolagem por inércia,
+diálogos) num modelo **imediato**, que encaixa no laço bloqueante de sempre:
+
+```js
+var T = System.theme();
+var ligado = false, volume = 40, aba = 0;
+var itens = [{label: "WiFi", right: "Casa", bars: 3}, {label: "Bluetooth", sub: "Desligado"}, "Tela", "Som"];
+while (true) {
+    var full = UI.begin(T.bg);                 // lê o toque 1x; true = redesenho total
+    if (UI.header("Ajustes", {back: true})) System.exitApp();
+    aba = UI.tabs(10, 48, 220, 30, ["Geral", "Rede", "Sobre"], aba);
+    UI.card(10, 86, 220, 70);
+    UI.text("Modo escuro", 22, 96);
+    ligado = UI.toggle(176, 94, ligado);
+    volume = UI.slider(22, 122, 196, volume);
+    UI.cardEnd();
+    var i = UI.list("menu", 10, 164, 220, 120, itens);
+    if (i >= 0) System.toast("Abrir " + i);
+    if (UI.button("Salvar", 10, 290, 220, 28)) salvar();
+    UI.end();                                  // present + ritmo (~30 fps)
+}
+```
+
+**Modelo de redesenho.** Os widgets **sempre** fazem o hit-test, mas só
+desenham no frame total (`UI.begin` devolveu `true`) ou quando o **próprio**
+estado visual mudou (pressionado, arrasto, valor, texto) — nesse caso limpam
+só o próprio retângulo com o fundo corrente. Na CYD (sem quadro PSRAM) isso
+evita o pisca de redesenhar a tela inteira a cada toque. Regras práticas:
+
+- desenho **próprio** do app (primitivas) vai dentro de `if (full) { ... }`;
+- um tap que dispara um widget marca o **próximo** frame como total (a ação
+  quase sempre muda a tela); para outras mudanças use `UI.invalidate()`;
+- `UI.text` e `UI.badge` se redesenham sozinhos quando o texto muda — um
+  contador em `UI.text` não precisa de `invalidate`;
+- coordenadas no espaço virtual 240x320 de sempre; cores RGB565
+  (`System.theme()`); um tap vale para **um** widget por frame.
+
+#### `UI.begin([bg])` (API 22)
+- **Retorna:** Boolean — `true` quando este frame é de redesenho total (o fundo `bg`, padrão `theme().bg`, já foi pintado).
+- **Descrição:** Abre o frame: leva o quadro anterior ao vidro, lê o toque uma vez (tap/arrasto/pressão para todos os widgets do frame) e trata a topbar (X de sair) como `getTouch`.
+
+#### `UI.end([fps])` (API 22)
+- **Descrição:** Fecha o frame: present + espera até completar `1000/fps` ms desde o último `end` (padrão 30, teto 60). Substitui o `System.delay` do laço.
+
+#### `UI.invalidate()` (API 22)
+- **Descrição:** Marca o próximo frame como total (troca de tela, dados novos).
+
+#### `UI.toast(msg, [ms])` (API 22)
+- **Descrição:** Aviso curto (pílula na base da tela, padrão 1800 ms) **dentro do app**, desenhado pelo `UI.end` — o `System.toast` só aparece quando o app sai. Ao vencer, o próximo frame é total.
+
+#### `UI.touch()` (API 22)
+- **Retorna:** Object `{down, x, y, tap, released, moved, sx, sy}` — o toque do frame corrente, como os widgets o viram (`tap` já é `false` se um widget consumiu o tap; `sx/sy` = ponto do pouso). Para widgets próprios, "salvar ao soltar" (`released`) e swipe (`released && moved`: direção = `x - sx`, `y - sy`).
+
+#### `UI.text(s, x, y, [opts])` (API 22)
+- **Parâmetros:** `opts`: `role` (`"caption"` | `"body"` (padrão) | `"title"` | `"display"`), `color`, `align` (`"left"` | `"center"` | `"right"`; `x` é a âncora), `w` (largura máxima: corta com `..`), `lines` (com `w`: quebra por palavra em até N linhas, máx. 64), `bg` (fundo para limpar quando o texto muda), `id` (dois textos na mesma posição).
+- **Retorna:** Number — altura usada (virtual).
+- **Descrição:** Texto com as fontes de papel do sistema (FreeSans/DejaVu escolhidas pela densidade da tela). Redesenha sozinho quando o conteúdo muda.
+
+#### `UI.measure(s, [role])` (API 22)
+- **Retorna:** Number — largura virtual de `s` na fonte do papel.
+
+#### `UI.lineHeight([role])` (API 22)
+- **Retorna:** Number — altura virtual da linha do papel.
+
+#### `UI.measureWrap(s, w, [role])` (API 22)
+- **Retorna:** Number — altura virtual de `s` quebrado por palavra na largura `w` (até 64 linhas), sem desenhar. Para dimensionar balões/cards antes do `UI.text`.
+
+#### `UI.header(title, [opts])` (API 22)
+- **Parâmetros:** `opts`: `sub` (legenda à direita), `back` (seta de voltar).
+- **Retorna:** Boolean — `true` no tap da seta.
+- **Descrição:** Cabeçalho do app (faixa de 40 px no topo do canvas, abaixo da topbar do sistema) no visual das telas nativas.
+
+#### `UI.button(label, x, y, w, h, [opts])` (API 22)
+- **Parâmetros:** `opts`: `style` (`"primary"` (padrão) | `"ghost"` | `"danger"`), `disabled`, `id`; cor própria com `color` (fundo) + `textColor` e `role` do rótulo (teclados de calculadora, jogos).
+- **Retorna:** Boolean — `true` no frame do tap (soltar dentro do botão em que pousou, sem arrastar).
+
+#### `UI.toggle(x, y, on, [opts])` (API 22)
+- **Retorna:** Boolean — o novo estado (44x24 virtual; o alvo de toque tem folga de 6 px). Getters do sistema podem devolver `0/1`: compare com `!!valor` (`if (UI.toggle(x, y, !!v) !== !!v) ...`).
+
+#### `UI.slider(x, y, w, value, [opts])` (API 22)
+- **Parâmetros:** `opts`: `min` (0), `max` (100), `step` (1).
+- **Retorna:** Number — o valor (atualiza ao vivo durante o arrasto; 28 px de altura).
+
+#### `UI.progress(x, y, w, h, pct)` (API 22)
+- **Descrição:** Barra de progresso 0..100.
+
+#### `UI.spinner(cx, cy, r, [color])` (API 22)
+- **Descrição:** Arco girando (redesenha a cada frame) — espera de rede/IA.
+
+#### `UI.list(id, x, y, w, h, items, [opts])` (API 22)
+- **Parâmetros:** `items`: Strings ou `{label, sub, right, rightColor, bars, enabled}` (`sub` = segunda linha; `right` = texto à direita, na cor `rightColor`; `bars` 0..4 = sinal). `opts`: `rowH` (padrão 36, ou 48 com `sub`), `selected` (índice destacado; a lista abre rolada até ele).
+- **Retorna:** Number — índice tocado neste frame, ou `-1`.
+- **Descrição:** Lista rolável com arrasto + inércia nativos (estado de rolagem guardado pelo `id`).
+
+#### `UI.tabs(x, y, w, h, labels, sel)` (API 22)
+- **Retorna:** Number — a aba ativa (controle segmentado).
+
+#### `UI.card(x, y, w, h, [opts])` (API 22)
+- **Parâmetros:** `opts`: `color` (`theme().card`), `radius` (10), `stroke`.
+- **Descrição:** Superfície arredondada; os widgets seguintes usam a cor do card como fundo até `UI.cardEnd()`.
+
+#### `UI.cardEnd()` (API 22)
+- **Descrição:** Fecha o card (volta ao fundo anterior).
+
+#### `UI.scrollBegin(id, x, y, w, h, contentH)` (API 22)
+- **Retorna:** Number — deslocamento vertical; desenhe o conteúdo em `y - off`.
+- **Descrição:** Área rolável genérica (recorte + arrasto + inércia). Rolar marca o próximo frame como total, então o conteúdo vai dentro do `if (full)`. Toque fora da área não vale para os widgets de dentro.
+
+#### `UI.scrollEnd()` (API 22)
+- **Descrição:** Fecha a área (restaura o recorte e desenha a barra de rolagem).
+
+#### `UI.scrollTo(id, y)` (API 22)
+- **Descrição:** Posiciona a lista/área `id` no deslocamento `y` (um valor grande vai ao fim — o próximo `UI.list`/`UI.scrollBegin` limita ao conteúdo) e para a inércia. Chat/log que "segue o fim".
+
+#### `UI.resetScroll(id)` (API 22)
+- **Descrição:** Volta ao topo a lista/área `id` (troca de tela).
+
+#### `UI.badge(text, x, y, [opts])` (API 22)
+- **Parâmetros:** `opts`: `color`, `textColor`.
+- **Retorna:** Number — largura virtual da pílula.
+
+#### `UI.confirm(title, [body], [opts])` (API 22)
+- **Parâmetros:** `opts`: `yes` ("OK"), `no` ("Cancelar"), `danger` (botão de confirmar vermelho).
+- **Retorna:** Boolean — `true` = confirmou.
+- **Descrição:** Diálogo modal **bloqueante** (como `System.prompt`) sobre a tela escurecida. Ao voltar, o próximo `UI.begin` é total.
+
+#### `UI.alert(title, [body], [ok])` (API 22)
+- **Descrição:** Aviso modal bloqueante com um botão.
+
+### 27.1 Primitivas novas em `System`
+
+#### `System.fillGradient(x, y, w, h, top, bottom, [radius])` (API 22)
+- **Descrição:** Retângulo (arredondado com `radius`) com gradiente vertical `top` → `bottom`.
+
+#### `System.fillArc(x, y, r0, r1, a0, a1, color)` (API 22)
+- **Descrição:** Arco cheio entre os raios `r0`..`r1`, ângulos em graus (0 = 3h, sentido horário) — anéis de progresso, medidores.
+
+#### `System.fillSmoothCircle(x, y, radius, color)` (API 22)
+- **Descrição:** Círculo com borda suavizada (anti-aliasing).
+
+#### `System.fillSmoothRoundRect(x, y, w, h, radius, color)` (API 22)
+- **Descrição:** Retângulo arredondado com cantos suavizados.
+
+#### `System.drawWideLine(x0, y0, x1, y1, width, color)` (API 22)
+- **Descrição:** Linha grossa com anti-aliasing (ponteiros de relógio, gráficos).
+
+#### `System.mixColor(a, b, pct)` (API 22)
+- **Retorna:** Number — mistura RGB565 (`pct` 0 = `a`, 100 = `b`): estados pressionados, sombras, gradientes manuais.

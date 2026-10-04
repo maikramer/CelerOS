@@ -158,236 +158,144 @@ function sendRecording(b64) {
 // INTERFACE TOUCH (relogio, SmartDisplay, CYD): transcript + botao de voz
 // =============================================================================
 if (!IS_DOG) {
-var CHW = 6;                     // fonte 1 (GLCD): 6 px por coluna
-var COLS = Math.floor(W / CHW) - 4;
-var LINE_H = 10;
-var lines = [];                  // transcript renderizavel: {s, c}
-var MAXLINES = 150;
-
+// Conversa em baloes no toolkit UI (API 22): mesma area rolavel do Chat IA
+// (segue o fim), fileira de botoes no topo e o botao redondo de voz embaixo.
 var REC_MS = 8000;               // teto da captura no touch
 var MIN_MS = 700;                // abaixo disso descarta (toque perdido)
 var MIC_CY = H - 44;
 var MIC_R = 30;
+var TOP = 36;                    // conversa abaixo da fileira de botoes
+var BW = 180, PAD = 8, MAX_VIEW = 60;
 
-// Chrome proprio (topbar:false): 3 botoes na primeira faixa. No relogio
-// redondo os cantos sao zona morta — fileira centrada com folga nas bordas.
-var BTN_Y = 6, BTN_H = 20;
-var BTNS = [
-    { x: 14, w: 66 },    // Teclado / Voz
-    { x: 86, w: 68 },    // Limpar / Cancelar
-    { x: 160, w: 66 }    // Sair
-];
-var TOP = BTN_Y + BTN_H + 6;    // transcript comeca abaixo dos botoes
-
+var view = [];                   // baloes: {k: "user"|"assistant"|"note", s, c, h, bw}
 var kbOpen = false;
 var kbTop = H;
-var redrawAll = true;
-var inputDirty = true;
-var lastBlink = 0;
-var cursorOn = true;
 var rec = false;                 // gravando (botao segurado)
 var recStart = 0;
-var wasBtnTouch = false;
+var micSig = "";                 // ultimo estado desenhado do botao de voz
 
-var scrollBack = 0;              // 0 = ao vivo; >0 = linhas de recuo
-var dragY0 = -1;
-var dragScroll0 = 0;
-
-function pushLine(s, c) {
-    lines.push({ s: s, c: c });
-    if (lines.length > MAXLINES) lines.shift();
-}
-
-function wrapCols(s, cols) {
-    var out = [];
-    var paras = s.split("\n");
-    for (var p = 0; p < paras.length; p++) {
-        var words = paras[p].split(" ");
-        var cur = "";
-        for (var i = 0; i < words.length; i++) {
-            var w = words[i];
-            while (w.length > cols) {
-                if (cur.length) { out.push(cur); cur = ""; }
-                out.push(w.substring(0, cols));
-                w = w.substring(cols);
-            }
-            var trial = cur.length ? cur + " " + w : w;
-            if (trial.length > cols && cur.length) {
-                out.push(cur);
-                cur = w;
-            } else {
-                cur = trial;
-            }
-        }
-        out.push(cur);
+function pushView(k, s, c) {
+    var it = { k: k, s: s, c: c };
+    if (k === "note") {
+        it.h = UI.measureWrap(s, W - 24, "caption");
+    } else {
+        var one = UI.measure(s, "body") + 2 * PAD;
+        it.bw = one < BW ? Math.max(one, 40) : BW;
+        it.h = UI.measureWrap(s, it.bw - 2 * PAD, "body") + 12;
     }
-    return out;
+    view.push(it);
+    if (view.length > MAX_VIEW) view.shift();
+    UI.scrollTo("chat", 1e6);
+    UI.invalidate();
 }
-
-function pushWrapped(s, c) {
-    var ws = wrapCols(s, COLS);
-    for (var i = 0; i < ws.length; i++) pushLine(ws[i], c);
-}
-
-function appendMsgLines(role, text) {
-    var prefix = role === "user" ? "você: " : "Q: ";
-    var col = role === "user" ? T.accent : T.text;
-    var wrapped = wrapCols(prefix + text, COLS);
-    for (var i = 0; i < wrapped.length; i++) {
-        pushLine(i === 0 ? wrapped[i] : "  " + wrapped[i], col);
-    }
-}
+function note(s, c) { pushView("note", s, c || T.textDim); }
 
 (function renderHist() {
-    for (var i = 0; i < msgs.length; i++) appendMsgLines(msgs[i].r, msgs[i].s);
+    for (var i = 0; i < msgs.length; i++) pushView(msgs[i].r, msgs[i].s);
 })();
 
-// resultado da IA: entra no transcript (o loop redesenha no proximo giro)
-questionSink = function (text) { appendMsgLines("user", text); };
+// resultado da IA: entra na conversa (o frame seguinte redesenha)
+questionSink = function (text) { pushView("user", fit(text)); };
 answerSink = function (r) {
-    if (r && r.retrying) { pushWrapped("repetindo...", T.textDim); redrawAll = true; return; }
+    if (r && r.retrying) { note("repetindo..."); return; }
     if (r && r.ok && r.content) {
-        appendMsgLines("assistant", r.content);
-        if (r.usage && r.usage.total_tokens) pushWrapped("(" + r.usage.total_tokens + " tokens)", T.textDim);
+        pushView("assistant", fit(r.content));
+        if (r.usage && r.usage.total_tokens) note("(" + r.usage.total_tokens + " tokens)");
     } else if (r && r.ok) {
-        pushWrapped("Q: resposta vazia", T.err);
+        note("Qwen: resposta vazia", T.err);
     } else {
-        pushWrapped("erro: " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)), T.err);
-        if (r && r.detail) pushWrapped("detalhe: " + fit(r.detail), T.textDim);
+        note("erro: " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)), T.err);
+        if (r && r.detail) note("detalhe: " + fit(r.detail));
     }
-    scrollBack = 0;
-    redrawAll = true;
 };
 
-function transcriptBottom() {
-    return (kbOpen ? kbTop - 16 : H - 92) - (busy ? 12 : 0);
+function chatBottom() { return kbOpen ? kbTop - 44 : H - 96; }
+function chatHeight() {
+    var y = 6;
+    for (var i = 0; i < view.length; i++) y += view[i].h + 8;
+    return y + (busy ? 36 : 0);
 }
-
-function btnLabel(i) {
-    if (i === 0) return (kbOpen && HAS_MIC) ? "Voz" : "Teclado";
-    if (i === 1) return busy ? "Cancelar" : "Limpar";
-    return "Sair";
-}
-
-function drawChrome() {
-    System.fillRect(0, 0, W, TOP, T.bg);
-    System.setTextColor(T.accent, T.bg);
-    System.fillRoundRect(BTNS[0].x, BTN_Y, BTNS[0].w, BTN_H, 5, T.stroke);
-    System.fillRoundRect(BTNS[1].x, BTN_Y, BTNS[1].w, BTN_H, 5, T.stroke);
-    System.fillRoundRect(BTNS[2].x, BTN_Y, BTNS[2].w, BTN_H, 5, T.stroke);
-    for (var i = 0; i < 3; i++) {
-        var s = btnLabel(i);
-        System.drawString(s, BTNS[i].x + Math.floor((BTNS[i].w - System.textWidth(s, 1)) / 2),
-                          BTN_Y + 6, 1);
+function drawChat(full) {
+    var h = chatBottom() - TOP;
+    if (h <= 0) return;
+    var off = UI.scrollBegin("chat", 0, TOP, W, h, Math.max(h, chatHeight()));
+    var y = TOP + 6 - off;
+    for (var i = 0; i < view.length; i++) {
+        var it = view[i];
+        var vis = y + it.h >= TOP && y < TOP + h;
+        if (full && vis) {
+            if (it.k === "note") {
+                UI.text(it.s, W / 2, y, { role: "caption", align: "center", color: it.c, w: W - 24, lines: 64, id: i });
+            } else {
+                var mine = it.k === "user";
+                var x = mine ? W - 8 - it.bw : 8;
+                var bg = mine ? T.accentD : T.raised;
+                System.fillRoundRect(x, y, it.bw, it.h, 12, bg);
+                UI.text(it.s, x + PAD, y + 6, { w: it.bw - 2 * PAD, lines: 64, bg: bg, id: i });
+            }
+        }
+        y += it.h + 8;
     }
+    if (busy) {
+        if (full) System.fillRoundRect(8, y, 64, 28, 12, T.raised);
+        UI.spinner(40, y + 14, 9);
+    } else if (!view.length && full) {
+        UI.text(HAS_MIC ? "Segure o botão e fale com o Qwen" : "Pergunte algo ao Qwen...", W / 2, TOP + h / 2 - 8,
+                { role: "caption", align: "center", color: T.textDim });
+    }
+    UI.scrollEnd();
 }
 
-function drawOut() {
-    var bottom = transcriptBottom();
-    if (bottom <= TOP) return;
-    var vis = Math.max(1, Math.floor((bottom - TOP) / LINE_H));
-    var maxBack = Math.max(0, lines.length - vis);
-    if (scrollBack > maxBack) scrollBack = maxBack;
-    var end = lines.length - scrollBack;
-    var start = Math.max(0, end - vis);
-    System.fillRect(0, TOP, W, bottom - TOP, T.bg);
-    var y = TOP;
-    for (var i = start; i < end; i++) {
-        System.setTextColor(lines[i].c, T.bg);
-        System.drawString(lines[i].s, 4, y, 1);
-        y += LINE_H;
-    }
-    if (!lines.length) {
-        System.setTextColor(T.textDim, T.bg);
-        var hint = HAS_MIC ? "Segure o botão e fale com o Qwen" : "Pergunte algo ao Qwen...";
-        System.drawString(hint, 4, TOP + 4, 1);
-    }
-    if (maxBack > 0) {
-        System.fillRect(W - 3, TOP, 3, bottom - TOP, T.stroke);
-        var th = Math.max(8, Math.floor((bottom - TOP) * vis / lines.length));
-        var ty = TOP + Math.floor((bottom - TOP - th) * (maxBack - scrollBack) / maxBack);
-        System.fillRect(W - 3, ty, 3, th, T.accent);
-    }
-}
-
-function drawStatus() {
-    if (!busy) return;
-    var y = transcriptBottom() + 2;
-    System.fillRect(0, y, W, 12, T.bg);
-    var dots = "";
-    var t = Math.floor(System.millis() / 400) % 4;
-    for (var i = 0; i < t; i++) dots += ".";
-    System.setTextColor(T.accent, T.bg);
-    System.drawString("Qwen pensando" + dots, 4, y + 2, 1);
-}
-
-// Botao de voz: circulo que enche pelo tempo + nucleo pulsando pelo nivel
-function drawMic() {
+// Botao de voz: circulo que enche pelo tempo + nucleo pulsando pelo nivel.
+// Desenho proprio: so quando o estado muda (gravando: a cada frame)
+function drawMic(full) {
     if (kbOpen || !HAS_MIC) return;
+    var lvl = rec ? Math.max(0, Mic.level()) : 0;
+    var el = rec ? System.millis() - recStart : 0;
+    var sig = rec ? "r" + Math.floor(el / 100) + ":" + Math.round(lvl / 10) : (busy ? "b" : "i");
+    if (!full && sig === micSig) return;
+    micSig = sig;
     System.fillRect(0, H - 92, W, 92, T.bg);
     if (rec) {
-        var el = System.millis() - recStart;
-        var frac = el / REC_MS;
-        if (frac > 1) frac = 1;
-        System.fillRect(20, H - 88, 200, 4, T.stroke);
-        System.fillRect(20, H - 88, Math.round(200 * frac), 4, T.accent);
-        System.fillCircle(120, MIC_CY, MIC_R, T.accent);
-        var lvl = Mic.level();
-        if (lvl < 0) lvl = 0;
-        var rr = 4 + Math.round(20 * (lvl / 100));
-        if (rr > 24) rr = 24;
-        System.fillCircle(120, MIC_CY, rr, T.bg);
-        var lab = (el / 1000).toFixed(1) + "s";
-        System.setTextColor(T.bg, T.accent);
-        System.drawString(lab, 120 - Math.floor(System.textWidth(lab, 1) / 2), MIC_CY - 4, 1);
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("solte para enviar", 120 - Math.floor(System.textWidth("solte para enviar", 1) / 2), H - 16, 1);
+        var frac = Math.min(1, el / REC_MS);
+        System.fillRoundRect(20, H - 9, 200, 6, 3, T.raised);
+        System.fillRoundRect(20, H - 9, Math.max(6, Math.round(200 * frac)), 6, 3, T.accent);
+        System.fillSmoothCircle(120, MIC_CY, MIC_R, T.accent);
+        var rr = Math.min(24, 4 + Math.round(20 * (lvl / 100)));
+        System.fillSmoothCircle(120, MIC_CY, rr, T.accentD);
+        UI.text((el / 1000).toFixed(1) + "s", 120, MIC_CY - 8, { role: "caption", align: "center", color: T.onAccent,
+                                                                  bg: T.accent, id: 1 });
+        UI.text("solte para enviar", 120, H - 90, { role: "caption", align: "center", color: T.textDim, id: 2 });
     } else {
-        System.drawCircle(120, MIC_CY, MIC_R, T.accent);
-        System.fillCircle(120, MIC_CY, 10, T.accent);
-        System.fillCircle(112, MIC_CY - 12, 3, T.accent);
-        System.fillCircle(120, MIC_CY - 15, 3, T.accent);
-        System.fillCircle(128, MIC_CY - 12, 3, T.accent);
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("segure e fale", 120 - Math.floor(System.textWidth("segure e fale", 1) / 2), H - 16, 1);
+        System.fillSmoothCircle(120, MIC_CY, MIC_R, busy ? T.raised : T.accentD);
+        System.fillSmoothRoundRect(113, MIC_CY - 16, 14, 22, 7, busy ? T.textDim : T.accent);
+        System.drawWideLine(108, MIC_CY + 2, 108, MIC_CY + 6, 2, busy ? T.textDim : T.accent);
+        System.drawWideLine(132, MIC_CY + 2, 132, MIC_CY + 6, 2, busy ? T.textDim : T.accent);
+        System.drawWideLine(120, MIC_CY + 12, 120, MIC_CY + 18, 2, busy ? T.textDim : T.accent);
+        UI.text(busy ? "aguarde a resposta" : "segure e fale", 120, H - 90,
+                { role: "caption", align: "center", color: T.textDim, id: 2 });
     }
 }
 
 function drawInput() {
     if (!kbOpen) return;
-    var y = kbTop - 14;
-    System.fillRect(0, y, W, 14, T.bg);
-    var s = "você: " + System.keypadText();
-    if (s.length > COLS - 1) s = s.substring(s.length - (COLS - 1));
-    System.setTextColor(T.accent, T.bg);
-    System.drawString(s, 4, y + 3, 1);
-    if (cursorOn) {
-        var cx = 4 + System.textWidth(s, 1);
-        System.fillRect(cx + 1, y + 2, 5, 9, T.text);
-    }
-}
-
-function drawAll() {
-    drawChrome();
-    drawOut();
-    drawStatus();
-    drawMic();
-    drawInput();
-    if (typeof __harness !== "undefined") {
-        __harness.qwenRec = rec;
-        if (scrollBack > (__harness.chatScrollMax || 0)) __harness.chatScrollMax = scrollBack;
-    }
+    var y = kbTop - 36;
+    UI.card(6, y, W - 12, 30, { radius: 15, stroke: true });
+    var s = System.keypadText();
+    var cur = (Math.floor(System.millis() / 500) % 2) ? "_" : " ";
+    var shown = s;
+    while (shown.length && UI.measure(shown + "_", "body") > W - 40) shown = shown.substring(1);
+    UI.text(s.length ? shown + cur : "Mensagem", 18, y + 7, { color: s.length ? T.text : T.textDim, id: 1 });
+    UI.cardEnd();
 }
 
 // -------------------------------------------------------------- gravacao ---
 function startRec() {
     if (rec || busy || !HAS_MIC) return;
-    if (!Mic.start({ ms: REC_MS })) { pushWrapped("microfone ocupado ou sem RAM", T.err); redrawAll = true; return; }
+    if (!Mic.start({ ms: REC_MS })) { note("microfone ocupado ou sem RAM", T.err); return; }
     rec = true;
     recStart = System.millis();
-    redrawAll = true;
 }
-
 // fim do dedo/teto de tempo: envia (ou descarta se curtinho demais)
 function finishRec() {
     if (!rec) return;
@@ -395,157 +303,104 @@ function finishRec() {
     var el = System.millis() - recStart;
     if (el < MIN_MS) {
         Mic.stop();  // descarta o pinguinho
-        pushWrapped("(muito curto, tente de novo)", T.textDim);
-        redrawAll = true;
+        note("(muito curto, tente de novo)");
         return;
     }
-    appendMsgLines("user", "(voz)");  // a pergunta aparece no transcript
+    pushView("user", "(voz)");  // a pergunta aparece na conversa
     sendRecording(Mic.stop());
-    scrollBack = 0;
-    redrawAll = true;
+    UI.invalidate();
 }
-
 function cancelRec() {
     if (!rec) return;
     rec = false;
     Mic.stop();
-    pushWrapped("(cancelado)", T.textDim);
-    redrawAll = true;
+    note("(cancelado)");
 }
-
 function openKeypad() {
     if (rec) cancelRec();
     kbOpen = System.keypadOpen({ field: false, maxLen: 256 });
     if (kbOpen) kbTop = System.keypadRect().y;
-    redrawAll = true;
+    UI.invalidate();
 }
-
 function closeKepad() {
     if (typeof System.keypadClose === "function") System.keypadClose();
     kbOpen = false;
     kbTop = H;
-    redrawAll = true;
+    UI.invalidate();
 }
 
-function btnTap(i) {
-    if (i === 0) {
+// Fileira de botoes (topbar:false: o chrome e daqui). No relogio redondo os
+// cantos sao zona morta — fileira centrada com folga nas bordas.
+function chrome() {
+    if (UI.button((kbOpen && HAS_MIC) ? "Voz" : "Teclado", 14, 4, 66, 26, { style: "ghost" })) {
         if (kbOpen && HAS_MIC) closeKepad();
         else openKeypad();
-    } else if (i === 1) {
+    }
+    if (UI.button(busy ? "Cancelar" : "Limpar", 86, 4, 68, 26, { style: "ghost" })) {
         if (busy && hasAI && AI.cancel()) {
             busy = false;
-            pushWrapped("cancelado", T.textDim);
+            note("cancelado");
         } else if (!busy) {
             if (rec) cancelRec();
             msgs = [];
-            lines = [];
+            view = [];
             try { FS.deleteFile(histFile); } catch (e) {}
-            pushWrapped("conversa apagada", T.textDim);
+            note("conversa apagada");
         }
-        redrawAll = true;
-    } else {
+    }
+    if (UI.button("Sair", 160, 4, 66, 26, { style: "ghost" })) {
         if (rec) cancelRec();
         System.exitApp();
     }
 }
 
 // ------------------------------------------------------------------ main ---
-pushLine("Qwen " + VER, T.accent);
-if (!hasAI) pushWrapped("requer firmware com API >= 18", T.err);
-else if (!AI.configured(PROV)) pushWrapped("sem chave: rode tools/push_ai_key.py " + PROV, T.err);
-if (!HAS_MIC) pushWrapped("sem microfone aqui: use o teclado", T.textDim);
-else pushWrapped("fale segurando o botao; arraste p/ rever", T.textDim);
+note("Qwen " + VER, T.accent);
+if (!hasAI) note("requer firmware com API >= 18", T.err);
+else if (!AI.configured(PROV)) note("sem chave: rode tools/push_ai_key.py " + PROV, T.err);
+if (!HAS_MIC) note("sem microfone aqui: use o teclado");
+else note("fale segurando o botão; arraste para rever");
 
 // Sem microfone o teclado abre direto (chat de texto puro)
 if (!HAS_MIC && typeof System.keypadOpen === "function") openKeypad();
 
+var wasBusy = busy;
 while (true) {
     if (kbOpen) {
         var ev = System.keypadPoll();
         if (ev) {
             if (ev.type === "enter") {
-                cursorOn = true;
                 if (ev.text) sendText(ev.text);
-                redrawAll = true;
-            } else if (ev.type === "change") {
-                inputDirty = true;
-                cursorOn = true;
+                UI.invalidate();
             } else if (ev.type === "cancel") {
                 // voltar ao modo voz (se houver mic) em vez de reabrir o teclado
                 if (HAS_MIC) closeKepad();
-                else { System.keypadOpen({ field: false, maxLen: 256 }); kbTop = System.keypadRect().y; }
-                redrawAll = true;
+                else { System.keypadOpen({ field: false, maxLen: 256 }); kbTop = System.keypadRect().y; UI.invalidate(); }
             }
         }
     }
+    if (busy !== wasBusy) { wasBusy = busy; UI.invalidate(); }
 
-    var t = System.getTouch();
-
-    // botoes do chrome: toque (borda de descida) na faixa de cima
-    var inRow = t && t.touched && t.y >= BTN_Y - 2 && t.y <= BTN_Y + BTN_H + 2;
-    if (inRow && !wasBtnTouch) {
-        for (var b = 0; b < 3; b++) {
-            if (t.x >= BTNS[b].x - 4 && t.x <= BTNS[b].x + BTNS[b].w + 4) { btnTap(b); break; }
-        }
-    }
-    wasBtnTouch = !!inRow;
+    var full = UI.begin(T.bg);
+    if (full && kbOpen) System.keypadDraw();
+    chrome();
+    drawChat(full);
+    drawInput();
 
     // botao de voz: segurar dentro do circulo grava; soltar envia; arrastar
     // para fora cancela
     if (HAS_MIC && !kbOpen) {
-        var inBtn = t && t.touched &&
-            (t.x - 120) * (t.x - 120) + (t.y - MIC_CY) * (t.y - MIC_CY) <=
-            (MIC_R + 6) * (MIC_R + 6);
-        if (!rec && inBtn && !busy) {
-            startRec();
-        } else if (rec) {
-            var far = t && t.touched &&
-                (t.x - 120) * (t.x - 120) + (t.y - MIC_CY) * (t.y - MIC_CY) >
-                (MIC_R + 26) * (MIC_R + 26);
-            if (far) cancelRec();
-            else if (!t || !t.touched) finishRec();
-            else redrawAll = true;  // anima tempo/nivel
+        var t = UI.touch();
+        var d2 = (t.x - 120) * (t.x - 120) + (t.y - MIC_CY) * (t.y - MIC_CY);
+        if (!rec && t.down && d2 <= (MIC_R + 6) * (MIC_R + 6) && !busy) startRec();
+        else if (rec) {
+            if (t.down && d2 > (MIC_R + 26) * (MIC_R + 26)) cancelRec();
+            else if (!t.down) finishRec();
         }
     }
-
-    // arrasto no transcript: rever a conversa
-    if (!rec && t && t.touched && t.y > BTN_Y + BTN_H + 4 && t.y < transcriptBottom() - 4) {
-        if (dragY0 < 0) {
-            dragY0 = t.y;
-            dragScroll0 = scrollBack;
-        }
-        var visD = Math.max(1, Math.floor((transcriptBottom() - TOP - 8) / LINE_H));
-        var maxBackD = Math.max(0, lines.length - visD);
-        var want = dragScroll0 + Math.floor((dragY0 - t.y) / LINE_H);
-        if (want < 0) want = 0;
-        if (want > maxBackD) want = maxBackD;
-        if (want !== scrollBack) {
-            scrollBack = want;
-            redrawAll = true;
-        }
-    } else if (!rec) {
-        dragY0 = -1;
-    }
-
-    if (redrawAll) {
-        drawAll();
-        redrawAll = false;
-        inputDirty = false;
-        lastBlink = System.millis();
-    } else if (inputDirty) {
-        drawInput();
-        inputDirty = false;
-        lastBlink = System.millis();
-    } else if (busy && System.millis() - lastBlink > 400) {
-        drawStatus();
-        lastBlink = System.millis();
-    } else if (kbOpen && !busy && System.millis() - lastBlink > 500) {
-        cursorOn = !cursorOn;
-        drawInput();
-        lastBlink = System.millis();
-    }
-
-    System.delay(20);
+    drawMic(full);
+    if (typeof __harness !== "undefined") __harness.qwenRec = rec;
+    UI.end();
 }
 }  // fim da interface touch
 

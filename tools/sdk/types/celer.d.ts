@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 21 — 218 funcoes.
+// API level 22 — 250 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -10,6 +10,14 @@ interface CelerTheme {
 }
 
 interface TouchPoint { x: number; y: number; touched: boolean; }
+
+type UITextRole = "caption" | "body" | "title" | "display";
+interface UITextOpts {
+    role?: UITextRole; color?: number; align?: "left" | "center" | "right";
+    w?: number; lines?: number; bg?: number; id?: number;
+}
+interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }
+interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }
 
 declare function setTimeout(callback: () => void, ms: number): number;
 declare function setInterval(callback: () => void, ms: number): number;
@@ -48,6 +56,17 @@ declare const System: {
     drawRoundRect(x: number, y: number, w: number, h: number, radius: number, color: number): void;
     /** desenha retângulo com cantos arredondados na cor especificada. */
     fillRoundRect(x: number, y: number, w: number, h: number, radius: number, color: number): void;
+    /** Retângulo (arredondado com radius) com gradiente vertical top → bottom. (API 22) */
+    fillGradient(x: number, y: number, w: number, h: number, top: number, bottom: number, radius?: number): void;
+    /** Arco cheio entre os raios r0..r1, ângulos em graus (0 = 3h, sentido horário) — anéis de progresso, medidores. (API 22) */
+    fillArc(x: number, y: number, r0: number, r1: number, a0: number, a1: number, color: number): void;
+    /** Círculo com borda suavizada (anti-aliasing). (API 22) */
+    fillSmoothCircle(x: number, y: number, radius: number, color: number): void;
+    /** Retângulo arredondado com cantos suavizados. (API 22) */
+    fillSmoothRoundRect(x: number, y: number, w: number, h: number, radius: number, color: number): void;
+    /** Linha grossa com anti-aliasing (ponteiros de relógio, gráficos). (API 22) */
+    drawWideLine(x0: number, y0: number, x1: number, y1: number, width: number, color: number): void;
+    mixColor(a: number, b: number, pct: number): number;
     /** lê uma imagem .bmp de 16, 24 ou 32 bits do sistema de arquivos (`/sd/` ou `/local/`) e a transmite em `x, y` sem usar RAM do */
     drawBMP(path: string, x: number, y: number): any;
     /** desenha uma imagem .png do sistema de arquivos (/sd/ ou `/local/`) em `x, y`, decodificada em streaming linha a linha (sem pico de */
@@ -273,6 +292,52 @@ declare const Sensors: {
     steps(): any;
     temp(): any;
     stepHistory(): any;
+};
+
+declare const UI: {
+    /** Abre o frame: leva o quadro anterior ao vidro, lê o toque uma vez (tap/arrasto/pressão para todos os widgets do frame) e trata a topbar (X d (API 22) */
+    begin(bg?: number): boolean;
+    /** Fecha o frame: present + espera até completar 1000/fps ms desde o último end (padrão 30, teto 60). Substitui o System.delay do laço. (API 22) */
+    end(fps?: number): void;
+    /** Marca o próximo frame como total (troca de tela, dados novos). (API 22) */
+    invalidate(): void;
+    touch(): UITouch;
+    /** Aviso curto (pílula na base da tela, padrão 1800 ms) dentro do app, desenhado pelo UI.end — o System.toast só aparece quando o app sai. Ao v (API 22) */
+    toast(msg: string, ms?: number): void;
+    /** Texto com as fontes de papel do sistema (FreeSans/DejaVu escolhidas pela densidade da tela). Redesenha sozinho quando o conteúdo muda. (API 22) */
+    text(s: string, x: number, y: number, opts?: UITextOpts): number;
+    measure(s: string, role?: UITextRole): number;
+    lineHeight(role?: UITextRole): number;
+    measureWrap(s: string, w: number, role?: UITextRole): number;
+    /** Cabeçalho do app (faixa de 40 px no topo do canvas, abaixo da topbar do sistema) no visual das telas nativas. (API 22) */
+    header(title: string, opts?: { sub?: string; back?: boolean }): boolean;
+    button(label: string, x: number, y: number, w: number, h: number, opts?: { style?: "primary" | "ghost" | "danger"; disabled?: boolean; id?: number; color?: number; textColor?: number; role?: UITextRole }): boolean;
+    toggle(x: number, y: number, on?: boolean, opts?: { id?: number }): boolean;
+    slider(x: number, y: number, w: number, value: number, opts?: { min?: number; max?: number; step?: number; id?: number }): number;
+    /** Barra de progresso 0..100. (API 22) */
+    progress(x: number, y: number, w: number, h: number, pct: number): void;
+    /** Arco girando (redesenha a cada frame) — espera de rede/IA. (API 22) */
+    spinner(cx: number, cy: number, r: number, color?: number): void;
+    /** Lista rolável com arrasto + inércia nativos (estado de rolagem guardado pelo id). (API 22) */
+    list(id: string, x: number, y: number, w: number, h: number, items?: Array<string | UIListItem>, opts?: { rowH?: number; selected?: number }): number;
+    tabs(x: number, y: number, w: number, h: number, labels?: string[], sel?: number): number;
+    /** Superfície arredondada; os widgets seguintes usam a cor do card como fundo até UI.cardEnd(). (API 22) */
+    card(x: number, y: number, w: number, h: number, opts?: { color?: number; radius?: number; stroke?: boolean }): void;
+    /** Fecha o card (volta ao fundo anterior). (API 22) */
+    cardEnd(): void;
+    /** Área rolável genérica (recorte + arrasto + inércia). Rolar marca o próximo frame como total, então o conteúdo vai dentro do if (full). Toque (API 22) */
+    scrollBegin(id: string, x: number, y: number, w: number, h: number, contentH: number): number;
+    /** Fecha a área (restaura o recorte e desenha a barra de rolagem). (API 22) */
+    scrollEnd(): void;
+    /** Volta ao topo a lista/área id (troca de tela). (API 22) */
+    resetScroll(id: string): void;
+    /** Posiciona a lista/área id no deslocamento y (um valor grande vai ao fim — o próximo UI.list/UI.scrollBegin limita ao conteúdo) e para a inér (API 22) */
+    scrollTo(id: string, y: number): void;
+    badge(text: string, x: number, y: number, opts?: { color?: number; textColor?: number }): number;
+    /** Diálogo modal bloqueante (como System.prompt) sobre a tela escurecida. Ao voltar, o próximo UI.begin é total. (API 22) */
+    confirm(title: string, body?: string, opts?: { yes?: string; no?: string; danger?: boolean }): boolean;
+    /** Aviso modal bloqueante com um botão. (API 22) */
+    alert(title: string, body?: string, ok?: string): void;
 };
 
 declare const Net: {

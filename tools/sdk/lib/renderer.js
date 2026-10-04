@@ -27,6 +27,7 @@ class Renderer {
         this.sprite = null;     // { w, h, fb } criado por createSprite
         this.bound = false;     // bindSprite(true): draws vao ao sprite (contrato do firmware)
         this.unsupported = new Set();
+        this.clip = null;       // {x,y,w,h} de setClip (null = alvo inteiro)
     }
 
     // ------------------------------------------------------------ pixgrade
@@ -37,6 +38,8 @@ class Renderer {
     px(x, y, c) {
         x |= 0; y |= 0;
         if (x < 0 || y < 0 || x >= this.targetW() || y >= this.targetH()) return;
+        const k = this.clip;
+        if (k && (x < k.x || y < k.y || x >= k.x + k.w || y >= k.y + k.h)) return;
         this.target()[y * this.targetW() + x] = c & 0xFFFF;
     }
 
@@ -55,9 +58,12 @@ class Renderer {
     }
 
     // cantos de circulo para roundRect: quadrantes (cx,cy,r)
-    corner(cx, cy, r, c, filled) {
+    // qx/qy (-1/1) restringem ao quadrante do canto (0 = circulo inteiro)
+    corner(cx, cy, r, c, filled, qx = 0, qy = 0) {
         for (let dy = -r; dy <= r; dy++) {
+            if (qy && dy * qy < 0) continue;
             for (let dx = -r; dx <= r; dx++) {
+                if (qx && dx * qx < 0) continue;
                 const d2 = dx * dx + dy * dy;
                 if (filled ? d2 <= r * r : (d2 <= r * r && d2 >= (r - 1) * (r - 1))) {
                     this.px(cx + dx, cy + dy, c);
@@ -82,10 +88,10 @@ class Renderer {
             this.hLine(x + r2, y + h - 1, w - 2 * r2, c);
             this.vLine(x, y + r2, h - 2 * r2, c);
             this.vLine(x + w - 1, y + r2, h - 2 * r2, c);
-            this.corner(x + r2, y + r2, r2, c, false);
-            this.corner(x + w - 1 - r2, y + r2, r2, c, false);
-            this.corner(x + r2, y + h - 1 - r2, r2, c, false);
-            this.corner(x + w - 1 - r2, y + h - 1 - r2, r2, c, false);
+            this.corner(x + r2, y + r2, r2, c, false, -1, -1);
+            this.corner(x + w - 1 - r2, y + r2, r2, c, false, 1, -1);
+            this.corner(x + r2, y + h - 1 - r2, r2, c, false, -1, 1);
+            this.corner(x + w - 1 - r2, y + h - 1 - r2, r2, c, false, 1, 1);
         }
     }
 
@@ -144,6 +150,56 @@ class Renderer {
         }
     }
 
+    // ------------------------------------------------- primitivas API 22
+    // mistura RGB565 (pct 0 = a, 100 = b) — mesma conta do js_mixColor
+    static mix(a, b, p) {
+        p = Math.max(0, Math.min(100, p | 0));
+        const ch = (sh, m) => {
+            const ca = (a >> sh) & m, cb = (b >> sh) & m;
+            return ((ca + Math.trunc((cb - ca) * p / 100)) & m) << sh;
+        };
+        return ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F);
+    }
+
+    // gradiente vertical em retangulo (arredondado quando r > 0)
+    gradient(x, y, w, h, top, bottom, r) {
+        const r2 = Math.max(0, Math.min(r | 0, Math.floor(Math.min(w, h) / 2)));
+        for (let j = 0; j < h; j++) {
+            const c = Renderer.mix(top, bottom, h > 1 ? Math.round(j * 100 / (h - 1)) : 0);
+            let inset = 0;
+            const dy = j < r2 ? r2 - j : (j >= h - r2 ? j - (h - 1 - r2) : 0);
+            if (dy > 0) inset = r2 - Math.round(Math.sqrt(Math.max(0, r2 * r2 - dy * dy)));
+            this.hLine(x + inset, y + j, w - 2 * inset, c);
+        }
+    }
+
+    // arco cheio: angulos em graus, 0 = 3h, sentido horario (LovyanGFX)
+    arc(cx, cy, r0, r1, a0, a1, c) {
+        const rin = Math.min(r0, r1), rout = Math.max(r0, r1);
+        let span = a1 - a0;
+        while (span < 0) span += 360;
+        for (let dy = -rout; dy <= rout; dy++) {
+            for (let dx = -rout; dx <= rout; dx++) {
+                const d2 = dx * dx + dy * dy;
+                if (d2 > rout * rout || d2 < rin * rin) continue;
+                let a = Math.atan2(dy, dx) * 180 / Math.PI;
+                let rel = a - a0;
+                while (rel < 0) rel += 360;
+                while (rel >= 360) rel -= 360;
+                if (rel <= span || span >= 360) this.px(cx + dx, cy + dy, c);
+            }
+        }
+    }
+
+    // linha grossa (sem AA no preview): discos ao longo do segmento
+    wideLine(x0, y0, x1, y1, wd, c) {
+        const r = Math.max(0.5, wd / 2);
+        const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+        for (let i = 0; i <= n; i++) {
+            this.circle(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n), Math.round(r), c, true);
+        }
+    }
+
     // ---------------------------------------------------------------- texto
     // Metrica por tamanho de fonte (aproximacao; textWidth e drawString usam
     // a MESMA tabela para layouts centrados baterem entre si)
@@ -170,7 +226,9 @@ class Renderer {
             const gx = x + i * g;
             for (let row = 0; row < 8; row++) {
                 for (let col = 0; col < cols; col++) {
-                    const c = ((bm[row] >> col) & 1) ? this.fg : this.bg;
+                    const on = (bm[row] >> col) & 1;
+                    if (!on && this.bg === null) continue;   // setTextColor(fg): fundo transparente
+                    const c = on ? this.fg : this.bg;
                     // pinta o bloco escalado do pixel do glifo
                     for (let sy = 0; sy < src; sy++) {
                         for (let sx = 0; sx < src; sx++) {
@@ -215,10 +273,19 @@ class Renderer {
         S.fillTriangle = (x0, y0, x1, y1, x2, y2, c) => r.triangle(x0, y0, x1, y1, x2, y2, c, true);
         S.drawRoundRect = (x, y, w, h, rad, c) => r.roundRect(x, y, w, h, rad, c, false);
         S.fillRoundRect = (x, y, w, h, rad, c) => r.roundRect(x, y, w, h, rad, c, true);
-        S.setTextColor = (fg, bg) => { r.fg = fg; r.bg = (bg == null ? 0 : bg); };
+        // como o LovyanGFX: sem cor de fundo o texto e transparente
+        S.setTextColor = (fg, bg) => { r.fg = fg; r.bg = (bg == null ? null : bg); };
         S.setTextSize = (sz) => { r.textSize = Math.max(1, sz | 0); };
         S.setTextDatum = (d) => { r.textDatum = Math.max(0, Math.min(8, d | 0)); };
         S.drawString = (s, x, y, font) => r.drawString(s, x, y, font);
+        S.setClip = (x, y, w, h) => { r.clip = { x: x | 0, y: y | 0, w: Math.max(0, w | 0), h: Math.max(0, h | 0) }; };
+        S.clearClip = () => { r.clip = null; };
+        S.fillGradient = (x, y, w, h, top, bottom, rad) => r.gradient(x, y, w, h, top, bottom, rad || 0);
+        S.fillArc = (cx, cy, r0, r1, a0, a1, c) => r.arc(cx, cy, r0, r1, a0, a1, c);
+        S.fillSmoothCircle = (x, y, rad, c) => r.circle(x, y, rad, c, true);
+        S.fillSmoothRoundRect = (x, y, w, h, rad, c) => r.roundRect(x, y, w, h, rad, c, true);
+        S.drawWideLine = (x0, y0, x1, y1, wd, c) => r.wideLine(x0, y0, x1, y1, wd, c);
+        S.mixColor = (a, b, p) => Renderer.mix(a, b, p);
         S.textWidth = (s, font) => String(s).length * r.glyphW(font || 1);
         S.fontHeight = (font) => r.glyphH(font || 1);
         // sprite global (contrato do firmware: um por vez; desenho direcionado
@@ -255,6 +322,8 @@ const RENDERED = [
     'drawTriangle', 'fillTriangle', 'drawRoundRect', 'fillRoundRect',
     'setTextColor', 'setTextSize', 'setTextDatum', 'drawString', 'textWidth',
     'fontHeight', 'createSprite', 'bindSprite', 'pushSprite', 'deleteSprite',
+    'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
+    'fillSmoothRoundRect', 'drawWideLine', 'mixColor',
 ];
 
 module.exports = { Renderer, W, H, RENDERED };

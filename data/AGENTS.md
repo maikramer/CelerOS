@@ -27,8 +27,9 @@ data/
 
 ## CONVENTIONS
 - **ES5 only**: no arrow functions, `let`/`const`, `class`, template literals or `Promise`. Use `var` + `function` + string concatenation. Duktape rejects the modern syntax at load.
-- The app loop is a blocking `while` with `System.delay()`; there are no events or callbacks. Exit through `System.exitApp()`.
+- The app loop is a blocking `while` paced by `UI.end()` (or `System.delay()`); there are no events or callbacks. Exit through `System.exitApp()`.
 - Work in 240x320 virtual coords and take colors from `System.theme()`. Never hardcode the screen size.
+- UI goes through the `UI.*` toolkit (API 22: `UI.begin`/`UI.end` frame, `header`/`button`/`list`/`toggle`/`slider`/`tabs`/`card`/`confirm`...), which draws the native widgets. Raw `System.*` primitives are for app-specific content (game boards, charts, clock faces) and go inside `if (full)`. Don't reintroduce hand-rolled buttons/lists/modals.
 - Persist state under `/local/...`, never inside another app's folder.
 - Optional `test.js` next to `main.js`: exports `wire(env)` (taps via `env.__harness.*`, canned Net/CelerLink state) and is auto-injected by `node tools/sdk/celer.js test|emu <folder>`. It never ships to the device (dev-only files are filtered on install).
 - UI strings are Portuguese, with accents (the fonts cover Latin-1: á é ç ã õ ô °...; not em dash, curly quotes or emoji). `python3 tools/acentuar.py --write <main.js>` restores accents inside strings.

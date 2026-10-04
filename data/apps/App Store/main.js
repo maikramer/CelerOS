@@ -4,13 +4,13 @@
 // esta no proprio catalogo: gravar os arquivos em disco basta — o main.js e
 // relido do disco a cada abertura; ao se atualizar, a loja pede sair/reabrir).
 //
-// Estrutura (a faixa de topo e a topbar do sistema; o canvas comeca abaixo):
-//   [Loja | Atualizacoes | Meus apps]  strip de abas (y 0..26)
-//   Loja:        chips de categoria (drag horizontal) + lista com pill de
-//                estado por linha (Novo / Instalado vX / Atualizar)
-//   Atualizacoes: so apps com versao nova (vLocal -> vRemota + changelog),
+// Interface no toolkit UI (API 22):
+//   [Loja | Atualizar | Instalados]  abas (UI.tabs) no topo do canvas
+//   Loja:        Buscar + seletor de categoria + lista com o estado de cada
+//                app a direita (Novo / Instalado / Atualizar / API / PSRAM)
+//   Atualizar:   so apps com versao nova (vLocal > vRemota + changelog),
 //                rodape "Atualizar tudo" (a propria loja vai por ultimo)
-//   Meus apps:   instalados, com Desinstalar no detalhe (dupla confirmacao
+//   Instalados:  instalados, com Desinstalar no detalhe (dupla confirmacao
 //                p/ app de sistema)
 // Instalacao: main.js em <pkg>/main.js.new via Net.download (streaming, sem
 // teto de 32KB), MD5 do catalogo conferido, rename atomico no mesmo FS; a
@@ -48,75 +48,30 @@ var STORE_PKG = "celeros.appstore";
 var T = System.theme();
 var API = System.getAPILevel();
 
-// ---- helpers de UI ---------------------------------------------------------
-function ctext(s, cx, cy, f, col, bg) {
-    System.setTextColor(col, bg);
-    var fh = System.fontHeight ? System.fontHeight(f) : (f >= 2 ? 16 : 10);
-    System.drawString(s, cx - (System.textWidth(s, f) >> 1), cy - (fh >> 1), f);
-}
-function hit(t, x, y, w, h) {
-    return t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
-}
-function waitRelease() {
-    var guard = 0;
-    while (guard < 200) {
-        var t = System.getTouch();
-        if (!t.touched) return;
-        System.delay(10);
-        guard++;
-    }
-}
+// ---- utilitarios -------------------------------------------------------------
 function baseName(p) {
     var i = p.lastIndexOf("/");
     return i >= 0 ? p.substring(i + 1) : p;
 }
+
 function dirName(p) {
     var i = p.lastIndexOf("/");
     return i > 0 ? p.substring(0, i) : p;
 }
-function truncLine(s, maxw, f) {
-    if (System.textWidth(s, f) <= maxw) return s;
-    var r = s;
-    while (r.length > 1 && System.textWidth(r + "..", f) > maxw) {
-        r = r.substring(0, r.length - 1);
-    }
-    return r + "..";
-}
-function wrapLines(s, maxw, f, maxLines) {
-    var out = [];
-    var cur = "";
-    var words = s.split(" ");
-    for (var i = 0; i < words.length; i++) {
-        var w = words[i];
-        if (!w.length) continue;
-        var trial = cur.length ? cur + " " + w : w;
-        if (!cur.length || System.textWidth(trial, f) <= maxw) cur = trial;
-        else { out.push(cur); cur = w; }
-    }
-    if (cur.length) out.push(cur);
-    while (out.length > maxLines) out.pop();
-    if (out.length > 0 && System.textWidth(out[out.length - 1], f) > maxw) {
-        out[out.length - 1] = truncLine(out[out.length - 1], maxw, f);
-    }
-    return out;
-}
+
 function fmtKB(n) {
     if (!n || n <= 0) return "";
     if (n < 1024) return n + " B";
     var kb = Math.round(n / 102.4) / 10;
     return (kb % 1 ? kb : kb.toFixed(0)) + " KB";
 }
-function pill(label, rightX, y, bgc, fgc) {
-    var w = System.textWidth(label, 1) + 12;
-    System.fillRoundRect(rightX - w, y, w, 14, 7, bgc);
-    ctext(label, rightX - w / 2, y + 7, 1, fgc, bgc);
-    return w;
-}
 
+// ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
 // ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
 function fetchJSON(url) {
     try { return Net.getJSON(url); } catch (e) { return null; }
 }
+
 function fetchText(url) {
     try { return Net.get(url); } catch (e) { return null; }
 }
@@ -148,9 +103,7 @@ function cmpV(v1, v2) {
 var apps = [];        // catalogo
 var cats = [];        // ["Todos", "Arcade", ...] (do catalogo)
 var curCat = "Todos";
-var catScroll = 0;
-var curTab = 0;       // 0=Loja 1=Atualizacoes 2=Meus apps
-var scrollYs = [0, 0, 0];
+var curTab = 0;       // 0=Loja 1=Atualizar 2=Instalados
 var selIt = null;     // item aberto no detalhe
 var localMap = {};    // pkg -> {ver, root, dir, name, system, sd}
 var updCount = 0;
@@ -159,16 +112,14 @@ var wasUpdate = false, selfUpdated = false;
 var batchOk = 0, batchFails = [];
 
 // Versao dos dados que alimentam as listas (apps/localMap/cats): sobe a cada
-// refresh(). curList()/chipsGeom() cachear por essa chave — o drag chamava
-// drawList a cada 20ms e refiltrava+reordenava o catalogo inteiro por frame
+// refresh(). curList()/curRows() cacheiam por essa chave — a lista e lida a
+// cada frame e refiltrar+reordenar o catalogo inteiro por frame custava caro
 // (installedItems: sort + catalogByPkg linear por item).
 var dataStamp = 0;
 var listCache = { key: null, items: null };
-
-var TAB_H = 26, FOOT_Y = 282, ROW_H = 44, PITCH = 50, LIST_END = 272;
-var LIST_Y = 54;      // 54 na Loja (chips acima), 32 nas outras abas
 var query = "";       // filtro de busca da Loja ("" = desligado)
 
+// ---- disco: instalados -----------------------------------------------------
 // ---- disco: instalados -----------------------------------------------------
 // mesma regra do launcher (LauncherUI::scanLocalApps): PRIMEIRO visto ganha —
 // a ordem do listDir e a mesma nos dois, entao o estado exibido e o que o
@@ -310,6 +261,7 @@ function installedItems() {
 }
 
 // ---- catalogo ---------------------------------------------------------------
+// ---- catalogo ---------------------------------------------------------------
 function entryToItem(pkg, e) {
     return {
         id: pkg, pkg: pkg,
@@ -329,6 +281,7 @@ function entryToItem(pkg, e) {
         req: e.requires || []
     };
 }
+
 function fillItemFromMeta(it) {
     var m = fetchJSON(it.metaUrl);
     if (!m) return null;
@@ -342,6 +295,7 @@ function fillItemFromMeta(it) {
     it.req = m.requires || it.req || [];
     return it;
 }
+
 function buildCats() {
     var seen = {};
     cats = ["Todos"];
@@ -350,6 +304,7 @@ function buildCats() {
         if (!seen[c]) { seen[c] = 1; cats.push(c); }
     }
 }
+
 function filteredApps() {
     var out = [];
     var q = query.toLowerCase();
@@ -361,6 +316,7 @@ function filteredApps() {
     }
     return out;
 }
+
 function updApps() {
     var out = [];
     for (var i = 0; i < apps.length; i++) {
@@ -369,17 +325,9 @@ function updApps() {
     return out;
 }
 
-function drawLoading(msg, sub) {
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext(truncLine(msg, 216, 2), 120, 130, 2, T.text, T.bg);
-    if (sub) ctext(truncLine(sub, 216, 1), 120, 155, 1, T.textDim, T.bg);
-}
-
 function loadCatalog() {
     apps = [];
     curCat = "Todos";
-    catScroll = 0;
     selIt = null;
     retryMode = "load";
 
@@ -470,86 +418,6 @@ function loadCache() {
     return true;
 }
 
-// ---- abas -------------------------------------------------------------------
-function drawTabs() {
-    System.fillRect(0, 0, 240, TAB_H, T.card);
-    System.drawFastHLine(0, TAB_H, 240, T.stroke);
-    var names = ["Loja", "Atualizações", "Meus apps"];
-    for (var i = 0; i < 3; i++) {
-        var col;
-        if (i === curTab) col = T.text;
-        else if (i === 1 && updCount > 0) col = T.warn;
-        else col = T.textDim;
-        ctext(names[i], i * 80 + 40, TAB_H / 2, 1, col, T.card);
-        if (i === curTab) System.fillRect(i * 80 + 10, TAB_H - 3, 60, 3, T.accent);
-    }
-}
-
-// chips de categoria da Loja (drag horizontal quando nao cabem) — o primeiro
-// chip e fixo: abre a busca (ou limpa o filtro ativo)
-function searchChipLabel() {
-    return query ? query + " x" : "Buscar";
-}
-var chipsCache = { key: null, g: null };
-function chipsGeom() {
-    var key = dataStamp + "|" + query;
-    if (chipsCache.key === key) return chipsCache.g;
-    var xs = [], x = 8;
-    var qw = System.textWidth(searchChipLabel(), 1) + 16;
-    xs.push({ x: x, w: qw, search: true });
-    x += qw + 6;
-    for (var i = 0; i < cats.length; i++) {
-        var w = System.textWidth(cats[i], 1) + 16;
-        xs.push({ x: x, w: w });
-        x += w + 6;
-    }
-    chipsCache.key = key;
-    chipsCache.g = { xs: xs, total: x };
-    return chipsCache.g;
-}
-function drawChips() {
-    var g = chipsGeom();
-    var maxScroll = g.total > 232 ? g.total - 232 : 0;
-    if (catScroll > maxScroll) catScroll = maxScroll;
-    if (catScroll < 0) catScroll = 0;
-    if (typeof System.setClip === "function") {
-        System.setClip(0, 30, 240, 20);
-    }
-    // strip limpa AQUI (dentro do clip): o chipsDrag redesenha so os chips
-    // por frame, nao a tela inteira
-    System.fillRect(0, 30, 240, 20, T.bg);
-    for (var i = 0; i < g.xs.length; i++) {
-        var cx = g.xs[i].x - catScroll;
-        if (cx + g.xs[i].w < 0 || cx > 240) continue;
-        if (g.xs[i].search) {
-            var on = query !== "";
-            System.fillRoundRect(cx, 30, g.xs[i].w, 18, 9, on ? T.warn : T.card);
-            System.drawRoundRect(cx, 30, g.xs[i].w, 18, 9, on ? T.warn : T.stroke);
-            ctext(searchChipLabel(), cx + g.xs[i].w / 2, 39, 1,
-                  on ? T.bg : T.textDim, on ? T.warn : T.card);
-            continue;
-        }
-        var ci = i - 1;
-        var active = cats[ci] === curCat;
-        System.fillRoundRect(cx, 30, g.xs[i].w, 18, 9,
-                             active ? T.accent : T.card);
-        System.drawRoundRect(cx, 30, g.xs[i].w, 18, 9,
-                             active ? T.accent : T.stroke);
-        ctext(cats[ci], cx + g.xs[i].w / 2, 39, 1,
-              active ? T.onAccent : T.textDim,
-              active ? T.accent : T.card);
-    }
-    if (typeof System.clearClip === "function") System.clearClip();
-}
-function chipAt(x) {
-    var g = chipsGeom();
-    for (var i = 0; i < g.xs.length; i++) {
-        var cx = g.xs[i].x - catScroll;
-        if (x >= cx && x <= cx + g.xs[i].w) return i;   // 0 = chip de busca
-    }
-    return -1;
-}
-
 // ---- listas -----------------------------------------------------------------
 function curList() {
     var key = dataStamp + "|" + curTab + "|" + curCat + "|" + query;
@@ -562,361 +430,7 @@ function curList() {
     listCache.items = items;
     return items;
 }
-function maxScroll(len) {
-    var m = (len - 4) * PITCH;
-    return m > 0 ? m : 0;
-}
-function clampScroll(len) {
-    var m = maxScroll(len);
-    if (scrollYs[curTab] < 0) scrollYs[curTab] = 0;
-    if (scrollYs[curTab] > m) scrollYs[curTab] = m;
-}
-function listY() {
-    if (curTab === 0) return 54;              // chips em 30..48
-    return 32 + 18;                            // linha de contagem em 32..50
-}
-function drawCountLine() {
-    if (curTab === 1) {
-        ctext(updCount === 0 ? "Nenhuma atualização" :
-              (updCount + (updCount === 1 ? " atualização disponível"
-                                          : " atualizações disponíveis")),
-              120, 41, 1, updCount ? T.warn : T.textDim, T.bg);
-    } else if (curTab === 2) {
-        var n = 0;
-        for (var k in localMap) if (localMap.hasOwnProperty(k)) n++;
-        ctext(n + (n === 1 ? " app instalado" : " apps instalados"),
-              120, 41, 1, T.textDim, T.bg);
-    }
-}
-function drawRow(it, y, subLeft, subRight) {
-    System.fillRoundRect(8, y, 224, ROW_H, 8, T.card);
-    System.drawRoundRect(8, y, 224, ROW_H, 8, T.stroke);
-    var st = stateInfo(it);  // 1x por linha (o pill usava o mesmo estado)
-    var pw = System.textWidth(st.txt, 1) + 12;
-    System.setTextColor(T.text, T.card);
-    System.drawString(truncLine(it.name, 224 - pw - 26, 2), 18, y + 3, 2);
-    statePillLine(st, y);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString(truncLine(subLeft, 150, 1), 18, y + 31, 1);
-    if (subRight) {
-        System.drawString(subRight, 224 - System.textWidth(subRight, 1), y + 31, 1);
-    }
-}
-function statePillLine(st, y) {
-    if (st.code === "new") pill("Novo", 224, y + 4, T.ok, T.bg);
-    else if (st.code === "upd") pill("Atualizar", 224, y + 4, T.warn, T.bg);
-    else if (st.code === "api") pill(st.txt, 224, y + 4, T.raised, T.warn);
-    else pill("Instalado", 224, y + 4, T.raised, T.textDim);
-}
-// listOnly: so a area da lista (usado no drag por frame) — abas/chips/rodape
-// nao mudam durante o scroll e cada frame deles era um redraw de tela cheia
-// (pisca no vidro direto; caixa suja do tamanho do vidro no quadro).
-function drawList(listOnly) {
-    var items = curList();
-    LIST_Y = listY();
-    if (!listOnly) {
-        System.fillScreen(T.bg);
-        drawTabs();
-        if (curTab === 0) drawChips();
-        else drawCountLine();
-    } else {
-        System.fillRect(0, LIST_Y, 240, LIST_END - LIST_Y, T.bg);
-    }
 
-    var scrollY = scrollYs[curTab];
-    clampScroll(items.length);
-    scrollY = scrollYs[curTab];
-
-    if (items.length === 0) {
-        var msg = curTab === 1 ? "Tudo em dia!" :
-                  curTab === 2 ? "Nenhum app instalado" : "Nenhum app";
-        ctext(msg, 120, 140, 2, T.text, T.bg);
-        if (curTab === 1) ctext("Volte depois para conferir novidades.", 120, 164, 1, T.textDim, T.bg);
-        drawFooter();
-        return;
-    }
-
-    var first = Math.floor(scrollY / PITCH);
-    var y = LIST_Y - (scrollY - first * PITCH);
-    var clip = typeof System.setClip === "function";
-    if (clip) System.setClip(0, LIST_Y, 240, LIST_END - LIST_Y);
-    for (var i = first; i < items.length && y < LIST_END; i++, y += PITCH) {
-        if (!clip && (y < LIST_Y || y + ROW_H > LIST_END)) continue;
-        var it = items[i];
-        if (curTab === 1) {
-            var lm = localMap[it.pkg];
-            drawRow(it, y,
-                    (lm ? "v" + lm.ver : "v?") + " -> v" + it.ver +
-                    (it.changelog ? "  " + it.changelog.split("\n")[0] : ""),
-                    "");
-        } else if (curTab === 2) {
-            var l2 = localMap[it.pkg];
-            drawRow(it, y,
-                    "v" + (l2 ? l2.ver : it.ver) +
-                    (l2 && l2.sd ? "  no SD" : "") +
-                    (l2 && l2.system ? "  sistema" : ""), "");
-        } else {
-            drawRow(it, y, it.desc, "v" + it.ver);
-        }
-    }
-    if (clip) System.clearClip();
-
-    if (!listOnly) drawFooter();
-    if (maxScroll(items.length) > 0) {
-        System.drawFastVLine(235, LIST_Y, LIST_END - LIST_Y, T.stroke);
-        var trackH = LIST_END - LIST_Y;
-        var thH = Math.max(24, Math.floor(trackH * trackH / (items.length * PITCH)));
-        var ty = LIST_Y + Math.floor((trackH - thH) * scrollY / maxScroll(items.length));
-        System.fillRect(234, ty, 3, thH, T.accent);
-    }
-}
-function footerButton(x, w, label, enabled) {
-    System.fillRoundRect(x, FOOT_Y, w, 30, 8, enabled ? T.raised : T.card);
-    System.drawRoundRect(x, FOOT_Y, w, 30, 8, T.stroke);
-    ctext(label, x + w / 2, FOOT_Y + 15, 1, enabled ? T.text : T.textDim,
-          enabled ? T.raised : T.card);
-}
-function drawFooter() {
-    if (curTab === 0) footerButton(140, 92, "Atualizar", true);
-    else if (curTab === 1) footerButton(140, 92, "Atualizar tudo", updCount > 0);
-    else footerButton(140, 92, "< Sair", true);
-}
-// drag rola; toque parado devolve o item ou null
-function listDrag(t0, items) {
-    var startY = t0.y;
-    var startScroll = scrollYs[curTab];
-    var moved = false;
-    var scrollable = maxScroll(items.length) > 0;
-    var t = t0;
-    var guard = 0;
-    while (t.touched && guard < 400) {
-        t = System.getTouch();
-        if (!t.touched) break;
-        if (Math.abs(t.y - startY) > 8) moved = true;
-        if (moved) {
-            scrollYs[curTab] = startScroll + (startY - t.y);
-            clampScroll(items.length);
-            if (scrollable) drawList(true);  // so a area que rola
-        }
-        System.delay(20);
-        guard++;
-    }
-    if (moved) {
-        scrollYs[curTab] = Math.round(scrollYs[curTab] / PITCH) * PITCH;
-        clampScroll(items.length);
-        return null;
-    }
-    LIST_Y = listY();
-    var idx = Math.floor((t0.y - LIST_Y + scrollYs[curTab]) / PITCH);
-    if (idx >= 0 && idx < items.length) {
-        waitRelease();
-        return items[idx];
-    }
-    return null;
-}
-function screenList() {
-    drawList();
-    while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (t.y < TAB_H) {  // troca de aba
-                var nt = Math.floor(t.x / 80);
-                if (nt >= 0 && nt < 3 && nt !== curTab) {
-                    waitRelease();
-                    curTab = nt;
-                    selIt = null;
-                } else {
-                    waitRelease();
-                }
-                drawList();
-            } else if (curTab === 0 && t.y >= 30 && t.y < 50) {
-                // chips: tap seleciona; drag horizontal rola. 0 = busca
-                var r = chipsDrag(t);
-                if (r === 0) {
-                    if (query) {
-                        query = "";                 // x limpa o filtro
-                    } else if (typeof System.prompt === "function") {
-                        var q = System.prompt("Buscar app", "", "");
-                        query = (q && String(q).length) ? String(q) : "";
-                    }
-                    scrollYs[0] = 0;
-                } else if (r > 0) {
-                    curCat = cats[r - 1];
-                    scrollYs[0] = 0;
-                }
-                drawList();
-            } else if (t.y >= listY() && t.y < LIST_END) {
-                var items = curList();
-                var it = listDrag(t, items);
-                if (it) {
-                    selIt = it;
-                    return "detail";
-                }
-                drawList();
-            } else if (t.y >= FOOT_Y) {
-                if (hit(t, 140, FOOT_Y, 92, 30)) {
-                    waitRelease();
-                    if (curTab === 0) {
-                        return Net.isConnected() ? "load" : "wifi";
-                    }
-                    if (curTab === 1) {
-                        if (updCount > 0) return "batch";
-                    } else {
-                        return "exit";
-                    }
-                } else {
-                    waitRelease();
-                }
-            } else {
-                waitRelease();
-            }
-        }
-        System.delay(20);
-    }
-}
-// devolve o indice do chip tocado ou -1; drag horizontal rola os chips
-function chipsDrag(t0) {
-    var startScroll = catScroll;
-    var moved = false;
-    var t = t0;
-    var guard = 0;
-    var g = chipsGeom();
-    var maxS = g.total > 232 ? g.total - 232 : 0;
-    while (t.touched && guard < 400) {
-        t = System.getTouch();
-        if (!t.touched) break;
-        if (Math.abs(t.x - t0.x) > 6) moved = true;
-        if (moved) {
-            catScroll = startScroll - (t.x - t0.x);
-            if (catScroll < 0) catScroll = 0;
-            if (catScroll > maxS) catScroll = maxS;
-            drawChips();  // so a strip dos chips, nao a lista atras
-        }
-        System.delay(20);
-        guard++;
-    }
-    if (moved) return -1;
-    waitRelease();
-    return chipAt(t0.x);
-}
-
-// ---- detalhe ----------------------------------------------------------------
-function drawDetail() {
-    var it = selIt;
-    var lm = localMap[it.pkg];
-    System.fillScreen(T.bg);
-    System.setTextColor(T.text, T.bg);
-    System.drawString(truncLine(it.name, 216, 2), 10, 6, 2);
-
-    System.fillRoundRect(8, 30, 224, 92, 10, T.card);
-    System.drawRoundRect(8, 30, 224, 92, 10, T.stroke);
-
-    // icone do pacote instalado (cache do sistema) ou inicial
-    var ip = lm ? (lm.dir + "/icon.png") : "";
-    var drew = false;
-    if (ip && FS.exists(ip) && typeof System.drawIcon === "function") {
-        System.drawIcon(ip, 14, 44);
-        drew = true;
-    }
-    if (!drew) {
-        System.fillRoundRect(14, 44, 56, 56, 10, T.raised);
-        ctext((it.name || "?").substring(0, 1).toUpperCase(), 42, 72, 2,
-              T.textDim, T.raised);
-    }
-
-    var remote = it.appUrl ? ("v" + it.ver + (it.size ? " (" + fmtKB(it.size) + ")" : ""))
-                           : "-";
-    var rows = [
-        ["Autor", truncLine(it.author || "-", 118, 1)],
-        ["Local", lm ? ("v" + (lm.ver || "?")) : "não instalado"],
-        ["Remota", remote]
-    ];
-    var yy = 42;
-    for (var i = 0; i < rows.length; i++) {
-        System.setTextColor(T.textDim, T.card);
-        System.drawString(rows[i][0], 80, yy, 1);
-        System.setTextColor(T.text, T.card);
-        System.drawString(rows[i][1], 128, yy, 1);
-        yy += 18;
-    }
-    var st = stateInfo(it);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Estado", 80, yy, 1);
-    System.setTextColor(st.col, T.card);
-    System.drawString(st.txt + (lm ? " v" + lm.ver : ""), 128, yy, 1);
-
-    // descricao + novidades
-    var news = it.changelog && st.code !== "new" && st.code !== "api";
-    System.setTextColor(T.textDim, T.bg);
-    System.drawString("Descrição", 10, 130, 1);
-    var lines = wrapLines(it.desc || "Sem descrição.", 220, 1, news ? 2 : 4);
-    var y2 = 142;
-    for (var k = 0; k < lines.length; k++) {
-        System.setTextColor(T.text, T.bg);
-        System.drawString(lines[k], 10, y2, 1);
-        y2 += 13;
-    }
-    if (news) {
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Novidades", 10, 186, 1);
-        var nlines = wrapLines(it.changelog, 220, 1, 3);
-        var y3 = 198;
-        for (var j = 0; j < nlines.length; j++) {
-            System.setTextColor(T.text, T.bg);
-            System.drawString(nlines[j], 10, y3, 1);
-            y3 += 13;
-        }
-    }
-
-    // botoes: primario + desinstalar (se instalado)
-    if (it.appUrl && (it.api || 1) > API) {
-        ctext("Requer API " + it.api + " (sistema: " + API + ")", 120, 254, 1, T.warn, T.bg);
-    } else if (it.appUrl && st.code === "hw") {
-        ctext("Incompatível: requer hardware com PSRAM", 120, 250, 1, T.warn, T.bg);
-        ctext("(a RAM interna não basta p/ este app)", 120, 264, 1, T.textDim, T.bg);
-    } else if (it.appUrl) {
-        var lbl = st.code === "upd" ? "Atualizar" :
-                  st.code === "inst" ? "Reinstalar" : "Instalar";
-        System.fillRoundRect(8, 236, 110, 36, 8, T.accent);
-        ctext(lbl, 63, 254, 2, T.onAccent, T.accent);
-        if (lm) {
-            System.fillRoundRect(126, 236, 106, 36, 8, T.bg);
-            System.drawRoundRect(126, 236, 106, 36, 8, T.err);
-            ctext("Desinstalar", 179, 254, 2, T.err, T.bg);
-        }
-    } else if (lm) {
-        System.fillRoundRect(65, 236, 110, 36, 8, T.bg);
-        System.drawRoundRect(65, 236, 110, 36, 8, T.err);
-        ctext("Desinstalar", 120, 254, 2, T.err, T.bg);
-    }
-
-    footerButton(8, 84, "< Voltar", true);
-}
-function askConfirm(title, body, yesLabel, danger) {
-    System.fillRoundRect(20, 88, 200, 140, 10, T.card);
-    System.drawRoundRect(20, 88, 200, 140, 10, danger ? T.err : T.stroke);
-    ctext(truncLine(title, 180, 2), 120, 106, 2, T.text, T.card);
-    var lines = wrapLines(body, 180, 1, 3);
-    var y = 126;
-    for (var i = 0; i < lines.length; i++) {
-        ctext(lines[i], 120, y, 1, T.textDim, T.card);
-        y += 13;
-    }
-    System.fillRoundRect(28, 186, 84, 30, 8, T.raised);
-    ctext("Cancelar", 70, 201, 1, T.text, T.raised);
-    System.fillRoundRect(128, 186, 84, 30, 8, danger ? T.err : T.accent);
-    ctext(yesLabel, 170, 201, 1, danger ? T.text : T.onAccent,
-          danger ? T.err : T.accent);
-    while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (hit(t, 28, 186, 84, 30)) { waitRelease(); return false; }
-            if (hit(t, 128, 186, 84, 30)) { waitRelease(); return true; }
-            waitRelease();
-        }
-        System.delay(20);
-    }
-}
 // remove o pacote instalado (sem UI de confirmacao — a tela pergunta antes)
 function uninstallApp(pkg) {
     var dir = resolveInstalledDir(pkg);
@@ -929,93 +443,344 @@ function uninstallApp(pkg) {
     refresh();
     return true;
 }
-function screenDetail() {
-    if (!selIt) return "list";
-    drawDetail();
+
+// ---- UI (toolkit API 22) ------------------------------------------------------
+// Barra de abas no topo do canvas (a faixa do sistema fica acima). Frames
+// "avulsos" (carregando/baixando) desenham uma tela fora do laco de uma tela:
+// o present vem no proximo delay/download.
+var LX = 8, LW = 224;
+var TABS_Y = 6, TABS_H = 32;
+var BODY_Y = 46;
+
+function tabLabels() {
+    return ["Loja", updCount > 0 ? "Atualizar " + updCount : "Atualizar", "Instalados"];
+}
+// abas: devolve true quando a aba mudou (o chamador troca de lista)
+function tabsBar() {
+    var nt = UI.tabs(LX, TABS_Y, LW, TABS_H, tabLabels(), curTab);
+    if (nt !== curTab) {
+        curTab = nt;
+        selIt = null;
+        UI.invalidate();
+        return true;
+    }
+    return false;
+}
+function frameAlone() {
+    UI.invalidate();
+    UI.begin(T.bg);
+    UI.tabs(LX, TABS_Y, LW, TABS_H, tabLabels(), curTab);
+}
+function drawLoading(msg, sub) {
+    frameAlone();
+    UI.spinner(120, 128, 18);
+    UI.text(msg, 120, 160, { align: "center", w: LW });
+    if (sub) UI.text(sub, 120, 184, { role: "caption", align: "center", color: T.textDim, w: LW });
+}
+
+// ---- lista (3 abas) -------------------------------------------------------------
+function stateColor(code) {
+    if (code === "new") return T.ok;
+    if (code === "upd" || code === "api" || code === "hw") return T.warn;
+    return T.textDim;
+}
+function rowOf(it) {
+    var st = stateInfo(it);
+    var lm = localMap[it.pkg];
+    var sub;
+    if (curTab === 1) {
+        sub = (lm ? "v" + lm.ver : "v?") + " > v" + it.ver + (it.changelog ? "  " + it.changelog.split("\n")[0] : "");
+    } else if (curTab === 2) {
+        sub = "v" + (lm ? lm.ver : it.ver) + (lm && lm.sd ? " · SD" : "") + (lm && lm.system ? " · sistema" : "");
+    } else {
+        sub = it.desc || ("v" + it.ver);
+    }
+    return { label: it.name, sub: sub, right: st.txt, rightColor: stateColor(st.code) };
+}
+var rowsCache = { key: null, rows: null };
+function curRows() {
+    var items = curList();
+    var key = listCache.key;
+    if (rowsCache.key === key) return rowsCache.rows;
+    var rows = [];
+    for (var i = 0; i < items.length; i++) rows.push(rowOf(items[i]));
+    rowsCache.key = key;
+    rowsCache.rows = rows;
+    return rows;
+}
+function countLine() {
+    if (curTab === 1) {
+        return updCount === 0 ? "Nenhuma atualização" :
+            updCount + (updCount === 1 ? " atualização disponível" : " atualizações disponíveis");
+    }
+    var n = 0;
+    for (var k in localMap) if (localMap.hasOwnProperty(k)) n++;
+    return n + (n === 1 ? " app instalado" : " apps instalados");
+}
+function screenList() {
+    UI.invalidate();
     while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (hit(t, 8, FOOT_Y, 84, 30)) {
-                waitRelease();
-                return "list";
+        UI.begin(T.bg);
+        tabsBar();
+        var listY = BODY_Y, listH = 228;
+        if (curTab === 0) {
+            // busca + categoria (a categoria abre um seletor em lista)
+            if (UI.button(query ? query + "  x" : "Buscar", LX, BODY_Y, 100, 30,
+                          { style: query ? "primary" : "ghost" })) {
+                if (query) {
+                    query = "";
+                } else {
+                    var q = System.prompt("Buscar app", "", "");
+                    query = (q && String(q).length) ? String(q) : "";
+                }
+                UI.resetScroll("store0");
+                UI.invalidate();
             }
-            var it = selIt;
-            var lm = localMap[it.pkg];
-            if (hit(t, 8, 236, 110, 36) && it.appUrl && (it.api || 1) <= API) {
-                waitRelease();
-                return "install";
-            }
-            if (lm && it.appUrl && hit(t, 126, 236, 106, 36)) {
-                waitRelease();
-                doUninstallFlow(it);
-                drawDetail();
-            } else if (lm && !it.appUrl && hit(t, 65, 236, 110, 36)) {
-                waitRelease();
-                doUninstallFlow(it);
-                if (!localMap[it.pkg]) return "list";  // item sintetico sumiu
-                drawDetail();
-            } else {
-                waitRelease();
+            if (UI.button(curCat, LX + 108, BODY_Y, LW - 108, 30, { style: "ghost" })) return "cats";
+            listY = BODY_Y + 38;
+            listH = 190;
+        } else {
+            UI.text(countLine(), 120, BODY_Y + 2, { role: "caption", align: "center",
+                    color: (curTab === 1 && updCount) ? T.warn : T.textDim });
+            listY = BODY_Y + 22;
+            listH = 206;
+        }
+
+        var items = curList();
+        if (items.length === 0) {
+            var msg = curTab === 1 ? "Tudo em dia!" : (curTab === 2 ? "Nenhum app instalado" : "Nenhum app");
+            UI.text(msg, 120, listY + 50, { role: "title", align: "center" });
+            if (curTab === 1) UI.text("Volte depois para conferir novidades.", 120, listY + 84,
+                                      { role: "caption", align: "center", color: T.textDim });
+        } else {
+            var i = UI.list("store" + curTab, LX, listY, LW, listH, curRows(), { rowH: 50 });
+            if (i >= 0) {
+                selIt = items[i];
+                return "detail";
             }
         }
-        System.delay(20);
+
+        // rodape
+        if (curTab === 0) {
+            if (UI.button("Recarregar catálogo", LX, 282, LW, 34, { style: "ghost" })) {
+                return Net.isConnected() ? "load" : "wifi";
+            }
+        } else if (curTab === 1) {
+            if (UI.button("Atualizar tudo", LX, 282, LW, 34, { disabled: updCount === 0 })) return "batch";
+        }
+        UI.end();
     }
+}
+// seletor de categoria da Loja
+function screenCats() {
+    UI.invalidate();
+    while (true) {
+        UI.begin(T.bg);
+        if (UI.header("Categoria", { back: true })) return "list";
+        var sel = -1;
+        for (var k = 0; k < cats.length; k++) if (cats[k] === curCat) sel = k;
+        var i = UI.list("cats", LX, BODY_Y, LW, 312 - BODY_Y, cats, { selected: sel });
+        if (i >= 0) {
+            curCat = cats[i];
+            UI.resetScroll("store0");
+            return "list";
+        }
+        UI.end();
+    }
+}
+
+// ---- detalhe ----------------------------------------------------------------
+function infoRow(label, value, y, col) {
+    UI.text(label, 84, y, { role: "caption", color: T.textDim });
+    UI.text(String(value), LX + LW - 10, y, { role: "caption", color: col || T.text, align: "right", w: 96 });
 }
 function doUninstallFlow(it) {
     var lm = localMap[it.pkg];
     if (!lm) return;
-    var ok = askConfirm("Desinstalar",
-                        "Remover " + it.name + " do aparelho?", "Remover", true);
+    var ok = UI.confirm("Desinstalar", "Remover " + it.name + " do aparelho?", { yes: "Remover", danger: true });
     if (ok && lm.system) {
-        ok = askConfirm("App do sistema",
-                        "Confirma remover " + it.name +
-                        " definitivamente?", "Remover", true);
+        ok = UI.confirm("App do sistema", "Confirma remover " + it.name + " definitivamente?",
+                        { yes: "Remover", danger: true });
     }
-    if (ok && uninstallApp(it.pkg)) selIt = null;
+    if (ok && uninstallApp(it.pkg)) {
+        UI.toast(it.name + " removido");
+        selIt = null;
+    }
+}
+function screenDetail() {
+    if (!selIt) return "list";
+    UI.invalidate();
+    while (true) {
+        var full = UI.begin(T.bg);
+        var it = selIt;
+        var lm = localMap[it.pkg];
+        var st = stateInfo(it);
+        if (UI.header(it.name, { back: true })) return "list";
+
+        UI.card(LX, BODY_Y, LW, 92);
+        if (full) {
+            // icone do pacote instalado (cache do sistema) ou inicial
+            var ip = lm ? (lm.dir + "/icon.png") : "";
+            if (ip && FS.exists(ip) && typeof System.drawIcon === "function") {
+                System.drawIcon(ip, 14, BODY_Y + 14);
+            } else {
+                System.fillGradient(14, BODY_Y + 14, 60, 60, T.accent, T.accentD, 14);
+            }
+        }
+        if (!(lm && FS.exists(lm.dir + "/icon.png"))) {
+            UI.text((it.name || "?").substring(0, 1).toUpperCase(), 44, BODY_Y + 30,
+                    { role: "display", align: "center", color: T.onAccent, bg: T.accent });
+        }
+        infoRow("Autor", it.author || "-", BODY_Y + 10);
+        infoRow("Instalado", lm ? "v" + (lm.ver || "?") : "não", BODY_Y + 30);
+        infoRow("No hub", it.appUrl ? ("v" + it.ver + (it.size ? " · " + fmtKB(it.size) : "")) : "-", BODY_Y + 50);
+        infoRow("Estado", st.txt, BODY_Y + 70, stateColor(st.code));
+        UI.cardEnd();
+
+        // descricao + novidades
+        var news = it.changelog && st.code !== "new" && st.code !== "api";
+        var y = BODY_Y + 102;
+        UI.text("Descrição", LX + 2, y, { role: "caption", color: T.accent });
+        y += 18 + UI.text(it.desc || "Sem descrição.", LX + 2, y + 18,
+                          { role: "caption", w: LW - 4, lines: news ? 3 : 6 });
+        if (news) {
+            UI.text("Novidades", LX + 2, y + 6, { role: "caption", color: T.accent });
+            UI.text(it.changelog.split("\n")[0], LX + 2, y + 24, { role: "caption", color: T.textDim, w: LW - 4, lines: 3 });
+        }
+
+        // acoes
+        var by = 272;
+        if (it.appUrl && (it.api || 1) > API) {
+            UI.text("Requer API " + it.api + " (sistema: " + API + ")", 120, by + 10,
+                    { role: "caption", align: "center", color: T.warn });
+        } else if (it.appUrl && st.code === "hw") {
+            UI.text("Incompatível: requer hardware com PSRAM", 120, by + 4, { role: "caption", align: "center", color: T.warn });
+            UI.text("(a RAM interna não basta para este app)", 120, by + 22, { role: "caption", align: "center", color: T.textDim });
+        } else if (it.appUrl) {
+            var lbl = st.code === "upd" ? "Atualizar" : (st.code === "inst" ? "Reinstalar" : "Instalar");
+            if (UI.button(lbl, LX, by, lm ? 108 : LW, 40)) return "install";
+            if (lm && UI.button("Desinstalar", LX + 116, by, 108, 40, { style: "danger" })) {
+                doUninstallFlow(it);
+                if (!selIt) return "list";
+            }
+        } else if (lm) {
+            if (UI.button("Desinstalar", LX, by, LW, 40, { style: "danger" })) {
+                doUninstallFlow(it);
+                if (!selIt) return "list";
+            }
+        }
+        UI.end();
+    }
 }
 
 // ---- instalacao / atualizacao ----------------------------------------------
-// Progresso INCREMENTAL: drawDownload pinta o chrome (fundo, abas, titulo,
-// contorno da barra) UMA vez e drawProgress so toca o interior da barra e o
-// texto. Um fillScreen por KB (modelo antigo) sujava a caixa suja do quadro
-// inteiro (flush de tela cheia a cada chunk no watch) e, sem quadro, piscava
-// o vidro do primeiro ao ultimo byte. Throttle por conteudo (pct/texto
-// mudou), nao por tempo: os dois draws do stub do harness acontecem no mesmo
-// ms e continuam produzindo quadros.
-var progLast = { fillW: 0, txt: "" };
-// withBar so no download do main.js (unico com callback de progresso);
-// app.json e icon.png mostrariam uma barra vazia parada no lugar.
+// Progresso INCREMENTAL: drawDownload compoe a tela UMA vez e drawProgress so
+// alimenta UI.progress/UI.text — que se redesenham sozinhos quando o valor
+// muda (o toolkit compara a assinatura). Um redesenho de tela cheia por KB
+// sujava o quadro inteiro e, sem quadro (CYD), piscava o vidro.
 function drawDownload(name, sub, withBar) {
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext(truncLine("Baixando " + name + "...", 216, 2), 120, 96, 2, T.text, T.bg);
-    if (sub) ctext(sub, 120, 124, 1, T.textDim, T.bg);
-    if (withBar !== false) System.drawRoundRect(40, 126, 160, 16, 6, T.stroke);
-    progLast = { fillW: 0, txt: "" };
+    frameAlone();
+    UI.text("Baixando " + name + "...", 120, 104, { role: "title", align: "center", w: LW });
+    if (sub) UI.text(sub, 120, 136, { role: "caption", align: "center", color: T.textDim });
+    if (withBar !== false) UI.progress(LX + 24, 160, LW - 48, 14, 0);
 }
+// withBar so no download do main.js (unico com callback de progresso)
 function drawProgress(got, total) {
-    var fillW = 0, txt = "";
+    var pct = 0, txt = "";
     if (total > 0) {
-        var pct = got / total;
-        if (pct > 1) pct = 1;
-        fillW = Math.floor(154 * pct);
-        txt = Math.floor(pct * 100) + "%";
+        pct = Math.min(100, Math.floor(got * 100 / total));
+        txt = pct + "%";
     } else {
         var kb = Math.floor(got / 1024);
         if (kb > 0) {
-            fillW = Math.min(154, 20 + (kb % 7) * 18);
+            pct = Math.min(100, 10 + (kb % 9) * 10);
             txt = kb + " KB";
         }
     }
-    if (txt === progLast.txt && fillW >= progLast.fillW) return;  // nada novo
-    // barra: apaga o interior e preenche de novo (area 154x10, nao a tela)
-    System.fillRect(43, 129, 154, 10, T.bg);
-    if (fillW > 0) System.fillRect(43, 129, fillW, 10, T.accent);
-    // texto: limpa so a faixa dele antes de escrever o novo valor
-    System.fillRect(70, 152, 100, 18, T.bg);
-    ctext(txt, 120, 160, 1, T.textDim, T.bg);
-    progLast = { fillW: fillW, txt: txt };
+    UI.progress(LX + 24, 160, LW - 48, 14, pct);
+    UI.text(txt, 120, 186, { role: "caption", align: "center", color: T.textDim });
 }
+function drawBatch(k, n, name) {
+    frameAlone();
+    UI.text("Atualizando " + k + " de " + n, 120, 104, { role: "title", align: "center" });
+    UI.text(name, 120, 136, { align: "center", color: T.textDim, w: LW });
+    UI.progress(LX + 24, 166, LW - 48, 14, Math.round((k - 1) * 100 / n));
+    UI.text("não feche a loja", 120, 192, { role: "caption", align: "center", color: T.textDim });
+}
+
+// Tela de resultado generica: titulo colorido + linhas; botoes Voltar (e
+// "Sair agora" quando a propria loja se atualizou)
+function screenResult(title, col, lines, selfUpd) {
+    UI.invalidate();
+    while (true) {
+        UI.begin(T.bg);
+        UI.text(title, 120, 70, { role: "title", align: "center", color: col, w: LW });
+        var y = 108;
+        for (var i = 0; i < lines.length; i++) {
+            y += UI.text(lines[i].t, 120, y, { role: lines[i].r || "caption", align: "center",
+                                               color: lines[i].c || T.textDim, w: LW, lines: 2 }) + 6;
+        }
+        if (UI.button("Voltar", LX, 272, selfUpd ? 108 : LW, 40, { style: "ghost" })) {
+            curTab = 0;
+            UI.resetScroll("store0");
+            return "list";
+        }
+        if (selfUpd && UI.button("Sair agora", LX + 116, 272, 108, 40)) System.exitApp();
+        UI.end();
+    }
+}
+function screenBatchDone() {
+    var lines = [{ t: batchOk + (batchOk === 1 ? " app atualizado" : " apps atualizados") }];
+    for (var i = 0; i < batchFails.length && i < 4; i++) lines.push({ t: "falhou: " + batchFails[i], c: T.err });
+    if (selfUpdated) lines.push({ t: "A App Store se atualizou: saia e abra de novo", c: T.text, r: "body" });
+    return screenResult(batchFails.length === 0 ? "Tudo atualizado!" : "Terminado com falhas",
+                        batchFails.length === 0 ? T.ok : T.warn, lines, selfUpdated);
+}
+function screenDone() {
+    var it = selIt;
+    if (selfUpdated) {
+        return screenResult("App Store atualizada!", T.ok,
+                            [{ t: it.name, c: T.text, r: "title" }, { t: "Saia e abra de novo para rodar a v" + it.ver }], true);
+    }
+    var lm = localMap[it.pkg];
+    return screenResult(wasUpdate ? "Atualizado!" : "Instalado!", T.ok,
+                        [{ t: it.name, c: T.text, r: "title" },
+                         { t: "v" + it.ver + (lm && lm.sd ? " · no cartão SD" : "") },
+                         { t: "Pronto no launcher." }], false);
+}
+
+// ---- erro / sem WiFi --------------------------------------------------------
+function screenErr() {
+    UI.invalidate();
+    while (true) {
+        UI.begin(T.bg);
+        UI.text("Erro", 120, 64, { role: "caption", align: "center", color: T.err });
+        UI.text(errMsg, 120, 88, { role: "title", align: "center", w: LW, lines: 2 });
+        if (errHint) UI.text(errHint, 120, 150, { role: "caption", align: "center", color: T.textDim, w: LW, lines: 3 });
+        if (UI.button("Tentar de novo", LX, 220, LW, 40)) return retryMode === "install" ? "install" : "load";
+        if (UI.button("Voltar", LX, 270, LW, 40, { style: "ghost" })) return "list";
+        UI.end();
+    }
+}
+function screenWifi() {
+    UI.invalidate();
+    var lastCheck = 0;
+    while (true) {
+        UI.begin(T.bg);
+        UI.text("Wi-Fi desconectado", 120, 104, { role: "title", align: "center", color: T.warn });
+        UI.text("Conecte o Wi-Fi para usar a loja de apps. Esta tela segue sozinha quando a rede voltar.",
+                120, 140, { role: "caption", align: "center", color: T.textDim, w: LW, lines: 3 });
+        UI.spinner(120, 214, 14);
+        if (UI.button("Sair", LX, 272, LW, 40, { style: "ghost" })) System.exitApp();
+        if (System.millis() - lastCheck > 1500) {
+            lastCheck = System.millis();
+            if (Net.isConnected()) return "load";
+        }
+        UI.end();
+    }
+}
+
+// ---- instalacao (logica) ---------------------------------------------------
 // Update in-place: main.js novo entra como <pkg>/main.js.new (staging de um
 // arquivo dentro do proprio pacote), MD5 do catalogo conferido e rename
 // atomico por cima do antigo; app.json e icon.png vem depois. A pasta alvo e
@@ -1139,151 +904,10 @@ function updateAll() {
     }
     return "batchDone";
 }
-function drawBatch(k, n, name) {
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext("Atualizando " + k + " de " + n, 120, 96, 2, T.text, T.bg);
-    ctext(truncLine(name, 216, 1), 120, 124, 1, T.textDim, T.bg);
-    ctext("não feche a loja", 120, 150, 1, T.textDim, T.bg);
-}
+
 function screenBatch() {
     updateAll();
     return "batchDone";
-}
-function screenBatchDone() {
-    var self = selfUpdated;
-    System.fillScreen(T.bg);
-    drawTabs();
-    if (batchFails.length === 0) {
-        ctext("Tudo atualizado!", 120, 84, 2, T.ok, T.bg);
-    } else {
-        ctext("Terminado com falhas", 120, 84, 2, T.warn, T.bg);
-    }
-    ctext(batchOk + (batchOk === 1 ? " app atualizado" : " apps atualizados"),
-          120, 110, 1, T.textDim, T.bg);
-    var y = 132;
-    for (var i = 0; i < batchFails.length && i < 4; i++) {
-        ctext(truncLine("falhou: " + batchFails[i], 216, 1), 120, y, 1, T.err, T.bg);
-        y += 14;
-    }
-    if (self) {
-        ctext("A App Store se atualizou:", 120, y + 8, 1, T.text, T.bg);
-        ctext("saia e abra de novo", 120, y + 22, 2, T.text, T.bg);
-    }
-    footerButton(8, 84, "< Voltar", true);
-    if (self) footerButton(148, 84, "Sair agora", true);
-    while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (hit(t, 8, FOOT_Y, 84, 30)) {
-                waitRelease();
-                curTab = 0;
-                return "list";
-            }
-            if (self && hit(t, 148, FOOT_Y, 84, 30)) {
-                waitRelease();
-                System.exitApp();
-            }
-            waitRelease();
-        }
-        System.delay(20);
-    }
-}
-function screenDone() {
-    var it = selIt;
-    System.fillScreen(T.bg);
-    drawTabs();
-    if (selfUpdated) {
-        ctext("App Store atualizada!", 120, 84, 2, T.ok, T.bg);
-        ctext(truncLine(it.name, 216, 2), 120, 112, 2, T.text, T.bg);
-        ctext("saia e abra de novo para rodar v" + it.ver, 120, 140, 1, T.textDim, T.bg);
-    } else {
-        ctext(wasUpdate ? "Atualizado!" : "Instalado!", 120, 84, 2, T.ok, T.bg);
-        ctext(truncLine(it.name, 216, 2), 120, 112, 2, T.text, T.bg);
-        var lm = localMap[it.pkg];
-        ctext("v" + it.ver + (lm && lm.sd ? "  no SD" : ""), 120, 138, 1, T.textDim, T.bg);
-        ctext("App pronto no launcher.", 120, 156, 1, T.textDim, T.bg);
-    }
-    footerButton(8, 84, "< Voltar", true);
-    if (selfUpdated) footerButton(148, 84, "Sair agora", true);
-    while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (hit(t, 8, FOOT_Y, 84, 30)) {
-                waitRelease();
-                curTab = 0;
-                scrollYs[0] = 0;
-                return "list";
-            }
-            if (selfUpdated && hit(t, 148, FOOT_Y, 84, 30)) {
-                waitRelease();
-                System.exitApp();
-            }
-            waitRelease();
-        }
-        System.delay(20);
-    }
-}
-
-// ---- erro / sem WiFi --------------------------------------------------------
-function screenErr() {
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext("Erro", 120, 84, 2, T.err, T.bg);
-    var lines = wrapLines(errMsg, 216, 2, 2);
-    var y = 110;
-    for (var i = 0; i < lines.length; i++) {
-        ctext(lines[i], 120, y, 2, T.text, T.bg);
-        y += 20;
-    }
-    if (errHint) ctext(truncLine(errHint, 216, 1), 120, y + 6, 1, T.textDim, T.bg);
-
-    System.fillRoundRect(24, 190, 192, 36, 8, T.accent);
-    ctext("Tentar de novo", 120, 208, 2, T.onAccent, T.accent);
-    footerButton(8, 84, "< Voltar", true);
-    while (true) {
-        var t = System.getTouch();
-        if (t.touched) {
-            if (hit(t, 24, 190, 192, 36)) {
-                waitRelease();
-                if (retryMode === "install") return "install";
-                return "load";
-            } else if (hit(t, 8, FOOT_Y, 84, 30)) {
-                waitRelease();
-                return "list";
-            } else {
-                waitRelease();
-            }
-        }
-        System.delay(20);
-    }
-}
-function screenWifi() {
-    // tela estatica: desenhada UMA vez (redesenhar a cada espera de 1,5s
-    // piscava o vidro sem quadro sem motivo)
-    System.fillScreen(T.bg);
-    drawTabs();
-    ctext("WiFi desconectado", 120, 104, 2, T.warn, T.bg);
-    ctext("Conecte o WiFi para usar", 120, 134, 1, T.textDim, T.bg);
-    ctext("a loja de apps.", 120, 150, 1, T.textDim, T.bg);
-    footerButton(8, 84, "< Sair", true);
-    while (true) {
-        var last = System.millis();
-        var go = false;
-        while (System.millis() - last < 1500) {
-            var t = System.getTouch();
-            if (t.touched) {
-                if (hit(t, 8, FOOT_Y, 84, 30)) {
-                    waitRelease();
-                    System.exitApp();
-                }
-                waitRelease();
-            }
-            if (Net.isConnected()) { go = true; break; }
-            System.delay(20);
-        }
-        if (go) return "load";
-    }
 }
 
 // ---- fluxo principal --------------------------------------------------------
@@ -1326,6 +950,7 @@ if (typeof __harness !== "undefined" && __harness.storeTest) {
         else if (mode === "load") mode = loadCatalog();
         else if (mode === "err") mode = screenErr();
         else if (mode === "list") mode = screenList();
+        else if (mode === "cats") mode = screenCats();
         else if (mode === "detail") mode = screenDetail();
         else if (mode === "install") mode = installApp();
         else if (mode === "done") mode = screenDone();
