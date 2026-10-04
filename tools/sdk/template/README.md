@@ -29,7 +29,12 @@ node tools/sdk/celer.js publish {{APP_DIR}} --dry  # conferir antes de publicar
 - Permissoes: funcoes de rede exigem `"net"`, arquivos `"fs"`, gpio `"gpio"`
   em `app.json permissions`.
 - Strings com acentos OK (Latin-1); emoji e aspas curvas nao (fonte do device).
-- `main.js` ate 48KB no hub (128KB declarando `"requires": ["psram"]`);
-  acima de 30KB exige `api >= 6`.
+- Soma dos `.js` (main + modulos) ate 48KB no hub (128KB declarando
+  `"requires": ["psram"]`); cada arquivo acima de 30KB exige `api >= 6`.
+- Modulos JS (API 23): `.js` chatos na pasta, carregados com
+  `require("nome")` no estilo CommonJS (`exports.foo = ...` ou
+  `module.exports = {...}`). Assets (`.png .wav .json .bin`) viajam no
+  pacote: ate 16 extras de 128KB (256KB no total). `test.js` e dev-only,
+  nunca embarca.
 
 Guia completo da API: `Documentation/JS_API_Guide.pt-BR.md`.

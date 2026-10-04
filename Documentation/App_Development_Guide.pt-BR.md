@@ -18,8 +18,31 @@ Uma pasta de app padrão tem esta cara:
 MyAwesomeApp/
 ├── app.json
 ├── icon.png
-└── main.js
+├── main.js
+├── notas.js          # módulo JS opcional (require("notas"), API 23)
+└── alerta.wav        # asset opcional (playWav/drawPNG/FS.readFile)
 ```
+
+**Módulos (API 23):** separe o código em quantos `.js` chatos quiser e
+carregue com `require("nome")` — estilo CommonJS (`module.exports`/
+`exports`), cache por execução, módulos podem requerer módulos:
+
+```js
+// main.js
+var notas = require("notas");   // carrega notas.js da pasta do app
+notas.tocar("alerta");
+
+// notas.js
+var audio = require("audio");
+exports.tocar = function (n) { audio.beep(n); };
+```
+
+**Assets:** arquivos extras na pasta (chatos, sem subpasta) viajam no
+pacote pelo hub: `.js .png .wav .json .bin`, até 16 extras, 128 KB cada,
+256 KB de assets no total. Use por caminho
+(`System.playWav("/local/apps/MyAwesomeApp/alerta.wav")`) ou leia com
+`FS.readFile`. O hub computa o manifesto `files` sozinho — nunca sete à
+mão (como `size`/`md5`).
 
 ## 2. O Arquivo `app.json` (Metadados do App)
 
@@ -105,12 +128,13 @@ do `app.json` são calculados e gravados pelo servidor — **não escreva à mã
   (`--force` para exceções, ex. republicar um pacote corrigido).
 - **O seu `packageName` tem dono.** Quem publica primeiro vira o dono; só o
   mesmo token (ou o root do hub) atualiza/remove o pacote depois.
-- **Limites de tamanho:** `main.js` ≤ **48 KB** em qualquer placa; declarar
-  `"requires": ["psram"]` sobe o teto para **128 KB** (o hub recusa acima
-  disso — placa sem PSRAM não compila fonte desse tamanho). Apps acima de
-  **30 KB** precisam declarar `api: 6` (firmware antigo baixava via
-  `Net.get`, que trunca em 32 KB; o downloader streaming da API 6 não tem
-  teto). `icon.png` ≤ 16 KB.
+- **Limites de tamanho:** a **soma dos arquivos `.js`** (`main.js` +
+  módulos) tem que ficar em **48 KB**; declarar `"requires": ["psram"]`
+  sobe o teto para **128 KB** — é a soma que ocupa a RAM de compilação,
+  então módulos contam no mesmo orçamento. Cada `.js` acima de **30 KB**
+  exige `api: 6` (firmware antigo baixava via `Net.get`, que trunca em
+  32 KB; o downloader streaming da API 6 não tem teto). Assets (não-`.js`):
+  até 16 extras, 128 KB cada, 256 KB no total. `icon.png` ≤ 16 KB.
 - **O ícone viaja com o update:** mantenha um `icon.png` (PNG 64×64, ≤ 16 KB)
   no pacote — a loja baixa na instalação/atualização e o launcher renova o
   cache de ícones sozinho.

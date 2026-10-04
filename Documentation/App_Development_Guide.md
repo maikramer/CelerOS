@@ -13,8 +13,24 @@ A standard app folder looks like this:
 MyAwesomeApp/
 ├── app.json
 ├── icon.png
-└── main.js
+├── main.js
+├── notas.js          # optional JS module (require("notas"), API 23)
+└── alerta.wav        # optional asset (playWav/drawPNG/FS.readFile)
 ```
+
+**Modules (API 23):** split your code into as many flat `.js` files as you like and load them with `require("name")` — CommonJS-style (`module.exports`/`exports`), cached per run, modules may require modules:
+
+```js
+// main.js
+var notas = require("notas");   // loads notas.js from the app folder
+notas.tocar("alerta");
+
+// notas.js
+var audio = require("audio");
+exports.tocar = function (n) { audio.beep(n); };
+```
+
+**Assets:** any extra files in the folder (flat, no subfolders) ship with the package through the hub: `.js .png .wav .json .bin`, up to 16 extras, 128 KB each, 256 KB of assets in total. Reference them by path (`System.playWav("/local/apps/MyAwesomeApp/alerta.wav")`) or read with `FS.readFile`. The hub computes a `files` manifest automatically — never set it by hand.
 
 ## 2. The `app.json` File (App Metadata)
 
@@ -67,7 +83,7 @@ by hand** (a manual publish overwrites them again):
 - **The catalog is the update channel.** The device store compares each catalog version against the installed one; newer versions show an **"Atualizar"** badge in the list, the **Atualizações** tab and the **"Atualizar tudo"** button.
 - **Bump `version` on every publish.** The hub rejects versions ≤ the published one (`--force` to override, e.g. to republish a fixed package).
 - **You own your `packageName`.** The first publisher becomes the owner; only the same token (or the hub root) can update or remove the package afterwards.
-- **Size limits:** `main.js` ≤ **48 KB** on any board; declaring `"requires": ["psram"]` raises the ceiling to **128 KB** (the hub refuses bigger — boards without PSRAM can't compile a source that large). Apps above **30 KB** must declare `api: 6` (old firmware downloaded via `Net.get`, which truncates at 32 KB; the API 6 streaming downloader has no cap). `icon.png` ≤ 16 KB.
+- **Size limits:** the **sum of all `.js` files** (`main.js` + modules) must be ≤ **48 KB**; declaring `"requires": ["psram"]` raises the ceiling to **128 KB** — it's the sum that occupies compile RAM, so modules count against the same budget. Any single `.js` above **30 KB** must declare `api: 6` (old firmware downloaded via `Net.get`, which truncates at 32 KB; the API 6 streaming downloader has no cap). Assets (non-`.js`): 16 extras max, 128 KB each, 256 KB total. `icon.png` ≤ 16 KB.
 - **The icon ships with the update:** keep an `icon.png` (64×64 PNG, ≤ 16 KB) in the package — the store downloads it on install/update and the launcher refreshes its icon cache automatically.
 - **Updates land in the folder the launcher runs** (resolved by `packageName`): updating a preinstalled app updates it in place instead of creating a shadow copy.
 - **The App Store updates itself:** the store is a regular hub package (`celeros.appstore`). When the catalog has a newer store, it shows up like any update — after installing, the store asks to exit and reopen (the new `main.js` is read from disk on the next launch).
