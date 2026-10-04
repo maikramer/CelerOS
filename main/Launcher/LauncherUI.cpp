@@ -142,6 +142,10 @@ std::string LauncherUI::homeTarget() {
 }
 
 bool LauncherUI::launchHome() {
+    // Um launch ja pedido (celerctl run/dev/debug, r do debugger) vence a
+    // volta automatica para a casa: o pedido tem uma vaga so e a casa o
+    // sobrescrevia — no cao/watch o `run` abria a casa de novo
+    if (s_launchPending) return true;
     const std::string who = homeTarget();
     if (who.empty()) return false;
     if (findEntry(who) < 0) return false;  // app sumiu: fica no launcher
@@ -357,6 +361,14 @@ uint32_t LauncherUI::appEntryMissingPerms(int i) {
 
 void LauncherUI::grantEntry(int i) {
     if (i < 0 || i >= appCount) return;
+    // Permissoes RELIDAS do app.json: a lista so e reescaneada no tick do
+    // launcher, e com um app aberto (o cao vive na Dog Face) ela guarda a
+    // versao anterior — o `grant` de um app reinstalado concedia as
+    // permissoes velhas e o novo parava no dialogo (sem toque no cao)
+    if (apps[i].isFolder) {
+        const std::string json = FileSystem::readTextFile((apps[i].path + "/app.json").c_str());
+        if (!json.empty()) apps[i].perms = celer::parsePermissions(json);
+    }
     AppGrants::grant(grantId(apps[i].pkg, apps[i].path), apps[i].path, apps[i].perms & kKnownPerms);
 }
 
