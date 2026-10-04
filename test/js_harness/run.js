@@ -1789,7 +1789,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('conecta no dog', j.indexOf('conectado') >= 0 && j.indexOf('Celer-Dog') >= 0);
+    check('conecta no dog', j.indexOf('< sair') >= 0 && j.indexOf('Celer-Dog') >= 0);
     check('D-pad envia move up', j.indexOf('[link] tx {"type":"move","dir":"up"}') >= 0);
     var moves = j.split('[link] tx {"type":"move","dir":"up"}').length - 1;
     check('segurar repete o move (keepalive)', moves >= 2, moves + ' moves');
@@ -1835,12 +1835,12 @@ function holdFrames(x, y, n) {
     var j = joinLog(r.log);
     check('botao WiFi aparece com tel.wifi', j.indexOf('WiFi') >= 0);
     check('pede o scan ao robo', j.indexOf('[link] tx {"type":"wifi_scan"}') >= 0);
-    check('lista as redes do robo', j.indexOf('CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
+    check('lista as redes do robo', j.indexOf('* CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
     check('pede a senha da rede escolhida', j.indexOf('[prompt] senha de CasaNet') >= 0);
     check('senha vai SELADA (nunca pelo send comum)',
           j.indexOf('[link] txs {"type":"wifi","ssid":"CasaNet","pass":"segredo123"}') >= 0 &&
           !/\[link\] tx \{"type":"wifi","/.test(j));
-    check('mostra o IP do robo', j.indexOf('robô online: 192.168.0.77') >= 0, j.slice(-300));
+    check('mostra o IP do robo', j.indexOf('robo online: 192.168.0.77') >= 0, j.slice(-300));
 })();
 
 (function() {
@@ -1922,7 +1922,7 @@ function holdFrames(x, y, n) {
           j.indexOf('dance') >= 0 && j.indexOf('super_truco') >= 0);
     check('toque manda {type:trick} pelo nome', j.indexOf('[link] tx {"type":"trick","name":"dance"}') >= 0);
     check('trick_res vira nota', j.indexOf('dance!') >= 0, j.slice(-300));
-    check('say do cao aparece na tela', j.indexOf('cão: Sim! Bateria 87%') >= 0);
+    check('say do cao aparece na tela', j.indexOf('cao: Sim! Bateria 87%') >= 0);
 })();
 
 (function() {
@@ -1987,7 +1987,7 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('pede o codigo (tela de pareamento)', j.indexOf('código na tela do robô') >= 0);
+    check('pede o codigo (tela de pareamento)', j.indexOf('codigo na tela do robo') >= 0);
     check('tenta o codigo errado e o certo',
           j.indexOf('[link] verify 000000') >= 0 && j.indexOf('[link] verify 123456') >= 0);
     check('pareado chega ao D-pad', j.indexOf('pareado!') >= 0 &&
