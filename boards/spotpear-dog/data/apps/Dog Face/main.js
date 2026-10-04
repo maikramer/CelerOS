@@ -34,32 +34,33 @@ function PH_(h) { return Math.round(h * 320 / PH); }
 // "for (i = 0; i < 40; i++) angulo = inicio +/- i; delay(500/speed)" com o
 // speed default do produto (80 -> 6 ms por grau).
 //
-// Por que a marcha antiga nao saia do lugar: as duas metades eram
-// espelhos exatos (tesoura simetrica), entao o atrito de uma cancelava o
-// da outra e o corpo so balancava. A do ESP-Hi e ASSIMETRICA: o
-// STEP_OFFSET desloca a faixa de duas pernas em 5 graus e elas dao um
-// salto de ~10 graus na troca de fase — a assimetria e o que empurra.
+// O que faz o passo do ESP-Hi andar: o pace alterna as metades e o
+// STEP_OFFSET desloca a faixa do FR/BL em 5 graus (salto de ~10 graus na
+// troca de fase) — a assimetria quebra o cancelamento dos atritos, e os
+// pes curvos das pernas do ESP-Hi fazem o resto.
 //
 // Offsets sao crus em relacao ao neutro, na convencao de sinais do ESP-Hi
 // (FL e BR "pra frente" = angulo menor; FR e BL = angulo maior).
 //
-// SIGN espelhado: o ESP-Hi assume uma montagem "torcida" (FL/BR giram num
-// sentido, FR/BL no outro). O ZZPET NAO e assim: os servos de um lado sao
-// montados espelhados (o firmware-irmao xiaozhi-pet, mesma familia do stock,
-// aplica 180-angulo nos servos DIREITOS), e no comando o mesmo offset move
-// as 4 patas na MESMA direcao fisica. Sem inverter FR/BL aqui, o pace do
-// ESP-Hi degenera em "dianteiras juntas vs traseiras juntas": os atritos se
-// cancelam e o corpo so balanca pra frente e pra tras sem sair do lugar —
-// o sintoma da marcha 1.2.0.
+// PERNAS DO ESP-HI (2026-10): as perninhas plasticas foram trocadas pelas
+// do proprio ESP-Hi, entao a marcha dele tem de valer aqui 1:1 (e o modo
+// "esphi" virou o default). Nesta montagem um MESMO aumento de angulo move
+// as 4 patas pra FRENTE (fisica validada no cao no creep: putA com a>0 sobe
+// o angulo), logo a convencao ESP-Hi (FL/BR menor = frente) pede o SIGN
+// {-1,+1,+1,-1}. O SIGN antigo {+1,-1,-1,+1} espelhava a tabela inteira —
+// o "walk" empurrava pra tras e o sit fazia o papel do bow; aquele esphi
+// "que nao saia do lugar" da 1.2.x era isto, nao o pace.
 //
 // CALIBRACAO: mande {"type":"calib"} pelo Celer Remote/nRF Connect — as
 // QUATRO patas (FL, FR, BL, BR, nessa ordem) devem ir 25 graus pra FRENTE
-// e voltar. Pata indo pra tras = inverta o SIGN dela; ajuste NEUTRAL ate o
-// cao ficar reto em pe.
+// e voltar. Todas pra tras de uma vez = {"type":"tune","flip":true} (vale
+// pra creep, esphi e posturas); pata individual errada = inverta o SIGN
+// dela; ajuste NEUTRAL ate o cao ficar reto em pe.
 var PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
 var KEYS = ["FL", "FR", "BL", "BR"];
 var NEUTRAL = { FL: 90, FR: 90, BL: 90, BR: 90 };   // trim por perna
-var SIGN = { FL: 1, FR: -1, BL: -1, BR: 1 };  // espelho dos FR/BL (ver acima)
+var SIGN = { FL: -1, FR: 1, BL: 1, BR: -1 };  // convencao ESP-Hi -> fisica
+var FLIP = 1;  // -1 = inverte a direcao fisica de TUDO (tune "flip", bancada)
 
 // API 10: servos moram no sub-objeto gpio (desligavel por Kconfig)
 var SERVO = (typeof System.gpio !== "undefined" && System.gpio.servo)
@@ -83,7 +84,7 @@ var sent = { FL: -1, FR: -1, BL: -1, BR: -1 };  // ultimo angulo escrito
 
 function put(k, o) {
     off[k] = o;
-    var a = Math.round(NEUTRAL[k] + SIGN[k] * o);
+    var a = Math.round(NEUTRAL[k] + FLIP * SIGN[k] * o);
     if (a !== sent[k]) {
         sent[k] = a;
         leg(PIN[k], a);
@@ -136,10 +137,10 @@ var WALKS = {
     ]}
 };
 
-// Posturas (alvo da rampa). lay_down do ESP-Hi = 60 graus "pra frente";
-// bow/lean_back usam o BOW_OFFSET dele (nao publicado no header: 30 aqui,
-// ajuste na calibracao).
-var BOW = 30;
+// Posturas (alvo da rampa), transcricao do servo_dog_ctrl.c: lay_down varre
+// 60 graus; bow/lean_back varrem BOW_OFFSET = 50 (macro real do C — o 30
+// daqui era chute de quando o fonte ainda nao tinha sido lido).
+var BOW = 50;
 var POSES = {
     stand: [0, 0, 0, 0],
     lie: [-60, 60, 60, -60],            // servo_dog_lay_down
@@ -287,8 +288,8 @@ function calibrate() {
 
 // ---------------------------------------------- marcha centopeia ------
 // Convencao FISICA: a > 0 = pata pra FRENTE (rumo ao focinho), 0 = perna
-// vertical. Cru = FWD * a (FWD = sinal de F, "frente" do ESP-Hi); o SIGN
-// la em cima cuida do espelho da montagem.
+// vertical. FWD = SIGN (o flip global mora no put): putA com a>0 sobe o
+// angulo nas 4 pernas, como validado no cao desde o creep da 1.3.
 //
 // Fisica da perna de 1 articulacao: altura do quadril = L * cos(a). Perna
 // vertical = mais comprida; inclinada = mais curta. Nao da pra "levantar"
@@ -311,13 +312,13 @@ function calibrate() {
 //      a +P*d no ar, desinclina (a pata pousa na frente).
 // Movimento quase estatico, lento e robusto; nada empurra pra tras.
 //
-// FWD invertido em relacao a F do ESP-Hi: validado no cao — com o sinal do
-// ESP-Hi a pata erguida POUSAVA ATRAS (a recuperacao ia pra tras e a
-// remada empurrava ao contrario). FLIP (tune "flip") inverte ao vivo.
-var FWD = { FL: 1, FR: -1, BL: -1, BR: 1 };
-var FLIP = 1;
-function putA(k, a) { put(k, FLIP * FWD[k] * a); }
-function angA(k) { return FLIP * FWD[k] * off[k]; }
+// Historico: no putA com o sinal literal de F do ESP-Hi a pata erguida
+// POUSAVA ATRAS (validado no cao na 1.3) — por isso FWD ficou invertido em
+// relacao a F, com o SIGN compensando no caminho contrario; o produto dos
+// dois reproduz os angulos do C fielmente.
+var FWD = { FL: -1, FR: 1, BL: 1, BR: -1 };
+function putA(k, a) { put(k, FWD[k] * a); }
+function angA(k) { return FWD[k] * off[k]; }
 
 var UNLOAD = { FR: "BL", FL: "BR", BL: "FR", BR: "FL" };
 var CREEP = { P: 20, T: 25, power: 600, tilt: 180, swing: 240, order: ["BL", "FL", "BR", "FR"] };
@@ -328,13 +329,12 @@ var DIRS = {
     right: { FL: 1, FR: -1, BL: 1, BR: -1 }
 };
 var WALK_MODES = ["creep", "esphi"];
-// Marchas que o botao do Remote pode alternar (tel.modes). O esphi e o porte
-// fiel do servo_dog_ctrl do ESP-Hi mas NAO sai do lugar nesta montagem (o
-// pace degenera em tesoura simetrica — ver a saga da 1.2.x): fica fora do
-// ciclo ate calibrado. {"type":"mode","walk":"esphi"} explicito continua
-// valendo (ferramenta de calibracao via bleak/tune).
-var MODES_OK = ["creep"];
-var walkMode = "creep";
+// Marchas que o botao do Remote alterna (tel.modes). Default = esphi desde
+// a troca das perninhas pelas do ESP-Hi (a geometria dos pes dele e o que
+// faz o pace dele sair do lugar). O creep (centopeia, quase estatico) fica
+// como alternativa pra chao/peso que o pace nao agarar.
+var MODES_OK = ["esphi", "creep"];
+var walkMode = "esphi";
 var FRAME_STEP_MS = 10;
 
 function copyPose(p) { return { FL: p.FL, FR: p.FR, BL: p.BL, BR: p.BR }; }
@@ -384,6 +384,7 @@ function runFrame(fr) {
 
 // ---- ajuste ao vivo ({"type":"tune",...}) e persistencia ----
 var TUNE_FILE = "/local/dogtune.json";
+var TUNE_LEGS = "esphi";  // marca da calibracao vigente: trocou perna, arquivo velho nao vale
 
 function clampNum(v, lo, hi, dflt) {
     v = Number(v);
@@ -406,7 +407,7 @@ function applyTune(t) {
         }
         if (ok) CREEP.order = [t.order[0], t.order[1], t.order[2], t.order[3]];
     }
-    if (t.flip === true) FLIP = -FLIP;              // alterna
+    if (t.flip === true) FLIP = -FLIP;   // alterna a direcao fisica de tudo
     else if (t.flip === 1 || t.flip === -1) FLIP = t.flip;
     if (t.mode && WALK_MODES.indexOf(t.mode) >= 0) walkMode = t.mode;
 }
@@ -415,6 +416,7 @@ function saveTune() {
     if (typeof FS === "undefined" || !FS.writeTextFile) return;
     try {
         FS.writeTextFile(TUNE_FILE, JSON.stringify({
+            legs: TUNE_LEGS,
             P: CREEP.P, T: CREEP.T, power: CREEP.power, tilt: CREEP.tilt,
             swing: CREEP.swing, order: CREEP.order, mode: walkMode, flip: FLIP
         }));
@@ -423,7 +425,12 @@ function saveTune() {
 
 function loadTune() {
     if (typeof FS === "undefined" || !FS.exists || !FS.exists(TUNE_FILE)) return;
-    try { applyTune(JSON.parse(FS.readTextFile(TUNE_FILE))); } catch (e) {}
+    try {
+        var t = JSON.parse(FS.readTextFile(TUNE_FILE));
+        // o P/T/flip/mode salvos com as pernas do ZZPET nao valem mais:
+        // so aplica o que foi gravado com as pernas atuais (TUNE_LEGS)
+        if (t && t.legs === TUNE_LEGS) applyTune(t);
+    } catch (e) {}
 }
 loadTune();
 
@@ -496,6 +503,36 @@ function drawStatus() {
     if (lastMic > 0) {
         System.fillRect(PX(0), PY(62), Math.min(PW, Math.round(lastMic * PW / 100)), PH_(2), 0xFFFF);
     }
+    // wake word escutando: microfone pequeno a esquerda do ponto do link —
+    // aceso = pode dizer "hi celer"
+    if (voiceReady && !voiceBusy) {
+        System.fillRoundRect(PX(83), PY(2), PW_(4), PH_(6), PW_(2), 0xFFFF);
+        System.fillRect(PX(84), PY(9), PW_(2), PH_(1), 0xFFFF);
+    }
+}
+
+// Comando de voz na tela (o texto e ilegivel no vidro: so desenho).
+// Gravando = microfone grande + barras que seguem o volume (fale agora);
+// esperando a IA = tres pontos andando.
+function drawVoice(now) {
+    if (voiceRec) {
+        System.fillRoundRect(PX(58), PY(12), PW_(12), PH_(24), PW_(6), 0xFFFF);
+        System.drawRoundRect(PX(54), PY(24), PW_(20), PH_(18), PW_(9), 0xFFFF);
+        System.fillRect(PX(63), PY(42), PW_(2), PH_(8), 0xFFFF);
+        System.fillRect(PX(56), PY(50), PW_(16), PH_(2), 0xFFFF);
+        for (var i = 0; i < 3; i++) {
+            var h = Math.round(4 + (voiceLvl / 100) * (30 - i * 7));
+            if (h > 34) h = 34;
+            var y = 30 - Math.round(h / 2);
+            System.fillRect(PX(40 - i * 8), PY(y), PW_(3), PH_(h), 0xFFFF);
+            System.fillRect(PX(85 + i * 8), PY(y), PW_(3), PH_(h), 0xFFFF);
+        }
+        return;
+    }
+    var on = ((now / 250) | 0) % 3;
+    for (var k = 0; k < 3; k++) {
+        System.fillCircle(PX(46 + k * 18), PY(32), PW_(k === on ? 5 : 3), 0xFFFF);
+    }
 }
 
 function draw() {
@@ -503,6 +540,8 @@ function draw() {
     var now = System.millis();
     if (pairShow) {
         drawPair();      // codigo de pareamento no lugar da cara
+    } else if (voiceBusy) {
+        drawVoice(now);  // ouvindo o comando / esperando a IA
     } else if (now < happyUntil) {
         drawHappy();
     } else {
@@ -619,10 +658,9 @@ function handleMsg(m) {
             calibrate();
             break;
         case "mode":
-            // {"type":"mode","walk":"creep"|"esphi"} nomeado (calibracao) ou
-            // sem walk = proximo das marchas LIBERADAS (MODES_OK) — o ciclo
-            // cego das 1.3.x podia salvar o esphi sem ninguem ver e o robo
-            // "nao saia do lugar" em todos os boots seguintes
+            // {"type":"mode","walk":"esphi"|"creep"} nomeado ou sem walk =
+            // proximo das marchas liberadas (MODES_OK); escolha fica salva
+            // no dogtune.json (junto com a marca das pernas atuais)
             if (gait !== null) stopGait();
             var wm = WALK_MODES.indexOf(String(m.walk));
             walkMode = wm >= 0 ? WALK_MODES[wm]
@@ -658,11 +696,14 @@ var voiceWalkUntil = 0;       // andar por voz dura no maximo 3 s (sem keepalive
 var VOICE_WALK_MS = 3000;
 var hasAI = (typeof AI !== "undefined" && typeof Net !== "undefined");
 var voiceErrorAt = 0;
+var voiceLvl = 0;             // volume ao vivo da janela de gravacao (tela)
 
 function cueVoice(ok) {
     // ack do wake: duas notas subindo (ouvindo) ou duas graves (erro)
-    if (ok) System.playTone([[900, 60], [0, 30], [1350, 90]]);
-    else System.playTone([[400, 90], [0, 40], [330, 120]]);
+    // (playTone nao aceita frequencia 0 como pausa: RangeError derrubava o
+    // app justo no momento do wake)
+    if (ok) System.playTone([[900, 60], [1350, 90]]);
+    else System.playTone([[400, 90], [330, 120]]);
 }
 
 function voiceRing(on, err) {
@@ -761,6 +802,7 @@ function voiceTick(now) {
     // janela de gravacao: fim por teto, por silencio pos-fala ou por tempo
     if (voiceRec) {
         var lvl = Mic.level();
+        voiceLvl = lvl > 0 ? lvl : 0;
         if (lvl > 22) { voiceHeard = true; voiceQuietAt = 0; }
         else if (voiceHeard && lvl < 5) {
             if (!voiceQuietAt) voiceQuietAt = now + 550;

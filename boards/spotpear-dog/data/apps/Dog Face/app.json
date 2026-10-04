@@ -1,7 +1,7 @@
 {
   "name": "Dog Face",
   "packageName": "celeros.dogface",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": "CelerOS",
   "description": "A cara do cao robotico: olhos que piscam e seguem, reagem ao toque e ao som, medem bateria e microfone. Comandos por voz: diga 'hi celer' e fale (senta, deita, anda). Pensada para o OLED 128x64 do spotpear-dog (sem texto: so formas).",
   "type": "Utility",

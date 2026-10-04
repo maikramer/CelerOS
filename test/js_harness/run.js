@@ -1232,12 +1232,13 @@ function holdMoves(ms) {
 }
 
 (function() {
-    console.log('Dog Face (marcha ESP-Hi, modo esphi):');
+    console.log('Dog Face (marcha ESP-Hi, default das pernas do ESP-Hi):');
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
         env.CelerLink.status = function() { return { connected: true }; };
         // seta segurada 2 s (move a cada 250 ms), depois SOME sem stop
-        // (stop perdido): o keepalive tem que parar o robo sozinho
-        var items = [[0, '{"type":"mode","walk":"esphi"}']];
+        // (stop perdido): o keepalive tem que parar o robo sozinho. Sem
+        // "mode" explicito: o esphi tem de ser o default do boot
+        var items = [];
         holdMoves(2000).forEach(function(it) { items.push([it[0] + 100, it[1]]); });
         items.push([6000, '{"cmd":"pet"}']);
         linkSchedule(env, items);
@@ -1290,11 +1291,12 @@ function holdMoves(ms) {
 })();
 
 (function() {
-    console.log('Dog Face (centopeia, modo creep default):');
+    console.log('Dog Face (centopeia, modo creep):');
     var P = 20, T = 25;
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
         env.CelerLink.status = function() { return { connected: true }; };
-        var items = holdMoves(7000);
+        var items = [[0, '{"type":"mode","walk":"creep"}']];
+        holdMoves(7000).forEach(function(it) { items.push([it[0] + 100, it[1]]); });
         items.push([12000, '{"type":"tune","P":30,"T":20,"order":["FR","BR","FL","BL"]}']);
         holdMoves(4000).forEach(function(it) { items.push([it[0] + 12100, it[1]]); });
         linkSchedule(env, items);
@@ -1423,9 +1425,10 @@ function padSchedule(env, spans) {
     });
     check('roda sem erro (pad)', r.err === null, r.err || '');
     var FRp = servoSeq(r.log, 13);
-    check('toque longo inicia walk', FRp.indexOf(physAng('FR', -45)) >= 0);
-    check('walk do pad segue sem link (sem keepalive)', count(FRp, physAng('FR', -45)) >= 3,
-          count(FRp, physAng('FR', -45)) + ' ciclos');
+    // walk default = esphi: fase A do FR comeca no raw F-S = +15 e varre -24
+    check('toque longo inicia walk (esphi)', FRp.indexOf(rawAng('FR', 15)) >= 0);
+    check('walk do pad segue sem link (sem keepalive)', count(FRp, rawAng('FR', 15)) >= 3,
+          count(FRp, rawAng('FR', 15)) + ' ciclos');
 
     // parado e sem link: dorme apos 2 min e solta os servos; barulho acorda
     var r2 = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
