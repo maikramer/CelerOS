@@ -3,7 +3,7 @@
 **English** | [Português (BR)](/maikramer/CelerOS/wiki/Watch-Waveshare)
 
 CelerOS's first wearable: the **Waveshare ESP32-S3-Touch-AMOLED-2.06**
-(board id `waveshare-amoled206`), a 2.06" AMOLED smartwatch with a rectangular, rounded-corner glass, on the
+(board id `waveshare-watch`), a 2.06" AMOLED smartwatch with a rectangular, rounded-corner glass, on the
 ESP32-S3R8 — 32 MB of flash, 8 MB of embedded PSRAM, a hardware PMU and a
 proper sensor pack behind the glass. The pin map and the panel init sequences
 were ported from the Rust firmware **`waveshare-watch-rs`** (a standalone
@@ -42,7 +42,7 @@ required.
 | Microphone — ES8311 ADC | **ASDOUT 42** | I²S1 RX slave on the codec's clocks |
 | microSD — SPI3 | **CS 17, SCK 2, MOSI 1, MISO 3** | mounted at `/sd` |
 | BOOT button | **0** | short = home/exit app, hold = screenshot |
-| Power key | via **AXP2101 PEK** | polled by ScreenPower (short = wake screen, hold = deep sleep). The PMU IRQ is not on a GPIO, so it **cannot** wake from deep sleep — BOOT does |
+| Power key | via **AXP2101 PEK** | polled by ScreenPower (short = wake screen, hold = deep sleep). Latched, and the ULP-RISC-V sentinel wakes the watch on PWR from deep sleep in <=100 ms |
 | IMU INT1 | **21** | active low; wakes from deep sleep on motion when the `imu_wake` setting is on |
 
 GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
@@ -67,11 +67,18 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
 * **Screen power ladder** (ScreenPower): full → **dim** after 8 s →
   **AOD** at 15 s on the watch face (once-a-minute face with anti burn-in
   shifting, date, battery % and the latest unread notification; the panel
-  stays awake at low brightness) → off (panel in SLPIN) → **deep sleep** on
-  a long press of the power key. Raising the wrist wakes the screen at full
+  stays awake at low brightness) → off (panel in SLPIN) → **automatic
+  deep sleep**: after off the watch goes to sleep by itself — no need to
+  hold the power key. Raising the wrist wakes the screen at full
   brightness; a new notification **wakes the watch with a full-screen
   alert** (source, title, body and time; no touch falls back asleep in ~8 s,
   tapping opens the center) plus a double beep.
+* **Deep sleep sentinel** (ULP-RISC-V, `WatchUlp.cpp`): loaded into RTC
+  slow memory on every deep sleep; watches the IMU (raise-the-wrist
+  gesture = 2 AnyMotion in ~2 s), VBAT every ~5 min (3.30 V warning;
+  3.15 V critical powers the IMU off) and the cable/USB (~1 s). The PWR
+  key (AXP2101 PEK, latched) wakes in <=100 ms; cycle ~100 ms with the
+  IMU moving, ~250 ms after 60 s calm.
 * **Power** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle —
   240 MHz while the screen is lit, DFS down to 40 MHz with automatic light
   sleep when dim/off (not while USB is plugged in, so `celerctl` keeps
@@ -100,14 +107,18 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
 * **Watch apps** (`boards/waveshare-watch/data/apps`): Alarms, Timer,
   Activity (steps, goal, last 7 days), Music and Weather.
   `boards/waveshare-watch/data-exclude.txt` keeps Terminal, HTTP Demo,
-  Touch Test and Web Server off the watch.
+  Touch Test and Web Server off the watch. The **Qwen** voice assistant
+  (hold to talk; `Mic.*` + qwen omni via OpenRouter) and **Chat IA**
+  also run on the watch.
 * Time survives reboots without network (PCF85063 — written after NTP,
   phone sync or manual adjust). The pedometer rolls over at midnight and
   keeps 7 closed days.
 * Watch JS surface: API 13 `Sensors.*`, `System.setVolume()/getVolume()`,
   `System.micLevel()`; API 15 `System.batteryInfo()`, `getInfo().inset/
   shape/board/screenW/screenH`, `Sensors.stepHistory()`, alarms/timer
-  calls, `System.unreadNotifications()` and the `Phone` object.
+  calls, `System.unreadNotifications()` and the `Phone` object; now at
+  API 20 — `System.button` (17), `AI.chat` (18), `Mic.*` (19) and
+  function calling + `WakeWord` (20).
 
 ## Known traps
 
@@ -146,9 +157,9 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   gauge, edge gestures + quick settings + notification center, list
   launcher, persistent alarms/timer, PM + light sleep, Gadgetbridge phone
   link, watch apps and the Watch settings page.
-* **[todo]** Measure current draw in AOD / screen off with PM on, and
-  ULP-RISC-V motion monitoring during deep sleep (raise-to-wake without the
-  main cores).
+* **[done]** ULP-RISC-V sentinel during deep sleep (`WatchUlp.cpp`):
+  raise-to-wake, battery and cable watch without the main cores.
+* **[todo]** Measure current draw in AOD / screen off with PM on.
 
 Restoring the stock Waveshare firmware is a plain esptool write over the
 same USB — the CelerOS flash never touches the bootloader.

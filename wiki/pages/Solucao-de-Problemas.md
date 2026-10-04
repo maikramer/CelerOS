@@ -59,7 +59,12 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
   teto prático de um `main.js` de ~60 KB.
 * **App crasha ou volta ao launcher.** Acompanhe ao vivo com
   `python3 tools/celerctl.py logcat` e, depois do crash, baixe o coredump
-  com `celerctl coredump` (ELF para o GDB/ferramentas xtensa).
+  com `celerctl coredump` (ELF para o GDB/ferramentas xtensa). O último
+  erro de app também fica persistido em `/local/lastcrash.txt` (versão do
+  OS, data, uptime, app + stack completa; sobrevive a reboot) — o
+  `lasterror` do shell serial mostra tamanho e horário da gravação, e o
+  file manager web consegue ler o arquivo. Em builds com debugger, o
+  `celerctl debug MyApp` pausa no ponto do throw para inspecionar o estado.
 * **`SyntaxError` no aparelho mas funciona no Node.** A engine é Duktape:
   **só ES5** — sem arrow functions, `let`/`const`, `class` ou template
   literals. Teste os apps embutidos no host com
@@ -91,5 +96,7 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
 * **Push/pull lento.** Negocie um baud maior: `celerctl -b 921600
   push ...`.
 * **Frames truncados/esquisitos depois de uma desconexão.** O parser
-  ressincroniza depois de um frame cortado; se persistir, reconecte o USB
-  e tente de novo.
+  ressincroniza depois de um frame cortado; com o proto 2 o CRC32 também
+  descarta quadros corrompidos e a transferência tenta de novo sozinha.
+  Uma sessão deixada em baud alto (há menos de 8 s) é achada
+  automaticamente na próxima abertura — sem desconectar/reconectar o USB.

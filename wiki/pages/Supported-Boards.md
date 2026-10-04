@@ -8,11 +8,11 @@
 
 | Board | SoC | Display | Touch | Notes |
 |---|---|---|---|---|
-| **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | 4" IPS 480x480 RGB (ST7701) | Capacitive GT911 | 16 MB flash / 8 MB PSRAM, microSD, I2S speaker (NS4168); "Y" SKUs with relays |
+| **SmartDisplay 4"** (Guition ESP32-S3-4848S040) | ESP32-S3-N16R8 | 4" IPS 480x480 RGB (ST7701) | Capacitive GT911 | 16 MB flash / 8 MB PSRAM, microSD, I2S speaker (NS4168); "Y" SKUs with relays; Celer Link BLE (NimBLE) |
 | **CYD** (ESP32-2432S028R, "Cheap Yellow Display") | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | No PSRAM; CH340 serial; asks for touch calibration on first boot; simpler UI ([see below](#cyd-classic-esp32)) |
 | **CYD-VSPI** (untested variant) | ESP32 | 2.8" ILI9341 320x240 SPI | Resistive XPT2046 | Legacy pinout (TFT on VSPI 18/23/19, shared touch bus, backlight GPIO22) kept for boards wired that way — **never tested on hardware**; build with `-DCELEROS_BOARD=cyd-vspi` |
-| **Robot dog** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB embedded PSRAM) | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 4 servos (legs), mic + speaker I²S, 2x WS2812, battery ADC; boots into the Dog Face app (profile `homeApp`); driven by the Celer Remote app over Celer Link BLE; `celerctl` on the USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`); build with `-DCELEROS_BOARD=spotpear-dog` — see [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) |
-| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB embedded PSRAM) | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash, AXP2101 PMU, RTC PCF85063 + IMU QMI8658 (pedometer) + audio ES8311 codec on I²C, microSD on SPI3; boots into the Watchface app (profile `homeApp`); screen ladder with AOD + deep sleep; Celer Link BLE; `celerctl` on the native USB (dual CDC — `CELEROS_USB_NATIVE`), logs via `celerctl logcat`; build with `-DCELEROS_BOARD=waveshare-watch` — see [Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) |
+| **Robot dog** (SpotBear/ZZPET `zzpet-s3`) | ESP32-S3R8 (8 MB embedded PSRAM) | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 4 servos (legs ported from Espressif's ESP-Hi tables, per-leg calibration saved to `/local/dogtune.json`), mic + speaker I²S, 2x WS2812, battery ADC with a ULP-RISC-V watchdog during deep sleep; on-device wake word "Hi Celer" + voice commands; boots into the Dog Face app (profile `homeApp`); driven by the Celer Remote app over Celer Link BLE; `celerctl` on the USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`); build with `-DCELEROS_BOARD=spotpear-dog` — see [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) |
+| **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 (8 MB embedded PSRAM) | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash, AXP2101 PMU, RTC PCF85063 + IMU QMI8658 (pedometer) + audio ES8311 codec on I²C, microSD on SPI3; boots into the Watchface app (profile `homeApp`); screen ladder with AOD + automatic deep sleep guarded by a ULP-RISC-V sentinel (the PWR button wakes it in ~100 ms); Celer Link BLE; `celerctl` on the native USB (dual CDC — `CELEROS_USB_NATIVE`), logs via `celerctl logcat`; build with `-DCELEROS_BOARD=waveshare-watch` — see [Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) |
 | **Barebone devkit** (any plain ESP32 board, e.g. DOIT DevKit v1) | ESP32 | none — on-board LED (GPIO2) | BOOT button (GPIO0) | 4 MB flash, no PSRAM, no SD; display is a stub panel (invisible launcher), apps run headless via `System.button()` + `System.led`; `celerctl` on UART0; WiFi via the `wifi` shell command; OTA channel `updates/devkit`; build with `-DCELEROS_BOARD=devkit` — see [Barebone devkit](/maikramer/CelerOS/wiki/Barebone-Devkit) |
 
 ## Where a board is defined
@@ -55,7 +55,9 @@ LRC=GPIO2, no MCLK — `System.beep` plays a sine wave), and the "Y" SKUs
 (86 wall-switch box with 1 or 3 relays): L1=GPIO40, L2=GPIO2, L3=GPIO1 —
 the same pins as the speaker. Firmware built with
 `CONFIG_CELEROS_SMARTDISPLAY_RELAYS=N` trades the speaker for N relays
-controllable with `System.relay` (they start off at boot).
+controllable with `System.relay` (they start off at boot). Celer Link BLE
+(NimBLE) also runs on this board now that the host pools moved to PSRAM
+(~22 KB of internal RAM free after init).
 
 **Free GPIOs for apps** (`System.gpio`): IO35, IO36 and IO37 on the header
 (IO0 is BOOT and the display's R4 line; IO43/44 are the console serial).
@@ -141,7 +143,8 @@ PA (GPIO46) for `System.beep` and `System.micLevel()` (16 kHz, MCLK 4,096 MHz
 on GPIO16), QMI8658 IMU (pedometer + raise-to-wake, `Sensors.*` API 13),
 PCF85063 RTC (time survives reboots), AXP2101 battery in `System.battery()`,
 BOOT/PWR buttons (short = home, hold = screenshot / deep sleep) and the
-ScreenPower ladder (dim 8 s → AOD 15 s with anti burn-in → off → deep sleep
-by EXT1 on the buttons). Planned: ULP-RISC-V motion monitoring during deep
-sleep. The full pinout and the watch experience live in the
+ScreenPower ladder (dim 8 s → AOD 15 s with anti burn-in → off → automatic
+deep sleep guarded by a ULP-RISC-V sentinel that wakes on the PWR button in
+~100 ms, on a raise gesture, on low battery or on the USB cable). The full
+pinout and the watch experience live in the
 [Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) page.

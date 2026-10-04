@@ -71,6 +71,36 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   toque e ao som, bateria, sono na inatividade e gaits com rampas
   (andar/ré/virar/sentar/deitar/alongar) com keepalive dead-man — o cachorro
   para sozinho se o controle soltar a seta ou o link cair.
+* **[feito]** **Dog Face 1.5.1**: pernas portadas das tabelas C do ESP-Hi
+  (Espressif) — gaits cíclicos walk/back/left/right mais a marcha "creep"
+  (centopeia) como modo default `esphi`; posturas stand/lie/stretch/sit;
+  espelho de servos FR/BL com sinais por perna. Calibração por perna pelo
+  Celer Remote/nRF Connect (`{"type":"calib"}`, ajuste fino
+  `{"type":"tune"}`) salva em `/local/dogtune.json`; o comando `modes`
+  lista os gaits.
+* **[feito]** **Watchdog de bateria** no deep sleep: o coprocessador
+  ULP-RISC-V (`DogUlp.cpp` + `ulp/ulp_main.c`) lê o ADC da bateria
+  (ADC1_CH1, GPIO2, divisor 2:1) a cada ~60 s e acorda os núcleos se a
+  célula cair abaixo de ~3,30 V — o cachorro dorme seguro. O cachorro só
+  dorme via `System.deepSleep(ms)` e o timer sempre acorda.
+
+### Voz e wake word
+
+* **[feito]** **Wake word "Hi Celer"** on-device: detector microWakeWord
+  próprio (`main/Hardware/WakeWord.cpp`) com streaming TFLite Micro —
+  modelo int8 embutido na flash (~60 KB), arena de 32 KB que vai para a
+  PSRAM quando disponível, em task própria. JS
+  `WakeWord.start()/stop()/poll()/level()/running()` (API 20), com a
+  mesma permissão `mic` no app.json do `Mic.*`.
+* **[feito]** **Comandos por voz** (Dog Face 1.5.0): "hi celer" abre a
+  janela de escuta (beep de ack + anel de LED), grava 3 s
+  (`Mic.start({ms:3000})`) e envia ao modelo qwen omni (OpenRouter)
+  declarando a tool `dog_command` — o tool_call dispara o gait. Fallback
+  por palavra-chave PT/EN se a chave/modelo falhar. Comandos: senta,
+  deita, levanta, alonga, anda, trás, para (EN: sit, down, up,
+  bow/stretch, walk, back, stop); andar por voz dura 3 s sem keepalive.
+* Pilha de voz na API JS: **18** AI, **19** `Mic.*`, **20** function
+  calling + `WakeWord.*`.
 
 Restaurar o firmware original a qualquer momento é um comando único a partir
 do dump completo (`tools/flash_backup_restore.sh` no repo do cachorro) — o

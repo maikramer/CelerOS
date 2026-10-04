@@ -4,9 +4,11 @@
 
 Os apps de sistema do CelerOS são **JavaScript** (ES5, Duktape) e moram na
 partição LittleFS, montada em `/local` — o firmware carrega só o core. Isso
-cortou ~330 KB da imagem da CYD e virou o padrão da casa: Settings, App
-Store, Installer, Help, Web Server, Terminal, Snake e as demos
-(HTTP Demo, Touch Test) são todos JS.
+cortou ~330 KB da imagem da CYD e virou o padrão da casa: os 13 apps em
+`data/apps/` são todos JS (App Store, Barebone, Chat IA, HTTP Demo, Help,
+Installer, Qwen, Settings, Snake, Terminal, Touch Test, Watchface, Web
+Server). Placas podem acrescentar os seus por cima (overlay): Dog Face no
+dog; Alarmes, Atividade, Celular, Clima, Musica e Timer no watch.
 
 ## Layout
 
@@ -16,9 +18,10 @@ data/
 └── icons/<id>.png # GERADO por tools/make_icons.py (RGBA quantizado p/ RGB565)
 ```
 
-[`hub_apps/`](hub_apps) (2048, Breakout, Cronômetro e **Celer Remote**)
-segue o mesmo layout, mas é publicado no hub em vez de virar imagem de
-fábrica. O Celer Remote (API 10) é a vitrine de robótica: escaneia CelerOS
+[`hub_apps/`](hub_apps) — 13 apps hoje (2048, Breakout, Calculator,
+Previsao, System Info, **Celer Remote** e outros) — segue o mesmo layout,
+mas é publicado no hub em vez de virar imagem de fábrica. O Celer Remote
+(API 11) é a vitrine de robótica: escaneia CelerOS
 próximos pelo Celer Link (BLE), conecta e pilota um robô com D-pad mostrando
 a telemetria dele — referência completa de `CelerLink` +
 `System.gpio.servo`.
@@ -45,8 +48,10 @@ Guia completo de empacotamento em [Guia de apps](/maikramer/CelerOS/wiki/Guia-de
 
 * **ES5 somente**: sem arrow functions, `let`/`const`, `class`, template
   literals ou `Promise`. Use `var` + `function` + concatenação.
-* O loop do app é um `while` bloqueante com `System.delay()`; não há
-  eventos nem callbacks. Saída por `System.exitApp()`.
+* O loop do app é um `while` bloqueante com `System.delay()`; saída por
+  `System.exitApp()`. Desde a API 18/19 algumas chamadas assíncronas
+  aceitam callback (`AI.chat`, `Mic.start`) — ele dispara uma única vez,
+  no ciclo do próprio app (`present()`).
 * Trabalhe em coordenadas virtuais 240x320 e pegue cores no
   `System.theme()`. Nunca hardcode o tamanho da tela.
 * Estado persistente em `/local/...`, nunca dentro da pasta de outro app.

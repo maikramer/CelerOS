@@ -3,7 +3,7 @@
 [English](/maikramer/CelerOS/wiki/Waveshare-Watch) | **Português (BR)**
 
 O primeiro wearable do CelerOS: o **Waveshare ESP32-S3-Touch-AMOLED-2.06**
-(id de board `waveshare-amoled206`), um smartwatch de AMOLED 2.06" com vidro retangular de cantos arredondados,
+(id de board `waveshare-watch`), um smartwatch de AMOLED 2.06" com vidro retangular de cantos arredondados,
 sobre o ESP32-S3R8 — 32 MB de flash, 8 MB de PSRAM embutida, um PMU de
 hardware e um bom conjunto de sensores atrás do vidro. O mapa de pinos e as
 sequências de init do painel foram portados do firmware Rust
@@ -42,7 +42,7 @@ parede, passos, bateria) é a tela inicial; swipe pra cima abre o launcher.*
 | Microfone — ADC do ES8311 | **ASDOUT 42** | I²S1 RX slave nos clocks do codec |
 | microSD — SPI3 | **CS 17, SCK 2, MOSI 1, MISO 3** | montado em `/sd` |
 | Botão BOOT | **0** | curto = home/encerra app, segurar = screenshot |
-| Tecla de power | via **PEK do AXP2101** | poll pelo ScreenPower (curto = acende, segurar = deep sleep). O IRQ do PMU não chega a um GPIO: **não** acorda do deep sleep — o BOOT acorda |
+| Tecla de power | via **PEK do AXP2101** | poll pelo ScreenPower (curto = acende, segurar = deep sleep). Latchada, e a sentinela ULP-RISC-V acorda o relógio pelo PWR em <=100 ms |
 | INT1 do IMU | **21** | ativo-baixo; acorda do deep sleep com movimento se o ajuste `imu_wake` estiver ligado |
 
 O GPIO10 **não** é botão nesta HW: lê LOW com pull-up (armadilha herdada da
@@ -68,11 +68,18 @@ família da placa do cachorro).
 * **Escada de tela** (ScreenPower): pleno → **dim** em 8 s → **AOD** em
   15 s no mostrador (face 1x por minuto com deslocamento anti burn-in,
   data, bateria em % e a última notificação não lida; o painel segue
-  acordado em brilho baixo) → off (painel em SLPIN) → **deep sleep**
-  segurando a tecla de power. Levantar o pulso acende a tela no brilho
+  acordado em brilho baixo) → off (painel em SLPIN) → **deep sleep
+  automático**: depois do off o relógio dorme sozinho — não precisa
+  segurar a tecla de power. Levantar o pulso acende a tela no brilho
   normal; notificação nova **acorda o relógio com o alerta em tela cheia**
   (origem, título, corpo e hora; sem toque volta a dormir em ~8 s, toque
   abre a central) e dá dois bipes.
+* **Sentinela do deep sleep** (ULP-RISC-V, `WatchUlp.cpp`): carregada na
+  RTC slow a cada deep sleep; vigia o IMU (gesto de levantar o pulso =
+  2 AnyMotion em ~2 s), a VBAT a cada ~5 min (aviso 3,30 V; crítico
+  3,15 V desliga o IMU) e o cabo/USB (~1 s). A tecla PWR (PEK do
+  AXP2101, latchada) acorda em <=100 ms; ciclo ~100 ms com o IMU
+  mexendo, ~250 ms após 60 s calmo.
 * **Energia** (`Hardware/PowerPolicy`): `CONFIG_PM_ENABLE` + tickless idle
   — 240 MHz com a tela acesa, DFS até 40 MHz e light sleep automático com
   ela dim/apagada (não com o USB plugado, para o `celerctl` seguir vivo). O
@@ -101,7 +108,9 @@ família da placa do cachorro).
 * **Apps do relógio** (`boards/waveshare-watch/data/apps`): Alarmes, Timer,
   Atividade (passos, meta, últimos 7 dias), Música e Clima.
   `boards/waveshare-watch/data-exclude.txt` tira Terminal, HTTP Demo, Touch
-  Test e Web Server do relógio.
+  Test e Web Server do relógio. O assistente de voz **Qwen** (segure para
+  falar; `Mic.*` + qwen omni via OpenRouter) e o **Chat IA** também rodam
+  no relógio.
 * A hora sobrevive a reboot sem rede (PCF85063 — gravado após NTP,
   celular ou ajuste manual). O pedômetro vira o dia à meia-noite e guarda 7
   dias fechados.
@@ -109,7 +118,8 @@ família da placa do cachorro).
   `System.setVolume()/getVolume()`, `System.micLevel()`; API 15
   `System.batteryInfo()`, `getInfo().inset/shape/board/screenW/screenH`,
   `Sensors.stepHistory()`, alarmes/timer, `System.unreadNotifications()` e o
-  objeto `Phone`.
+  objeto `Phone`; hoje na API 20 — `System.button` (17), `AI.chat` (18),
+  `Mic.*` (19) e function calling + `WakeWord` (20).
 
 ## Armadilhas conhecidas
 
@@ -147,9 +157,9 @@ família da placa do cachorro).
   fuel gauge, gestos de borda + ajustes rápidos + central de notificações,
   launcher em lista, alarmes/timer persistentes, PM + light sleep, celular
   via Gadgetbridge, apps do relógio e a página Relógio nos Ajustes.
-* **[a fazer]** Medir o consumo em AOD / tela apagada com o PM ligado, e
-  monitoramento de movimento por ULP-RISC-V durante o deep sleep
-  (raise-to-wake sem os núcleos principais).
+* **[feito]** Sentinela ULP-RISC-V durante o deep sleep (`WatchUlp.cpp`):
+  raise-to-wake, bateria e cabo vigiados sem os núcleos principais.
+* **[a fazer]** Medir o consumo em AOD / tela apagada com o PM ligado.
 
 Restaurar o firmware original da Waveshare é uma gravação comum do esptool
 pela mesma USB — o flash do CelerOS nunca toca no bootloader.

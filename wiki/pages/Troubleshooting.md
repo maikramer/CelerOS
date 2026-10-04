@@ -58,7 +58,12 @@ Common problems, in rough order of "you will hit this".
   with a practical ceiling of a ~60 KB `main.js`.
 * **App crashes or exits to the launcher.** Watch it live with
   `python3 tools/celerctl.py logcat` and, after a crash, pull the coredump
-  with `celerctl coredump` (ELF for GDB/xtensa tools).
+  with `celerctl coredump` (ELF for GDB/xtensa tools). The last app error
+  is also persisted to `/local/lastcrash.txt` (OS version, date, uptime,
+  app + full stack; it survives a reboot) — `lasterror` in the serial
+  shell reports its size and write time, and the web file manager can read
+  it. On debugger builds, `celerctl debug MyApp` pauses at the throw so
+  you can inspect the state.
 * **`SyntaxError` on device but works in Node.** The engine is Duktape:
   **ES5 only** — no arrow functions, `let`/`const`, `class` or template
   literals. Test the bundled apps on the host with

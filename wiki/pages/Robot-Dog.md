@@ -71,6 +71,36 @@ implementation in the bring-up firmware's `oled_px()`/`glyph_px()`.
   on idle, and ramped gaits (walk/back/turn/sit/lie/stretch) with a
   dead-man keepalive — the dog stops by itself if the remote lets go of
   the arrow or the link drops.
+* **[done]** **Dog Face 1.5.1**: legs ported from the ESP-Hi (Espressif)
+  C tables — cyclic gaits walk/back/left/right plus the "creep"
+  (centipede) march as the default `esphi` mode; postures
+  stand/lie/stretch/sit; FR/BL servo mirroring with per-leg signs.
+  Per-leg calibration via Celer Remote/nRF Connect (`{"type":"calib"}`,
+  fine tuning `{"type":"tune"}`) saved to `/local/dogtune.json`; the
+  `modes` command lists the gaits.
+* **[done]** **Battery watchdog** in deep sleep: the ULP-RISC-V
+  coprocessor (`DogUlp.cpp` + `ulp/ulp_main.c`) reads the battery ADC
+  (ADC1_CH1, GPIO2, 2:1 divider) about every 60 s and wakes the cores if
+  the cell drops below ~3.30 V — the dog sleeps safely. The dog only
+  sleeps via `System.deepSleep(ms)` and the timer always wakes it.
+
+### Voice & wake word
+
+* **[done]** **Wake word "Hi Celer"** on-device: own microWakeWord
+  detector (`main/Hardware/WakeWord.cpp`) streaming TFLite Micro — int8
+  model in flash (~60 KB), a 32 KB arena that goes to PSRAM when
+  available, on its own task. JS
+  `WakeWord.start()/stop()/poll()/level()/running()` (API 20), guarded
+  by the same `mic` permission in app.json as `Mic.*`.
+* **[done]** **Voice commands** (Dog Face 1.5.0): "hi celer" opens a
+  listening window (ack beep + LED ring), records 3 s
+  (`Mic.start({ms:3000})`) and sends it to the qwen omni model
+  (OpenRouter) declaring the `dog_command` tool — the tool_call triggers
+  the gait. PT/EN keyword fallback if the key/model fails. Commands:
+  senta, deita, levanta, alonga, anda, tras, para (EN: sit, down, up,
+  bow/stretch, walk, back, stop); voice walk runs 3 s with no keepalive.
+* Voice stack on the JS API: **18** AI, **19** `Mic.*`, **20** function
+  calling + `WakeWord.*`.
 
 Restoring the stock firmware at any time is a single command from a full dump
 (`tools/flash_backup_restore.sh` in the dog repo) — the CelerOS port never

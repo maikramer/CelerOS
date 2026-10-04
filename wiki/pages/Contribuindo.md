@@ -16,7 +16,7 @@ python3 tools/size_report.py         # custo de flash — o slot OTA da CYD é o
 
 O CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) roda o
 harness JS e os testes de host a cada push/PR e depois compila o firmware
-das duas placas no container oficial do ESP-IDF.
+das seis placas no container oficial do ESP-IDF.
 
 ## Convenções de código
 

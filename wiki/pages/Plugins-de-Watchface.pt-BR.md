@@ -13,7 +13,7 @@ O watchface é um app JS (`celeros.watchface`). A cada 30 segundos ele
 reescaneia duas origens e carrega até **2 plugins**:
 
 1. `<pasta do app>/watchface.js` — para instalações completas (imagem do
-   sistema, `celerctl push` de pasta,_instalador por SD);
+   sistema, `celerctl push` de pasta, instalador por SD);
 2. `/local/data/<packageName>/watchface.js` — o appData privado do app. É o
    caminho que a **loja** usa: ela instala só `main.js`/`app.json`/ícone, e a
    origem exigiria permissão de sistema para escrever na pasta de outro app.
@@ -21,7 +21,7 @@ reescaneia duas origens e carrega até **2 plugins**:
    próprio appData na primeira execução — instalar o app *é* instalar o
    plugin; desinstalar o app remove os dois (appData é apagado junto).
 
-Desinstalar o app remove o plugin automaticamente. Um plugin que errar na
+Um plugin que errar na
 avaliação ou no desenho é dispensado (e fica de quarentena até o próximo
 scan) — ele **nunca derruba o relógio**. O plugin roda **dentro do watchface**
 e herda as permissões dele (app de sistema): só instale plugins de autores em

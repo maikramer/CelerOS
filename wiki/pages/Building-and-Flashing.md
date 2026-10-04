@@ -45,11 +45,17 @@ idf.py -B build-dog -DSDKCONFIG=build-dog/sdkconfig \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/spotpear-dog/sdkconfig.defaults" \
   -DCELEROS_BOARD=spotpear-dog set-target esp32s3
 idf.py -B build-dog build flash -p /dev/ttyACM0 monitor
+
+# Barebone devkit (headless ESP32)
+idf.py -B build-devkit -DSDKCONFIG=build-devkit/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/devkit/sdkconfig.defaults" \
+  -DCELEROS_BOARD=devkit set-target esp32
+idf.py -B build-devkit build flash -p /dev/ttyUSB0 monitor
 ```
 
 Each board uses its own build directory (`build/`, `build-cyd/`,
-`build-watch/`, `build-dog/`) with its cached `sdkconfig` — that way you
-can switch targets without reconfiguring.
+`build-watch/`, `build-dog/`, `build-devkit/`) with its cached `sdkconfig`
+— that way you can switch targets without reconfiguring.
 
 ## The data partition (LittleFS)
 
@@ -57,7 +63,7 @@ can switch targets without reconfiguring.
 partition, mounted at `/local`:
 
 ```bash
-tools/flash_data.sh smartdisplay /dev/ttyUSB0   # or: cyd|spotpear-dog|waveshare-watch <port>
+tools/flash_data.sh smartdisplay /dev/ttyUSB0   # or: cyd|spotpear-dog|waveshare-watch|devkit <port>
 ```
 
 The script needs the IDF environment exported (`IDF_PATH`) and uses the

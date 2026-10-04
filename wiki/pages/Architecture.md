@@ -66,13 +66,15 @@ The main loop runs on the main task: `Navigator::tick()`,
 ## The JavaScript runtime
 
 * Globals exposed by the bindings (`main/Runtime/JSBindings.cpp` +
-  `Js{System,Net,Fs,Gfx,Gpio,Keypad,Link,SystemApps}.cpp`): `System`, `Net`,
-  `FS` and `CelerLink` (the BLE link, on Bluetooth builds).
+  `Js{System,Net,Fs,Gfx,Gpio,Keypad,Link,SystemApps,Storage,Timers,Sensors,
+  Phone,Ai,Mic,Wake}.cpp`): `System`, `Net`, `FS`, `Storage`, `Sensors`,
+  `Phone`, `AI`, `Mic` and `WakeWord` (the last ones depend on the
+  build/hardware) plus `CelerLink` (the BLE link, on Bluetooth builds).
 * Apps are pure ES5 (no `Promise` — the builtin was compiled out of
   Duktape), with a blocking `while` loop and `System.delay()`.
 * All geometry is drawn in virtual 240x320 coordinates and scaled by
   `UI::sx()/sy()` — apps never see physical pixels.
-* The **API level** (`System.getAPILevel()`, currently 12) is the
+* The **API level** (`System.getAPILevel()`, currently 20) is the
   feature-detection contract for apps. History: 1 base
   (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps in JS · 5 docked
   keyboard · 6 custom topbar + streaming `Net.download` · 7 RGB LED, light
@@ -80,7 +82,21 @@ The main loop runs on the main task: `Navigator::tick()`,
   (BLE) · 10 servos + robot hardware (battery, mic, touch pad, NeoPixel) ·
   11 Celer Link code pairing + keyboard `{hint:"num"}` (numeric page) ·
   12 `setTimeout`/`setInterval`, `Storage` (private NVS), multi-sprites,
-  binary `FS.readFile`/`writeFile`, `setTextDatum`.
+  binary `FS.readFile`/`writeFile`, `setTextDatum` · 13 `Sensors.*`
+  (watch IMU: accel/steps, raise-to-wake) · 14 Celer Link pairing on by
+  default · 15 the watch experience (notification center, persistent
+  alarms/timer, quick panels, `Phone.*` Gadgetbridge, `batteryInfo`) ·
+  16 watchface plugins (`watchface.js` + `System.launchApp`) ·
+  17 `System.button()` (headless devkit) · 18 `AI` (async chat,
+  DeepSeek/OpenRouter) · 19 `Mic.*` (16 kHz WAV recording, `mic`
+  permission) · 20 function calling (`toolCalls`) + `WakeWord.*`
+  (on-device "Hi Celer").
+* An optional Duktape debugger (`CONFIG_CELEROS_JS_DEBUGGER`, default on
+  the ESP32-S3 targets) exposes breakpoints/step/eval over the celerctl
+  channel (`celerctl debug`).
+* ULP-RISC-V coprocessors stand guard while the main cores sleep: the
+  deep-sleep sentinel on the watch (`Boards/waveshare-watch/WatchUlp.cpp`)
+  and the battery watchdog on the dog (`Boards/spotpear-dog/DogUlp.cpp`).
 * When adding/calling a new API: bump `CELEROS_API_LEVEL`, document it in
   both languages of `JS_API_Guide` and add a stub to the
   `test/js_harness/run.js` harness.

@@ -15,8 +15,8 @@ python3 tools/size_report.py         # flash cost — the CYD OTA slot is the bi
 ```
 
 CI ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs the
-JS harness and the host tests on every push/PR and then builds both board
-firmwares in the official ESP-IDF container.
+JS harness and the host tests on every push/PR and then builds the firmware
+for all six boards in the official ESP-IDF container.
 
 ## Code conventions
 

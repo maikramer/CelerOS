@@ -22,7 +22,8 @@ Pillow, which is not in the list).
 python3 tools/celerctl.py devices            # list devices
 python3 tools/celerctl.py shell              # interactive shell on the device
 python3 tools/celerctl.py push main.js /local/apps/MyApp/main.js
-python3 tools/celerctl.py logcat --dump      # log ring buffer
+python3 tools/celerctl.py logcat --dump      # log ring buffer (repeatable; --ts/--grep)
+python3 tools/celerctl.py debug MyApp        # JS debugger: breakpoints/step/eval
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware over serial
 python3 tools/celerctl.py screencap out.png  # framebuffer capture
 python3 tools/celerctl.py tap 120 160        # inject a touch
@@ -39,6 +40,20 @@ serial prefix shown by `devices`. The opcodes live in
 one source of truth for both sides. Do not run `celerctl` while
 `idf.py monitor` holds the same port.
 
+`logcat --dump` copies the ring buffer without draining it (repeatable);
+`--ts` prefixes host-side timestamps and `--grep` filters lines on the
+host. Every app error is persisted to `/local/lastcrash.txt` (OS version,
+date, uptime, app + full stack) and survives a reboot — the serial shell's
+`lasterror` reports its size and write time; the web file manager reads the
+file.
+
+`celerctl debug MyApp` (boards with `CONFIG_CELEROS_JS_DEBUGGER`, default
+on the ESP32-S3 targets) brings up a TCP proxy and the Duktape debugger
+REPL: the app pauses on attach (first line) and at the throw of an
+uncaught error, with breakpoints, stepping, eval, watches and `r`
+(restart, rereading `main.js` and keeping breakpoints). Full reference in
+[`tools/README_USBTOOL.md`](tools/README_USBTOOL.md).
+
 ## celerhub — publishing to the hub
 
 ```bash
@@ -52,15 +67,18 @@ python3 tools/celerhub.py publish hub_apps/2048
 node tools/sdk/celer.js new MeuApp      # scaffold: app.json + main.js + icon + editor typings
 node tools/sdk/celer.js lint MeuApp     # ES5 + API check against the real firmware manifest (app_lint)
 node tools/sdk/celer.js test MeuApp     # runs the app in the Node harness (stubbed device APIs)
-node tools/sdk/celer.js emu MeuApp      # headless emulator: drives the app and snapshots the screen to PNG
+node tools/sdk/celer.js emu MeuApp --frames "0,600,1500"   # emulator: PNG per clock mark + pixel diff
 python3 tools/celerctl.py dev MeuApp    # live on the device (push + relaunch)
 node tools/sdk/celer.js publish MeuApp  # publishes to the hub store
 ```
 
 `lint`/`check` delegate to `tools/app_lint` (the manifest is derived from the
 firmware source, so the linter knows the real API surface); `dev`/`publish`
-delegate to `celerctl`/`celerhub`. Zero npm dependencies — acorn is vendored
-and the PNG encoder uses Node's zlib.
+delegate to `celerctl`/`celerhub`. `emu` runs the app headlessly and
+snapshots the screen to PNG; with `--frames "0,600,1500"` it renders one
+PNG per clock mark (`tela-0000.png`, ..., in the app's `.dev/` folder) and
+prints the pixel diff between consecutive frames. Zero npm dependencies —
+acorn is vendored and the PNG encoder uses Node's zlib.
 
 ## Flashing without a toolchain — CelerOS Flasher
 
