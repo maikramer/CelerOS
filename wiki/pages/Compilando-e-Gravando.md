@@ -4,6 +4,28 @@
 
 O CelerOS 1.2+ usa **ESP-IDF 6.1 puro** (sem camada Arduino/PlatformIO).
 
+## Só quer gravar numa placa? (release de fábrica, sem toolchain)
+
+Cada tag `v*` no GitHub publica um **pacote de fábrica**: um zip por placa
+(firmware + partição de dados + `flash.json` + `README.txt`) e o
+**CelerOS Flasher** para linux e windows (esptool embutido). É o caminho
+recomendado para a primeira instalação — sem ESP-IDF, sem build:
+
+1. Baixe o **CelerOS_Flasher** do seu sistema e o **zip da sua placa** em
+   [releases](https://github.com/maikramer/CelerOS/releases).
+2. Extraia os dois na mesma pasta e execute o flasher.
+3. Escolha a **placa** e a **porta USB** em que ela está.
+4. Responda **"apagar tudo" = sim** (a 1ª gravação limpa uma NVS antiga),
+   dê ENTER — as imagens são gravadas com verificação e a placa boota
+   direto no CelerOS.
+
+Porta não aparece? Instale o driver USB-serial do seu adaptador (CP210x ou
+CH34x) e reconecte a placa. Prefere o caminho manual? O `README.txt` de
+cada zip traz a linha `esptool write-flash` exata, com todos os offsets.
+
+Depois disso as atualizações chegam por OTA (Ajustes > Atualizacao no
+aparelho) — releases são para o primeiro flash.
+
 ## Pré-requisitos
 
 ```bash

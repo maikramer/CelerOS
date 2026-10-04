@@ -4,6 +4,28 @@
 
 CelerOS 1.2+ is plain **ESP-IDF 6.1** (no Arduino/PlatformIO layer).
 
+## Just flashing a board? (factory release, no toolchain)
+
+Every `v*` tag on GitHub publishes a **factory package**: one zip per board
+(firmware + data partition + `flash.json` + `README.txt`) plus the
+**CelerOS Flasher** for linux and windows (esptool embedded). This is the
+recommended first-install path — no ESP-IDF, no build:
+
+1. Grab the **CelerOS_Flasher** for your system and the **zip for your
+   board** from [releases](https://github.com/maikramer/CelerOS/releases).
+2. Extract both into the same folder and run the flasher.
+3. Pick **board**, then the **USB port** the board is on.
+4. Answer **"erase everything" = yes** (first flash clears stale NVS data),
+   press ENTER — images are written and verified, and the board reboots
+   into CelerOS.
+
+No port listed? Install the USB-serial driver of your adapter (CP210x or
+CH34x) and replug the board. Prefer the manual route? Each zip's
+`README.txt` has the exact `esptool write-flash` line with all offsets.
+
+Updates after that arrive over the air (Settings > Update on the device) —
+releases are for first flashes.
+
 ## Prerequisites
 
 ```bash

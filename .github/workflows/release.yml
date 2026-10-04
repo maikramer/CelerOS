@@ -135,27 +135,37 @@ jobs:
           # sem isto o verify "^{tag}" falha e o preambulo das notas (corpo
           # da tag) e pulado em silencio — aconteceu no v1.6.0
           git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          # NOTAS DE RELEASE EM INGLES (publico = quem flasha a 1a vez; ver
+          # AGENTS.md). O corpo da tag anotada vira o preambulo — escreva-o
+          # em ingles tambem.
           cat > /tmp/notes.md <<'FIM'
-          **Primeiro flash de fabrica.** Atualizacoes futuras chegam por OTA
-          (Settings > Atualizacao no aparelho).
+          **Factory first flash.** Future updates arrive over OTA on the
+          device (Settings > Update).
 
-          ## Como gravar
+          ## How to flash (using the Flasher)
 
-          1. Baixe o **CelerOS_Flasher** do seu sistema (linux ou windows) e o
-             **zip da sua placa**.
-          2. Extraia os dois na mesma pasta e execute o flasher.
-          3. Escolha placa -> porta USB -> "apagar tudo" (1a gravacao) -> ENTER.
+          1. Download the **CelerOS_Flasher** for your system (linux or
+             windows) and the **zip for your board** — both attached to this
+             release.
+          2. Extract everything into the same folder and run the flasher.
+          3. Pick **board**, then the **USB port** the board is plugged into.
+          4. Answer **"erase everything" = yes** on the first flash (clears
+             stale NVS data), press ENTER and wait — images are written and
+             verified, and the board reboots into CelerOS.
 
-          Sem flasher: cada zip traz `README.txt` com a linha `esptool`
-          equivalente (offsets incluidos).
+          No port showing up? Install the USB-serial driver for your adapter
+          (CP210x or CH34x) and replug it.
 
-          ## Pacotes
+          Without the flasher: each zip carries a `README.txt` with the
+          equivalent `esptool` command line (offsets included).
 
-          | Placa | Zip |
+          ## Packages
+
+          | Board | Zip |
           |---|---|
           | SmartDisplay 4848S040 (ESP32-S3) | `CelerOS_*_smartdisplay.zip` |
           | CYD ESP32-2432S028R (ESP32) | `CelerOS_*_cyd.zip` |
-          | SpotPear (robo cachorro, ESP32-S3) | `CelerOS_*_spotpear-dog.zip` |
+          | SpotPear (robot dog, ESP32-S3) | `CelerOS_*_spotpear-dog.zip` |
           | Waveshare AMOLED 2.06 watch (ESP32-S3) | `CelerOS_*_waveshare-watch.zip` |
           FIM
           # o corpo da tag (anotada) vira preambulo das notas
