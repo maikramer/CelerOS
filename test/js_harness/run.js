@@ -1513,6 +1513,112 @@ function padSchedule(env, spans) {
     check('telemetria anuncia wifi', j.indexOf('"wifi":true') >= 0);
 })();
 
+// --- Dog Face (repetorio 2.0): truques, latidos e o sequenciador -------------
+(function() {
+    console.log('Dog Face (truque pushup: sequencia + latido WAV):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.__harness.pushLink(['{"type":"trick","name":"pushup"}']);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('sequencia disparada pelo link', j.indexOf('[dog] sequencia trick:pushup') >= 0);
+    // pushup = agachado (4 encurtadas pra tras) <-> em pe: a rampa cruza o
+    // offset +30 da FL (mesmo padrao da pose sit do teste da voz)
+    check('pose crouch alcancada', q.FL.indexOf(rawAng('FL', 30)) >= 0);
+    check('volta ao pe entre as flexoes', count(q.FL, D_NEU.FL) >= 2, count(q.FL, D_NEU.FL) + 'x');
+    check('termina com latido WAV', j.indexOf('[wav] /local/apps/Dog Face/bark_woof.wav') >= 0,
+          j.slice(-300));
+    check('responde trick_res ok', j.indexOf('[link] tx {"type":"trick_res","ok":true,"name":"pushup"}') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (truque hello: fala no link + patinha):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.__harness.pushLink(['{"type":"trick","name":"hello"}']);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('say via link (texto inteiro no controle)', j.indexOf('[link] tx {"type":"say","text":"OLA"}') >= 0);
+    check('yip WAV no fim', j.indexOf('[wav] /local/apps/Dog Face/bark_yip.wav') >= 0);
+    // hello senta (FL/BL +30 na rampa) antes de oferecer a pata
+    check('senta antes da patinha', q.FL.indexOf(rawAng('FL', 30)) >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (stop interrompe truque):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        linkSchedule(env, [[100, '{"type":"trick","name":"pushup"}'],
+                           [700, '{"type":"stop"}']]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var q = dogSeqs(r.log);
+    check('stop no meio = volta ao pe (FL neutra no fim)', q.FL[q.FL.length - 1] === D_NEU.FL,
+          JSON.stringify(q.FL.slice(-3)));
+})();
+
+(function() {
+    console.log('Dog Face (dancinha: LED arco-iris, nunca igual):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.__harness.pushLink(['{"type":"trick","name":"dance"}']);
+        // captura os quadros do anel (o stub padrao e mudo)
+        env.System.neopixel = function(s, px) {
+            env.__harness.log.push('[neo] ' + s + ' ' + JSON.stringify(px));
+            return true;
+        };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('sequencia da dancinha', j.indexOf('[dog] sequencia trick:dance') >= 0);
+    // arco-iris: algum quadro com cores DISTINTAS nas 4 posicoes
+    var rainbow = false;
+    j.split('\n').forEach(function(l) {
+        if (l.indexOf('[neo] 0 ') !== 0) return;
+        var px = JSON.parse(l.substring(8));
+        var uniq = {};
+        px.forEach(function(c) { uniq[c] = 1; });
+        if (Object.keys(uniq).length >= 3) rainbow = true;
+    });
+    check('anel em arco-iris durante a dancinha', rainbow);
+    check('anel apaga no fim', j.split('\n').filter(function(l) {
+        return l.indexOf('[neo] 0 [0,0,0,0]') === 0;
+    }).length > 0);
+})();
+
+(function() {
+    console.log('Dog Face (bateria fraca recusa truque pesado):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.System.battery = function() { return 3430; };   // ~14%
+        env.__harness.pushLink(['{"type":"trick","name":"dance"}',
+                                '{"type":"trick","name":"hello"}']);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('danca recusada (sem sequencia)', j.indexOf('[dog] sequencia trick:dance') < 0);
+    check('recusa com ganido', j.indexOf('[wav] /local/apps/Dog Face/bark_whine.wav') >= 0);
+    check('recusa fala "cansado" pro controle', j.indexOf('"type":"say","text":"cansado"') >= 0);
+    check('trick_res negativo', j.indexOf('"type":"trick_res","ok":false,"name":"dance"') >= 0);
+    // truque leve (nao pesado) NAO e bloqueado pela guarda
+    check('truque leve passa mesmo fraco', j.indexOf('[dog] sequencia trick:hello') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (bateria cruzando 20%: ganido uma vez):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.System.battery = function() { return 3400; };   // ~11%
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var n = j.split('[wav] /local/apps/Dog Face/bark_whine.wav').length - 1;
+    check('ganido unico no boot fraco', n === 1, n + ' whines');
+})();
+
 // --- Celer Remote (hub_apps) --------------------------------------------------
 function holdFrames(x, y, n) {
     var f = [];

@@ -10,6 +10,12 @@
 // quem conecta digita o codigo de 6 digitos que aparece na tela; controles
 // ja pareados entram direto (hold 5s no touch pad esquece todos).
 //
+// Repertorio 2.0: SEQUENCIADOR de passos {do:...} que alimenta os truques
+// nativos (dancinha sorteada, giro, patinha, xixi...), os truques que o
+// dono ensina (/local/dogtricks.json) e a coreografia que a LLM compoe
+// (dog_sequence) — mais latidos WAV, emocoes na cara/anel de LED e fala
+// (bolha no vidro + texto inteiro no controle pareado).
+//
 // Tempo real: rampas e fases andam pelo millis() (dt de cada volta), nao
 // por contagem de voltas — o flush do OLED por I2C a 100 kHz (~100 ms) e o
 // micLevel variam o tempo da volta e antes esticavam/encolhiam o passo.
@@ -165,7 +171,14 @@ var POSES = {
     stand: [0, 0, 0, 0],
     lie: [-60, 60, 60, -60],            // servo_dog_lay_down
     stretch: [-BOW, BOW, -BOW, BOW],    // servo_dog_bow (play bow)
-    sit: [BOW, -BOW, BOW, -BOW]         // servo_dog_lean_back
+    sit: [BOW, -BOW, BOW, -BOW],        // servo_dog_lean_back
+    // Repertorio 2.0 (mesma convencao de offsets; angulos de partida para
+    // validar/afinar no vidro pela bancada):
+    beg: [65, -65, 55, -55],        // sentado ereto: dobra mais a dianteira
+    crouch: [30, -30, -30, 30],     // agachado (4 encurtadas): base do pushup
+    pee: [55, -5, 10, -25],         // xixi: encurta a FL (ergue o canto BR)
+    shake_hi: [-40, -50, 50, -50],  // sentado oferecendo a pata FL (alta)
+    shake_lo: [-52, -50, 50, -50]   // ...e abanando (baixa)
 };
 var RATE = 6;   // graus por 60 ms nas posturas (lay_down: 1 grau / 10 ms)
 
@@ -455,6 +468,348 @@ function loadTune() {
 }
 loadTune();
 
+// ------------------------------------------- repertorio 2.0 -----------------
+// Truques coreografados, latidos de verdade (WAVs do app, gerados por
+// tools/dog/barks.py), emocoes (cara + anel de LED) e o SEQUENCIADOR: a
+// maquina que roda uma fila de passos {do:...} no ritmo do loop principal.
+// A mesma fila alimenta os truques nativos (TRICKS), os truques que o dono
+// ensina (/local/dogtricks.json) e a coreografia que a LLM compoe na hora
+// (dog_sequence). Tudo clampado: atos fora da whitelist sao descartados, a
+// fila nao passa de 12 passos nem de 12 s de relogio.
+
+// ---- latidos ----
+var BARK_DIR = "/local/apps/Dog Face/";
+var BARKS = ["woof", "yip", "growl", "whine", "howl"];
+var BARK_FALLBACK = {  // sem WAV (imagem antiga): melodia aproximada
+    woof: [[220, 90], [150, 130]],
+    yip: [[900, 50], [600, 70]],
+    growl: [[110, 160], [95, 180], [110, 160]],
+    whine: [[900, 160], [1250, 220], [800, 260]],
+    howl: [[420, 300], [560, 720], [500, 260]]
+};
+function playBark(kind, n) {
+    if (BARKS.indexOf(kind) < 0) kind = "woof";
+    n = Math.round(clampNum(n, 1, 3, 1));
+    for (var i = 0; i < n; i++) {
+        var played = false;
+        try { played = System.playWav(BARK_DIR + "bark_" + kind + ".wav"); } catch (e) { played = false; }
+        if (!played) System.playTone(BARK_FALLBACK[kind]);
+        if (i + 1 < n) System.delay(140);
+    }
+}
+
+// ---- anel de LED (2 fitas x 4) ----
+var ledAnim = "off", ledAt = 0, ledFrame = 0;
+var LED_COLORS = { happy: 0x20C020, alert: 0xFF2000, heart: 0xE02070,
+                   listen: 0x0040FF, err: 0xFF2000, calm: 0x00A0A0 };
+function ledDim(c, f) {
+    return ((Math.round(((c >> 16) & 255) * f) << 16) |
+            (Math.round(((c >> 8) & 255) * f) << 8) | Math.round((c & 255) * f));
+}
+function ledHsv(h) {   // h 0..1 -> 0xRRGGBB (arco-iris da dancinha)
+    var i = Math.floor(h * 6), f = h * 6 - i;
+    var v = 0.65, p = 0, q = v * (1 - f);
+    var r = 0, g = 0, b = 0;
+    var m = i % 6;
+    if (m === 0) { r = v; g = v * f; }
+    else if (m === 1) { r = q; g = v; }
+    else if (m === 2) { g = v; b = v * f; }
+    else if (m === 3) { g = q; b = v; }
+    else if (m === 4) { r = v * f; b = v; }
+    else { r = v; b = p; }
+    return (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
+}
+function setLeds(anim) {
+    if (ledAnim === anim) return;
+    ledAnim = anim;
+    ledFrame = 0;
+    if (anim === "off") { System.neopixel(0, [0, 0, 0, 0]); System.neopixel(1, [0, 0, 0, 0]); }
+}
+function ledsOff() { setLeds("off"); }
+function ledTick(now) {   // um quadro a cada 120 ms
+    if (ledAnim === "off" || now - ledAt < 120) return;
+    ledAt = now;
+    ledFrame++;
+    var solid = LED_COLORS[ledAnim];
+    for (var s = 0; s < 2; s++) {
+        var px = [];
+        for (var i = 0; i < 4; i++) {
+            var c = 0;
+            if (ledAnim === "rainbow") c = ledHsv((ledFrame * 0.06 + i * 0.125) % 1);
+            else if (ledAnim === "happy" || ledAnim === "alert") c = ((ledFrame >> 1) & 1) === 0 ? solid : 0;
+            else if (ledAnim === "heart") c = ledDim(solid, 0.35 + 0.65 * Math.abs(Math.sin(ledFrame * 0.35)));
+            else c = solid;
+            px.push(c);
+        }
+        System.neopixel(s, px);
+    }
+}
+
+// ---- emocoes (cara + LED) ----
+var MOODS = ["happy", "love", "curious", "sad", "angry", "sleepy", "alert"];
+var mood = "", moodUntil = 0;
+function setMood(m, ms) {
+    if (MOODS.indexOf(m) < 0) return false;
+    moodUntil = System.millis() + (ms || 4000);
+    lastActivity = System.millis();
+    if (m === "happy") {   // feliz ja tem cara propria (happyUntil)
+        mood = "";
+        happyUntil = System.millis() + (ms || 1600);
+        setLeds("happy");
+        return true;
+    }
+    mood = m;
+    if (m === "love") setLeds("heart");
+    else if (m === "angry" || m === "alert") setLeds("alert");
+    else if (m === "sad" || m === "sleepy") ledsOff();
+    else if (m === "curious") setLeds("calm");
+    return true;
+}
+
+// ---- fala do cao ----
+// Bolha na cara + ate 5 caracteres em sete-segmentos (texto e ilegivel no
+// vidro; OLA/SIM/87% cabem) + o texto INTEIRO no controle pareado via link.
+var sayText = "", sayRaw = "", sayUntil = 0;
+function showSay(text) {
+    sayRaw = String(text || "");
+    var ok = "";
+    for (var i = 0; i < sayRaw.length && ok.length < 5; i++) {
+        var ch = sayRaw.charAt(i).toUpperCase();
+        if (SEG[ch - "0"] !== undefined || SEG7[ch] !== undefined) ok += ch;
+    }
+    sayText = ok;
+    sayUntil = System.millis() + 3500;
+    lastActivity = System.millis();
+    reply({ type: "say", text: sayRaw.substring(0, 120) });
+    playBark("yip", 1);
+}
+
+// ---- sequenciador ----
+var SEQ_MAX_STEPS = 12;     // passos por fila (dono ensina ate 20)
+var SEQ_STEP_MS = 3000;     // teto de UM passo
+var SEQ_TOTAL_MS = 12000;   // teto da fila inteira
+var seqSteps = null, seqIdx = 0, seqUntil = 0, seqMove = false;
+function seqActive() { return seqSteps !== null; }
+function seqClear() { seqSteps = null; seqIdx = 0; seqUntil = 0; }
+
+function clampMs(v, dflt) { return Math.round(clampNum(v, 150, SEQ_STEP_MS, dflt)); }
+
+// Valida UM passo cru (JSON da LLM ou do dono); truque devolve array expandido.
+function seqStep(s, depth) {
+    if (!s || typeof s !== "object") return null;
+    var act = String(s.do || "");
+    if (act === "move") {
+        if (!WALKS[s.dir]) return null;
+        return { do: "move", dir: String(s.dir), ms: clampMs(s.ms, 900) };
+    }
+    if (act === "pose") {
+        if (!POSES[s.name]) return null;
+        return { do: "pose", name: String(s.name), ms: clampMs(s.ms, 700) };
+    }
+    if (act === "trick") {
+        if (depth >= 2) return null;   // truque dentro de truque dentro de truque: nao
+        return trickSteps(String(s.name || ""), depth);
+    }
+    if (act === "bark") {
+        var k = BARKS.indexOf(s.kind) >= 0 ? String(s.kind) : "woof";
+        return { do: "bark", kind: k, n: Math.round(clampNum(s.n, 1, 3, 1)) };
+    }
+    if (act === "leds") {
+        var an = ["off", "happy", "rainbow", "alert", "heart"].indexOf(s.anim) >= 0
+            ? String(s.anim) : "happy";
+        return { do: "leds", anim: an };
+    }
+    if (act === "emotion") {
+        if (MOODS.indexOf(s.mood) < 0) return null;
+        return { do: "emotion", mood: String(s.mood) };
+    }
+    if (act === "wait") return { do: "wait", ms: clampMs(s.ms, 300) };
+    if (act === "say") {
+        if (!s.text) return null;
+        return { do: "say", text: String(s.text).substring(0, 60) };
+    }
+    return null;
+}
+
+// Fila valida: descarta passos invalidos, expande truques, respeta os
+// tetos de passos e de duracao total.
+function buildSeq(raw, maxSteps, depth) {
+    var out = [];
+    if (!raw || typeof raw.length !== "number") return out;
+    for (var i = 0; i < raw.length && out.length < maxSteps; i++) {
+        var st = seqStep(raw[i], depth || 0);
+        if (st === null) continue;
+        if (st.length !== undefined) {   // truque expandido: absorve os passos
+            for (var j = 0; j < st.length && out.length < maxSteps; j++) out.push(st[j]);
+        } else out.push(st);
+    }
+    var fin = [], total = 0;
+    for (var q = 0; q < out.length; q++) {
+        var ms = out[q].ms || (out[q].do === "bark" ? 600 * out[q].n : 0);
+        if (total + ms > SEQ_TOTAL_MS) break;
+        total += ms;
+        fin.push(out[q]);
+    }
+    return fin;
+}
+
+function runSeq(steps, kind) {
+    seqClear();
+    if (!steps || !steps.length) return false;
+    if (legsLimp) { legsLimp = false; legsHold(); }
+    seqSteps = steps;
+    seqIdx = 0;
+    seqUntil = 0;
+    System.print('[dog] sequencia ' + (kind || '') + ': ' + steps.length + ' passos');
+    return true;
+}
+
+// Uma volta do loop: passos instantaneos (bark/leds/emotion/say) saem em
+// rajada ate o proximo passo com duracao; move/pose/wait ocupam a fila ate
+// seqUntil. Bark e bloqueante (playWav toca inteiro): a dancinha da uma
+// pausa natural a cada latido.
+function seqTick(now) {
+    if (!seqSteps) return;
+    if (seqUntil > now) return;
+    if (seqUntil !== 0) {
+        seqUntil = 0;
+        seqIdx++;
+        if (seqMove) { seqMove = false; stopGait(); }
+        if (seqIdx >= seqSteps.length) { seqEnd(); return; }
+    }
+    while (seqIdx < seqSteps.length) {
+        var s = seqSteps[seqIdx];
+        if (s.do === "move") {
+            if (startGait(s.dir, true)) { seqMove = true; seqUntil = now + s.ms; break; }
+        } else if (s.do === "pose") {
+            if (startGait(s.name, false)) { seqUntil = now + s.ms; break; }
+        } else if (s.do === "wait") {
+            seqUntil = now + s.ms;
+            break;
+        } else if (s.do === "bark") {
+            playBark(s.kind, s.n);
+        } else if (s.do === "leds") {
+            setLeds(s.anim);
+        } else if (s.do === "emotion") {
+            setMood(s.mood, 4000);
+        } else if (s.do === "say") {
+            showSay(s.text);
+        }
+        seqIdx++;
+    }
+    if (seqIdx >= seqSteps.length) seqEnd();
+}
+
+function seqEnd() {
+    seqClear();
+    if (seqMove) { seqMove = false; stopGait(); }
+    ledsOff();
+}
+
+// ---- truques nativos ----
+// A danca e uma funcao: sorteia a coreografia a cada chamada (nunca a
+// mesma dancinha). Os demais sao filas fixas.
+var HEAVY_TRICKS = ["dance", "spin", "excited"];
+var TRICKS = {
+    dance: function () {
+        var pool = [
+            { do: "pose", name: "sit", ms: 420 },
+            { do: "pose", name: "stand", ms: 320 },
+            { do: "pose", name: "stretch", ms: 400 },
+            { do: "pose", name: "crouch", ms: 400 },
+            { do: "move", dir: "left", ms: 420 },
+            { do: "move", dir: "right", ms: 420 },
+            { do: "move", dir: "walk", ms: 480 },
+            { do: "bark", kind: "yip", n: 1 }
+        ];
+        var steps = [{ do: "leds", anim: "rainbow" }];
+        var n = 6 + Math.floor(Math.random() * 3);
+        for (var i = 0; i < n; i++) steps.push(pool[Math.floor(Math.random() * pool.length)]);
+        steps.push({ do: "emotion", mood: "happy" });
+        steps.push({ do: "leds", anim: "off" });
+        return steps;
+    },
+    spin: [
+        { do: "bark", kind: "yip", n: 1 },
+        { do: "move", dir: "left", ms: 2200 },
+        { do: "emotion", mood: "happy" }
+    ],
+    shake: function () {   // patinha: senta e oferece a FL abanando
+        var s = [{ do: "pose", name: "sit", ms: 600 }];
+        for (var i = 0; i < 4; i++) s.push({ do: "pose", name: i % 2 ? "shake_lo" : "shake_hi", ms: 200 });
+        s.push({ do: "pose", name: "sit", ms: 300 });
+        s.push({ do: "bark", kind: "yip", n: 1 });
+        return s;
+    },
+    pushup: [
+        { do: "pose", name: "crouch", ms: 420 },
+        { do: "pose", name: "stand", ms: 320 },
+        { do: "pose", name: "crouch", ms: 420 },
+        { do: "pose", name: "stand", ms: 320 },
+        { do: "pose", name: "crouch", ms: 420 },
+        { do: "pose", name: "stand", ms: 320 },
+        { do: "bark", kind: "woof", n: 1 }
+    ],
+    excited: [
+        { do: "bark", kind: "yip", n: 2 },
+        { do: "move", dir: "walk", ms: 320 },
+        { do: "move", dir: "back", ms: 320 },
+        { do: "move", dir: "walk", ms: 320 },
+        { do: "move", dir: "back", ms: 320 },
+        { do: "emotion", mood: "happy" }
+    ],
+    hello: [
+        { do: "pose", name: "sit", ms: 500 },
+        { do: "pose", name: "shake_hi", ms: 220 },
+        { do: "pose", name: "shake_lo", ms: 220 },
+        { do: "pose", name: "shake_hi", ms: 220 },
+        { do: "say", text: "OLA" },
+        { do: "bark", kind: "yip", n: 1 }
+    ],
+    pee: [
+        { do: "pose", name: "pee", ms: 1200 },
+        { do: "bark", kind: "yip", n: 1 },
+        { do: "pose", name: "stand", ms: 500 }
+    ]
+};
+
+function trickNames() {
+    var n = [];
+    for (var k in TRICKS) n.push(k);
+    return n;
+}
+
+// Expandir truque pelo nome -> fila valida (ou null)
+function trickSteps(name, depth) {
+    var def = TRICKS[String(name || "").toLowerCase()];
+    if (def === undefined) return null;
+    var raw = typeof def === "function" ? def() : def;
+    return buildSeq(raw, SEQ_MAX_STEPS, (depth || 0) + 1);
+}
+
+function battPct() {
+    if (lastBatt < 0) return 100;
+    var f = (lastBatt - 3300) / 900;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    return Math.round(f * 100);
+}
+
+function runTrick(name) {
+    name = String(name || "").toLowerCase();
+    // bateria fraca recusa truque pesado com drama (e evita brownout)
+    if (HEAVY_TRICKS.indexOf(name) >= 0 && battPct() < 15) {
+        playBark("whine", 1);
+        setMood("sad", 3000);
+        showSay("cansado");
+        return false;
+    }
+    var steps = trickSteps(name, 0);
+    if (!steps || !steps.length) return false;
+    happyUntil = System.millis() + 900;
+    return runSeq(steps, "trick:" + name);
+}
+
 // ------------------------------------------------------------ estado ------
 var blinkAt = System.millis() + 1800;
 var blinkUntil = 0;
@@ -464,6 +819,7 @@ var lookT = System.millis() + 900;
 var breath = 0;
 var lastMic = 0, micAt = 0;
 var lastBatt = -1, battAt = -100000;
+var battWarned = false;      // ganido da bateria fraca: uma vez por cruzamento
 var padZeros = 0;           // leituras soltas seguidas (debounce da soltura)
 var lastActivity = System.millis();
 var sleeping = false;
@@ -472,6 +828,7 @@ var GAIT_CYCLE = ["stand", "walk", "sit", "lie", "stretch"];
 var gaitIdx = 0;
 
 function cycleGait() {
+    seqClear();   // o pad manda: interrompe truque/sequencia em curso
     gaitIdx = (gaitIdx + 1) % GAIT_CYCLE.length;
     var name = GAIT_CYCLE[gaitIdx];
     System.print('[dog] touch gait: ' + name);
@@ -499,6 +856,44 @@ function drawHappy() {
     System.fillRect(PX(80), PY(20), PW_(10), PH_(3), 0xFFFF);
     System.fillRect(PX(90), PY(23), PW_(10), PH_(3), 0xFFFF);
     System.fillRoundRect(PX(52), PY(40), PW_(24), PH_(8), PH_(3), 0xFFFF);
+}
+
+// ---- emocoes na cara (repositorio 2.0) ----
+function drawHeart(cx, cy, s) {
+    System.fillCircle(PX(cx - s / 2 + 1), PY(cy - s / 4), PW_(s / 2 + 1), 0xFFFF);
+    System.fillCircle(PX(cx + s / 2 - 1), PY(cy - s / 4), PW_(s / 2 + 1), 0xFFFF);
+    System.fillTriangle(PX(cx - s), PY(cy - 2), PX(cx + s), PY(cy - 2),
+                        PX(cx), PY(cy + s), 0xFFFF);
+}
+
+function drawZ(x, y, s, now) {   // "Z" com 3 tracos, flutuando
+    var bob = Math.round(Math.sin(now / 400) * 2);
+    System.drawLine(PX(x), PY(y + bob), PX(x + s), PY(y + bob), 0xFFFF);
+    System.drawLine(PX(x + s), PY(y + bob), PX(x), PY(y + s + bob), 0xFFFF);
+    System.drawLine(PX(x), PY(y + s + bob), PX(x + s), PY(y + s + bob), 0xFFFF);
+}
+
+function drawMood(now) {
+    if (mood === "love") {
+        drawHeart(38, 22, 14);
+        drawHeart(90, 22, 14);
+    } else if (mood === "angry") {
+        drawEyes(true, 8);
+        // sobrancelhas em V (grossas, caindo pro centro)
+        System.fillTriangle(PX(14), PY(8), PX(52), PY(15), PX(14), PY(15), 0xFFFF);
+        System.fillTriangle(PX(114), PY(8), PX(76), PY(15), PX(114), PY(15), 0xFFFF);
+    } else if (mood === "sad") {
+        drawEyes(true, 6);
+        var ty = 30 + (((now / 350) | 0) % 6);   // lagrima caindo
+        System.fillRect(PX(98), PY(ty), PW_(3), PH_(4), 0xFFFF);
+    } else if (mood === "sleepy") {
+        drawEyes(false, 0);
+        drawZ(96, 8, 9, now);
+        drawZ(110, 1, 6, now);
+    } else {   // curious / alert: olhos abertos, pupilas grandes
+        drawEyes(true, mood === "alert" ? 13 : 12);
+    }
+    System.fillRect(PX(60), PY(36), PW_(8), PH_(3), 0xFFFF);   // nariz
 }
 
 // arco de cima (leque de WiFi) em segmentos, coordenadas do vidro 128x64:
@@ -573,6 +968,16 @@ function drawVoice(now) {
     }
 }
 
+// Fala do cao na tela: balao + rabo + ate 5 caracteres em sete-segmentos
+// (o texto inteiro vai pro controle pareado via link).
+function drawSay() {
+    System.drawRoundRect(PX(4), PY(6), PW_(120), PH_(42), PW_(8), 0xFFFF);
+    System.fillTriangle(PX(28), PY(48), PX(40), PY(48), PX(33), PY(57), 0xFFFF);
+    var n = sayText.length;
+    var x0 = Math.round((PW - n * 14) / 2);
+    for (var i = 0; i < n; i++) drawSegDigit(x0 + i * 14, 14, sayText.charAt(i));
+}
+
 function draw() {
     System.fillScreen(0);
     var now = System.millis();
@@ -580,8 +985,12 @@ function draw() {
         drawPair();      // codigo de pareamento no lugar da cara
     } else if (voiceBusy) {
         drawVoice(now);  // ouvindo o comando / esperando a IA
+    } else if (now < sayUntil) {
+        drawSay();       // respondendo (dog_say)
     } else if (now < happyUntil) {
         drawHappy();
+    } else if (mood) {
+        drawMood(now);   // emocao corrente (love/angry/sad/sleepy/...)
     } else {
         drawEyes(now >= blinkUntil, 10);
         System.fillRect(PX(60), PY(36), PW_(8), PH_(3), 0xFFFF);
@@ -601,13 +1010,19 @@ if (hasLink) CelerLink.start("Celer-Dog", { pairing: true });
 // no vidro). pairShow fica aceso enquanto o handshake pendura.
 var pairShow = false, pairWas = false, pairCode = "";
 
-// Segmentos de cada digito (a=topo, b/c=dir, d=base, e/f=esq, g=meio)
+// Segmentos de cada digito (a=topo, b/c=dir, d=base, e/f=esq, g=meio) e
+// das letras que a fala do cao usa (OLA/SIM/NAO/87%...); M e Q nao dao
 var SEG = {
     0: "abcdef", 1: "bc", 2: "abdeg", 3: "abcdg", 4: "bcfg",
     5: "acdfg", 6: "acdefg", 7: "abc", 8: "abcdefg", 9: "abcdfg"
 };
+var SEG7 = {
+    A: "abcefg", B: "bcdef", C: "adef", D: "bcdeg", E: "adefg", F: "aefg",
+    G: "acdef", H: "bcefg", I: "bc", L: "def", N: "ceg", O: "abcdef",
+    P: "abefg", R: "eg", S: "acdfg", T: "defg", U: "bdef", Y: "bcdfg"
+};
 function drawSegDigit(x, y, ch) {
-    var on = SEG[ch - "0"] || SEG[8];
+    var on = SEG[ch - "0"] || SEG7[ch] || SEG[8];
     // celula 12x22 fisica, trilho 2px; horizontal no meio da largura
     if (on.indexOf("a") >= 0) System.fillRect(PX(x + 2), PY(y), PW_(8), PH_(2), 0xFFFF);
     if (on.indexOf("g") >= 0) System.fillRect(PX(x + 2), PY(y + 10), PW_(8), PH_(2), 0xFFFF);
@@ -695,14 +1110,16 @@ function handleMsg(m) {
     if (!m || !m.type) {
         // compat: forma antiga {cmd:"gait"|"stop"|"pet"|"info"}
         if (m && m.cmd === "gait") {
+            seqClear();
             if (startGait(String(m.name), !!m.repeat)) {
                 linkGait = !!m.repeat;
                 happyUntil = System.millis() + 800;
             }
         } else if (m && m.cmd === "stop") {
+            seqClear();
             stopGait();
         } else if (m && m.cmd === "pet") {
-            happyUntil = System.millis() + 1600;
+            setMood("happy", 1600);
         } else if (m && m.cmd === "info") {
             sendTel();
         }
@@ -713,6 +1130,7 @@ function handleMsg(m) {
             // O Remote repete o move a cada ~250 ms enquanto a seta esta
             // pressionada: a mesma gait em curso so renova o keepalive
             // (reiniciar no quadro 0 travaria o passo no meio).
+            seqClear();   // o D-pad manda: interrompe truque/sequencia
             var g = MOVE2GAIT[m.dir] || "walk";
             var same = gaitName === g && repeatGait && linkDrive;
             moveAt = System.millis();
@@ -722,10 +1140,17 @@ function handleMsg(m) {
             }
             break;
         case "stop":
+            seqClear();
             stopGait();
             break;
         case "pet":
-            happyUntil = System.millis() + 1600;
+            setMood("happy", 1600);
+            break;
+        case "trick":
+            // {"type":"trick","name":"dance"} — truque coreografado (o
+            // Remote 1.5 e a voz chamam pela mesma porta)
+            var tok = runTrick(m.name);
+            reply({ type: "trick_res", ok: !!tok, name: String(m.name || "") });
             break;
         case "gait":
             if (startGait(String(m.name), !!m.repeat)) {
@@ -790,10 +1215,14 @@ function cueVoice(ok) {
 }
 
 function voiceRing(on, err) {
-    // anel de LED: azul = ouvindo/pensando, vermelho = erro
-    var c = err ? 0xFF2000 : (on ? 0x0040FF : 0x000000);
-    System.neopixel(0, [c, c, c, c]);
-    System.neopixel(1, [c, c, c, c]);
+    // anel de LED: azul = ouvindo/pensando, vermelho = erro (os anims do
+    // repertorio 2.0 seguem no ledTick; aqui o quadro sai na hora)
+    setLeds(err ? "err" : (on ? "listen" : "off"));
+    if (on) {
+        var c = err ? LED_COLORS.err : LED_COLORS.listen;
+        System.neopixel(0, [c, c, c, c]);
+        System.neopixel(1, [c, c, c, c]);
+    }
 }
 
 // "sentar"/"deitar"/... -> gait. O fallback por palavra-chave cobre o caso
@@ -907,6 +1336,7 @@ function voiceTick(now) {
     // wake -> abre a janela (a task do detector descansa sozinha durante
     // a gravacao — micRecActive no firmware)
     if (!voiceBusy && (voiceErrorAt === 0 || now - voiceErrorAt > 2500) && WakeWord.poll()) {
+        if (seqActive()) { seqClear(); stopGait(); }   // "hi celer" corta a dancinha
         voiceBusy = true;
         voiceHeard = false;
         voiceQuietAt = 0;
@@ -1019,8 +1449,10 @@ while (true) {
 
     // sono: sem comando/toque e sem link = olhos fechados, servos soltos
     // (parado em pe o servo gasta corrente segurando), mic mais espacado
-    if (!sleeping && now - lastActivity > SLEEP_MS && !linkUp && !pairShow && !gait) {
+    if (!sleeping && now - lastActivity > SLEEP_MS && !linkUp && !pairShow && !gait && !seqActive()) {
         sleeping = true;
+        seqClear();
+        ledsOff();
         legsRelease();
     }
     if (sleeping && (linkUp || pairShow || happyUntil > now)) {
@@ -1041,6 +1473,13 @@ while (true) {
     if (now - battAt > 10000) {
         battAt = now;
         lastBatt = System.battery();
+        // primeira vez abaixo de 20%: ganido + cara triste (uma vez so;
+        // rearma acima de 25% — histerese contra o ruido do divisor)
+        if (battPct() < 20 && !battWarned) {
+            battWarned = true;
+            playBark("whine", 1);
+            setMood("sad", 2500);
+        } else if (battPct() > 25) battWarned = false;
     }
     // pad lido toda volta; a soltura so vale apos 2 leituras soltas
     // seguidas (um 0 espurio no meio do toque nao vira "carinho")
@@ -1067,9 +1506,13 @@ while (true) {
     voiceTick(now);
     if (voiceWalkUntil && now > voiceWalkUntil) {
         voiceWalkUntil = 0;
+        seqClear();
         stopGait();
     }
     linkTick(now);
+    if (mood && now > moodUntil) mood = "";
+    ledTick(now);
+    seqTick(now);   // sequenciador roda ANTES da gait: o passo move ja vale
     gaitTick(dt);
     // andando, o flush do OLED (~100 ms no I2C) entre as fases viraria
     // pausa extra no meio do passo: desenha so uma vez por ciclo
