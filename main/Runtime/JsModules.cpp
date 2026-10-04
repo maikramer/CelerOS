@@ -132,9 +132,13 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     duk_get_prop_string(ctx, 3, "exports");   // 5: exports (cache parcial)
     duk_put_prop_string(ctx, 2, mod);         // cache[mod] = exports
 
-    // compile: [name stash cache module(3) exports(4)] -> fn no topo
+    // compile: [name stash cache module(3) exports(4)] -> fn no topo.
+    // DUK_COMPILE_FUNCTION: o fonte E uma expressao de funcao. Com flags 0
+    // (programa) o Duktape le "function(" como DECLARACAO sem nome e lanca
+    // "SyntaxError: function name required" — todo require falhava no
+    // aparelho (o harness Node nao compila com o Duktape e nao via isso).
     duk_push_string(ctx, path);
-    duk_int_t rc = duk_pcompile_lstring_filename(ctx, 0, src, srcLen);
+    duk_int_t rc = duk_pcompile_lstring_filename(ctx, DUK_COMPILE_FUNCTION, src, srcLen);
     free(src);  // bytecode no heap: o fonte sai antes do eval
     if (rc != 0) {
         duk_del_prop_string(ctx, 2, mod);  // falha nao memoiza
