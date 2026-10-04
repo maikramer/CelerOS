@@ -1322,7 +1322,7 @@ function holdMoves(ms) {
     check('varios ciclos enquanto segura', count(q.FR, physAng('FR', -P - T)) >= 2, count(q.FR, physAng('FR', -P - T)) + ' ciclos');
     // tune ao vivo: P=30/T=20, ordem FR primeiro (unload BL a -30-20)
     check('tune responde e vale no proximo ciclo',
-          j.indexOf('[link] tx {"type":"tune","P":30,"T":20') >= 0 && at('BL', -30 - 20) >= 0 &&
+          j.indexOf('[link] tx {"type":"tune","lean":20,"P":30,"T":20') >= 0 && at('BL', -30 - 20) >= 0 &&
           at('FR', 30, at('BL', -30 - 20)) > 0);
     check('tune salvo em /local/dogtune.json', r.env.FS.exists('/local/dogtune.json') &&
           JSON.parse(r.env.FS.readTextFile('/local/dogtune.json')).P === 30);
@@ -1443,7 +1443,7 @@ function padSchedule(env, spans) {
     var j2 = joinLog(r2.log);
     var off = j2.indexOf('[servo-off] 14');
     check('sono solta os servos', off >= 0);
-    check('barulho acorda e retoma a pose', off >= 0 && j2.indexOf('[servo] 14@90', off) > off);
+    check('barulho acorda e retoma a pose', off >= 0 && j2.indexOf('[servo] 14@' + D_NEU.BR, off) > off);
 })();
 
 (function() {

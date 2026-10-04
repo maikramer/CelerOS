@@ -44,22 +44,42 @@ function PH_(h) { return Math.round(h * 320 / PH); }
 //
 // PERNAS DO ESP-HI (2026-10): as perninhas plasticas foram trocadas pelas
 // do proprio ESP-Hi, entao a marcha dele tem de valer aqui 1:1 (e o modo
-// "esphi" virou o default). Nesta montagem um MESMO aumento de angulo move
-// as 4 patas pra FRENTE (fisica validada no cao no creep: putA com a>0 sobe
-// o angulo), logo a convencao ESP-Hi (FL/BR menor = frente) pede o SIGN
-// {-1,+1,+1,-1}. O SIGN antigo {+1,-1,-1,+1} espelhava a tabela inteira —
-// o "walk" empurrava pra tras e o sit fazia o papel do bow; aquele esphi
-// "que nao saia do lugar" da 1.2.x era isto, nao o pace.
+// "esphi" virou o default). A montagem DESTE corpo e POR LADO (bench
+// 2026-10-03: com o SIGN diagonal as 4 patas iam JUNTAS pra frente e pra
+// tras — tesoura simetrica, so balancava): nas esquerdas angulo MAIOR =
+// pata pra FRENTE, nas direitas angulo MENOR = pata pra FRENTE (o mesmo
+// espelho do firmware-irmao xiaozhi-pet, que aplica 180-angulo nos servos
+// DIREITOS). A convencao ESP-Hi (FL/BR menor = frente, FR/BL maior =
+// frente) pede entao o SIGN por lado {-1,-1,+1,+1} — com ele o pace sai
+// como no ESP-Hi: esquerdas balancam pra frente enquanto as direitas
+// varrem pra tras, e vice-versa (nunca as 4 juntas).
 //
 // CALIBRACAO: mande {"type":"calib"} pelo Celer Remote/nRF Connect — as
 // QUATRO patas (FL, FR, BL, BR, nessa ordem) devem ir 25 graus pra FRENTE
 // e voltar. Todas pra tras de uma vez = {"type":"tune","flip":true} (vale
 // pra creep, esphi e posturas); pata individual errada = inverta o SIGN
-// dela; ajuste NEUTRAL ate o cao ficar reto em pe.
+// dela; inclinacao de pe = {"type":"tune","lean":graus} (20 = postura do
+// ESP-Hi; 0 = perna vertical).
+// Postura de pe: NAO e perna vertical. A pose de instalacao do ESP-Hi
+// (servo_dog_installation) estica as pernas em linha com o corpo nos
+// extremos do servo (0/180); o neutro dele (70/110/110/70) fica 20 graus
+// antes da vertical — as 4 pernas INCLINADAS ~20 graus pra FRENTE (com a
+// montagem espelhada, o neutro de cada uma pende pro nariz). E nessa zona
+// que o pe redondo dele empurra: em pe reto o varredor dos dois lados
+// agarra e o corpo so torce (bench 2026-10-03: pace certo, zero deslocamento).
+// No nosso espelho por lado (esq sobe = frente): esquerdas 90+LEAN,
+// direitas 90-LEAN. LEAN e afinavel ao vivo: {"type":"tune","lean":0..40}.
+var LEAN = 20;   // inclinacao fisica pra frente (postura do ESP-Hi = 20)
+var NEUTRAL = { FL: 110, FR: 70, BL: 110, BR: 70 };   // = 90 +/- LEAN
+function setLean(l) {
+    LEAN = l;
+    NEUTRAL.FL = 90 + l; NEUTRAL.FR = 90 - l;
+    NEUTRAL.BL = 90 + l; NEUTRAL.BR = 90 - l;
+    if (!legsLimp) legsHold();   // ja reescreve a postura nova
+}
 var PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
 var KEYS = ["FL", "FR", "BL", "BR"];
-var NEUTRAL = { FL: 90, FR: 90, BL: 90, BR: 90 };   // trim por perna
-var SIGN = { FL: -1, FR: 1, BL: 1, BR: -1 };  // convencao ESP-Hi -> fisica
+var SIGN = { FL: -1, FR: -1, BL: 1, BR: 1 };  // convencao ESP-Hi -> fisica (POR LADO)
 var FLIP = 1;  // -1 = inverte a direcao fisica de TUDO (tune "flip", bancada)
 
 // API 10: servos moram no sub-objeto gpio (desligavel por Kconfig)
@@ -288,8 +308,8 @@ function calibrate() {
 
 // ---------------------------------------------- marcha centopeia ------
 // Convencao FISICA: a > 0 = pata pra FRENTE (rumo ao focinho), 0 = perna
-// vertical. FWD = SIGN (o flip global mora no put): putA com a>0 sobe o
-// angulo nas 4 pernas, como validado no cao desde o creep da 1.3.
+// vertical. FWD por perna (o flip global mora no put): putA com a>0 sobe o
+// angulo nas ESQUERDAS e desce nas DIREITAS — frente fisica por lado.
 //
 // Fisica da perna de 1 articulacao: altura do quadril = L * cos(a). Perna
 // vertical = mais comprida; inclinada = mais curta. Nao da pra "levantar"
@@ -409,6 +429,7 @@ function applyTune(t) {
     }
     if (t.flip === true) FLIP = -FLIP;   // alterna a direcao fisica de tudo
     else if (t.flip === 1 || t.flip === -1) FLIP = t.flip;
+    if (t.lean !== undefined) setLean(clampNum(t.lean, 0, 40, LEAN));
     if (t.mode && WALK_MODES.indexOf(t.mode) >= 0) walkMode = t.mode;
 }
 
@@ -416,7 +437,7 @@ function saveTune() {
     if (typeof FS === "undefined" || !FS.writeTextFile) return;
     try {
         FS.writeTextFile(TUNE_FILE, JSON.stringify({
-            legs: TUNE_LEGS,
+            legs: TUNE_LEGS, lean: LEAN,
             P: CREEP.P, T: CREEP.T, power: CREEP.power, tilt: CREEP.tilt,
             swing: CREEP.swing, order: CREEP.order, mode: walkMode, flip: FLIP
         }));
@@ -670,11 +691,12 @@ function handleMsg(m) {
             sendTel();
             break;
         case "tune":
-            // {"type":"tune","P":20,"T":25,"power":600,"tilt":180,"swing":240,
-            //  "order":["BL","FL","BR","FR"]} — vale no proximo ciclo e fica salvo
+            // {"type":"tune","lean":20,"flip":true,"P":20,"T":25,"power":600,
+            //  "tilt":180,"swing":240,"order":["BL","FL","BR","FR"]} — vale no
+            // proximo ciclo e fica salvo (lean/flip ja valem na hora)
             applyTune(m);
             saveTune();
-            reply({ type: "tune", P: CREEP.P, T: CREEP.T, power: CREEP.power,
+            reply({ type: "tune", lean: LEAN, P: CREEP.P, T: CREEP.T, power: CREEP.power,
                     tilt: CREEP.tilt, swing: CREEP.swing, order: CREEP.order, mode: walkMode,
                     flip: FLIP });
             break;
