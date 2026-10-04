@@ -1290,6 +1290,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"disconnect", js_linkDisconnect, 0},
         {"send", js_linkSend, 1},
         {"poll", js_linkPoll, 0},
+        {"sendSealed", js_linkSendSealed, 1},   // API 21: AES-GCM com o bond
+        {"pollSealed", js_linkPollSealed, 0},   // API 21: so selos autenticados
         {"status", js_linkStatus, 0},
         {"verify", js_linkVerify, 1},
         {"unpair", js_linkUnpair, 1},

@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 18
+### API Level: 21
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -557,7 +557,7 @@ Web server (file manager + web upload) state and toggle — live, no reboot.
 - **Returns:** lowercase hex MD5 of the string (same format as `FS.getFileMD5`). Kept for legacy data only — **do not use for passwords** (see `setPin` below).
 
 #### App permissions (`app.json` → runtime, F4)
-`"permissions": ["fs","net","gpio","system","mic"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, without `mic` no `Mic` (recording; API 19), and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, clock `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) are absent. Paths given to `FS` (and to `drawPNG`/`drawBMP`/`playWav`/`Net.download`) must be **canonical** under `/local` or `/sd`: no `//`, `.` or `..` (denied for every app). **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are always granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
+`"permissions": ["fs","net","gpio","system","mic"]` gates what the runtime registers for the app: without `fs` there is no `FS` object, without `net` no `Net`, without `gpio` no `System.gpio`, without `mic` no `Mic` (recording; API 19), and without `system` the device-affecting calls (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, clock `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) are absent. Paths given to `FS` (and to `drawPNG`/`drawBMP`/`playWav`/`Net.download`) must be **canonical** under `/local` or `/sd`: no `//`, `.` or `..` (denied for every app). **Apps without the field keep everything** (compat with the existing store); system apps (`"system": true`) are **not** an exception: they also get only what they declared and the owner granted — `"system": true` itself (grid order, removal protection) only counts with the `"system"` capability declared and granted. `FS.appData()` returns the app's private folder `/local/data/<packageName>/` (created on first call) — use it for scores and state instead of loose files in `/local`.
 
 #### `System.toast(message)` / `System.beep(freq, ms)`
 `toast` queues a system notification (shows immediately when the UI is live — `CELEROS_APP_TASK` — or when the app exits). `beep` plays a tone on the board's speaker output (blocking; 20–20000 Hz, up to 5000 ms). The CYD drives its speaker connector (GPIO26, on-board amplifier); the SmartDisplay feeds the on-board Nsiway NS4168 digital amplifier over I2S (a sine wave, softer than the CYD's square wave). Returns `false` on boards without a speaker.
@@ -1578,3 +1578,30 @@ Typical flow (Dog Face): `WakeWord.start()` at boot; on `poll() === true`
 ack with a beep, `Mic.start({ms: 3500})` to capture the command and send it
 to `AI.chat` with `tools` — the detector yields by itself during the
 recording.
+
+## 26. API Level 21 — Sealed messages on Celer Link
+
+Regular Celer Link messages (`send`/`poll`) are **not encrypted on the air**:
+code pairing authenticates who connects, but anyone nearby with a BLE
+sniffer can read the content. For short secrets — the WiFi password the
+Celer Remote sends to the robot, which has no keyboard — there is a sealed
+channel: AES-128-GCM with a key derived from the **code-pairing bond**
+(confidential and authenticated). Honest limit: whoever recorded the
+pairing itself knows the code and therefore the key; the seal protects the
+transfers made afterwards.
+
+#### `CelerLink.sendSealed(message)` (API 21)
+- **Parameters:** `message` (String or Object — an object becomes JSON), up to **209 bytes** (the seal takes nonce + tag).
+- **Returns:** Boolean — `false` without a verified connection or **without a bond with the peer** (the pair must have been code-paired; a peer without pairing has no key).
+- **Description:** Sends the message encrypted and authenticated to the connected peer. A message over the limit throws `RangeError`.
+
+#### `CelerLink.pollSealed()` (API 21)
+- **Returns:** String|null — the oldest sealed message **that authenticated** with the connected peer's bond (own queue of 2); `null` when empty.
+- **Description:** The regular `poll()` never delivers sealed frames, and a seal that does not verify is dropped by the firmware — so whatever comes out of here came from whoever paired. Use this channel to accept secrets: a `{type:"wifi"}` arriving through the regular `poll()` should be ignored.
+
+```js
+// robot: accept the credential only through the sealed channel
+var s = CelerLink.pollSealed();
+if (s) { var m = JSON.parse(s); if (m.type === "wifi") Net.wifiConnect(m.ssid, m.pass); }
+// controller: CelerLink.sendSealed({type: "wifi", ssid: ssid, pass: password});
+```

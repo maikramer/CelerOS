@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 20 — 216 funcoes.
+// API level 21 — 218 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -418,6 +418,10 @@ interface CelerLinkApi {
     disconnect(): any;
     send(mensagem?: number): any;
     poll(): any;
+    /** Envia a mensagem cifrada e autenticada ao peer conectado. Mensagem maior que o teto lança RangeError. (API 21) */
+    sendSealed(mensagem?: number): any;
+    /** O poll() comum nunca entrega quadros selados, e um selo que não confere é descartado pelo firmware — então o que sai daqui veio de quem pare (API 21) */
+    pollSealed(): any;
     status(): any;
     verify(codigo: number): any;
     unpair(id?: string): any;

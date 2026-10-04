@@ -141,7 +141,17 @@ bool s_initFail = false;
 SemaphoreHandle_t s_syncSem = nullptr;
 EventGroupHandle_t s_evt = nullptr;
 QueueHandle_t s_rxQueue = nullptr;
+QueueHandle_t s_sealedQueue = nullptr;  // mensagens seladas que autenticaram
 Msg s_rxScratch;  // so a task do host usa (pushRx)
+Msg s_sealScratch;  // idem (abertura do selo)
+
+// Quadro selado: 00 'S' 01 | nonce(12) | AES-128-GCM(texto) | tag(16).
+// O cabecalho e o AAD; JSON nunca comeca com 0x00, entao o quadro nao se
+// confunde com mensagem comum.
+constexpr uint8_t K_SEAL_HDR[3] = {0x00, 'S', 0x01};
+constexpr size_t K_SEAL_NONCE = 12;
+constexpr size_t K_SEAL_TAG = 16;
+constexpr int K_SEALED_DEPTH = 2;
 
 uint16_t s_chrValHandle = 0;  // handle da nossa caracteristica (GATT preenche)
 uint16_t s_pairValHandle = 0;  // handle da nossa char de pareamento
@@ -210,6 +220,10 @@ TickType_t deadlineIn(uint32_t ms) {
     return xTaskGetTickCount() + pdMS_TO_TICKS(ms) + 1;
 }
 
+bool sealKey(const uint8_t mac[6], uint8_t out[16]);
+bool sealAead(bool enc, const uint8_t key[16], const uint8_t* nonce, const uint8_t* in,
+              size_t inLen, uint8_t* out, size_t outCap, size_t* outLen);
+
 // Fila cheia descarta a mensagem MAIS ANTIGA: num controle remoto o
 // comando mais novo e o que importa. Roda so na task do host.
 void pushRx(const struct os_mbuf* om) {
@@ -219,6 +233,28 @@ void pushRx(const struct os_mbuf* om) {
     if (len == 0 || len > CelerLink::MAX_MSG) return;
     if (ble_hs_mbuf_to_flat(om, s_rxScratch.data, sizeof(s_rxScratch.data), &len) != 0) return;
     s_rxScratch.len = len;
+    // Quadro selado: abre com o bond do peer e vai para a fila propria —
+    // nunca para o poll() comum. Selo que nao autentica e descartado.
+    if (len >= sizeof(K_SEAL_HDR) + K_SEAL_NONCE + K_SEAL_TAG &&
+        memcmp(s_rxScratch.data, K_SEAL_HDR, sizeof(K_SEAL_HDR)) == 0) {
+        uint8_t key[16];
+        size_t plain = 0;
+        const uint8_t* nonce = s_rxScratch.data + sizeof(K_SEAL_HDR);
+        const uint8_t* ct = nonce + K_SEAL_NONCE;
+        const size_t ctLen = len - sizeof(K_SEAL_HDR) - K_SEAL_NONCE;
+        if (s_sealedQueue == nullptr || !sealKey(s_peerAddr, key) ||
+            !sealAead(false, key, nonce, ct, ctLen, s_sealScratch.data, sizeof(s_sealScratch.data), &plain)) {
+            ESP_LOGW(TAG, "mensagem selada descartada (sem bond ou selo invalido)");
+            return;
+        }
+        s_sealScratch.len = (uint16_t)plain;
+        if (xQueueSend(s_sealedQueue, &s_sealScratch, 0) != pdTRUE) {
+            static Msg dropS;
+            xQueueReceive(s_sealedQueue, &dropS, 0);
+            xQueueSend(s_sealedQueue, &s_sealScratch, 0);
+        }
+        return;
+    }
     if (xQueueSend(s_rxQueue, &s_rxScratch, 0) != pdTRUE) {
         static Msg drop;
         xQueueReceive(s_rxQueue, &drop, 0);
@@ -342,6 +378,42 @@ void sha256(const uint8_t* in, size_t n, uint8_t out[32]) {
     size_t olen = 0;
     psa_crypto_init();  // idempotente
     psa_hash_compute(PSA_ALG_SHA_256, in, n, out, 32, &olen);
+}
+
+// Chave do selo: SHA-256("celer-seal-v1" | chave do bond) -> 16 bytes. Chave
+// propria por finalidade: a do bond segue so para o desafio-resposta.
+bool sealKey(const uint8_t mac[6], uint8_t out[16]) {
+    uint8_t bond[K_BOND_KEY];
+    if (!bondFind(mac, bond)) return false;
+    static const char kLabel[] = "celer-seal-v1";
+    uint8_t buf[sizeof(kLabel) - 1 + K_BOND_KEY];
+    memcpy(buf, kLabel, sizeof(kLabel) - 1);
+    memcpy(buf + sizeof(kLabel) - 1, bond, K_BOND_KEY);
+    uint8_t h[32];
+    sha256(buf, sizeof(buf), h);
+    memcpy(out, h, 16);
+    return true;
+}
+
+// AES-128-GCM via PSA (o mbedTLS do IDF). enc=false confere a tag: falha
+// de autenticacao devolve false sem expor o texto.
+bool sealAead(bool enc, const uint8_t key[16], const uint8_t* nonce, const uint8_t* in,
+              size_t inLen, uint8_t* out, size_t outCap, size_t* outLen) {
+    psa_crypto_init();
+    psa_key_attributes_t a = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&a, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&a, 128);
+    psa_set_key_usage_flags(&a, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+    psa_set_key_algorithm(&a, PSA_ALG_GCM);
+    psa_key_id_t id = 0;
+    if (psa_import_key(&a, key, 16, &id) != PSA_SUCCESS) return false;
+    psa_status_t st = enc
+        ? psa_aead_encrypt(id, PSA_ALG_GCM, nonce, K_SEAL_NONCE, K_SEAL_HDR, sizeof(K_SEAL_HDR),
+                           in, inLen, out, outCap, outLen)
+        : psa_aead_decrypt(id, PSA_ALG_GCM, nonce, K_SEAL_NONCE, K_SEAL_HDR, sizeof(K_SEAL_HDR),
+                           in, inLen, out, outCap, outLen);
+    psa_destroy_key(id);
+    return st == PSA_SUCCESS;
 }
 
 // K a partir do codigo de 6 digitos e do desafio da conexao do pareamento
@@ -694,6 +766,7 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             if (ble_gap_adv_active()) ble_gap_adv_stop();  // 1 conexao por vez
             // Sessao nova: nada da conexao anterior vaza para esta.
             if (s_rxQueue != nullptr) xQueueReset(s_rxQueue);
+            if (s_sealedQueue != nullptr) xQueueReset(s_sealedQueue);
             s_pairFails = 0;
             s_pairPending = false;
             s_pairVerified = true;
@@ -895,7 +968,8 @@ bool CelerLink::ensureStarted() {
     s_syncSem = xSemaphoreCreateBinary();
     s_evt = xEventGroupCreate();
     s_rxQueue = xQueueCreate(RX_DEPTH, sizeof(Msg));
-    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr) {
+    s_sealedQueue = xQueueCreate(K_SEALED_DEPTH, sizeof(Msg));
+    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr) {
         ESP_LOGE(TAG, "sem memoria para as primitivas do link");
         s_initFail = true;
         return false;
@@ -1281,6 +1355,39 @@ bool CelerLink::send(const void* data, size_t len) {
     }
 }
 
+bool CelerLink::sendSealed(const void* data, size_t len) {
+    if (data == nullptr || len == 0 || len > MAX_SEALED) return false;
+    if (!s_started || !s_ready || !s_pairVerified) return false;
+    uint8_t key[16];
+    if (!sealKey(s_peerAddr, key)) {
+        ESP_LOGW(TAG, "sendSealed: sem bond com o peer (pareie por codigo)");
+        return false;
+    }
+    static uint8_t frame[MAX_MSG];  // so a task do app envia
+    memcpy(frame, K_SEAL_HDR, sizeof(K_SEAL_HDR));
+    uint8_t* nonce = frame + sizeof(K_SEAL_HDR);
+    esp_fill_random(nonce, K_SEAL_NONCE);
+    size_t ctLen = 0;
+    if (!sealAead(true, key, nonce, (const uint8_t*)data, len, nonce + K_SEAL_NONCE,
+                  sizeof(frame) - sizeof(K_SEAL_HDR) - K_SEAL_NONCE, &ctLen)) {
+        return false;
+    }
+    const bool ok = send(frame, sizeof(K_SEAL_HDR) + K_SEAL_NONCE + ctLen);
+    memset(frame, 0, sizeof(frame));
+    return ok;
+}
+
+bool CelerLink::pollSealed(void* buf, size_t cap, size_t* len) {
+    if (s_sealedQueue == nullptr) return false;
+    static Msg m;  // fora da pilha do app (so a task do app chama)
+    if (xQueueReceive(s_sealedQueue, &m, 0) != pdTRUE) return false;
+    size_t n = m.len < cap ? m.len : cap;
+    memcpy(buf, m.data, n);
+    memset(m.data, 0, sizeof(m.data));  // segredo nao fica na copia estatica
+    *len = n;
+    return true;
+}
+
 bool CelerLink::poll(void* buf, size_t cap, size_t* len) {
     if (s_rxQueue == nullptr) return false;
     static Msg m;  // fora da pilha do app (so a task do app chama poll)
@@ -1350,5 +1457,6 @@ void CelerLink::appReset() {
     ble_svc_gap_device_name_set(s_advName);
     s_rxDropped = 0;
     if (s_rxQueue != nullptr) xQueueReset(s_rxQueue);
+    if (s_sealedQueue != nullptr) xQueueReset(s_sealedQueue);
     advRestart();  // Phone Link volta ao ar (no-op sem ele)
 }

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 18
+### API Level: 21
 ### Nível de API: 13
 ---
 
@@ -760,7 +760,7 @@ reboot.
   (veja `setPin` abaixo).
 
 #### Permissões do app (`app.json` → runtime, F4)
-`"permissions": ["fs","net","gpio","system","mic"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio`, sem `mic` não existe `Mic` (gravação; API 19) e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, hora `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) ficam ausentes. Caminhos do `FS` (e de `drawPNG`/`drawBMP`/`playWav`/`Net.download`) precisam ser **canônicos** dentro de `/local` ou `/sd`: sem `//`, `.` ou `..` (negados para todos os apps). **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) sempre recebem tudo. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
+`"permissions": ["fs","net","gpio","system","mic"]` controla o que o runtime registra para o app: sem `fs` não existe objeto `FS`, sem `net` não existe `Net`, sem `gpio` não existe `System.gpio`, sem `mic` não existe `Mic` (gravação; API 19) e sem `system` as chamadas que afetam o aparelho (`restart`, `factoryReset`, `otaCheck/otaStart`, `openWifiSetup`, `web*`, `wifiConnect`, PIN `setPin/verifyPin/pinClear`, hora `setTimezone/setManualTime/set24hFormat/setNtpEnabled`) ficam ausentes. Caminhos do `FS` (e de `drawPNG`/`drawBMP`/`playWav`/`Net.download`) precisam ser **canônicos** dentro de `/local` ou `/sd`: sem `//`, `.` ou `..` (negados para todos os apps). **App sem o campo mantém tudo** (compatibilidade com a loja existente); apps de sistema (`"system": true`) **não** são exceção: também recebem só o que declararam e o dono concedeu — o próprio `"system": true` (ordem no grid, proteção contra remoção) só vale com a capability `"system"` declarada e concedida. `FS.appData()` devolve a pasta privada do app `/local/data/<packageName>/` (criada na primeira chamada) — use para recordes e estado em vez de arquivos soltos em `/local`.
 
 #### `System.toast(mensagem)` / `System.beep(freq, ms)`
 `toast` enfileira notificação do sistema (aparece na hora com a UI viva — `CELEROS_APP_TASK` — ou quando o app sai). `beep` toca um tom na saída de alto-falante da placa (bloqueante; 20–20000 Hz, até 5000 ms). A CYD aciona o conector de alto-falante (GPIO26, amplificador na placa, onda quadrada); a SmartDisplay alimenta o amplificador digital Nsiway NS4168 da placa via I2S (senoide, som mais suave). Devolve `false` em placa sem alto-falante.
@@ -1857,3 +1857,30 @@ Fluxo típico (Dog Face): `WakeWord.start()` no boot; ao ver `poll() ===
 true`, ack em beep, `Mic.start({ms: 3500})` para capturar o comando e
 enviá-lo ao `AI.chat` com `tools` — o detector cede sozinho durante a
 gravação.
+
+## 26. Nível de API 21 — Mensagens seladas no Celer Link
+
+As mensagens comuns do Celer Link (`send`/`poll`) **não são cifradas no ar**:
+o pareamento por código autentica quem conecta, mas qualquer um com um
+sniffer BLE por perto lê o conteúdo. Para segredos curtos — a senha do WiFi
+que o Celer Remote manda ao robô, que não tem teclado — há um canal selado:
+AES-128-GCM com uma chave derivada do **bond do pareamento por código**
+(confidencial e autenticado). Limite honesto: quem gravou o próprio momento
+do pareamento conhece o código e, portanto, a chave; o selo protege as
+transferências feitas depois.
+
+#### `CelerLink.sendSealed(mensagem)` (API 21)
+- **Parâmetros:** `mensagem` (String ou Object — objeto vira JSON), até **209 bytes** (o selo ocupa nonce + tag).
+- **Retorna:** Boolean — `false` sem conexão verificada ou **sem bond com o peer** (o par precisa ter sido pareado por código; peer sem pareamento não tem chave).
+- **Descrição:** Envia a mensagem cifrada e autenticada ao peer conectado. Mensagem maior que o teto lança `RangeError`.
+
+#### `CelerLink.pollSealed()` (API 21)
+- **Retorna:** String|null — a mensagem selada mais antiga **que autenticou** com o bond do peer conectado (fila própria de 2); `null` quando vazia.
+- **Descrição:** O `poll()` comum nunca entrega quadros selados, e um selo que não confere é descartado pelo firmware — então o que sai daqui veio de quem pareou. Use este canal para aceitar segredos: um `{type:"wifi"}` que chegue pelo `poll()` comum deve ser ignorado.
+
+```js
+// robô: aceita a credencial só pelo canal selado
+var s = CelerLink.pollSealed();
+if (s) { var m = JSON.parse(s); if (m.type === "wifi") Net.wifiConnect(m.ssid, m.pass); }
+// controle: CelerLink.sendSealed({type: "wifi", ssid: ssid, pass: senha});
+```

@@ -501,6 +501,17 @@ function drawHappy() {
     System.fillRoundRect(PX(52), PY(40), PW_(24), PH_(8), PH_(3), 0xFFFF);
 }
 
+// arco de cima (leque de WiFi) em segmentos, coordenadas do vidro 128x64:
+// sem apagar nada embaixo (a cara mora ali)
+function wifiArc(cx, cy, r) {
+    var px = cx + r * Math.cos(Math.PI * 1.20), py = cy + r * Math.sin(Math.PI * 1.20);
+    for (var a = 1.30; a <= 1.81; a += 0.10) {
+        var x = cx + r * Math.cos(Math.PI * a), y = cy + r * Math.sin(Math.PI * a);
+        System.drawLine(PX(px), PY(py), PX(x), PY(y), 0xFFFF);
+        px = x; py = y;
+    }
+}
+
 function drawStatus() {
     // bateria: canto superior DIREITO (deixa o alto-esquerdo limpo pra cara)
     if (lastBatt >= 0) {
@@ -516,6 +527,12 @@ function drawStatus() {
     }
     // link BLE: pontinho aceso quando conectado (esquerda da bateria)
     if (linkUp) System.fillCircle(PX(93), PY(6), PW_(2), 0xFFFF);
+    // internet: leque de WiFi (3 arcos + ponto) a esquerda do link
+    if (netUp) {
+        System.fillCircle(PX(74), PY(9), PW_(1), 0xFFFF);
+        wifiArc(74, 9, 4);
+        wifiArc(74, 9, 7);
+    }
     // saude dos servos: so aparece se algo falhar (canto alto-esquerdo)
     if (!SERVO || servoFails > 0) {
         System.fillRect(PX(3), PY(3), PW_(2), PH_(5), 0xFFFF);
@@ -627,10 +644,54 @@ var MOVE2GAIT = { up: "walk", down: "back", left: "left", right: "right" };
 
 function sendTel() {
     reply({ type: "tel", batt: lastBatt, mic: lastMic, state: gaitName || "stand",
-            sleep: sleeping, mode: walkMode, modes: MODES_OK });
+            sleep: sleeping, mode: walkMode, modes: MODES_OK,
+            wifi: canWifi, net: hasNet && Net.isConnected() });
+}
+
+// ---- WiFi pelo Celer Remote (API 21) ---------------------------------------
+// O cao nao tem teclado: o Remote pede a lista de redes que ELE ve
+// ({type:"wifi_scan"}, aberto — SSID nao e segredo) e manda a senha SELADA
+// (CelerLink.sendSealed: AES-GCM com a chave do pareamento). A credencial so
+// e aceita pelo pollSealed() — um {type:"wifi"} em texto aberto e ignorado.
+var hasNet = (typeof Net !== "undefined" && typeof Net.isConnected === "function");
+var netUp = false;  // internet no ar (icone na barra; relido a cada 2 s)
+var netAt = 0;
+var canWifi = hasLink && hasNet && typeof CelerLink.pollSealed === "function" &&
+              typeof Net.wifiConnect === "function" && typeof Net.wifiScan === "function";
+
+function wifiScanReply() {
+    if (!canWifi) { reply({ type: "wifi_list", nets: [], err: "sem suporte" }); return; }
+    stopGait();
+    var list = Net.wifiScan() || [];
+    list.sort(function (a, b) { return b.rssi - a.rssi; });
+    var nets = [], seen = {};
+    for (var i = 0; i < list.length; i++) {
+        var n = list[i];
+        if (!n.ssid || seen[n.ssid]) continue;
+        seen[n.ssid] = true;
+        nets.push([String(n.ssid).substring(0, 24), n.rssi, n.secure ? 1 : 0]);
+        // cabe numa mensagem do link (240 B) com folga para o envelope
+        if (JSON.stringify({ type: "wifi_list", nets: nets }).length > 220) { nets.pop(); break; }
+    }
+    reply({ type: "wifi_list", nets: nets });
+}
+
+function wifiApply(m) {
+    if (!canWifi || !m.ssid) return;
+    stopGait();
+    System.neopixel(0, [0x00A0A0, 0x00A0A0, 0x00A0A0, 0x00A0A0]);  // ciano: conectando
+    System.neopixel(1, [0x00A0A0, 0x00A0A0, 0x00A0A0, 0x00A0A0]);
+    var ok = Net.wifiConnect(String(m.ssid), String(m.pass || ""));  // salva + conecta (ate 15 s)
+    m.pass = null;
+    System.neopixel(0, [0, 0, 0, 0]);
+    System.neopixel(1, [0, 0, 0, 0]);
+    if (ok) { happyUntil = System.millis() + 1400; netUp = true; }
+    System.print("[wifi] " + m.ssid + ": " + (ok ? "conectado " + System.getIPAddress() : "falhou"));
+    reply({ type: "wifi_res", ok: !!ok, ssid: String(m.ssid), ip: ok ? System.getIPAddress() : "" });
 }
 
 function handleMsg(m) {
+    if (m && m.type === "wifi_scan") { wifiScanReply(); return; }
     if (!m || !m.type) {
         // compat: forma antiga {cmd:"gait"|"stop"|"pet"|"info"}
         if (m && m.cmd === "gait") {
@@ -885,12 +946,27 @@ function linkTick(now) {
         try { m = JSON.parse(msg); } catch (e) { m = null; }
         if (m) handleMsg(m);
     }
+    // canal selado: so credenciais autenticadas com o pareamento
+    if (canWifi) {
+        for (var q = 0; q < 2; q++) {
+            var sm = CelerLink.pollSealed();
+            if (sm === null || sm === undefined) break;
+            var sv = null;
+            try { sv = JSON.parse(sm); } catch (e2) { sv = null; }
+            sm = null;
+            if (sv && sv.type === "wifi") wifiApply(sv);
+        }
+    }
     // failsafe: link caiu ou o controle parou de repetir o move (soltou a
     // seta e o stop se perdeu) -> o robo nao sai andando sozinho
     if (linkDrive && (!linkUp || System.millis() - moveAt > MOVE_KEEPALIVE_MS)) {
         stopGait();
     } else if (linkGait && !linkUp) {
         stopGait();
+    }
+    if (hasNet && now - netAt > 2000) {
+        netAt = now;
+        netUp = !!Net.isConnected();
     }
     // telemetria periodica enquanto conectado (o remote mostra batt/state)
     if (linkUp) lastActivity = now;

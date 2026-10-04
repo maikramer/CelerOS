@@ -618,6 +618,7 @@ function makeEnv() {
     // firmware. __harness.setLink({conn,pairing,code}) simula os estados
     // do handshake; verify() aceita so o codigo corrente.
     var linkRx = [];
+    var linkSealedRx = [];  // API 21: mensagens seladas que "autenticaram"
     var linkConn = false, linkPairing = false, linkPairCode = '123456';
     env.CelerLink = {
         start: function(name, opts) {
@@ -635,6 +636,12 @@ function makeEnv() {
             return true;
         },
         poll: function() { return linkRx.length ? linkRx.shift() : null; },
+        // API 21: selo AES-GCM com o bond — no host so registra/entrega
+        sendSealed: function(m) {
+            log.push('[link] txs ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+            return true;
+        },
+        pollSealed: function() { return linkSealedRx.length ? linkSealedRx.shift() : null; },
         verify: function(code) { log.push('[link] verify ' + code); return linkPairing && code === linkPairCode; },
         unpair: function() { log.push('[link] unpair'); return true; },
         status: function() {
@@ -662,6 +669,7 @@ function makeEnv() {
         pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
         pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
         pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
+        pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
         pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
         typeLine: function(text) {
             // simula digitacao: 1 change por char + enter com o texto completo
@@ -1475,6 +1483,36 @@ function padSchedule(env, spans) {
     check('hold 5s nao e carinho nem troca de gait', j.indexOf('touch gait') < 0);
 })();
 
+
+// --- Dog Face (WiFi pelo Remote, API 21): credencial so pelo canal selado ---
+(function() {
+    console.log('Dog Face (WiFi selado pelo Remote):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.Net.isConnected = function() { return false; };
+        env.System.getIPAddress = function() { return '192.168.0.77'; };
+        env.Net.wifiConnect = function(ssid, pass) {
+            env.__harness.log.push('[net] wifiConnect ' + ssid + ' / ' + pass);
+            return ssid === 'CasaNet';
+        };
+        // em texto aberto: tem de ser IGNORADO (qualquer um no ar mandaria)
+        env.__harness.pushLink(['{"type":"wifi","ssid":"Intruso","pass":"x"}', '{"type":"wifi_scan"}']);
+        env.setTimeout(function() {
+            env.__harness.pushSealed(['{"type":"wifi","ssid":"CasaNet","pass":"segredo123"}']);
+        }, 400);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('wifi em texto aberto ignorado', j.indexOf('wifiConnect Intruso') < 0);
+    check('credencial selada conecta', j.indexOf('[net] wifiConnect CasaNet / segredo123') >= 0);
+    check('responde wifi_res com IP (sem ecoar a senha)',
+          j.indexOf('[link] tx {"type":"wifi_res","ok":true,"ssid":"CasaNet","ip":"192.168.0.77"}') >= 0 &&
+          j.split('segredo123').length === 2, j.slice(-400));
+    check('wifi_scan devolve a lista ordenada por sinal',
+          j.indexOf('[link] tx {"type":"wifi_list","nets":[["CasaNet",-50,1],["Vizinho",-70,0]]}') >= 0);
+    check('telemetria anuncia wifi', j.indexOf('"wifi":true') >= 0);
+})();
+
 // --- Celer Remote (hub_apps) --------------------------------------------------
 function holdFrames(x, y, n) {
     var f = [];
@@ -1508,6 +1546,51 @@ function holdFrames(x, y, n) {
     check('soltar a seta envia stop',
           j.indexOf('[link] tx {"type":"stop"}') > j.lastIndexOf('[link] tx {"type":"move"'));
     check('telemetria exibida', j.indexOf('batt 2340') >= 0);
+})();
+
+
+(function() {
+    console.log('Celer Remote (WiFi do robo, senha selada):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        var lg = env.__harness.log;
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        // robo simulado: tel com wifi; responde ao scan e a credencial selada
+        var telSent = false, listSent = false, resSent = false;
+        env.CelerLink.poll = function() {
+            var j = lg.join('\n');
+            if (!telSent) { telSent = true; return '{"type":"tel","batt":4100,"state":"stand","wifi":true,"net":false}'; }
+            if (!listSent && j.indexOf('tx {"type":"wifi_scan"}') >= 0) {
+                listSent = true;
+                return '{"type":"wifi_list","nets":[["CasaNet",-50,1],["Vizinho",-70,0]]}';
+            }
+            if (!resSent && j.indexOf('[link] txs ') >= 0) {
+                resSent = true;
+                return '{"type":"wifi_res","ok":true,"ssid":"CasaNet","ip":"192.168.0.77"}';
+            }
+            return null;
+        };
+        env.System.prompt = function(msg) {
+            lg.push('[prompt] ' + msg);
+            return msg.indexOf('senha') === 0 ? 'segredo123' : null;
+        };
+        env.__harness.tap(120, 80);                       // conecta no dog
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(215, 15);                       // botao WiFi
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(120, 85);                       // 1a rede da lista (CasaNet)
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('botao WiFi aparece com tel.wifi', j.indexOf('WiFi') >= 0);
+    check('pede o scan ao robo', j.indexOf('[link] tx {"type":"wifi_scan"}') >= 0);
+    check('lista as redes do robo', j.indexOf('* CasaNet') >= 0 && j.indexOf('Vizinho') >= 0);
+    check('pede a senha da rede escolhida', j.indexOf('[prompt] senha de CasaNet') >= 0);
+    check('senha vai SELADA (nunca pelo send comum)',
+          j.indexOf('[link] txs {"type":"wifi","ssid":"CasaNet","pass":"segredo123"}') >= 0 &&
+          !/\[link\] tx \{"type":"wifi","/.test(j));
+    check('mostra o IP do robo', j.indexOf('robo online: 192.168.0.77') >= 0, j.slice(-300));
 })();
 
 (function() {

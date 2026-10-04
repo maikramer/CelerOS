@@ -310,6 +310,8 @@ private:
     static duk_ret_t js_linkDisconnect(duk_context *ctx);
     static duk_ret_t js_linkSend(duk_context *ctx);
     static duk_ret_t js_linkPoll(duk_context *ctx);
+    static duk_ret_t js_linkSendSealed(duk_context *ctx);  // CelerLink.sendSealed (API 21)
+    static duk_ret_t js_linkPollSealed(duk_context *ctx);  // CelerLink.pollSealed (API 21)
     static duk_ret_t js_linkStatus(duk_context *ctx);
     static duk_ret_t js_linkVerify(duk_context *ctx);
     static duk_ret_t js_linkUnpair(duk_context *ctx);

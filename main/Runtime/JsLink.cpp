@@ -134,6 +134,58 @@ duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
     return 1;
 }
 
+static void throwSealedSize(duk_context* ctx) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "mensagem selada deve ter 1 a %d bytes", (int)CelerLink::MAX_SEALED);
+    duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+}
+
+// CelerLink.sendSealed(objOuString) -> bool (API 21): igual ao send, mas
+// AES-128-GCM com a chave do pareamento (CelerLink::sendSealed). Teto menor
+// (MAX_SEALED): o selo ocupa nonce + tag. false sem bond com o peer.
+duk_ret_t JSBindings::js_linkSendSealed(duk_context *ctx) {
+    char buf[CelerLink::MAX_MSG];
+    size_t len;
+    if (duk_is_object(ctx, 0) && !duk_is_callable(ctx, 0)) {
+        const char* json = duk_json_encode(ctx, 0);
+        if (json == nullptr) {
+            duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
+            return 0;
+        }
+        len = strlen(json);
+        if (len == 0 || len > CelerLink::MAX_SEALED) {
+            throwSealedSize(ctx);
+            return 0;
+        }
+        memcpy(buf, json, len);
+    } else {
+        const char* s = duk_require_lstring(ctx, 0, &len);
+        if (len == 0 || len > CelerLink::MAX_SEALED) {
+            throwSealedSize(ctx);
+            return 0;
+        }
+        memcpy(buf, s, len);
+    }
+    const bool ok = CelerLink::sendSealed(buf, len);
+    memset(buf, 0, sizeof(buf));  // segredo nao fica na pilha
+    duk_push_boolean(ctx, ok ? 1 : 0);
+    return 1;
+}
+
+// CelerLink.pollSealed() -> string | null (API 21): so mensagens seladas que
+// autenticaram com o bond do peer conectado. O poll() comum nunca as ve.
+duk_ret_t JSBindings::js_linkPollSealed(duk_context *ctx) {
+    char buf[CelerLink::MAX_MSG];
+    size_t len = 0;
+    if (!CelerLink::pollSealed(buf, sizeof(buf), &len)) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    duk_push_lstring(ctx, buf, (duk_size_t)len);
+    memset(buf, 0, sizeof(buf));
+    return 1;
+}
+
 duk_ret_t JSBindings::js_linkPoll(duk_context *ctx) {
     char buf[CelerLink::MAX_MSG];
     size_t len = 0;

@@ -17,7 +17,8 @@
 // requirePairing=false explicito). Acertos viram bond no NVS (ate 4 peers):
 // chave derivada do codigo + desafio; nas conexoes seguintes o central
 // responde a um desafio novo e entra direto — MAC falsificado nao passa.
-// Nao ha criptografia no ar: quem farejou o PAREAMENTO conhece o codigo.
+// Nao ha criptografia no ar nas mensagens comuns: quem farejou o PAREAMENTO
+// conhece o codigo. Segredos curtos (senha do WiFi) vao por sendSealed().
 //
 // O nome CelerLink e deste link; o protocola do celerctl e o HostLink
 // (main/USBDevice/HostLink.h).
@@ -88,6 +89,17 @@ public:
     static bool send(const void* data, size_t len);
     // Mensagem recebida; false = fila vazia. len recebe os bytes copiados.
     static bool poll(void* buf, size_t cap, size_t* len);
+
+    // Mensagem SELADA (API 21): AES-128-GCM com chave derivada do bond do
+    // pareamento por codigo — confidencial e autenticada contra quem so
+    // escuta o ar DEPOIS do pareamento (quem gravou o proprio pareamento
+    // conhece o codigo e, portanto, a chave). Para segredos curtos como a
+    // senha do WiFi. false sem bond com o peer (pareie por codigo antes).
+    static constexpr size_t MAX_SEALED = MAX_MSG - 3 - 12 - 16;  // hdr+nonce+tag
+    static bool sendSealed(const void* data, size_t len);
+    // Mensagem selada que AUTENTICOU com o bond do peer (fila propria: o
+    // poll() comum nunca ve quadros selados; selo invalido e descartado).
+    static bool pollSealed(void* buf, size_t cap, size_t* len);
 
     // Id do peer conectado ("" sem conexao).
     static void peerId(char* out, size_t cap);

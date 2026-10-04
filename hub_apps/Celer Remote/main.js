@@ -1,4 +1,4 @@
-// Celer Remote (API 11): controle remoto via Celer Link (Bluetooth).
+// Celer Remote (API 11; WiFi do robo com API 21): controle remoto via Celer Link (Bluetooth).
 // Escaneia CelerOS proximos, conecta e pilota com um D-pad na tela.
 // Mensagens JSON: {type:"move",dir} / {type:"stop"}; o lado do robo
 // responde com {type:"tel",...}.
@@ -93,17 +93,26 @@ var PAD = [
 ];
 var STOP_IDX = 4;
 var BACK = [0, 0, 64, 40];   // "< sair" no canto superior esquerdo
+var WIFI_BTN = [W - 64, 0, 64, 40];  // "WiFi" no canto superior direito (API 21)
 var MODE = [10, 254, W - 20, 30];  // troca a marcha do robo ({type:"mode"})
 var held = -1;
 var lastSend = 0;
 
+// Nota que sobrevive aos redesenhos da telemetria (chega a cada 1,5 s e
+// apagava na hora o "robo online: IP" do WiFi)
+var stickyNote = null, stickyUntil = 0;
+function stickNote(n, ms) { stickyNote = n; stickyUntil = System.millis() + (ms || 8000); }
+
 function drawCtrl(note) {
+    if (!note && stickyNote && System.millis() < stickyUntil) note = stickyNote;
     System.fillScreen(TH.bg);
     var st = CelerLink.status();
     txt("< sair", 8, 6, 1, TH.accent);
     var head = st.connected ? ((target && target.name) || st.peer || "?") : "desconectado";
     if (st.connected && st.rssi) head += "  " + st.rssi + " dBm";
-    txt(head.substring(0, 30), 60, 6, 1, st.connected ? TH.ok : TH.err);
+    var wifi = wifiAvailable();
+    txt(head.substring(0, wifi ? 16 : 30), 60, 6, 1, st.connected ? TH.ok : TH.err);
+    if (wifi) txt("WiFi", W - 44, 6, 1, tel.net ? TH.ok : TH.accent);  // verde = robo online
     var y2 = 6 + fh(1) + 4;
     if (note) txt(note, 8, y2, 1, TH.accent);
     else if (tel) txt("batt " + tel.batt + "  " + (tel.state || ""), 8, y2, 1, TH.textDim);
@@ -205,6 +214,100 @@ function reconnect() {
     return false;
 }
 
+// ---- WiFi do robo (API 21) -----------------------------------------------
+// O robo nao tem teclado: ele escaneia as redes que ELE ve e devolve a lista
+// ({type:"wifi_scan"} -> {type:"wifi_list"}); a senha vai SELADA
+// (CelerLink.sendSealed: AES-GCM com a chave do pareamento — no ar, quem nao
+// gravou o proprio pareamento nao le) e ele responde {type:"wifi_res"}.
+function wifiAvailable() {
+    return !!(tel && tel.wifi && typeof CelerLink.sendSealed === "function");
+}
+
+// Espera uma mensagem do tipo pedido (a telemetria segue atualizando).
+function waitMsg(type, ms) {
+    var t0 = System.millis();
+    while (System.millis() - t0 < ms) {
+        for (var k = 0; k < 8; k++) {
+            var m = CelerLink.poll();
+            if (m === null) break;
+            var v = null;
+            try { v = JSON.parse(m); } catch (e) {}
+            if (v && v.type === "tel") tel = v;
+            if (v && v.type === type) return v;
+        }
+        if (!CelerLink.status().connected) return null;
+        System.delay(50);
+    }
+    return null;
+}
+
+function wifiScreen(title, line, color) {
+    System.fillScreen(TH.bg);
+    center(title, 40, 2, TH.text);
+    if (line) center(line, 40 + fh(2) + 14, 1, color || TH.textDim);
+}
+
+// Fluxo inteiro; devolve a nota que volta para a tela do D-pad.
+function wifiSetup() {
+    wifiScreen("WiFi do robo", "procurando redes...", TH.accent);
+    if (!CelerLink.send({type: "wifi_scan"})) return "falha ao pedir o scan";
+    var res = waitMsg("wifi_list", 9000);
+    if (!res) return "robo nao respondeu ao scan";
+    var nets = res.nets || [];
+    var ROW = 30, y0 = 40 + fh(2) + 14, items = [];
+    System.fillScreen(TH.bg);
+    center("WiFi do robo", 10, 2, TH.text);
+    center(nets.length ? "toque na rede" : "nenhuma rede vista pelo robo", 10 + fh(2) + 4, 1, TH.textDim);
+    for (var i = 0; i < nets.length && items.length < 6; i++) {
+        var r = [10, y0 + items.length * (ROW + 4), W - 20, ROW];
+        items.push({ r: r, ssid: nets[i][0], secure: nets[i][2] === 1 });
+        System.fillRect(r[0], r[1], r[2], r[3], TH.card);
+        System.drawRect(r[0], r[1], r[2], r[3], TH.stroke);
+        txt((nets[i][2] ? "* " : "  ") + nets[i][0], 16, r[1] + (ROW - fh(1)) / 2, 1, TH.text);
+        txt(nets[i][1] + "", W - 44, r[1] + (ROW - fh(1)) / 2, 1, TH.textDim);
+    }
+    var other = [10, y0 + items.length * (ROW + 4), W - 20, ROW];
+    System.fillRect(other[0], other[1], other[2], other[3], TH.raised);
+    center("outra rede (digitar nome)", other[1] + (ROW - fh(1)) / 2, 1, TH.text);
+    var cancel = [10, H - 46, W - 20, 36];
+    System.fillRect(cancel[0], cancel[1], cancel[2], cancel[3], TH.card);
+    System.drawRect(cancel[0], cancel[1], cancel[2], cancel[3], TH.stroke);
+    center("cancelar", cancel[1] + (cancel[3] - fh(1)) / 2, 1, TH.text);
+
+    var ssid = null, secure = true, down = true;  // espera soltar o toque do botao
+    while (ssid === null) {
+        var tt = System.getTouch();
+        var pr = tt.touched && !down;
+        down = !!tt.touched;
+        if (pr) {
+            if (hit(tt, cancel)) return "WiFi: cancelado";
+            if (hit(tt, other)) {
+                var nm = System.prompt("nome da rede (SSID)", "", {nullOnCancel: true});
+                if (!nm) return "WiFi: cancelado";
+                ssid = nm;
+            }
+            for (var j = 0; j < items.length && ssid === null; j++) {
+                if (hit(tt, items[j].r)) { ssid = items[j].ssid; secure = items[j].secure; }
+            }
+        }
+        if (!CelerLink.status().connected) return "conexao perdida";
+        System.delay(30);
+    }
+    var pass = "";
+    if (secure) {
+        pass = System.prompt("senha de " + ssid, "", {mask: true, nullOnCancel: true});
+        if (pass === null || pass === undefined) return "WiFi: cancelado";
+    }
+    wifiScreen("WiFi do robo", "enviando (cifrado)...", TH.accent);
+    var ok = CelerLink.sendSealed({type: "wifi", ssid: ssid, pass: pass});
+    pass = null;
+    if (!ok) return "falha ao enviar (pareie de novo pelo codigo)";
+    wifiScreen("WiFi do robo", "robo conectando em " + ssid + "...", TH.accent);
+    var r2 = waitMsg("wifi_res", 25000);
+    if (!r2) return "sem resposta do robo";
+    return r2.ok ? "robo online: " + r2.ip : "robo nao conectou em " + ssid + " (senha?)";
+}
+
 // ---- sem Celer Link (placa sem BT) ---------------------------------------
 if (typeof CelerLink === "undefined") {
     System.fillScreen(TH.bg);
@@ -263,6 +366,16 @@ while (true) {
 
         if (press && hit(t, BACK)) {
             backToScan(null);
+            System.delay(30);
+            continue;
+        }
+
+        if (press && wifiAvailable() && hit(t, WIFI_BTN)) {
+            held = -1;
+            var wnote = wifiSetup();
+            wasDown = true;  // o toque que fechou o fluxo nao vira seta
+            stickNote(wnote, 8000);
+            if (mode === MODE_CTRL) drawCtrl(wnote);
             System.delay(30);
             continue;
         }
