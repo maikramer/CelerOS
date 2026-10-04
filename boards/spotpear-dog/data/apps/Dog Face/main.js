@@ -773,18 +773,67 @@ var TRICKS = {
     ]
 };
 
-function trickNames() {
-    var n = [];
-    for (var k in TRICKS) n.push(k);
-    return n;
+// "Super Truco" -> super_truco (mesma normalizacao da carga do arquivo)
+function trickKey(name) {
+    return String(name || "").toLowerCase().replace(/[^a-z0-9_]+/g, "_")
+               .replace(/^_+|_+$/g, "").substring(0, 16);
 }
 
 // Expandir truque pelo nome -> fila valida (ou null)
 function trickSteps(name, depth) {
-    var def = TRICKS[String(name || "").toLowerCase()];
-    if (def === undefined) return null;
-    var raw = typeof def === "function" ? def() : def;
-    return buildSeq(raw, SEQ_MAX_STEPS, (depth || 0) + 1);
+    name = trickKey(name);
+    var def = TRICKS[name];
+    if (def !== undefined) {
+        var raw = typeof def === "function" ? def() : def;
+        return buildSeq(raw, SEQ_MAX_STEPS, (depth || 0) + 1);
+    }
+    // truque do dono: so no nivel raiz (custom nao referencia custom — a
+    // carga e uma passada so e a ordem das chaves nao pode importar)
+    if (!depth && customTricks[name]) return customTricks[name];
+    return null;
+}
+
+// ---- truques que o dono ensina (/local/dogtricks.json) ----
+// {"super truco": [{do:"bark",kind:"woof"},{do:"pose",name:"lie",ms:400},...]}
+// Mesmo schema do sequenciador (e o que a LLM compoe no dog_sequence); os
+// nomes entram na tool dog_trick e no prompt, entao "hi celer, faz o super
+// truco" funciona. Criar/editar pelo celerctl (push) ou editor web e mandar
+// {"type":"tricks_reload"} pelo link — ou reboot.
+var TRICKS_FILE = "/local/dogtricks.json";
+var customTricks = {};
+function loadCustomTricks() {
+    customTricks = {};
+    if (typeof FS === "undefined" || !FS.exists || !FS.exists(TRICKS_FILE)) return;
+    var names = [];
+    try {
+        var t = JSON.parse(FS.readTextFile(TRICKS_FILE));
+        for (var name in t) {
+            // "Super Truco" -> super_truco (o dono fala/escreve como quiser)
+            var key = trickKey(name);
+            if (!key || TRICKS[key] !== undefined) continue;
+            // depth 1: dentro do custom so valem atos basicos e truques nativos
+            var seq = buildSeq(t[name], 20, 1);
+            if (seq && seq.length) { customTricks[key] = seq; names.push(key); }
+        }
+        if (names.length) System.print('[dog] truques do dono: ' + names.join(', '));
+    } catch (e) {
+        System.print('[dog] dogtricks.json invalido: ' + e);
+    }
+}
+loadCustomTricks();
+
+function trickNames() {
+    var n = [];
+    for (var k in TRICKS) n.push(k);
+    for (var c in customTricks) n.push(c);
+    return n;
+}
+
+// Lista para a telemetria: caber no frame do link (240 B) junto do resto
+function telTricks() {
+    var names = trickNames();
+    while (names.length && JSON.stringify(names).length > 96) names.pop();
+    return names;
 }
 
 function battPct() {
@@ -796,7 +845,7 @@ function battPct() {
 }
 
 function runTrick(name) {
-    name = String(name || "").toLowerCase();
+    name = trickKey(name);
     // bateria fraca recusa truque pesado com drama (e evita brownout)
     if (HEAVY_TRICKS.indexOf(name) >= 0 && battPct() < 15) {
         playBark("whine", 1);
@@ -1060,6 +1109,7 @@ var MOVE2GAIT = { up: "walk", down: "back", left: "left", right: "right" };
 function sendTel() {
     reply({ type: "tel", batt: lastBatt, mic: lastMic, state: gaitName || "stand",
             sleep: sleeping, mode: walkMode, modes: MODES_OK,
+            tricks: telTricks(),   // o Remote 1.5 monta a grade de truques com ela
             wifi: canWifi, net: hasNet && Net.isConnected() });
 }
 
@@ -1152,6 +1202,11 @@ function handleMsg(m) {
             var tok = runTrick(m.name);
             reply({ type: "trick_res", ok: !!tok, name: String(m.name || "") });
             break;
+        case "tricks_reload":
+            // dono atualizou /local/dogtricks.json: recarrega e devolve a lista
+            loadCustomTricks();
+            reply({ type: "tricks_res", names: trickNames() });
+            break;
         case "gait":
             if (startGait(String(m.name), !!m.repeat)) {
                 linkGait = !!m.repeat;
@@ -1225,8 +1280,10 @@ function voiceRing(on, err) {
     }
 }
 
-// "sentar"/"deitar"/... -> gait. O fallback por palavra-chave cobre o caso
-// do modelo responder texto em vez de tool_call (e o PT e o EN).
+// ---- fallback offline por palavra-chave ----
+// Cobre o modelo responder texto em vez de tool_call (e o PT/EN, com as
+// variantes acentuadas que o STT devolve). Casamento pelo texto mais longo
+// primeiro; truques/latidos/emocoes alem das posturas/marchas de sempre.
 var VOICE_GAITS = {
     sit: "sit", senta: "sit", sentar: "sit", sentado: "sit", "senta aí": "sit",
     lie: "lie", down: "lie", deita: "lie", deitar: "lie", deitado: "lie",
@@ -1237,12 +1294,36 @@ var VOICE_GAITS = {
     back: "back", tras: "back", recua: "back",
     stop: "stop", para: "stop", pare: "stop", passo: "stop", quieta: "stop"
 };
+var VOICE_TRICKS = {
+    "dança": "dance", "danca": "dance", "dançar": "dance", "dancar": "dance",
+    "dancinha": "dance", dance: "dance",
+    "giro": "spin", girar: "spin", gira: "spin", spin: "spin",
+    "patinha": "shake", shake: "shake", paw: "shake",
+    xixi: "pee", "xixizinho": "pee", pee: "pee",
+    "flexão": "pushup", "flexao": "pushup", pushup: "pushup", polichinelo: "pushup",
+    "olá": "hello", ola: "hello", hello: "hello", cumprimenta: "hello",
+    anima: "excited", animado: "excited", excited: "excited", festeja: "excited"
+};
+var VOICE_BARKS = {
+    late: "woof", bark: "woof", woof: "woof",
+    uiva: "howl", uivar: "howl", uivo: "howl", howl: "howl",
+    rosna: "growl", rosnar: "growl", growl: "growl",
+    "geme": "whine", ganir: "whine", whine: "whine", chora: "whine"
+};
+var VOICE_MOODS = {
+    feliz: "happy", happy: "happy",
+    "te amo": "love", love: "love",
+    bravo: "angry", brava: "angry", angry: "angry",
+    triste: "sad", sad: "sad",
+    sono: "sleepy", "com sono": "sleepy", sleepy: "sleepy",
+    curioso: "curious", alerta: "alert"
+};
 
 function voiceRunGait(cmd) {
     var name = VOICE_GAITS[String(cmd).toLowerCase()];
     System.print('[voz] comando "' + cmd + '" -> ' + (name || "desconhecido"));
     if (!name) return false;
-    if (name === "stop") { stopGait(); voiceWalkUntil = 0; return true; }
+    if (name === "stop") { seqClear(); stopGait(); voiceWalkUntil = 0; return true; }
     var cont = (name === "walk" || name === "back" || name === "left" || name === "right");
     if (startGait(name, cont)) {
         if (cont) voiceWalkUntil = System.millis() + VOICE_WALK_MS;
@@ -1252,14 +1333,146 @@ function voiceRunGait(cmd) {
     return false;
 }
 
+var VOICE_WORDS = null;
 function voiceFromText(t) {
     if (!t) return false;
-    t = t.toLowerCase();
-    var keys = [];
-    for (var k in VOICE_GAITS) keys.push(k);
-    keys.sort(function (a, b) { return b.length - a.length; });
-    for (var i = 0; i < keys.length; i++) {
-        if (t.indexOf(keys[i]) >= 0) return voiceRunGait(keys[i]);
+    t = String(t).toLowerCase();
+    if (!VOICE_WORDS) {
+        VOICE_WORDS = [];
+        function add(map, act) {
+            for (var k in map) VOICE_WORDS.push({ k: k, act: act, v: map[k] });
+        }
+        add(VOICE_TRICKS, "trick");
+        add(VOICE_BARKS, "bark");
+        add(VOICE_MOODS, "mood");
+        add(VOICE_GAITS, "gait");
+        VOICE_WORDS.sort(function (a, b) { return b.k.length - a.k.length; });
+    }
+    for (var i = 0; i < VOICE_WORDS.length; i++) {
+        var w = VOICE_WORDS[i];
+        if (t.indexOf(w.k) < 0) continue;
+        if (w.act === "trick") return runTrick(w.v);
+        if (w.act === "bark") { playBark(w.v, 1); setMood("happy", 1200); return true; }
+        if (w.act === "mood") return setMood(w.v, 4000);
+        return voiceRunGait(w.v);
+    }
+    return false;
+}
+
+// ---- ferramentas da LLM (voz 2.0) ----
+// A IA deixa de ser um seletor de 8 comandos e vira COREOGRAFA: compoe
+// sequencias de passos, escolhe latidos e emocoes e responde perguntas
+// com o dog_say. A telemetria viva vai no prompt (bateria/postura/marcha
+// e os truques que o dono ensinou), entao "tudo bem?" tem resposta em
+// UMA rodada, sem devolver tool result pro modelo.
+function voicePrompt() {
+    var p = "Voce e o Celercao, um cachorro robotico carismatico, brincalhao " +
+        "e um pouco dramatico. O audio e o dono falando com voce (portugues ou " +
+        "ingles). Telemetria: bateria " + battPct() + "%, postura " +
+        (gaitName || "stand") + ", marcha " + walkMode + ". ";
+    var customs = [];
+    for (var k in customTricks) customs.push(k);
+    if (customs.length) p += "Truques que o dono te ensinou: " + customs.join(", ") + ". ";
+    p += "Responda chamando EXATAMENTE UMA ferramenta. Pedido simples de " +
+        "movimento: dog_move ou dog_posture. Truque conhecido: dog_trick. " +
+        "Pedido com varios passos ou coreografia livre: dog_sequence (compoe " +
+        "os passos voce mesmo, criativo e ritmado). Reacao ou animo: dog_bark " +
+        "ou dog_emotion. Pergunta do dono (bateria, nome, como voce esta): " +
+        "dog_say com resposta curta e com graca (ate 60 caracteres). Audio " +
+        "vazio, ruido ou conversa sem pedido: nao chame nenhuma ferramenta.";
+    return p;
+}
+
+function voiceTools() {
+    var tricks = trickNames();   // nativos + do dono
+    return [
+        { type: "function", function: { name: "dog_move",
+          description: "Anda ou gira na direcao por um tempo",
+          parameters: { type: "object", properties: {
+              direction: { type: "string", enum: ["walk", "back", "left", "right"] },
+              ms: { type: "integer", description: "duracao em ms, 150 a 3000" }
+          }, required: ["direction"] } } },
+        { type: "function", function: { name: "dog_posture",
+          description: "Assume uma postura parado",
+          parameters: { type: "object", properties: {
+              pose: { type: "string", enum: ["stand", "sit", "lie", "stretch", "beg", "pee"] }
+          }, required: ["pose"] } } },
+        { type: "function", function: { name: "dog_trick",
+          description: "Executa um truque coreografado",
+          parameters: { type: "object", properties: {
+              name: { type: "string", enum: tricks }
+          }, required: ["name"] } } },
+        { type: "function", function: { name: "dog_sequence",
+          description: "Compoe uma coreografia livre de ate 10 passos, na ordem",
+          parameters: { type: "object", properties: {
+              steps: { type: "array", maxItems: 10, items: { type: "object" },
+                  description: 'passos: {do:"move",dir:"walk|back|left|right",ms} ' +
+                      '{do:"pose",name:"stand|sit|lie|stretch|beg|pee",ms} ' +
+                      '{do:"trick",name} {do:"bark",kind:"woof|yip|growl|whine|howl",n} ' +
+                      '{do:"leds",anim:"rainbow|happy|alert|heart|off"} ' +
+                      '{do:"emotion",mood:"happy|love|curious|sad|angry|sleepy|alert"} ' +
+                      '{do:"wait",ms} {do:"say",text:"ate 60 chars"}' }
+          }, required: ["steps"] } } },
+        { type: "function", function: { name: "dog_bark",
+          description: "Late: escolha o som que combina com a resposta",
+          parameters: { type: "object", properties: {
+              kind: { type: "string", enum: BARKS },
+              times: { type: "integer", description: "1 a 3" }
+          }, required: ["kind"] } } },
+        { type: "function", function: { name: "dog_emotion",
+          description: "Expressa uma emocao na cara e no anel de LED",
+          parameters: { type: "object", properties: {
+              mood: { type: "string", enum: MOODS }
+          }, required: ["mood"] } } },
+        { type: "function", function: { name: "dog_say",
+          description: "Responde o dono: frase curta no controle pareado e resumo no vidro",
+          parameters: { type: "object", properties: {
+              text: { type: "string", description: "ate 60 caracteres, portugues" }
+          }, required: ["text"] } } },
+        { type: "function", function: { name: "dog_stop",
+          description: "Para movimento/truque na hora",
+          parameters: { type: "object", properties: {} } } }
+    ];
+}
+
+// Despacho de UM tool_call: tudo passa pelo sequenciador (mesmos clamps
+// e interrupcoes dos truques).
+function voiceRunTool(call) {
+    if (!call || !call.name) return false;
+    var a = call.args || {};
+    if (call.name === "dog_move") {
+        var dir = WALKS[a.direction] ? String(a.direction) : "walk";
+        happyUntil = System.millis() + 900;
+        return runSeq(buildSeq([{ do: "move", dir: dir, ms: clampMs(a.ms, 1200) }], 4, 0), "voz:move");
+    }
+    if (call.name === "dog_posture") {
+        if (!POSES[a.pose]) return false;
+        happyUntil = System.millis() + 900;
+        return runSeq(buildSeq([{ do: "pose", name: String(a.pose), ms: 800 }], 4, 0), "voz:pose");
+    }
+    if (call.name === "dog_trick") return runTrick(a.name);
+    if (call.name === "dog_sequence") {
+        var seq = buildSeq(a.steps, 10, 0);
+        if (!seq.length) return false;
+        System.print('[voz] coreografia: ' + JSON.stringify(a.steps).substring(0, 200));
+        return runSeq(seq, "voz:sequencia");
+    }
+    if (call.name === "dog_bark") {
+        playBark(a.kind, a.times);
+        setMood("happy", 1500);
+        return true;
+    }
+    if (call.name === "dog_emotion") return setMood(a.mood, 4500);
+    if (call.name === "dog_say") {
+        if (!a.text) return false;
+        showSay(String(a.text));
+        return true;
+    }
+    if (call.name === "dog_stop") {
+        seqClear();
+        stopGait();
+        voiceWalkUntil = 0;
+        return true;
     }
     return false;
 }
@@ -1270,24 +1483,14 @@ function voiceRequest(audioB64) {
         var started = AI.chat({
             provider: "openrouter",
             messages: [
-                { role: "system", content: "Voce comanda um cachorro robotico. O audio e o dono falando um comando " +
-                  "(em portugues ou ingles). Responda SEMPRE chamando a ferramenta dog_command com um unico comando. " +
-                  "Se o audio estiver vazio, for so ruido ou nao for um pedido de movimento, use command none — " +
-                  "nunca invente um movimento." },
+                { role: "system", content: voicePrompt() },
                 { role: "user", content: [
                     { type: "input_audio", input_audio: { data: audioB64, format: "wav" } }
                 ]}
             ],
-            tools: [{ type: "function", function: {
-                name: "dog_command",
-                description: "Executa um comando de movimento no cachorro",
-                parameters: { type: "object", properties: {
-                    command: { type: "string",
-                               enum: ["sit", "lie", "stand", "stretch", "walk", "back", "stop", "none"] }
-                }, required: ["command"] }
-            } }],
+            tools: voiceTools(),
             tool_choice: "auto",
-            max_tokens: 150,
+            max_tokens: 400,   // sequencia composta e maior que um enum
             reasoning: { effort: "low" }
         }, function (r) {
             var done = false;
@@ -1298,7 +1501,7 @@ function voiceRequest(audioB64) {
                 tools: r && r.toolCalls, txt: r && r.content ? String(r.content).substring(0, 160) : null,
                 erro: r && r.error ? String(r.error).substring(0, 120) : null }));
             if (r && r.ok && r.toolCalls && r.toolCalls.length) {
-                done = voiceRunGait(r.toolCalls[0].args && r.toolCalls[0].args.command);
+                for (var i = 0; i < r.toolCalls.length && !done; i++) done = voiceRunTool(r.toolCalls[i]);
             }
             if (!done && r && r.ok) done = voiceFromText(r.content);
             voiceDone(done);

@@ -1345,7 +1345,7 @@ function holdMoves(ms) {
         env.__harness.setAiResponse({
             ok: true, status: 200, content: null,
             finishReason: 'tool_calls',
-            toolCalls: [{ id: 'c1', name: 'dog_command', args: { command: 'sit' } }],
+            toolCalls: [{ id: 'c1', name: 'dog_posture', args: { pose: 'sit' } }],
             raw: ''
         });
         // mic dirigido: fala (nivel 30) e depois silencio — o app encerra a
@@ -1361,8 +1361,10 @@ function holdMoves(ms) {
     check('wake word ligou no boot', j.indexOf('wake word "hi celer" ativo') >= 0, j.slice(0, 300));
     var req = r.env.__harness.aiChats[0] || '';
     check('input_audio + tools no payload', req.indexOf('input_audio') >= 0 &&
-          req.indexOf('dog_command') >= 0 && req.indexOf('"tool_choice":"auto"') >= 0,
+          req.indexOf('dog_sequence') >= 0 && req.indexOf('"tool_choice":"auto"') >= 0,
           req.slice(0, 250));
+    check('persona + telemetria no prompt', req.indexOf('Celercao') >= 0 &&
+          req.indexOf('bateria ') >= 0, req.slice(0, 300));
     check('mic abriu e fechou', r.env.__harness.mic.ms === 3500 && !r.env.__harness.mic.on,
           JSON.stringify(r.env.__harness.mic));
     // sentou: rampa termina na pose sit (FL/BR +30, FR/BL -30, raw com SIGN)
@@ -1371,6 +1373,105 @@ function holdMoves(ms) {
         return q[k].indexOf(rawAng(k, (k === 'FL' || k === 'BL') ? 30 : -30)) >= 0;
     }), JSON.stringify({ FL: q.FL.slice(-4), FR: q.FR.slice(-4),
                           BL: q.BL.slice(-4), BR: q.BR.slice(-4) }));
+})();
+
+// --- Dog Face (voz 2.0): a LLM coreografa (dog_sequence) e fala (dog_say) ----
+(function() {
+    console.log('Dog Face (voz 2.0: dog_sequence composto pela IA):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'c2', name: 'dog_sequence', args: { steps: [
+                { do: 'bark', kind: 'yip', n: 1 },
+                { do: 'pose', name: 'sit', ms: 500 },
+                { do: 'say', text: 'pronto chefe!' }
+            ] } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('coreografia aceita e logada', j.indexOf('[voz] coreografia:') >= 0 &&
+          j.indexOf('[dog] sequencia voz:sequencia: 3 passos') >= 0);
+    check('passo bark tocou o yip', j.indexOf('[wav] /local/apps/Dog Face/bark_yip.wav') >= 0);
+    check('passo pose sentou', q.FL.indexOf(rawAng('FL', 30)) >= 0);
+    check('passo say vai pro controle', j.indexOf('"type":"say","text":"pronto chefe!"') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (voz 2.0: clamps da sequencia):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        var steps = [{ do: 'moonwalk', ms: 9999 }];   // ato fora da whitelist
+        for (var i = 0; i < 15; i++) steps.push({ do: 'wait', ms: 3000 });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'c3', name: 'dog_sequence', args: { steps: steps } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    // 15 waits de 3 s: o teto total (12 s) deixa passar apenas 4 — e o
+    // 'moonwalk' e descartado sem derrubar nada
+    check('teto de duracao trunca a fila (4 passos)', j.indexOf('[dog] sequencia voz:sequencia: 4 passos') >= 0,
+          j.split('\n').filter(function(l) { return l.indexOf('sequencia voz:sequencia') >= 0; })[0]);
+})();
+
+// --- Dog Face (voz 2.0): truques do dono (/local/dogtricks.json) -------------
+(function() {
+    console.log('Dog Face (truques ensinaveis do dono):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.FS.writeTextFile('/local/dogtricks.json',
+            '{"Super Truco":[{"do":"bark","kind":"howl"},{"do":"pose","name":"lie","ms":400}]}');
+        env.__harness.pushLink(['{"type":"trick","name":"super truco"}',
+                                '{"type":"tricks_reload"}']);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('truque do dono carregado no boot', j.indexOf('truques do dono: super_truco') >= 0);
+    check('roda pelo nome falado/escrito', j.indexOf('[dog] sequencia trick:super_truco') >= 0);
+    check('trick_res do truque do dono', j.indexOf('"name":"super truco"') >= 0);
+    check('telemetria lista os truques', j.indexOf('"tricks":["dance",') >= 0);
+    check('tricks_reload devolve a lista', j.indexOf('"type":"tricks_res"') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (dogtricks.json corrompido nao derruba):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.FS.writeTextFile('/local/dogtricks.json', 'isto nao e json{');
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    check('avisa e segue', joinLog(r.log).indexOf('dogtricks.json invalido') >= 0);
+})();
+
+(function() {
+    console.log('Dog Face (voz 2.0: fallback offline acha a dancinha):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({ ok: true, status: 200, content: 'danca aí!', raw: '' });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(28);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    check('texto "dança" roda o truque', joinLog(r.log).indexOf('[dog] sequencia trick:dance') >= 0);
 })();
 
 // --- Dog Face (voz): sem tool_call cai no texto (PT: "deita") --------------
