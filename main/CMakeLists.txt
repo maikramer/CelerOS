@@ -70,6 +70,9 @@ if(CONFIG_CELEROS_WAKE_WORD)
          "Hardware/Wake/frontend/tensorflow/lite/experimental/microfrontend/lib/*.cc")
     list(APPEND CELEROS_SRCS "Hardware/WakeWord.cpp" "Runtime/JsWake.cpp"
          ${CELEROS_WAKE_FRONTEND})
+    # alocacoes pequenas do frontend na PSRAM (ver Hardware/Wake/psram_alloc.h)
+    set_source_files_properties(${CELEROS_WAKE_FRONTEND} PROPERTIES COMPILE_OPTIONS
+        "-include;${CMAKE_CURRENT_SOURCE_DIR}/Hardware/Wake/psram_alloc.h")
 endif()
 # esp_driver_usb_serial_jtag: so e puxado pelo SerialLink com
 # CELEROS_LINK_ON_USJ (dog); nas demais boards o linker descarta o driver

@@ -267,8 +267,12 @@ bool start() {
         s_feInited = false;
         return false;
     }
-    s_varArena = (uint8_t*)malloc(kVarArena);
-    s_arena = (uint8_t*)malloc(kTensorArena);  // PSRAM-eligible
+    // arenas na PSRAM: a de variaveis (1 KB) caia na RAM interna pelo
+    // SPIRAM_MALLOC_ALWAYSINTERNAL — a interna e o recurso escasso do cao
+    s_varArena = (uint8_t*)heap_caps_malloc(kVarArena, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_varArena == nullptr) s_varArena = (uint8_t*)malloc(kVarArena);
+    s_arena = (uint8_t*)heap_caps_malloc(kTensorArena, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_arena == nullptr) s_arena = (uint8_t*)malloc(kTensorArena);
     auto falhaArena = [&]() {
         free(s_arena);
         free(s_varArena);
