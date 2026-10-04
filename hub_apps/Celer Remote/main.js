@@ -1,4 +1,5 @@
-// Celer Remote (API 11; WiFi do robo com API 21): controle remoto via Celer Link (Bluetooth).
+// Celer Remote (API 11; WiFi do robo com API 21; truques + respostas com o
+// Dog Face 1.7+): controle remoto via Celer Link (Bluetooth).
 // Escaneia CelerOS proximos, conecta e pilota com um D-pad na tela.
 // Mensagens JSON: {type:"move",dir} / {type:"stop"}; o lado do robo
 // responde com {type:"tel",...}.
@@ -94,7 +95,10 @@ var PAD = [
 var STOP_IDX = 4;
 var BACK = [0, 0, 64, 40];   // "< sair" no canto superior esquerdo
 var WIFI_BTN = [W - 64, 0, 64, 40];  // "WiFi" no canto superior direito (API 21)
-var MODE = [10, 254, W - 20, 30];  // troca a marcha do robo ({type:"mode"})
+// Faixa inferior: marcha na metade esquerda ({type:"mode"}) e truques na
+// direita ({type:"trick"} — grade com o que o robo anunciou em tel.tricks)
+var MODE = [10, 254, 105, 30];
+var TRICKS = [125, 254, 105, 30];
 var held = -1;
 var lastSend = 0;
 
@@ -131,7 +135,13 @@ function drawCtrl(note) {
     if (tel && tel.mode && tel.modes && tel.modes.length > 1) {
         System.fillRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.card);
         System.drawRect(MODE[0], MODE[1], MODE[2], MODE[3], TH.stroke);
-        center("marcha: " + tel.mode + " (trocar)", MODE[1] + (MODE[3] - fh(1)) / 2, 1, TH.text);
+        center("marcha: " + tel.mode, MODE[1] + (MODE[3] - fh(1)) / 2, 1, TH.text);
+    }
+    // Truques que o ROBO anunciou (tel.tricks): robo velho/sem truques nao mostra
+    if (tel && tel.tricks && tel.tricks.length) {
+        System.fillRect(TRICKS[0], TRICKS[1], TRICKS[2], TRICKS[3], TH.raised);
+        System.drawRect(TRICKS[0], TRICKS[1], TRICKS[2], TRICKS[3], TH.stroke);
+        center("truques (" + tel.tricks.length + ")", TRICKS[1] + (TRICKS[3] - fh(1)) / 2, 1, TH.text);
     }
     center("soltar = parar", H - 8 - fh(1), 1, TH.textDim);
 }
@@ -308,6 +318,52 @@ function wifiSetup() {
     return r2.ok ? "robo online: " + r2.ip : "robo nao conectou em " + ssid + " (senha?)";
 }
 
+// ---- truques do cao ---------------------------------------------------------
+// Grade com os truques que o ROBO anunciou na telemetria (tel.tricks: os
+// nativos + os que o dono ensinou). Toque manda {type:"trick",name} e o
+// robo responde {type:"trick_res",ok} — ok:false = recusou (bateria fraca
+// recusa truque pesado com ganido: o robo faz drama, o controle conta).
+function trickScreen() {
+    var names = tel.tricks || [];
+    var ROW = 30, y0 = 40 + fh(2) + 14, items = [];
+    System.fillScreen(TH.bg);
+    center("truques do cao", 10, 2, TH.text);
+    center(names.length ? "toque para rodar" : "o cao nao listou truques",
+           10 + fh(2) + 4, 1, TH.textDim);
+    for (var i = 0; i < names.length && items.length < 6; i++) {
+        var r = [10, y0 + items.length * (ROW + 4), W - 20, ROW];
+        items.push({ r: r, name: names[i] });
+        System.fillRect(r[0], r[1], r[2], r[3], TH.card);
+        System.drawRect(r[0], r[1], r[2], r[3], TH.stroke);
+        txt(names[i], 16, r[1] + (ROW - fh(1)) / 2, 1, TH.text);
+    }
+    var back = [10, H - 46, W - 20, 36];
+    System.fillRect(back[0], back[1], back[2], back[3], TH.card);
+    System.drawRect(back[0], back[1], back[2], back[3], TH.stroke);
+    center("voltar", back[1] + (back[3] - fh(1)) / 2, 1, TH.text);
+
+    var down = true;   // espera soltar o toque que abriu a tela
+    while (true) {
+        var tt = System.getTouch();
+        var pr = tt.touched && !down;
+        down = !!tt.touched;
+        if (pr) {
+            if (hit(tt, back)) return null;
+            for (var q = 0; q < items.length; q++) {
+                if (!hit(tt, items[q].r)) continue;
+                var nm = items[q].name;
+                if (!CelerLink.send({ type: "trick", name: nm })) return "falha ao enviar " + nm;
+                drawCtrl("rodando " + nm + "...");
+                var res = waitMsg("trick_res", 6000);
+                if (!res) return nm + ": sem resposta";
+                return nm + (res.ok ? "!" : " recusou (bateria?)");
+            }
+        }
+        if (!CelerLink.status().connected) return "conexao perdida";
+        System.delay(30);
+    }
+}
+
 // ---- sem Celer Link (placa sem BT) ---------------------------------------
 if (typeof CelerLink === "undefined") {
     System.fillScreen(TH.bg);
@@ -364,6 +420,16 @@ while (true) {
             continue;
         }
 
+        if (press && tel && tel.tricks && tel.tricks.length && hit(t, TRICKS)) {
+            held = -1;
+            var tnote = trickScreen();
+            wasDown = true;  // o toque que fechou a grade nao vira seta
+            if (tnote) stickNote(tnote, 6000);
+            if (mode === MODE_CTRL) drawCtrl(tnote || null);
+            System.delay(30);
+            continue;
+        }
+
         if (press && hit(t, BACK)) {
             backToScan(null);
             System.delay(30);
@@ -401,6 +467,11 @@ while (true) {
             try { v = JSON.parse(m); } catch (e) {}
             if (v && v.type === "tel") {
                 tel = v;
+                redraw = true;
+            }
+            if (v && v.type === "say") {
+                // resposta do cao (voz 2.0: dog_say) — nota na tela
+                stickNote("cao: " + String(v.text || "").substring(0, 60), 6000);
                 redraw = true;
             }
         }

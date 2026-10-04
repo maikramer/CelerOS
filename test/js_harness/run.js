@@ -1807,10 +1807,11 @@ function holdFrames(x, y, n) {
         env.CelerLink.connect = function() { return true; };
         env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
         env.__harness.tap(120, 80);
-        // robo 1.4.1+: tel.modes com 2 funcionais -> botao aparece
+        // robo 1.4.1+: tel.modes com 2 funcionais -> botao aparece (metade
+        // esquerda da faixa inferior desde o 1.5.0)
         env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand","mode":"creep","modes":["creep","esphi"]}']);
         env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
-        env.__harness.tap(120, 268);
+        env.__harness.tap(60, 268);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
@@ -1830,12 +1831,72 @@ function holdFrames(x, y, n) {
         // as cegas — era assim que o esphi ficava salvo no dog
         env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand","mode":"creep"}']);
         env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
-        env.__harness.tap(120, 268);
+        env.__harness.tap(60, 268);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('sem tel.modes o botao nao aparece', j.indexOf('marcha:') < 0);
     check('nenhum mode sai do remote', j.indexOf('[link] tx {"type":"mode"') < 0);
+})();
+
+// --- Celer Remote 1.5: grade de truques + respostas do cao (say) --------------
+(function() {
+    console.log('Celer Remote (truques do cao + resposta say):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        var lg = env.__harness.log;
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        // robo simulado: tel com truques (nativos + um do dono), trick_res
+        // depois do pedido e uma resposta dog_say chegando por ultimo
+        var telSent = false, resSent = false, said = false;
+        env.CelerLink.poll = function() {
+            var j = lg.join('\n');
+            if (!telSent) {
+                telSent = true;
+                return '{"type":"tel","batt":4100,"state":"stand","tricks":["dance","shake","super_truco"]}';
+            }
+            if (!resSent && j.indexOf('tx {"type":"trick"') >= 0) {
+                resSent = true;
+                return '{"type":"trick_res","ok":true,"name":"dance"}';
+            }
+            if (resSent && !said) {
+                said = true;
+                return '{"type":"say","text":"Sim! Bateria 87%"}';
+            }
+            return null;
+        };
+        env.__harness.tap(120, 80);                    // conecta no dog
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(180, 268);                   // botao truques (metade direita)
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(120, 77);                    // 1o truque da grade (dance)
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('botao de truques com tel.tricks', j.indexOf('truques (3)') >= 0);
+    check('grade lista os truques do robo (incl. do dono)',
+          j.indexOf('dance') >= 0 && j.indexOf('super_truco') >= 0);
+    check('toque manda {type:trick} pelo nome', j.indexOf('[link] tx {"type":"trick","name":"dance"}') >= 0);
+    check('trick_res vira nota', j.indexOf('dance!') >= 0, j.slice(-300));
+    check('say do cao aparece na tela', j.indexOf('cao: Sim! Bateria 87%') >= 0);
+})();
+
+(function() {
+    console.log('Celer Remote (sem tel.tricks nao ha grade):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF', listening: false }; };
+        env.__harness.tap(120, 80);
+        env.__harness.pushLink(['{"type":"tel","batt":4100,"state":"stand"}']);   // robo 1.6: sem tricks
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(180, 268);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('sem tel.tricks o botao nao aparece', j.indexOf('truques (') < 0);
+    check('nenhum trick sai do remote', j.indexOf('[link] tx {"type":"trick"') < 0);
 })();
 
 (function() {
