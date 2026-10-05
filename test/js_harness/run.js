@@ -1336,6 +1336,12 @@ function dogTable(name) {
     return { FL: +m[1], FR: +m[2], BL: +m[3], BR: +m[4] };
 }
 var D_SIGN = dogTable('SIGN'), D_NEU = dogTable('NEUTRAL'), D_FWD = dogTable('FWD');
+// knobs do hop (defaults = oficial): lidos do fonte como SIGN/NEUTRAL/FWD
+var D_HOP = {};
+(function () {
+    var m = /var HOP = \{([^}]*)\}/.exec(DOG_SRC);
+    if (m) m[1].split(',').forEach(function (kv) { var p = kv.split(':'); D_HOP[p[0].trim()] = +p[1]; });
+})();
 var D_PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
 function rawAng(k, raw) { return Math.round(D_NEU[k] + D_SIGN[k] * raw); }
 function physAng(k, a) { return rawAng(k, D_FWD[k] * a); }
@@ -1353,13 +1359,13 @@ function holdMoves(ms) {
 }
 
 (function() {
-    console.log('Dog Face (marcha ESP-Hi, default das pernas do ESP-Hi):');
+    console.log('Dog Face (marcha ESP-Hi como modo explicito — default e o hop):');
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
         env.CelerLink.status = function() { return { connected: true }; };
         // seta segurada 2 s (move a cada 250 ms), depois SOME sem stop
-        // (stop perdido): o keepalive tem que parar o robo sozinho. Sem
-        // "mode" explicito: o esphi tem de ser o default do boot
-        var items = [];
+        // (stop perdido): o keepalive tem que parar o robo sozinho. O esphi
+        // agora e MODO explicito (o default do boot e o hop oficial)
+        var items = [[0, '{"type":"mode","walk":"esphi"}']];
         holdMoves(2000).forEach(function(it) { items.push([it[0] + 100, it[1]]); });
         items.push([6000, '{"cmd":"pet"}']);
         linkSchedule(env, items);
@@ -1409,6 +1415,66 @@ function holdMoves(ms) {
     var iFL = j.indexOf('[servo] 17@' + physAng('FL', 25)), iFR = j.indexOf('[servo] 13@' + physAng('FR', 25), iFL),
         iBL = j.indexOf('[servo] 18@' + physAng('BL', 25), iFR), iBR = j.indexOf('[servo] 14@' + physAng('BR', 25), iBL);
     check('calib FL,FR,BL,BR pra frente em ordem', iFL >= 0 && iFR > iFL && iBL > iFR && iBR > iBL);
+})();
+
+(function() {
+    console.log('Dog Face (tune de bancada: speed/trim):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        linkSchedule(env, [
+            [0, '{"type":"mode","walk":"esphi"}'],
+            [100, '{"type":"tune","speed":250}'],
+            [200, '{"type":"gait","name":"walk","repeat":false}'],
+            [4000, '{"type":"tune","trim":{"FL":5}}']
+        ]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('speed no reply do tune', j.indexOf('"speed":250') >= 0);
+    // ritmo nao muda trajetoria: a fase A do FL continua varrendo cru 20->-19
+    check('speed nao muda a trajetoria', seqHas(q.FL, rawRange('FL', 20, -19)));
+    // trim FL+5 (frente = angulo SOBE na esquerda): pose reescrita +5 so no FL
+    check('trim FL desloca so o FL pra frente', q.FL.indexOf(D_NEU.FL + 5) >= 0);
+    var tu = r.env.FS.exists('/local/dogtune.json') ? JSON.parse(r.env.FS.readTextFile('/local/dogtune.json')) : null;
+    check('tune salvo com speed e trim', !!tu && tu.speed === 250 && tu.trim && tu.trim.FL === 5);
+})();
+
+(function() {
+    console.log('Dog Face (marcha pulo: hop):');
+    var H = {};
+    DOG_SRC.match(/var HOP = \{([^}]*)\}/)[1].split(',').forEach(function (kv) {
+        var p = kv.split(':');
+        H[p[0].trim()] = +p[1];
+    });
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        linkSchedule(env, [
+            [0, '{"type":"gait","name":"hop","repeat":true}'],
+            [8000, '{"type":"stop"}'],
+            [10000, '{"type":"tune","hop":{"rear":40}}']
+        ]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    // coreografia: pronto encolhido (FL -prep, BL +rear) < [chute e abertura,
+    // ordem livre — com air<0 a dianteira LIDERA] < puxa (FL -pull)
+    var iP0 = j.indexOf('[servo] 17@' + physAng('FL', -H.prep));
+    var iR = j.indexOf('[servo] 18@' + physAng('BL', H.rear));
+    var iK = j.indexOf('[servo] 18@' + physAng('BL', -H.kick), iR);
+    var iF = j.indexOf('[servo] 17@' + physAng('FL', H.front), iR);
+    var iP = j.indexOf('[servo] 17@' + physAng('FL', -H.pull), Math.max(iK, iF));
+    check('sequencia pronto->chute/abre->puxa',
+          iP0 >= 0 && iR >= 0 && iK > iR && iF > iR && iP > Math.max(iK, iF));
+    check('repeat: varios chutes', count(q.BL, physAng('BL', -H.kick)) >= 2,
+          count(q.BL, physAng('BL', -H.kick)) + ' chutes');
+    check('stop volta ao neutro', allNeutralAtEnd(q));
+    check('reply do hop no tune', j.indexOf('"type":"hop"') >= 0 && j.indexOf('"rear":40') >= 0);
+    // hop e o padrao oficial: telemetria anuncia mode hop (o Remote so ecoa)
+    check('hop e o modo default anunciado', j.indexOf('"mode":"hop"') >= 0);
+    var tu = r.env.FS.exists('/local/dogtune.json') ? JSON.parse(r.env.FS.readTextFile('/local/dogtune.json')) : null;
+    check('hop salvo no dogtune', !!tu && tu.hop && tu.hop.rear === 40);
 })();
 
 (function() {
@@ -1647,10 +1713,10 @@ function padSchedule(env, spans) {
     });
     check('roda sem erro (pad)', r.err === null, r.err || '');
     var FRp = servoSeq(r.log, 13);
-    // walk default = esphi: fase A do FR comeca no raw F-S = +15 e varre -24
-    check('toque longo inicia walk (esphi)', FRp.indexOf(rawAng('FR', 15)) >= 0);
-    check('walk do pad segue sem link (sem keepalive)', count(FRp, rawAng('FR', 15)) >= 3,
-          count(FRp, rawAng('FR', 15)) + ' ciclos');
+    // walk default = hop oficial: ciclo visita a abertura +front da FR
+    check('toque longo inicia walk (hop)', FRp.indexOf(physAng('FR', D_HOP.front)) >= 0);
+    check('walk do pad segue sem link (sem keepalive)', count(FRp, physAng('FR', D_HOP.front)) >= 3,
+          count(FRp, physAng('FR', D_HOP.front)) + ' ciclos');
 
     // parado e sem link: dorme apos 2 min e solta os servos; barulho acorda
     var r2 = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {

@@ -49,43 +49,62 @@ function PH_(h) { return Math.round(h * 320 / PH); }
 // (FL e BR "pra frente" = angulo menor; FR e BL = angulo maior).
 //
 // PERNAS DO ESP-HI (2026-10): as perninhas plasticas foram trocadas pelas
-// do proprio ESP-Hi, entao a marcha dele tem de valer aqui 1:1 (e o modo
-// "esphi" virou o default). A montagem DESTE corpo e POR LADO (bench
-// 2026-10-03: com o SIGN diagonal as 4 patas iam JUNTAS pra frente e pra
-// tras — tesoura simetrica, so balancava): nas esquerdas angulo MAIOR =
-// pata pra FRENTE, nas direitas angulo MENOR = pata pra FRENTE (o mesmo
-// espelho do firmware-irmao xiaozhi-pet, que aplica 180-angulo nos servos
-// DIREITOS). A convencao ESP-Hi (FL/BR menor = frente, FR/BL maior =
-// frente) pede entao o SIGN por lado {-1,-1,+1,+1} — com ele o pace sai
-// como no ESP-Hi: esquerdas balancam pra frente enquanto as direitas
-// varrem pra tras, e vice-versa (nunca as 4 juntas).
+// do proprio ESP-Hi. A convencao FISICA deste corpo (decidida na bancada
+// 2026-10-04 pelo repouso do hop: traseiras a 110/70 ficavam com os pes
+// pra TRAS): ESQUERDAS angulo menor = pata pra FRENTE, DIREITAS angulo
+// maior = pata pra FRENTE (SIDE abaixo). As observacoes anteriores (tesoura
+// com o SIGN diagonal; 2+2 com o por lado) nao distinguiam as leituras —
+// as duas batem com qualquer convencao que inverta FL/FR; o repouso
+// separou. Com isso o SIGN certo do C para ca e por EIXO {+1,+1,-1,-1} e o
+// pace do esphi pode voltar a ser calibrado (foi re-testado so com os
+// SIGNs errados).
 //
 // CALIBRACAO: mande {"type":"calib"} pelo Celer Remote/nRF Connect — as
 // QUATRO patas (FL, FR, BL, BR, nessa ordem) devem ir 25 graus pra FRENTE
 // e voltar. Todas pra tras de uma vez = {"type":"tune","flip":true} (vale
 // pra creep, esphi e posturas); pata individual errada = inverta o SIGN
-// dela; inclinacao de pe = {"type":"tune","lean":graus} (20 = postura do
-// ESP-Hi; 0 = perna vertical).
-// Postura de pe: NAO e perna vertical. A pose de instalacao do ESP-Hi
-// (servo_dog_installation) estica as pernas em linha com o corpo nos
-// extremos do servo (0/180); o neutro dele (70/110/110/70) fica 20 graus
-// antes da vertical — as 4 pernas INCLINADAS ~20 graus pra FRENTE (com a
-// montagem espelhada, o neutro de cada uma pende pro nariz). E nessa zona
-// que o pe redondo dele empurra: em pe reto o varredor dos dois lados
-// agarra e o corpo so torce (bench 2026-10-03: pace certo, zero deslocamento).
-// No nosso espelho por lado (esq sobe = frente): esquerdas 90+LEAN,
-// direitas 90-LEAN. LEAN e afinavel ao vivo: {"type":"tune","lean":0..40}.
-var LEAN = 20;   // inclinacao fisica pra frente (postura do ESP-Hi = 20)
-var NEUTRAL = { FL: 110, FR: 70, BL: 110, BR: 70 };   // = 90 +/- LEAN
-function setLean(l) {
-    LEAN = l;
-    NEUTRAL.FL = 90 + l; NEUTRAL.FR = 90 - l;
-    NEUTRAL.BL = 90 + l; NEUTRAL.BR = 90 - l;
+// dela. Postura = tune leanF/leanR por eixo (abaixo); trim individual =
+// tune "trim" (+ = frente, como o set_leg_offset do C); ritmo = tune
+// "speed" (20..250, default 80 do C).
+// Historico da postura (2026-10-03): a derivacao pelo fonte do ESP-Hi
+// (instalacao em linha a 0/180, neutro 70/110 = 20 graus antes da
+// vertical) dava as 4 pernas inclinadas ~20 graus pra frente; no nosso
+// corpo isso abaixava a frente e o hop caia DE BOCA — o repouso agora e
+// por EIXO (frente ereta). O pace do ESP-Hi com pernas inclinadas segue
+// documentado acima p/ quando a montagem das dobras em L for conferida.
+// Postura de REPOUSO por EIXO (bench 2026-10-04: frente toda inclinada pra
+// frente fazia o robo cair DE BOCA — repouso agora e frente ERETA): eixo
+// dianteiro vertical (leanF 0 = frente no maximo de altura) e traseiras
+// 20 graus pra frente (leanR 20, a postura do hop). O "lean" antigo seta os
+// dois eixos de uma vez (compat); leanF/leanR afinam cada um ao vivo:
+// {"type":"tune","leanF":0,"leanR":20}.
+// DIRECAO FISICA VALIDADA NA BANCADA (2026-10-04): nas ESQUERDAS angulo
+// MENOR = pata pra FRENTE; nas DIREITAS angulo MAIOR = pata pra FRENTE
+// (traseiras a 110/70 ficavam com os pes pra TRAS — o contrario do que se
+// lia na observacao antiga do "por lado", que nao distinguia qual par ia
+// pra onde). SIDE e o sinal de "frente" no angulo de cada perna.
+var SIDE = { FL: -1, FR: 1, BL: -1, BR: 1 };
+var LEAN = 20;   // legacy: tune "lean" inclina os dois eixos juntos
+var LEAN_F = 0;  // eixo dianteiro: inclinacao fisica pra frente (0 = vertical)
+var LEAN_R = 25; // eixo traseiro: inclinacao fisica pra frente (bancada: +5 p/ mais impulso no chute)
+var TRIM = { FL: 0, FR: 0, BL: 0, BR: 0 };  // trim por perna: + = pata pra frente (set_leg_offset do C)
+var NEUTRAL = { FL: 90, FR: 90, BL: 70, BR: 110 };   // = 90 + SIDE*(lean do eixo + TRIM)
+function applyStance() {
+    NEUTRAL.FL = 90 + SIDE.FL * (LEAN_F + TRIM.FL);
+    NEUTRAL.FR = 90 + SIDE.FR * (LEAN_F + TRIM.FR);
+    NEUTRAL.BL = 90 + SIDE.BL * (LEAN_R + TRIM.BL);
+    NEUTRAL.BR = 90 + SIDE.BR * (LEAN_R + TRIM.BR);
     if (!legsLimp) legsHold();   // ja reescreve a postura nova
 }
+function setLean(l) { LEAN = l; LEAN_F = l; LEAN_R = l; applyStance(); }
 var PIN = { FL: 17, FR: 13, BL: 18, BR: 14 };
 var KEYS = ["FL", "FR", "BL", "BR"];
-var SIGN = { FL: -1, FR: -1, BL: 1, BR: 1 };  // convencao ESP-Hi -> fisica (POR LADO)
+// SIGN converte a convencao do C (FL/BR menor = frente; FR/BL maior =
+// frente) para a fisica DESTE corpo (SIDE acima): +1/+1/-1/-1, POR EIXO.
+// Com o SIGN por lado das rodadas anteriores o pace girava sem andar —
+// as duas primeiras observacoes da bancada (tesoura e 2+2) nao distinguiam
+// as duas leituras; a traseira do repouso (2026-10-04) decidiu.
+var SIGN = { FL: 1, FR: 1, BL: -1, BR: -1 };
 var FLIP = 1;  // -1 = inverte a direcao fisica de TUDO (tune "flip", bancada)
 
 // API 10: servos moram no sub-objeto gpio (desligavel por Kconfig)
@@ -134,7 +153,12 @@ function legsRelease() {
 }
 
 // ---- tabelas do ESP-Hi ----
-var STEP_MS = 6;       // 500 / speed(80), arredondado pra baixo como no C
+// speed e o unico ritmo do produto (step_delay_ms = 500/speed, divisao
+// inteira como no C; 80 = default -> 6 ms/grau). Ao vivo:
+// {"type":"tune","speed":20..250} — vale na proxima fase e fica salvo.
+var SPEED = 80;
+var STEP_MS = 6;       // = 500 / SPEED
+function setSpeed(s) { SPEED = s; STEP_MS = (500 / s) | 0; }
 var STEP_N = 40;       // graus varridos por fase
 var PAUSE_MS = 50;     // pausa entre fases (andar pra frente/tras)
 var S = 5;             // STEP_OFFSET
@@ -242,17 +266,24 @@ function walking() { return gait !== null; }
 // default do ESP-Hi) e volta ao neutro.
 var cyclesLeft = 0;
 function startGait(name, repeat) {
-    if (!WALKS[name] && !POSES[name]) return false;
+    if (!WALKS[name] && !POSES[name] && name !== "hop") return false;
     linkDrive = false;
     linkGait = false;
     if (legsLimp) { legsLimp = false; legsHold(); }
-    if (WALKS[name]) {
+    if (WALKS[name] || name === "hop") {
         if (gait !== null && gaitName === name) {
             repeatGait = repeatGait || !!repeat;
             return true;  // mesma marcha em curso: nao reinicia o passo no meio
         }
-        // modo creep: quadros gerados a cada ciclo; esphi: tabelas do C
-        gait = walkMode === "creep" ? { frames: true, d: DIRS[name], list: null } : WALKS[name];
+        // hop: quadros do pulo (empina/abre/puxa/recolhe). Como MARCHA
+        // (walkMode hop): frente = hop, tras = hop reverso, giros = esphi
+        if (name === "hop") gait = { frames: true, hop: true, d: 1, list: null };
+        else if (walkMode === "hop") {
+            gait = (name === "walk") ? { frames: true, hop: true, d: 1, list: null }
+                : (name === "back") ? { frames: true, hop: true, d: -1, list: null }
+                : WALKS[name];
+        }
+        else gait = walkMode === "creep" ? { frames: true, d: DIRS[name], list: null } : WALKS[name];
         gaitPhase = 0;
         cyclesLeft = 2;
     } else {
@@ -262,8 +293,8 @@ function startGait(name, repeat) {
     }
     gaitName = name;
     repeatGait = !!repeat;
-    moveDir = (name === "walk") ? 1 : (name === "back" ? -1 :
-               (name === "left" ? -1 : (name === "right" ? 1 : null)));
+    moveDir = (name === "back" || name === "left") ? -1 :
+              (name === "walk" || name === "right" || name === "hop") ? 1 : null;
     return true;
 }
 
@@ -288,7 +319,7 @@ function gaitTick(dt) {
     }
     var len;
     if (gait.frames) {
-        if (gaitPhase === 0 || !gait.list) gait.list = creepFrames(gait.d);
+        if (gaitPhase === 0 || !gait.list) gait.list = gait.hop ? hopFrames(gait.d) : creepFrames(gait.d);
         runFrame(gait.list[gaitPhase]);
         len = gait.list.length;
     } else {
@@ -321,8 +352,8 @@ function calibrate() {
 
 // ---------------------------------------------- marcha centopeia ------
 // Convencao FISICA: a > 0 = pata pra FRENTE (rumo ao focinho), 0 = perna
-// vertical. FWD por perna (o flip global mora no put): putA com a>0 sobe o
-// angulo nas ESQUERDAS e desce nas DIREITAS — frente fisica por lado.
+// vertical. putA com a>0: esquerdas DESCem e direitas SOBem no angulo —
+// a frente fisica validada na bancada (SIDE), com o flip global no put.
 //
 // Fisica da perna de 1 articulacao: altura do quadril = L * cos(a). Perna
 // vertical = mais comprida; inclinada = mais curta. Nao da pra "levantar"
@@ -361,13 +392,16 @@ var DIRS = {
     left: { FL: -1, FR: 1, BL: -1, BR: 1 },    // lado direito empurra, esquerdo recua
     right: { FL: 1, FR: -1, BL: 1, BR: -1 }
 };
-var WALK_MODES = ["creep", "esphi"];
-// Marchas que o botao do Remote alterna (tel.modes). Default = esphi desde
-// a troca das perninhas pelas do ESP-Hi (a geometria dos pes dele e o que
-// faz o pace dele sair do lugar). O creep (centopeia, quase estatico) fica
-// como alternativa pra chao/peso que o pace nao agarar.
-var MODES_OK = ["esphi", "creep"];
-var walkMode = "esphi";
+var WALK_MODES = ["creep", "esphi", "hop"];
+// Marchas que o botao do Remote alterna (tel.modes — o Remote so ecoa a
+// lista do robo, nada de marcha endurecida no controle). Default = HOP
+// desde 2026-10-04: e a unica marcha VALIDADA no vidro com as pernas novas
+// (oficial plan_hop4 #13). Seta pra cima = hop; baixo = hop REVERSO
+// (coreografia negada); esquerda/direita = giros das tabelas esphi. O
+// esphi (pace do ESP-Hi, SIGN por eixo agora correto) e o creep ficam como
+// alternativas para re-calibrar.
+var MODES_OK = ["hop", "creep", "esphi"];
+var walkMode = "hop";
 var FRAME_STEP_MS = 10;
 
 function copyPose(p) { return { FL: p.FL, FR: p.FR, BL: p.BL, BR: p.BR }; }
@@ -399,25 +433,91 @@ function creepFrames(d) {
 }
 
 // Interpola da pose atual ate fr.p em fr.ms (bloqueante, passo de 10 ms,
-// guiado pelo relogio como o runPhase).
+// guiado pelo relogio como o runPhase). fr.dly opcional atrasa a partida
+// de pernas especificas DENTRO do quadro (a pata espera dly ms parada e
+// varre o restante ate o fim do quadro) — e o que faz a abertura das
+// dianteiras comecar milissegundos depois do INICIO do chute traseiro,
+// ainda no ar, em vez de esperar o chute acabar (bench: esperando, o robo
+// ja tinha pousado e a abertura arrastava no chao).
 function runFrame(fr) {
     var from = { FL: angA("FL"), FR: angA("FR"), BL: angA("BL"), BR: angA("BR") };
     var n = Math.max(1, Math.round(fr.ms / FRAME_STEP_MS));
     var t0 = System.millis();
     for (var i = 1; i <= n; i++) {
-        var f = i / n;
+        var t = i * FRAME_STEP_MS;
         for (var q = 0; q < KEYS.length; q++) {
             var k = KEYS[q];
+            var d = fr.dly && fr.dly[k] ? fr.dly[k] : 0;
+            var f = t <= d ? 0 : Math.min(1, (t - d) / (fr.ms - d));
             putA(k, from[k] + (fr.p[k] - from[k]) * f);
         }
-        var wait = t0 + i * FRAME_STEP_MS - System.millis();
+        var wait = t0 + t - System.millis();
         if (wait > 0) System.delay(wait);
     }
 }
 
+// ---------------------------------------------- marcha pulo (hop) ---------
+// Locomocao por DINAMICA, sem depender do ratchet do pe: o chute rapido
+// das traseiras empina o corpo, as dianteiras avancam no ar, na queda elas
+// ancoram la na frente e a puxada rapida arrasta o corpo (a familia do
+// servo_dog_jump_forward do C). Convencao FISICA (putA): + = pata pra
+// frente. Roda no motor de quadros do creep; a lista e refeita a cada
+// ciclo, entao o tune vale ja no pulo seguinte. Afinavel ao vivo:
+//   {"type":"tune","hop":{...}}
+//   prep   = angulo das DIANTEIRAS PRA TRAS na posicao inicial (o "pronto"
+//            encolhido: dianteiras tras + traseiras frente — bancada: da o
+//            coiled look sem abaixar demais o corpo; nao exagerar)
+//   rear   = angulo INICIAL das traseiras PRA FRENTE (mais range no chute;
+//            o "recolhe" do fim do ciclo volta pra aqui)
+//   kick   = ate onde atras as traseiras chicoteiam (o chute que empina)
+//   front  = quanto as dianteiras avancam no ar (varre de -prep ate +front)
+//   pull   = ate onde atras as dianteiras puxam o corpo
+//   msDeg  = velocidade dos movimentos (ms por grau; 0 = estalo no maximo)
+//   air    = defasagem da ABERTURA contra o chute traseiro. POSITIVO:
+//            dianteiras partem air ms DEPOIS do chute; NEGATIVO: partem
+//            |air| ms ANTES (bancada 2026-10-04: com 0 o conjunto parecia
+//            SEQUENCIAL — sob carga o traseiro aparece primeiro e a
+//            dianteira chegava atrasada; ela tem de LIDERAR. Default -50;
+//            plan_hop2 ja tinha mostrado que atrasos GRANDES perdem o ar)
+//   fall    = queda: hold ate o corpo descer sobre as dianteiras plantadas
+//   land    = POUSO: hold firme com as dianteiras plantadas pra frente
+//            antes do chute delas (contato garantido no chao)
+//   settle = espera pos-chute-dianteiro (corpo deslizando) antes de recolher
+//   rest   = REPOUSO no fim do ciclo (em pe, frente ereta): o corpo tem de
+//            tocar o chao e assentar ANTES do proximo chute (bench: sem
+//            isso o robo caia de bochecha no inicio do loop seguinte)
+// OFICIAL (plan_hop4 #13 + axugos 2026-10-04): 660 ms/ciclo; air -50
+// (dianteira lidera) e leanR 25 (traseiras do repouso 5 graus mais pra
+// frente — pedido da bancada). Esperas curtas DEMAIS plantavam bananeira.
+var HOP = { prep: 20, rear: 40, kick: 50, front: 40, pull: 35, msDeg: 0,
+            air: -50, fall: 120, land: 60, settle: 100, rest: 200 };
+
+function hopFrames(dir) {
+    var d = dir || 1;   // -1 = hop REVERSO (seta pra tras): coreografia espelhada
+    var b = HOP.prep, r = HOP.rear, k = HOP.kick, f = HOP.front, p = HOP.pull, m = HOP.msDeg;
+    function ms(deg, extra) { return Math.max(60, Math.round(m * deg) + (extra || 0)); }
+    // chute e abertura NUM quadro so. air < 0: dianteiras LIDERAM (o atraso
+    // cai nas traseiras); air > 0: traseiras na frente e abertura atrasada
+    var air = Math.round(HOP.air);
+    var abre = Math.abs(air) + Math.max(ms(r + k), ms(f + b));
+    var dly = null;
+    if (air > 0) dly = { FL: air, FR: air };
+    else if (air < 0) dly = { BL: -air, BR: -air };
+    return [
+        { p: { FL: -b * d, FR: -b * d, BL: r * d, BR: r * d }, ms: ms(r + b + 40) },               // pronto: encolhido
+        { p: { FL: -b * d, FR: -b * d, BL: -k * d, BR: -k * d }, dly: dly, ms: abre },             // CHUTE + ABRE no ar
+        { p: { FL: f * d, FR: f * d, BL: -k * d, BR: -k * d }, ms: HOP.fall + HOP.land },          // queda + pouso plantado
+        { p: { FL: -p * d, FR: -p * d, BL: -k * d, BR: -k * d }, ms: ms(f + p, HOP.settle) },      // CHUTE DIANTEIRO: puxa o corpo
+        { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: ms(k + 40) },                     // repouso: em pe (frente ereta)
+        { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: HOP.rest }                        // assenta antes do proximo ciclo
+    ];
+}
+
 // ---- ajuste ao vivo ({"type":"tune",...}) e persistencia ----
 var TUNE_FILE = "/local/dogtune.json";
-var TUNE_LEGS = "esphi";  // marca da calibracao vigente: trocou perna, arquivo velho nao vale
+// esphi4: hop OFICIAL plan_hop4 #13 (660 ms/ciclo) — descarta o dogtune da
+// sessao de testes (a ultima combinacao testada ficou salva)
+var TUNE_LEGS = "esphi4";
 
 function clampNum(v, lo, hi, dflt) {
     v = Number(v);
@@ -443,6 +543,29 @@ function applyTune(t) {
     if (t.flip === true) FLIP = -FLIP;   // alterna a direcao fisica de tudo
     else if (t.flip === 1 || t.flip === -1) FLIP = t.flip;
     if (t.lean !== undefined) setLean(clampNum(t.lean, 0, 40, LEAN));
+    if (t.speed !== undefined) setSpeed(clampNum(t.speed, 20, 250, SPEED));
+    if (t.trim) {
+        for (var q = 0; q < KEYS.length; q++) {
+            var tk = KEYS[q];
+            if (t.trim[tk] !== undefined) TRIM[tk] = clampNum(t.trim[tk], -15, 15, TRIM[tk]);
+        }
+        applyStance();
+    }
+    if (t.hop) {
+        HOP.prep = clampNum(t.hop.prep, 0, 40, HOP.prep);
+        HOP.rear = clampNum(t.hop.rear, 0, 50, HOP.rear);
+        HOP.kick = clampNum(t.hop.kick, 0, 60, HOP.kick);
+        HOP.front = clampNum(t.hop.front, 0, 50, HOP.front);
+        HOP.pull = clampNum(t.hop.pull, 0, 50, HOP.pull);
+        HOP.msDeg = clampNum(t.hop.msDeg, 0, 20, HOP.msDeg);
+        HOP.air = clampNum(t.hop.air, -200, 800, HOP.air);
+        HOP.fall = clampNum(t.hop.fall, 0, 1200, HOP.fall);
+        HOP.land = clampNum(t.hop.land, 0, 600, HOP.land);
+        HOP.settle = clampNum(t.hop.settle, 0, 800, HOP.settle);
+        HOP.rest = clampNum(t.hop.rest, 0, 2000, HOP.rest);
+    }
+    if (t.leanF !== undefined) { LEAN_F = clampNum(t.leanF, 0, 40, LEAN_F); applyStance(); }
+    if (t.leanR !== undefined) { LEAN_R = clampNum(t.leanR, 0, 40, LEAN_R); applyStance(); }
     if (t.mode && WALK_MODES.indexOf(t.mode) >= 0) walkMode = t.mode;
 }
 
@@ -450,7 +573,8 @@ function saveTune() {
     if (typeof FS === "undefined" || !FS.writeTextFile) return;
     try {
         FS.writeTextFile(TUNE_FILE, JSON.stringify({
-            legs: TUNE_LEGS, lean: LEAN,
+            legs: TUNE_LEGS, lean: LEAN, leanF: LEAN_F, leanR: LEAN_R,
+            speed: SPEED, trim: TRIM, hop: HOP,
             P: CREEP.P, T: CREEP.T, power: CREEP.power, tilt: CREEP.tilt,
             swing: CREEP.swing, order: CREEP.order, mode: walkMode, flip: FLIP
         }));
@@ -1110,6 +1234,7 @@ function sendTel() {
     reply({ type: "tel", batt: lastBatt, mic: lastMic, state: gaitName || "stand",
             sleep: sleeping, mode: walkMode, modes: MODES_OK,
             tricks: telTricks(),   // o Remote 1.5 monta a grade de truques com ela
+            tune: 1,               // anuncia painel de afino (Remote 1.6: air/leanR/esperas ao vivo)
             wifi: canWifi, net: hasNet && Net.isConnected() });
 }
 
@@ -1232,14 +1357,21 @@ function handleMsg(m) {
             sendTel();
             break;
         case "tune":
-            // {"type":"tune","lean":20,"flip":true,"P":20,"T":25,"power":600,
-            //  "tilt":180,"swing":240,"order":["BL","FL","BR","FR"]} — vale no
-            // proximo ciclo e fica salvo (lean/flip ja valem na hora)
+            // {"type":"tune","lean":20,"speed":80,"trim":{"FL":5},"flip":true,
+            //  "hop":{"rear":30,"kick":40,"msDeg":2},"P":20,"T":25,"power":600,
+            //  "tilt":180,"swing":240,"order":["BL","FL","BR","FR"]} — lean/
+            //  speed/trim/flip/hop ja valem na hora (postura/ritmo/pulo), o
+            //  resto no proximo ciclo; tudo fica salvo
             applyTune(m);
             saveTune();
             reply({ type: "tune", lean: LEAN, P: CREEP.P, T: CREEP.T, power: CREEP.power,
                     tilt: CREEP.tilt, swing: CREEP.swing, order: CREEP.order, mode: walkMode,
-                    flip: FLIP });
+                    flip: FLIP, speed: SPEED, trim: TRIM });
+            reply({ type: "hop", prep: HOP.prep, rear: HOP.rear, kick: HOP.kick,
+                    front: HOP.front, pull: HOP.pull, msDeg: HOP.msDeg,
+                    air: HOP.air, fall: HOP.fall, land: HOP.land,
+                    settle: HOP.settle, rest: HOP.rest });
+            reply({ type: "stance", leanF: LEAN_F, leanR: LEAN_R });
             break;
     }
 }
@@ -1291,6 +1423,7 @@ var VOICE_GAITS = {
     stand: "stand", levanta: "stand", levantar: "stand", em_pe: "stand", up: "stand",
     stretch: "stretch", alonga: "stretch", alongar: "stretch", bow: "stretch",
     walk: "walk", anda: "walk", andar: "walk", "vai": "walk", frente: "walk",
+    pula: "hop", pulo: "hop", salta: "hop", saltar: "hop", hop: "hop", empina: "hop",
     back: "back", tras: "back", recua: "back",
     stop: "stop", para: "stop", pare: "stop", passo: "stop", quieta: "stop"
 };
@@ -1324,7 +1457,8 @@ function voiceRunGait(cmd) {
     System.print('[voz] comando "' + cmd + '" -> ' + (name || "desconhecido"));
     if (!name) return false;
     if (name === "stop") { seqClear(); stopGait(); voiceWalkUntil = 0; return true; }
-    var cont = (name === "walk" || name === "back" || name === "left" || name === "right");
+    var cont = (name === "walk" || name === "back" || name === "left" ||
+                name === "right" || name === "hop");
     if (startGait(name, cont)) {
         if (cont) voiceWalkUntil = System.millis() + VOICE_WALK_MS;
         happyUntil = System.millis() + 900;
