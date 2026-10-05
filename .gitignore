@@ -43,3 +43,7 @@ negative_datasets/
 
 # telas tela-*.png que o `celerctl dev` deixa ao lado de cada app
 .dev/
+
+# CSVs de sweep do dogtune na raiz (saidas de bancada; os planos vivem
+# em tools/dog/)
+/*.csv
