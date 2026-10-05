@@ -1,0 +1,12 @@
+{
+  "name": "Gravador",
+  "packageName": "celeros.gravador",
+  "version": "1.0.0",
+  "api": 22,
+  "permissions": ["fs", "mic"],
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Gravador de voz do aparelho: grave pelo microfone (API 19), veja o nivel ao vivo num medidor de arco, salve os WAVs no espaco privado do app e escute de novo (playWav). Duracao ajustavel de 2 a 10 s.",
+  "changelog": "1.0.0 - primeiro lancamento: gravacao com medidor de nivel em fillArc (API 22) e arco de progresso, lista de gravacoes com tamanho, reproducao nativa e exclusao com confirmacao; em placa sem microfone o app explica e continua sendo um player"
+}

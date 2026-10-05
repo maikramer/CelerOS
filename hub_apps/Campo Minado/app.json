@@ -1,0 +1,12 @@
+{
+  "name": "Campo Minado",
+  "packageName": "celeros.minado",
+  "version": "1.0.0",
+  "api": 23,
+  "permissions": ["fs"],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "description": "Classico do campo minado: a primeira jogada sempre abre area limpa, bandeiras, atalho de acorde (numero com bandeiras certas abre os vizinhos), cronometro e melhor tempo por dificuldade salvo no aparelho.",
+  "changelog": "1.0.0 - primeiro lancamento; primeiro app da loja multi-arquivo (API 23): o motor do tabuleiro vive em board.js carregado via require, menu e controles no toolkit UI (API 22)"
+}
