@@ -12,9 +12,12 @@ HostFrame.h (test/cpp/run_tests.cpp) e pela bancada.
 import io
 import json
 import os
+import socket
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import zlib
 from contextlib import redirect_stderr
@@ -534,6 +537,228 @@ class TestStats(unittest.TestCase):
         with redirect_stderr(err), self.assertRaises(SystemExit):
             C._poll_stats(link)
         self.assertIn("firmware antigo", err.getvalue())
+
+
+# ---------------------------------------------------------------- bridge WiFi
+# Celer Debug Bridge: servidor TCP de verdade em 127.0.0.1 fazendo o
+# handshake do firmware (banner + AUTH por token) e casando com o FakeDevice
+# — valida o NetTransport do celerctl sem hardware.
+
+class SockSerial:
+    """FakeSerial conversando por socket: o reply() do device vira sendall."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.dev = None
+        self.port = "FAKE_TCP"
+        self.baudrate = None  # como o bridge: sem baud
+        self.timeout = 3.0
+        self.rx = b""
+
+    def write(self, data):
+        self.dev.on_bytes(data)
+        if self.rx:
+            out, self.rx = self.rx, b""
+            self.conn.sendall(out)
+        return len(data)
+
+    def read(self, n):
+        return self.conn.recv(n)
+
+    def reset_input_buffer(self):
+        pass
+
+    def close(self):
+        try:
+            self.conn.close()
+        except OSError:
+            pass
+
+
+class FakeBridge(threading.Thread):
+    """Espelho do main/USBDevice/DebugBridge.cpp: banner "CELERBRIDGE 1",
+    AUTH com 3 tentativas (NO/NO/ERR) e pipe binario para o FakeDevice."""
+
+    TOKEN = "tok12345"
+
+    def __init__(self, proto=2, chunk=4096, win=4):
+        super().__init__(daemon=True)
+        self.proto = proto
+        self.chunk = chunk
+        self.win = win
+        self.auth_fails = []
+        self.dev = None
+        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(2)
+        self.srv.settimeout(10.0)
+        self.port = self.srv.getsockname()[1]
+
+    def run(self):
+        try:
+            conn, _ = self.srv.accept()
+        except OSError:
+            return
+        with conn:
+            conn.sendall(f"CELERBRIDGE 1 test 127.0.0.1 {self.port}\n".encode())
+            if not self._auth(conn):
+                return
+            ser = SockSerial(conn)
+            dev = FakeDevice(ser, proto=self.proto, chunk=self.chunk, win=self.win)
+            ser.dev = dev
+            self.dev = dev
+            self._pipe(conn, ser)
+
+    def _auth(self, conn):
+        buf = b""
+        fails = 0
+        deadline = time.monotonic() + 5.0
+        conn.settimeout(0.25)
+        while time.monotonic() < deadline:
+            try:
+                data = conn.recv(64)
+            except socket.timeout:
+                continue
+            if not data:
+                return False
+            buf += data
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = line.decode().strip()
+                if text == f"AUTH {self.TOKEN}":
+                    conn.sendall(b"OK\n")
+                    return True
+                self.auth_fails.append(text)
+                fails += 1
+                if fails >= 3:
+                    conn.sendall(b"ERR\n")
+                    return False
+                conn.sendall(b"NO\n")
+        return False
+
+    def _pipe(self, conn, ser):
+        # frames chegam inteiros no loopback (1 sendall = 1 recv), mas o
+        # remontador custa pouco e cobre o caso de o kernel partir mesmo assim
+        pending = b""
+        first = True
+        conn.settimeout(10.0)
+        while True:
+            try:
+                data = conn.recv(65536)
+            except OSError:
+                return
+            if not data:
+                return
+            pending += data
+            while len(pending) >= 4:
+                (ln,) = struct.unpack("<H", pending[2:4])
+                v2 = (not first) and ser.dev.proto == 2
+                total = (8 if v2 else 4) + ln
+                if len(pending) < total:
+                    break
+                frame, pending = pending[:total], pending[total:]
+                first = False
+                ser.write(frame)
+
+
+class TestNetBridge(unittest.TestCase):
+
+    def setUp(self):
+        # cache de tokens num tmp: nao suja o ~/.config de quem roda o teste
+        self.tmp = tempfile.mkdtemp()
+        self.old_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = self.tmp
+        self.old_env_tok = os.environ.get("CELEROS_BRIDGE_TOKEN")
+        os.environ.pop("CELEROS_BRIDGE_TOKEN", None)
+
+    def tearDown(self):
+        if self.old_xdg is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self.old_xdg
+        if self.old_env_tok is not None:
+            os.environ["CELEROS_BRIDGE_TOKEN"] = self.old_env_tok
+
+    def start(self, **kw):
+        br = FakeBridge(**kw)
+        br.start()
+        return br
+
+    def test_endereco(self):
+        self.assertTrue(C.is_net_addr("192.168.0.10"))
+        self.assertTrue(C.is_net_addr("10.0.0.2:5555"))
+        self.assertFalse(C.is_net_addr("/dev/ttyUSB0"))
+        self.assertFalse(C.is_net_addr("K303AE"))  # serial-prefixo do S3
+        self.assertEqual(C.split_net_addr("192.168.0.10"), ("192.168.0.10", 5555))
+        self.assertEqual(C.normalize_net_addr("192.168.0.10"), "192.168.0.10:5555")
+
+    def test_token_cache(self):
+        addr = "192.168.0.10:5555"
+        C.save_token(addr, "cache123")
+        self.assertEqual(C.load_token_cache().get(addr), "cache123")
+        self.assertEqual(C.net_token(addr, prompt=False), "cache123")
+        os.environ["CELEROS_BRIDGE_TOKEN"] = "env123"
+        self.assertEqual(C.net_token(addr, prompt=False), "env123")  # env vence
+        os.environ.pop("CELEROS_BRIDGE_TOKEN", None)
+        with self.assertRaises(C.CelerError):
+            C.net_token("10.9.9.9:5555", prompt=False)  # sem cache, sem prompt
+
+    def test_auth_e_hello_proto2(self):
+        br = self.start()
+        link = C.HostLink(f"127.0.0.1:{br.port}", token=FakeBridge.TOKEN)
+        try:
+            ident = link.hello()
+            self.assertIn("proto 2", ident)
+            self.assertIn("win 4", ident)
+        finally:
+            link.close()
+
+    def test_token_errado_recusado(self):
+        br = self.start()
+        with self.assertRaises(C.CelerError) as ctx:
+            C.HostLink(f"127.0.0.1:{br.port}", token="token-errado")
+        self.assertIn("auth", str(ctx.exception))
+        self.assertEqual(br.auth_fails, ["AUTH token-errado"])
+
+    def test_banner_de_outro_servico(self):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        srv.settimeout(5.0)
+        port = srv.getsockname()[1]
+
+        def say_hi():
+            conn, _ = srv.accept()
+            conn.sendall(b"SSH-2.0-OpenSSH\r\n")
+            conn.close()
+
+        threading.Thread(target=say_hi, daemon=True).start()
+        with self.assertRaises(C.CelerError):
+            C.HostLink(f"127.0.0.1:{port}", token="x")
+        srv.close()
+
+    def test_push_e_pull_por_tcp(self):
+        br = self.start()
+        link = C.HostLink(f"127.0.0.1:{br.port}", token=FakeBridge.TOKEN)
+        try:
+            link.hello()
+            payload = os.urandom(9000)  # ~2 chunks com janela 4
+            src = tmpfile(payload)
+            link.write_file(src, "/local/arquivo.bin", progress=False)
+            self.assertEqual(br.dev.files["/local/arquivo.bin"], payload)
+            dest = os.path.join(self.tmp, "volta.bin")
+            link.read_file("/local/arquivo.bin", dest, progress=False)
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            link.close()
+
+    def test_sem_token_nao_pergunta_em_probe(self):
+        br = self.start()
+        # probe (devices): prompt=False -> falha limpa, sem travar no input()
+        self.assertIsNone(C.probe(f"127.0.0.1:{br.port}", fast=True))
 
 
 if __name__ == "__main__":

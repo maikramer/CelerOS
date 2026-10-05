@@ -1,12 +1,13 @@
-# celerctl — CelerOS USB/serial companion tool (adb-style)
+# celerctl — CelerOS USB/serial/WiFi companion tool (adb-style)
 
 **English** | [Português (BR)](README_USBTOOL.pt-BR.md)
 
 `celerctl.py` talks to the firmware over the **HostLink** channel: a light
 binary protocol that runs on the console UART — in practice, the CH340 that
 the PC sees as `/dev/ttyUSB*` — on CDC1 of native USB (`CONFIG_CELEROS_USB_NATIVE`,
-e.g. the Waveshare watch) or on the S3 USB-Serial/JTAG itself
-(`CONFIG_CELEROS_LINK_ON_USJ`, e.g. the SpotPear dog). One tool, every board.
+e.g. the Waveshare watch), on the S3 USB-Serial/JTAG itself
+(`CONFIG_CELEROS_LINK_ON_USJ`, e.g. the SpotPear dog) or over **TCP/WiFi**
+(the Celer Debug Bridge — `-p 192.168.x.y`). One tool, every board, cable or not.
 
 ## Wire protocol (proto 1 and 2)
 
@@ -48,7 +49,8 @@ pip install -r tools/requirements.txt   # pyserial (screencap needs Pillow)
 ## Commands
 
 ```bash
-python3 tools/celerctl.py devices            # list connected boards (+ USB serial)
+python3 tools/celerctl.py devices            # list connected boards (USB + WiFi)
+python3 tools/celerctl.py pair 192.168.0.50  # pair a WiFi bridge once (token)
 python3 tools/celerctl.py info               # version/board/heap/network/FS
 python3 tools/celerctl.py shell              # interactive shell (help)
 python3 tools/celerctl.py shell "ls /local"  # run and print
@@ -125,6 +127,43 @@ the proxy (even `kill -9`: the device drops the client when the host session
 idles out after 8s) or pulling the cable all detach and the app keeps
 running. Protocol and client are covered on the host by
 `node test/debug/run.js` (fake Duktape target).
+
+## WiFi: the Celer Debug Bridge (`-p IP`)
+
+Every board on WiFi speaks the **same HostLink protocol over TCP** — the
+Celer Debug Bridge (`main/USBDevice/DebugBridge.cpp`, Kconfig
+`CELEROS_DEBUG_BRIDGE`, default on; port 5555 for TCP and UDP, configurable).
+It comes up with the WiFi STA connection (and re-listens by itself after a
+reconnect), accepts **one client at a time** and hands the connection to a
+new HELLO exactly like a USB channel would. The watch keeps the radio on
+while a bridge session is active (PowerPolicy defers the idle WiFi-off).
+
+The connection is authenticated: after TCP connect the device sends
+`CELERBRIDGE 1 <board> <ip> <port>` and expects `AUTH <token>` (15 s window,
+3 wrong attempts close the socket); from the `OK` on, the socket is a pure
+HostLink pipe. The token lives in NVS (generated once) — read it on the
+device with the shell `bridge` command (or `celerctl info`, field
+`bridge.token`) and pair once:
+
+```bash
+python3 tools/celerctl.py pair 192.168.0.50        # asks for the token, saves it
+python3 tools/celerctl.py -p 192.168.0.50 info     # from now on: no cable
+python3 tools/celerctl.py -p 192.168.0.50 logcat
+python3 tools/celerctl.py -p 192.168.0.50 ota push build-x/CelerOS.bin  # OTA over the air
+python3 tools/celerctl.py -p 192.168.0.50 dev hub_apps/Celer Remote
+```
+
+Token resolution order: `--token`, env `CELEROS_BRIDGE_TOKEN`, the
+`celerctl pair` cache (`~/.config/celerctl/tokens.json`), then a prompt.
+`bridge reset` (device shell) rotates the token. Everything works over the
+bridge — shell, push/pull, logcat, `debug` (the local proxy select()s the
+socket directly), screencap/tap/swipe, `apps` and `dev`. Throughput is WiFi
+bound (no baud to negotiate: `-b` is a no-op).
+
+`celerctl devices` also discovers boards on the LAN: a `CELERPROBE1` UDP
+broadcast on port 5555, answered unicast with the same version line the
+HELLO carries (no token needed — it's the same public info). On networks
+with AP/client isolation the broadcast won't pass: use `-p IP` directly.
 
 ## Speeding up transfers (-b)
 

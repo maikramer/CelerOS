@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 r"""
-celerctl - ferramenta de depuracao/manutencao do CelerOS via USB (estilo adb).
+celerctl - ferramenta de depuracao/manutencao do CelerOS via USB ou WiFi (estilo adb).
 
 Conversa com o firmware pelo canal HostLink: na pratica a UART do CH340
-(USB do PC -> /dev/ttyUSB*) ou, em placas com USB nativo, a CDC1. Os opcodes
-sao lidos diretamente de main/USBDevice/HostLink.h para manter os dois
-lados em sincronia.
+(USB do PC -> /dev/ttyUSB*), a CDC1 nas placas de USB nativo, ou o Celer
+Debug Bridge por TCP/WiFi ("-p IP" — mesmos comandos, token de pareamento).
+Os opcodes sao lidos diretamente de main/USBDevice/HostLink.h para manter os
+dois lados em sincronia.
 
 Comandos:
-  devices [-l]                lista placas CelerOS conectadas
+  devices [-l]                lista placas CelerOS conectadas (USB e WiFi)
+  pair IP[:PORTA] [--token T] pareia com o bridge WiFi e guarda o token
   info                        versao/board/heap/rede/filesystems
   top [-w] [--sort cpu|stack|name]  profiling: CPU% por task em janela,
                               heap interna/PSRAM, consumo do app JS, fps
@@ -22,7 +24,7 @@ Comandos:
   pull REMOTO [LOCAL]         baixa arquivo do dispositivo
   reboot                      reinicia a placa
   logcat [--dump] [--ts] [--grep P]  logs: stream ao vivo ou copia o buffer (--dump)
-  ota push FW.bin [--no-reboot]  grava firmware pela serial (sem esptool)
+  ota push FW.bin [--no-reboot]  grava firmware pela conexao (sem esptool)
   coredump [--out ARQ]        baixa coredump ELF do ultimo crash nativo
   debug [APP] [--serve]       debugger Duktape: breakpoints, step, eval (REPL neste terminal)
   screencap [SAIDA.png]       captura da tela do dispositivo
@@ -41,6 +43,8 @@ Exemplos:
   python3 tools/celerctl.py shell ls /local
   python3 tools/celerctl.py -b 921600 push firmware.bin /sd/fw.bin
   python3 tools/celerctl.py dev hub_apps/Celer Remote
+  python3 tools/celerctl.py pair 192.168.0.50            # bridge WiFi (1x)
+  python3 tools/celerctl.py -p 192.168.0.50 ota push build-x/CelerOS.bin
 
 Dependencias: pyserial (pip install -r tools/requirements.txt)
 """
@@ -49,6 +53,7 @@ import argparse
 import json
 import os
 import re
+import select
 import socket
 import struct
 import sys
@@ -68,6 +73,7 @@ except ImportError:
 USB_VIDS = (0x303A, 0x1A86, 0x10C4)
 CHUNK = 4096  # tamanho maximo de payload HostLink (proto 1)
 DEFAULT_BAUD = 115200
+BRIDGE_PORT = 5555  # porta default do Celer Debug Bridge (TCP e UDP)
 FORCE_PROTO1 = False  # --proto 1: valida o caminho legado sem CRC/janela
 WIN_CAP = 0  # --win: teto manual da janela anunciada (OTA de firmware antigo)
 
@@ -108,8 +114,176 @@ def read_exact(ser, n, timeout):
     return buf
 
 
+# ------------------------------------------------- Celer Debug Bridge (WiFi)
+# O firmware hospeda o HostLink num servidor TCP (porta 5555): banner
+# "CELERBRIDGE 1 ..." + "AUTH <token>" e depois um pipe binario de frames.
+# Aqui embaixo vive so o transporte — o protocolo HostLink em cima e o mesmo
+# da serial. Descoberta: sonda UDP broadcast ("celerctl devices").
+
+def is_net_addr(s):
+    """"192.168.0.10" (porta default) ou "host:5555"."""
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", s):
+        return True
+    return bool(re.match(r"^[A-Za-z0-9._-]+:\d{1,5}$", s))
+
+
+def split_net_addr(addr):
+    host, _, port = addr.rpartition(":")
+    if not host or not port.isdigit():
+        return addr, BRIDGE_PORT
+    return host, int(port)
+
+
+def normalize_net_addr(addr):
+    if not is_net_addr(addr):
+        die(f"{addr} nao e um endereco do bridge (IP ou host:porta)")
+    host, port = split_net_addr(addr)
+    return f"{host}:{port}"
+
+
+def token_store_path():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return Path(base) / "celerctl" / "tokens.json"
+
+
+def load_token_cache():
+    try:
+        return json.loads(token_store_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_token(addr, token):
+    p = token_store_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        cache = load_token_cache()
+        cache[addr] = token
+        p.write_text(json.dumps(cache, indent=1, sort_keys=True))
+    except OSError:
+        pass  # cache e conveniencia: sem ele, --token/env continuam valendo
+
+
+def net_token(addr, prompt=True):
+    """Token do bridge: --token (caller) > env CELEROS_BRIDGE_TOKEN > cache."""
+    tok = os.environ.get("CELEROS_BRIDGE_TOKEN")
+    if tok:
+        return tok
+    tok = load_token_cache().get(addr)
+    if tok:
+        return tok
+    if not prompt:
+        raise CelerError(f"token do bridge ausente para {addr} (celerctl pair, "
+                         "--token ou env CELEROS_BRIDGE_TOKEN)")
+    try:
+        return input(f"token do bridge {addr} (comando 'bridge' no device): ").strip()
+    except EOFError:
+        raise CelerError(f"token do bridge ausente para {addr}") from None
+
+
+class NetTransport:
+    """Socket TCP com a aparencia do pyserial (duck-typed no lugar de ser).
+
+    Faz o handshake do bridge (banner + AUTH <token>) e vira pipe binario
+    de frames HostLink. O token vem de --token/env/cache — ou do terminal,
+    se interativo.
+    """
+
+    def __init__(self, addr, timeout=3.0, token=None, prompt=True):
+        host, port = split_net_addr(addr)
+        self.addr = f"{host}:{port}"
+        self.port = self.addr        # pyserial: identificador para reabrir
+        self.baudrate = None         # sem baud: o set_baud do HostLink pula
+        self._timeout = timeout
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            banner = self._line(timeout)
+            if not banner.startswith("CELERBRIDGE"):
+                raise CelerError(f"{addr} nao e um Celer Debug Bridge "
+                                 f"(banner: {banner!r})")
+            if token is None:
+                token = net_token(self.addr, prompt=prompt)
+            self.sock.sendall(f"AUTH {token}\n".encode())
+            resp = self._line(timeout)
+            if resp != "OK":
+                raise CelerError(f"auth do bridge recusada ({resp}): conferir o "
+                                 "token no device (shell 'bridge' ou celerctl info)")
+        except BaseException:
+            self.sock.close()
+            raise
+
+    def _line(self, timeout):
+        buf = b""
+        deadline = time.monotonic() + timeout
+        while b"\n" not in buf:
+            if time.monotonic() > deadline:
+                raise CelerError("timeout no handshake do bridge")
+            self.sock.settimeout(max(0.05, deadline - time.monotonic()))
+            chunk = self.sock.recv(64)
+            if not chunk:
+                raise CelerError("conexao fechada pelo device no handshake")
+            buf += chunk
+        return buf.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+
+    # ---- aparencia pyserial usada pelo HostLink
+    @property
+    def timeout(self):
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, v):
+        self._timeout = v
+        try:
+            self.sock.settimeout(v)
+        except OSError:
+            pass
+
+    def read(self, n=1):
+        try:
+            return self.sock.recv(n)  # pode voltar curto (stream), como a serial
+        except socket.timeout:
+            return b""                # mesma semantica do pyserial no timeout
+        except OSError as e:
+            # reset/refused viram SerialException: os handlers de reconexao
+            # e retry do celerctl ja sabem o que fazer com ela
+            raise serial.SerialException(f"bridge TCP: {e}") from None
+
+    def write(self, data):
+        try:
+            self.sock.sendall(data)
+        except socket.timeout:
+            raise CelerError("timeout escrevendo no bridge") from None
+        except OSError as e:
+            raise serial.SerialException(f"bridge TCP: {e}") from None
+
+    def reset_input_buffer(self):
+        try:
+            while self.in_waiting:
+                self.sock.recv(65536)
+        except OSError:
+            pass
+
+    @property
+    def in_waiting(self):
+        return 65536 if select.select([self.sock], [], [], 0)[0] else 0
+
+    def fileno(self):
+        return self.sock.fileno()
+
+    def setblocking(self, flag):
+        self.sock.setblocking(flag)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
 class HostLink:
-    """Cliente do protocolo HostLink sobre a CDC1 ou a UART do CH340.
+    """Cliente do protocolo HostLink sobre a CDC1, a UART do CH340 ou o
+    Celer Debug Bridge TCP/WiFi ("-p IP": banner+AUTH ficam no transporte).
 
     Dois formatos por sessao (ver main/USBDevice/HostFrame.h):
       proto 1: [43][cmd][len u16][payload]
@@ -125,8 +299,11 @@ class HostLink:
     # resposta esperada
     keep_push = False
 
-    def __init__(self, port, timeout=3.0, baud=DEFAULT_BAUD):
-        self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
+    def __init__(self, port, timeout=3.0, baud=DEFAULT_BAUD, token=None, prompt=True):
+        if is_net_addr(port):
+            self.ser = NetTransport(port, timeout=timeout, token=token, prompt=prompt)
+        else:
+            self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
         self.timeout = timeout
         self.push_queue = []  # frames nao-solicitados (logs) que chegaram no meio de um xfer
         # teto de espera por comando EXEC (saida grande = mais continuacoes)
@@ -509,9 +686,11 @@ class HostLink:
     def set_baud(self, baud):
         """Negocia a troca de baud e reabre a porta no novo valor.
 
-        Canais sem baud (CDC nativa do S3) respondem erro: vira aviso, a
-        sessao segue na velocidade do USB.
+        Canais sem baud (CDC nativa do S3, bridge TCP) respondem erro ou
+        nem sequer chegam aqui: vira aviso, a sessao segue como esta.
         """
+        if self.ser.baudrate is None:  # bridge TCP: nao existe baud
+            return
         try:
             self.xfer(KL["SET_BAUD"], struct.pack("<I", baud), retries=0)
         except CelerError as e:
@@ -647,6 +826,15 @@ def probe(port, fast=False):
     UART do device em baud alto (o restore so acontece no idle timeout).
     """
     t = 0.6 if fast else 1.5
+    if isinstance(port, str) and is_net_addr(port):
+        try:
+            link = HostLink(port, timeout=t, prompt=False)
+            try:
+                return link.hello()
+            finally:
+                link.close()
+        except (CelerError, OSError):
+            return None
     for baud in (DEFAULT_BAUD, 921600):
         try:
             link = HostLink(port.device, timeout=t, baud=baud)
@@ -676,16 +864,53 @@ def find_devices(verbose=False):
     return found
 
 
+def find_net_devices(timeout=1.5):
+    """Descobre CelerOS na LAN: sonda UDP broadcast do Celer Debug Bridge.
+
+    O device responde unicast "CELEROS <ver>|<board>|api N|proto 2|tcp P"
+    (o IP dele e o endereco de origem da resposta). Nao precisa de token —
+    a mesma informacao do HELLO, sem autenticacao.
+    """
+    found = {}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                sock.sendto(b"CELERPROBE1\n", ("255.255.255.255", BRIDGE_PORT))
+            except OSError:
+                pass  # interface sem broadcast (loopback only?): segue p/ recv
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            sock.settimeout(min(0.4, remaining))
+            try:
+                data, addr = sock.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            text = data.decode("utf-8", "replace").strip()
+            if text.startswith("CELEROS"):
+                found.setdefault(addr[0], text)
+    finally:
+        sock.close()
+    return sorted(found.items())
+
+
 def open_link(args):
     def try_open(port):
         """Abre e faz hello; cai para o baud alto se a sessao anterior
-        (<8s) ainda estiver viva no device."""
-        link = HostLink(port, timeout=3.0)
+        (<8s) ainda estiver viva no device (TCP nao tem baud: 1 tentativa)."""
+        link = HostLink(port, timeout=3.0, token=getattr(args, "token", None))
         try:
             link.hello()
             return link
-        except (CelerError, serial.SerialException):
+        except (CelerError, serial.SerialException, OSError):
             link.close()
+        if is_net_addr(port):
+            return None
         fallback = getattr(args, "baud", None) or 921600
         link = HostLink(port, timeout=3.0, baud=fallback)
         try:
@@ -702,11 +927,17 @@ def open_link(args):
             die(f"{args.port} nao responde ao protocolo HostLink")
     else:
         devices = find_devices()
-        if not devices:
-            die("nenhum CelerOS encontrado (usar -p PORTA para especificar)")
-        link = try_open(devices[0][0].device)
+        if devices:
+            link = try_open(devices[0][0].device)
+        else:
+            # sem USB: 1 device na LAN serve (varios: use -p IP)
+            net = find_net_devices()
+            if not net:
+                die("nenhum CelerOS encontrado (USB ou WiFi; usar -p PORTA/IP)")
+            link = try_open(f"{net[0][0]}:{BRIDGE_PORT}")
         if link is None:
-            die(f"{devices[0][0].device} nao responde ao protocolo HostLink")
+            die(f"{devices[0][0].device if devices else 'device'} nao responde "
+                "ao protocolo HostLink")
     if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD and link.ser.baudrate == DEFAULT_BAUD:
         link.set_baud(args.baud)
     if getattr(args, "exec_timeout", None):
@@ -722,8 +953,11 @@ def die(msg, code=1):
 # ------------------------------------------------------------------- comandos
 
 def resolve_port(selector):
-    """-p aceita caminho de porta OU prefixo do serial number USB (a MAC
-    "K..." que o firmware S3 define) — varias placas na mesma maquina."""
+    """-p aceita caminho de porta, prefixo do serial number USB (a MAC
+    "K..." que o firmware S3 define) ou endereco do bridge WiFi (IP /
+    host:porta) — varias placas na mesma maquina."""
+    if is_net_addr(selector):
+        return selector  # Celer Debug Bridge (TCP): o resto nao se aplica
     if selector.startswith("/") or ":" in selector:
         return selector  # caminho (ou COM3: estilo windows)
     for port in list_ports.comports():
@@ -736,12 +970,31 @@ def resolve_port(selector):
 
 def cmd_devices(args):
     found = find_devices(verbose=True)
-    if not found and not args.long:
-        print("nenhum dispositivo encontrado")
+    net = find_net_devices()
+    for ip, ident in net:
+        print(f"{ip + ':' + str(BRIDGE_PORT):<14} {'wifi':<14} {ident}")
+    if not found and not net and not args.long:
+        print("nenhum dispositivo encontrado (USB ou WiFi)")
     elif found and not args.long:
         for port, ident in found:
             serial = port.serial_number or "-"
             print(f"{port.device}  {serial:<14} {ident}")
+
+
+def cmd_pair(args):
+    """Pareia com o Celer Debug Bridge: valida o token e guarda no cache."""
+    addr = normalize_net_addr(args.addr)
+    token = args.token or net_token(addr, prompt=True)
+    link = HostLink(addr, timeout=3.0, token=token)
+    try:
+        ident = link.hello()
+        info = link.info()
+    finally:
+        link.close()
+    save_token(addr, token)
+    print(f"pareado: {addr}  {ident}")
+    print(f"board {info.get('board')}, versao {info.get('version')}; "
+          f"token salvo em {token_store_path()}")
 
 
 def cmd_info(args):
@@ -1715,7 +1968,7 @@ def _reconnect(old):
         try:
             link = HostLink(port, timeout=3.0)
             link.hello()
-            if baud != DEFAULT_BAUD:
+            if baud is not None and baud != DEFAULT_BAUD:
                 link.set_baud(baud)
             print("dev: reconectado")
             return link
@@ -1844,8 +2097,12 @@ def cmd_apps(args):
 def main():
     parser = argparse.ArgumentParser(prog="celerctl", description="ferramenta USB do CelerOS (estilo adb)")
     parser.add_argument("-p", "--port",
-                        help="porta serial do canal celerctl (ex: /dev/ttyUSB0) ou "
-                             "prefixo do serial USB da placa (celerctl devices lista)")
+                        help="porta serial do canal celerctl (ex: /dev/ttyUSB0), "
+                             "prefixo do serial USB da placa ou IP do Celer Debug "
+                             "Bridge (celerctl devices lista os tres)")
+    parser.add_argument("--token", default=None,
+                        help="token do Celer Debug Bridge (default: env "
+                             "CELEROS_BRIDGE_TOKEN ou o cache do 'celerctl pair')")
     parser.add_argument("-b", "--baud", type=int, default=DEFAULT_BAUD,
                         help="negocia este baud com o firmware (ex: 921600 acelera push/pull)")
     parser.add_argument("--proto", type=int, choices=(1, 2), default=2,
@@ -1860,9 +2117,16 @@ def main():
                              " grande (default 15)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("devices", help="lista placas conectadas")
+    p = sub.add_parser("devices", help="lista placas conectadas (USB e WiFi)")
     p.add_argument("-l", "--long", action="store_true")
     p.set_defaults(func=cmd_devices)
+
+    p = sub.add_parser("pair", help="pareia com o Celer Debug Bridge WiFi e "
+                                    "guarda o token (conecta uma vez so)")
+    p.add_argument("addr", help="IP ou host:porta do device (celerctl devices)")
+    p.add_argument("--token", default=None,
+                   help="token do bridge (default: pergunta no terminal)")
+    p.set_defaults(func=cmd_pair)
 
     p = sub.add_parser("info", help="informacoes do sistema")
     p.set_defaults(func=cmd_info)
@@ -2020,6 +2284,9 @@ def main():
         die(str(e))
     except serial.SerialException as e:
         die(f"porta serial: {e}")
+    except OSError as e:
+        # bridge TCP fora do ar / reset no meio da sessao
+        die(f"conexao: {e}")
     except KeyboardInterrupt:
         print()
         sys.exit(130)
