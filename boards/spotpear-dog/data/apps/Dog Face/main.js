@@ -309,6 +309,24 @@ function stopGait() {
     moveDir = null;
 }
 
+// Duracao de UM ciclo da marcha corrente na direcao name — para converter o
+// "N passos" da voz em ms. Espelha o gait que startGait(name) escolheria
+// (hop frente/tras, creep, ou as fases esphi), somando os ms do tune ao vivo.
+function gaitCycleMs(name) {
+    var i, t = 0;
+    if (walkMode === "hop" && (name === "walk" || name === "back")) {
+        var hf = hopFrames(name === "back" ? -1 : 1);
+        for (i = 0; i < hf.length; i++) t += hf[i].ms;
+        return t;
+    }
+    if (walkMode === "creep") {
+        var cf = creepFrames(DIRS[name]);
+        for (i = 0; i < cf.length; i++) t += cf[i].ms;
+        return t;
+    }
+    return 2 * (STEP_N * STEP_MS) + (WALKS[name] && WALKS[name].pause ? 2 * PAUSE_MS : 0);
+}
+
 // Uma volta do loop: marcha = UMA fase inteira (bloqueante, ~240-290 ms,
 // o link e a cara rodam entre as fases); postura = rampa por dt.
 function gaitTick(dt) {
@@ -1387,8 +1405,9 @@ var voiceBusy = false;        // da janela de escuta ate a resposta da IA
 var voiceRec = false;
 var voiceHeard = false;       // nivel subiu ao menos 1x (tem alguem falando)
 var voiceQuietAt = 0;
-var voiceWalkUntil = 0;       // andar por voz dura no maximo 3 s (sem keepalive)
+var voiceWalkUntil = 0;       // prazo da marcha por voz (dog_move longo ou fallback 3 s)
 var VOICE_WALK_MS = 3000;
+var VOICE_MOVE_MAX_MS = 60000;  // teto do dog_move da voz: steps x ciclo ou duracao
 var hasAI = (typeof AI !== "undefined" && typeof Net !== "undefined");
 var voiceErrorAt = 0;
 var voiceLvl = 0;             // volume ao vivo da janela de gravacao (tela)
@@ -1521,10 +1540,11 @@ function voiceTools() {
     var tricks = trickNames();   // nativos + do dono
     return [
         { type: "function", function: { name: "dog_move",
-          description: "Anda ou gira na direcao por um tempo",
+          description: "Anda ou gira na direcao por N passos ou por um tempo",
           parameters: { type: "object", properties: {
               direction: { type: "string", enum: ["walk", "back", "left", "right"] },
-              ms: { type: "integer", description: "duracao em ms, 150 a 3000" }
+              steps: { type: "integer", description: "numero de passos (1 passo = 1 ciclo de marcha); tem prioridade sobre ms" },
+              ms: { type: "integer", description: "duracao em ms, 150 a 60000" }
           }, required: ["direction"] } } },
         { type: "function", function: { name: "dog_posture",
           description: "Assume uma postura parado",
@@ -1577,7 +1597,25 @@ function voiceRunTool(call) {
     if (call.name === "dog_move") {
         var dir = WALKS[a.direction] ? String(a.direction) : "walk";
         happyUntil = System.millis() + 900;
-        return runSeq(buildSeq([{ do: "move", dir: dir, ms: clampMs(a.ms, 1200) }], 4, 0), "voz:move");
+        // "ande 10 passos" (steps x ciclo da marcha) ou "ande por 1 minuto"
+        // (ms). Ate SEQ_STEP_MS vai pela fila como antes; acima disso a
+        // marcha vira continua com prazo proprio (corta no prazo, pelo wake
+        // word ou dog_stop) — o teto de 3 s da fila engolia qualquer pedido.
+        var nSteps = Math.round(clampNum(a.steps, 1, 120, 0));
+        var ms = nSteps ? nSteps * gaitCycleMs(dir)
+                        : clampNum(a.ms, 150, VOICE_MOVE_MAX_MS, 1200);
+        if (ms > VOICE_MOVE_MAX_MS) ms = VOICE_MOVE_MAX_MS;
+        System.print('[voz] move ' + dir + ' ' + ms + ' ms (' +
+            (nSteps ? nSteps + ' passos' : 'duracao') + ')');
+        if (ms <= SEQ_STEP_MS) {
+            return runSeq(buildSeq([{ do: "move", dir: dir, ms: ms }], 4, 0), "voz:move");
+        }
+        seqClear();
+        if (startGait(dir, true)) {
+            voiceWalkUntil = System.millis() + ms;
+            return true;
+        }
+        return false;
     }
     if (call.name === "dog_posture") {
         if (!POSES[a.pose]) return false;
@@ -1673,7 +1711,9 @@ function voiceTick(now) {
     // wake -> abre a janela (a task do detector descansa sozinha durante
     // a gravacao — micRecActive no firmware)
     if (!voiceBusy && (voiceErrorAt === 0 || now - voiceErrorAt > 2500) && WakeWord.poll()) {
-        if (seqActive()) { seqClear(); stopGait(); }   // "hi celer" corta a dancinha
+        if (seqActive() || voiceWalkUntil) {   // "hi celer" corta dancinha/marcha
+            seqClear(); stopGait(); voiceWalkUntil = 0;
+        }
         voiceBusy = true;
         voiceHeard = false;
         voiceQuietAt = 0;
