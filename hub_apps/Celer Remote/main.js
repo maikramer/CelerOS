@@ -446,6 +446,7 @@ function trickScreen() {
 var TUNE_ROWS = [
     { k: "air",    lbl: "abertura",  min: -200, max: 800,  stp: 10, grp: "hop" },
     { k: "leanR",  lbl: "traseira",  min: 0,    max: 40,   stp: 5,  grp: "stance" },
+    { k: "spin",   lbl: "giro",      min: 40,   max: 110,  stp: 10, grp: "hop" },
     { k: "fall",   lbl: "queda",     min: 0,    max: 1200, stp: 20, grp: "hop" },
     { k: "land",   lbl: "pouso",     min: 0,    max: 600,  stp: 10, grp: "hop" },
     { k: "settle", lbl: "deslize",   min: 0,    max: 800,  stp: 10, grp: "hop" },
