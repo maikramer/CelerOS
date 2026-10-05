@@ -156,13 +156,18 @@ function level() {
 }
 
 function drawHeader() {
-    // o nome vive na faixa do sistema (retratil); aqui e so o placar
+    // o nome vive na faixa do sistema (retratil); aqui e so o placar.
+    // drawString direto (nao UI.text): o fillRect do fundo apagaria textos
+    // cuja assinatura nao mudou e o slot nao redesenharia
     System.fillRect(0, 0, W, 28, T.card);
-    UI.text("Pontos " + score, 10, 4, { role: "title", bg: T.card });
-    UI.text("Nv " + level(), 132, 8, { role: "caption", color: T.textDim, bg: T.card });
-    // passou o recorde em jogo: numero fica verde
-    UI.text("Rec " + hi, W - 10, 8, { role: "caption", align: "right", bg: T.card,
-            color: score > 0 && score >= hi && newRecord ? T.ok : T.textDim });
+    System.setTextColor(T.text, T.card);
+    System.drawString("Pontos " + score, 10, 8, 2);
+    System.setTextDatum(2);           // TR
+    System.setTextColor(score > 0 && score >= hi && newRecord ? T.ok : T.textDim, T.card);
+    System.drawString("Rec " + hi, W - 10, 10, 1);
+    System.setTextDatum(0);
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("Nv " + level(), 132, 10, 1);
     System.fillRect(0, 28, W, 2, T.accent);
 }
 
