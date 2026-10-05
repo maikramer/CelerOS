@@ -1,5 +1,6 @@
 #include "JSBindings.h"
 #include "../USBDevice/LogSink.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../Display/Layout.h"
 #include "../Display/ScreenPower.h"
 #include "../Hardware/PowerPolicy.h"
@@ -406,7 +407,9 @@ duk_ret_t JSBindings::js_beep(duk_context *ctx) {
         return 1;
     }
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    duk_push_boolean(ctx, BoardIO::tone(freq, ms) ? 1 : 0);
+    bool ok = BoardIO::tone(freq, ms);
+    CelerKernel::noteAppYield();  // ate 5s: renova a janela p/ o retorno
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 

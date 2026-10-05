@@ -285,6 +285,7 @@ private:
     void* _dnsSocket;       // Socket handle
     void* _dnsTask;         // TaskHandle_t
     volatile bool _dnsRunning;
+    volatile bool _dnsDone; // task de DNS sinalizou saida (socket fechado por ela)
 
     // Estado da tentativa de conexao (escrito pelo hospedeiro via
     // reportConnectionState, lido pelo handler de /status na task do httpd —

@@ -94,10 +94,9 @@ void AlarmScreen::onTick(uint32_t dtMs) {
     m_beepAccum += dtMs;
     if (m_beepAccum >= kBeepEveryMs) {
         m_beepAccum = 0;
-        for (int i = 0; i < 3; i++) {
-            BoardIO::tone(1800, 120);
-            delay(80);
-        }
+        // Jingle fora do tick: tone() bloqueante congelava a UI ~600 ms por
+        // ciclo, justo quando o usuario tenta tocar em Parar/Soneca
+        for (int i = 0; i < 3; i++) BoardIO::toneAsync(1800, 120, 80);
         markDirty();  // relogio na tela acompanha
     }
 }
@@ -105,6 +104,7 @@ void AlarmScreen::onTick(uint32_t dtMs) {
 void AlarmScreen::finish(bool snooze) {
     if (m_done) return;
     m_done = true;
+    BoardIO::toneStop();  // nao continua bipando apos atender/dispensar
     if (snooze) {
         Alarms::snooze();
         kui::Navigator::toast("Soneca: 5 min", THEME_ACCENT, 2000);

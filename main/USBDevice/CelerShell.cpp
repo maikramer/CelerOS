@@ -695,7 +695,14 @@ const ShellCmd kCommands[] = {
 }  // namespace
 
 bool CelerShell::pathAllowed(const std::string& path) {
-    return path.rfind("/local", 0) == 0 || path.rfind("/sd", 0) == 0;
+    // Segmento inteiro (mesma correcao do WebManager::pathAllowed): o
+    // prefixo cru aceitava "/localfoo"/"/sdcard" e o caminho ia direto
+    // ao fopen/stat/remove dos comandos
+    auto under = [&path](const char* mount) {
+        size_t n = strlen(mount);
+        return path.compare(0, n, mount) == 0 && (path.size() == n || path[n] == '/');
+    };
+    return under("/local") || under("/sd");
 }
 
 bool LineEditor::feed(uint8_t byte, char* line, size_t maxLen) {

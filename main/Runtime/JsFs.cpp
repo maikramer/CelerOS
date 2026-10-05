@@ -229,9 +229,7 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
     if (buf == nullptr) { fclose(f); duk_push_null(ctx); return 1; }
     size_t got = fread(buf, 1, sz, f);
     fclose(f);
-    duk_push_lstring(ctx, buf, got);
-    free(buf);
-    return 1;
+    return jsPushOwnedString(ctx, buf, got);
 }
 
 // API 12: escrita BINARIA — os bytes da string (0..255 por char) vão

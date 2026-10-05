@@ -232,6 +232,7 @@ CaptivePortal::CaptivePortal() :
     _dnsSocket(nullptr),
     _dnsTask(nullptr),
     _dnsRunning(false),
+    _dnsDone(false),
     _connState(PortalConnState::Idle) {
 }
 
@@ -242,6 +243,7 @@ CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
     _dnsSocket(nullptr),
     _dnsTask(nullptr),
     _dnsRunning(false),
+    _dnsDone(false),
     _connState(PortalConnState::Idle) {
 }
 
@@ -391,6 +393,7 @@ bool CaptivePortal::startDnsServer() {
     ESP_LOGI(TAG, "Starting DNS server on port %d", _config.dnsPort);
 
     _dnsRunning = true;
+    _dnsDone = false;
 
     // Create DNS task
     BaseType_t ret = xTaskCreate(
@@ -412,15 +415,32 @@ bool CaptivePortal::startDnsServer() {
 }
 
 void CaptivePortal::stopDnsServer() {
-    _dnsRunning = false;
-    
+    _dnsRunning = false;  // encerra o loop no proximo retorno do recvfrom
+
+    // O socket nao e fechado daqui: a task pode estar dentro do recvfrom e
+    // fecharia o mesmo numero de fd depois — se o indice ja tiver sido
+    // reciclado (ex.: web server subindo no mesmo instante), o close tardio
+    // derruba um socket vivo. Acordamos a task com um datagrama local e o
+    // close fica exclusivo de quem criou o socket (a propria task).
     if (_dnsSocket != nullptr) {
-        close(reinterpret_cast<intptr_t>(_dnsSocket));
-        _dnsSocket = nullptr;
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = inet_addr(WifiAP::instance().getIPAddress().c_str());
+        addr.sin_port = htons(_config.dnsPort);
+        int wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (wake >= 0) {
+            char c = 0;
+            sendto(wake, &c, 1, 0, (struct sockaddr*)&addr, sizeof(addr));
+            close(wake);
+        }
     }
 
     if (_dnsTask != nullptr) {
-        vTaskDelay(pdMS_TO_TICKS(100));  // Give task time to exit
+        // Timeout do recvfrom e 1s; o datagrama acima costuma acordar em ms
+        for (int i = 0; i < 20 && !_dnsDone; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         _dnsTask = nullptr;
     }
 }
@@ -433,6 +453,7 @@ void CaptivePortal::dnsTaskFunc(void* param) {
     if (sock < 0) {
         ESP_LOGE(TAG, "Failed to create DNS socket");
         self->_dnsRunning = false;
+        self->_dnsDone = true;
         vTaskDelete(nullptr);
         return;
     }
@@ -457,6 +478,7 @@ void CaptivePortal::dnsTaskFunc(void* param) {
         close(sock);
         self->_dnsSocket = nullptr;
         self->_dnsRunning = false;
+        self->_dnsDone = true;
         vTaskDelete(nullptr);
         return;
     }
@@ -496,10 +518,17 @@ void CaptivePortal::dnsTaskFunc(void* param) {
         buffer[6] = 0x00;  // Answer count high
         buffer[7] = 0x01;  // Answer count low
 
-        // Find end of query
+        // Find end of query. O salto por comprimento de label pode passar
+        // do fim do pacote (query truncada/malformada): validar antes de
+        // escrever a resposta, senao estoura o buffer de 512 bytes da stack.
         int query_end = 12;
         while (query_end < len && buffer[query_end] != 0) {
             query_end += buffer[query_end] + 1;
+        }
+        // Precisa caber o fim da query (null + qtype + qclass) dentro do
+        // pacote recebido e a resposta (16 bytes de answer + 4 de IP) no buffer
+        if (query_end + 5 > len || query_end + 5 + 16 + 4 > (int)sizeof(buffer)) {
+            continue;  // descarta pacote invalido
         }
         query_end += 5;  // Skip null + qtype + qclass
 
@@ -529,6 +558,7 @@ void CaptivePortal::dnsTaskFunc(void* param) {
 
     close(sock);
     self->_dnsSocket = nullptr;
+    self->_dnsDone = true;
     ESP_LOGI(TAG, "DNS server stopped");
     vTaskDelete(nullptr);
 }
@@ -538,7 +568,10 @@ bool CaptivePortal::startHttpServer() {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = _config.httpPort;
-    config.max_uri_handlers = 8;
+    // 4 handlers proprios + 7 URIs de deteccao de captive: 11 no total —
+    // com 8 os tres ultimos falhavam em silencio e o popup do Windows
+    // (ncsi.txt/connecttest.txt/fwlink) nao abria
+    config.max_uri_handlers = 12;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
 
@@ -690,7 +723,10 @@ bool CaptivePortal::startHttpServer() {
             },
             .user_ctx = nullptr
         };
-        httpd_register_uri_handler(server, &captive_uri);
+        esp_err_t reg = httpd_register_uri_handler(server, &captive_uri);
+        if (reg != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register captive URI %s", uri);
+        }
     }
 
     ESP_LOGI(TAG, "HTTP server started");

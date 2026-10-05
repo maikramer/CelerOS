@@ -57,6 +57,11 @@ void analogWrite(int pin, int val); // LEDC 8 bits (0-255)
 // (analogWrite pula canal reservado; o servo so reserva canal livre).
 bool celerLedcClaim(int ch);    // false = canal ja usado pelo analogWrite
 void celerLedcRelease(int ch);
+// Fim de app JS (kernel): para o PWM e solta os canais bindados pelo
+// analogWrite — sem isso o bind pin->canal era definitivo e apps
+// sucessivos exauriam os 3 canais (o analogWrite falhava em silencio),
+// alem de deixar o ultimo pino no ultimo duty para sempre.
+void celerAnalogWriteReset();
 unsigned long pulseIn(int pin, uint8_t state, unsigned long timeout_us);
 
 // --- Matematica / utilidades Arduino ---------------------------------------

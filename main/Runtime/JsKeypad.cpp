@@ -1,5 +1,6 @@
 #include "JSBindings.h"
 #include "../USBDevice/LogSink.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
 #include "../UI/Keyboard.h"
@@ -89,6 +90,10 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     }, &cancelled);
     // o teclado desenhou direto no display: o proximo present repoe o app
     s_frameDirty = true;
+    // A digitacao dura a vontade do usuario: a janela do exec-timeout
+    // (aberta pelo present() acima) chega vencida aqui e o RangeError
+    // matava o app assim que o script retomava
+    CelerKernel::noteAppYield();
     if (exitReq) throwAppExit(ctx);
 
     if (cancelled && nullOnCancel) {

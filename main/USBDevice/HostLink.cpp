@@ -178,10 +178,40 @@ void makeParentDirs(const char* path) {
     }
 }
 
-// PrintFn que acumula a saida do shell numa std::string (para o EXEC)
+// Buffer de saida do EXEC com teto e falha checada: std::string crescendo
+// ate 32KB ABORTA a placa sem PSRAM quando falta RAM continua
+// (-fno-exceptions: new falho = reboot), alem do pico da realocacao
+// (bloco velho + novo vivos, ~48KB). malloc/realloc com teto e o padrao
+// do projeto para caminhos de dados (ver HttpClient::setBodySink).
 struct ExecCtx {
-    std::string out;
+    char* p = nullptr;
+    size_t len = 0;
+    size_t cap = 0;
+    bool oom = false;  // realloc falhou: trunca, nao derruba o aparelho
 };
+
+constexpr size_t kExecOutMax = 32 * 1024;
+
+static void execAppend(ExecCtx* e, const char* s, size_t n) {
+    if (e->oom || n == 0) return;
+    if (e->len + n > kExecOutMax) {
+        n = kExecOutMax - e->len;
+        if (n == 0) return;  // teto alcancado: resto truncado
+    }
+    if (e->len + n > e->cap) {
+        size_t want = e->cap ? e->cap : 1024;
+        while (want < e->len + n) want *= 2;
+        char* q = (char*)realloc(e->p, want);
+        if (q == nullptr) {
+            e->oom = true;
+            return;
+        }
+        e->p = q;
+        e->cap = want;
+    }
+    memcpy(e->p + e->len, s, n);
+    e->len += n;
+}
 
 void execPrint(void* ctx, const char* fmt, ...) {
     ExecCtx* e = (ExecCtx*)ctx;
@@ -191,9 +221,8 @@ void execPrint(void* ctx, const char* fmt, ...) {
     int n = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     if (n > 0) {
-        if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
-        if (e->out.size() + (size_t)n > 32768) return;  // trunca em 32KB
-        e->out.append(buf, (size_t)n);
+        if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+        execAppend(e, buf, (size_t)n);
     }
 }
 
@@ -254,7 +283,7 @@ void handleInfo() {
 #if CONFIG_CELEROS_DEBUG_BRIDGE
     // mesmo precedente do web_pass: segredo visivel a quem ja tem sessao
     char bridge[72];
-    snprintf(bridge, sizeof(bridge), ",\"bridge\":{\"port\":%u,\"token\":\"%s\"}",
+    snprintf(bridge, sizeof(bridge), "\"bridge\":{\"port\":%u,\"token\":\"%s\"}",
              (unsigned)DebugBridge::port(), DebugBridge::token());
 #else
     const char* bridge = "";
@@ -265,7 +294,7 @@ void handleInfo() {
              "\"largest_block\":%u,\"psram_free\":%u,\"psram_total\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
              "\"web_user\":\"admin\",\"web_pass\":\"%s\","
-             "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}%s",
+             "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}},%s}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (linkCtx() != nullptr && linkCtx()->v2()) ? 2 : 1,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
@@ -594,19 +623,19 @@ void handleExec(const uint8_t* payload, uint16_t len) {
 
     uint8_t rec[5];
     rec[0] = (uint8_t)code;
-    uint32_t outLen = (uint32_t)ctx.out.size();
-    le32(rec + 1, outLen);
+    le32(rec + 1, (uint32_t)ctx.len);
     respond(KL_EXEC, 0, rec, sizeof(rec));
-    if (outLen > 0) {
+    if (ctx.len > 0) {
         // saida grande e enviada como frames de continuacao
         size_t off = 0;
-        while (off < ctx.out.size()) {
-            size_t n = ctx.out.size() - off;
+        while (off < ctx.len) {
+            size_t n = ctx.len - off;
             if (n > HostLink::MAX_PAYLOAD - 1) n = HostLink::MAX_PAYLOAD - 1;
-            respond(KL_EXEC_CONT, 0, ctx.out.data() + off, (uint16_t)n);
+            respond(KL_EXEC_CONT, 0, ctx.p + off, (uint16_t)n);
             off += n;
         }
     }
+    free(ctx.p);
 }
 
 void handleReboot() {

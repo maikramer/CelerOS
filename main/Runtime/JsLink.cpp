@@ -1,6 +1,7 @@
 #include "JSBindings.h"
 #include "JsInternal.h"
 #include "../Bluetooth/CelerLink.h"
+#include "../Kernel/Core/CelerKernel.h"
 
 // =====================================================
 // CelerLink Bindings (Bluetooth entre CelerOS, API 9)
@@ -47,6 +48,7 @@ duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
     present();  // bloqueante por segundos
     CelerLink::Peer peers[16];  // = cache do scan; RSSI mais forte primeiro
     int n = CelerLink::scan((uint32_t)timeoutMs, peers, 16);
+    CelerKernel::noteAppYield();  // espera de 0,5-8s: renova a janela p/ o retorno
 
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
@@ -70,7 +72,9 @@ duk_ret_t JSBindings::js_linkConnect(duk_context *ctx) {
     if (timeoutMs > 8000) timeoutMs = 8000;
 
     present();  // bloqueante por segundos
-    duk_push_boolean(ctx, CelerLink::connect(id, (uint32_t)timeoutMs) ? 1 : 0);
+    bool ok = CelerLink::connect(id, (uint32_t)timeoutMs);
+    CelerKernel::noteAppYield();  // espera de 1-8s
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -82,7 +86,9 @@ duk_ret_t JSBindings::js_linkDisconnect(duk_context *ctx) {
 duk_ret_t JSBindings::js_linkVerify(duk_context *ctx) {
     const char* code = duk_require_string(ctx, 0);
     present();  // write + read ATT podem esperar segundos
-    duk_push_boolean(ctx, CelerLink::verify(code) ? 1 : 0);
+    bool ok = CelerLink::verify(code);
+    CelerKernel::noteAppYield();
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 

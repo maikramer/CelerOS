@@ -101,6 +101,11 @@ static bool netFetch(duk_context *ctx, bool isPost) {
         ok = resp.isOk();
         if (!ok) snprintf(failWhy, sizeof(failWhy), "%s", resp.errorMessage.c_str());  // diagnostico (log)
     }  // TLS/cliente liberados antes de copiar o corpo para o heap JS
+    // A requisicao inteira rodou sem bytecode: a janela do exec-timeout
+    // (aberta pelo present() de entrada) vence em 1s e o RangeError matava
+    // o app logo apos o retorno — TLS sozinho passa disso. Mesma familia
+    // do fix do Net.download.
+    CelerKernel::noteAppYield();
     if (!ok) {
         celer_log_printf("[net] get falhou: why=%s internal=%u\n",
                          failWhy[0] ? failWhy : "?",

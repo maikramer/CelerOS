@@ -726,6 +726,7 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
+    CelerKernel::noteAppYield();  // arquivo grande passa de 1s
     return 1;
 }
 
@@ -745,7 +746,9 @@ duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
         snprintf(msg, sizeof(msg), "FS: copiar para %s requer permissao \"system\"", to);
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
-    duk_push_boolean(ctx, FileSystem::copyDirectory(from, to) ? 1 : 0);
+    bool ok = FileSystem::copyDirectory(from, to);
+    CelerKernel::noteAppYield();  // arvore grande (instalacao via SD): segundos
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -784,7 +787,9 @@ duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
         snprintf(msg, sizeof(msg), "FS: remover %s requer permissao \"system\"", path);
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
-    duk_push_boolean(ctx, removeTree(path) ? 1 : 0);
+    bool ok = removeTree(path);
+    CelerKernel::noteAppYield();  // desinstalacao de arvore: pode passar de 1s
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 

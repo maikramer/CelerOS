@@ -171,9 +171,8 @@ void init() {
 void tick(bool inApp) {
     if (s_beepReq) {  // vale em toda placa (notificacao nova)
         s_beepReq = false;
-        BoardIO::tone(1700, 60);
-        delay(60);
-        BoardIO::tone(1200, 80);
+        BoardIO::toneAsync(1700, 60, 60);  // fora do tick da UI
+        BoardIO::toneAsync(1200, 80);
     }
     if (!s_active) {
         s_glanceReq = false;

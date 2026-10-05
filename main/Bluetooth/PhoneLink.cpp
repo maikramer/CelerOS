@@ -287,11 +287,9 @@ void handleGb(const std::string& json) {
     } else if (t == "act") {
         s_actNow = true;  // Gadgetbridge pediu passos agora (tempo real)
     } else if (t == "vibrate") {
-        // sem motor: bipes no lugar do padrao de vibracao
-        for (int i = 0; i < 2; i++) {
-            BoardIO::tone(1800, 80);
-            delay(60);
-        }
+        // sem motor: bipes no lugar do padrao de vibracao (fora do tick:
+        // tone() bloqueante congelava o pump por ~280 ms)
+        for (int i = 0; i < 2; i++) BoardIO::toneAsync(1800, 80, 60);
     } else if (t == "find") {
         if (doc["n"].as<bool>()) {
             s_findUntil = millis() + kFindMs;
@@ -426,7 +424,7 @@ void tick(bool inApp) {
             s_findUntil = 0;
         } else if (now - s_findBeepAt >= 1000) {
             s_findBeepAt = now;
-            BoardIO::tone(2200, 150);
+            BoardIO::toneAsync(2200, 150);
         }
     }
 }

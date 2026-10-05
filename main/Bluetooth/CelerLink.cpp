@@ -1335,6 +1335,10 @@ bool CelerLink::send(const void* data, size_t len) {
     if (!s_isCentral && !s_peerSubscribed) return false;  // peer nao ouve notify
 
     const TickType_t deadline = deadlineIn(K_SEND_RETRY_MS);
+    // spam-control: loga a falha so na TRANSICAO (1a apos um sucesso) — a
+    // telemetria do Dog Face tenta a cada ~1,6 s com o link caido e o
+    // aviso por tentativa afogava ring e logcat (bancada 2026-10-05)
+    static int s_lastFailRc = -99;
     for (;;) {
         int rc;
         if (s_isCentral) {
@@ -1346,9 +1350,15 @@ bool CelerLink::send(const void* data, size_t len) {
             rc = om == nullptr ? BLE_HS_ENOMEM : ble_gatts_notify_custom(s_conn, s_chrValHandle, om);
             // notify_custom consome o om em qualquer resultado
         }
-        if (rc == 0) return true;
+        if (rc == 0) {
+            s_lastFailRc = -99;
+            return true;
+        }
         if (!retryable(rc) || !s_ready || (int32_t)(deadline - xTaskGetTickCount()) <= 0) {
-            ESP_LOGW(TAG, "send: rc=%d (%u bytes)", rc, (unsigned)len);
+            if (s_lastFailRc != rc) {
+                s_lastFailRc = rc;
+                ESP_LOGW(TAG, "send: rc=%d (%u bytes)", rc, (unsigned)len);
+            }
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(5));

@@ -11,6 +11,7 @@
 #include "../../Display/Icon.h"
 #include "../../Display/Backlight.h"
 #include "../../Hardware/BoardIO.h"
+#include "../../Compat/Arduino.h"  // celerAnalogWriteReset (fim de app)
 #include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
 #include "../DeviceStats.h"
@@ -657,6 +658,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     BoardIO::ledOff();  // LED e estado do app: nao fica aceso depois que ele sai
     BoardIO::stripsOff();  // idem fitas WS2812
     BoardIO::servosOff();  // servo sem dono nao segura forca (esquenta/gasta bateria)
+    celerAnalogWriteReset();  // canais LEDC 0..2 do analogWrite idem (vazavam entre apps)
     JSBindings::appExitCleanup();  // keepAwake + brilho/volume/tela de app comum
     checkJSError(ctx, rc);
     JsDebugger::detach(ctx);

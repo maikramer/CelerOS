@@ -207,9 +207,8 @@ duk_ret_t JSBindings::js_storageGet(duk_context *ctx) {
     }
     nvs_get_blob(h, key, buf, &len);
     nvs_close(h);
-    duk_push_lstring(ctx, buf, len);  // valor pode conter NUL (binario ok)
-    free(buf);
-    return 1;
+    // valor pode conter NUL (binario ok)
+    return jsPushOwnedString(ctx, buf, len);
 }
 
 duk_ret_t JSBindings::js_storageSet(duk_context *ctx) {

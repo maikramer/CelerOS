@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
+#include "../Kernel/Core/CelerKernel.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -300,6 +301,7 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
 duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     OtaManager::checkForUpdates();
+    CelerKernel::noteAppYield();  // fetch HTTPS do update.json passa de 1s
     const OtaUpdateInfo& info = OtaManager::info;
     duk_push_object(ctx);
     duk_push_boolean(ctx, info.fetchFailed ? 1 : 0);
@@ -359,6 +361,7 @@ duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
     }
 
     bool ok = OtaManager::performUpdate(url, hasCb ? otaProgressTrampoline : nullptr);
+    CelerKernel::noteAppYield();  // flash demora; o trampoline so cobre com callback
 
     if (hasCb) {
         duk_push_global_stash(ctx);
@@ -441,6 +444,7 @@ duk_ret_t JSBindings::js_wifiScan(duk_context *ctx) {
     // Scan bloqueante (~2s) — mesmo comportamento da tela nativa.
     CelerScanEntry entries[20];
     int n = WebManager::scanNetworks(entries, 20);
+    CelerKernel::noteAppYield();  // espera >1s: renova a janela p/ o retorno
 
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
@@ -460,7 +464,9 @@ duk_ret_t JSBindings::js_wifiConnect(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* ssid = duk_require_string(ctx, 0);
     const char* pass = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
-    duk_push_boolean(ctx, WebManager::connect(ssid, pass) ? 1 : 0);
+    bool ok = WebManager::connect(ssid, pass);
+    CelerKernel::noteAppYield();  // connect espera ate 15s
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -715,6 +721,7 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
             duk_pop(ctx);
         }
         esp_task_wdt_reset();
+        CelerKernel::noteAppYield();  // melodia de ate 15s: janela fresca por nota
         if (BoardIO::tone(f, ms)) played++;
     }
     duk_push_int(ctx, played);
@@ -779,6 +786,8 @@ duk_ret_t JSBindings::js_playWav(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     present();
-    duk_push_boolean(ctx, AudioPlayer::playWav(path) == AudioPlayer::WavError::None ? 1 : 0);
+    AudioPlayer::WavError we = AudioPlayer::playWav(path);
+    CelerKernel::noteAppYield();  // audio longo: renova a janela p/ o retorno
+    duk_push_boolean(ctx, we == AudioPlayer::WavError::None ? 1 : 0);
     return 1;
 }

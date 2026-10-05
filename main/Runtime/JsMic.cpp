@@ -1,4 +1,5 @@
 #include "JSBindings.h"
+#include "JsInternal.h"
 #include "../Hardware/BoardIO.h"
 
 // =====================================================
@@ -46,9 +47,7 @@ duk_ret_t JSBindings::js_micRecStop(duk_context *ctx) {
         duk_push_null(ctx);
         return 1;
     }
-    duk_push_lstring(ctx, p, len);
-    free(p);
-    return 1;
+    return jsPushOwnedString(ctx, p, len);
 }
 
 // Mic.recording(): true enquanto a task captura — false no teto de ms

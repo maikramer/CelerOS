@@ -88,9 +88,8 @@ public:
         m_ringAccum += dtMs;
         if (m_ringAccum >= 1500) {
             m_ringAccum = 0;
-            BoardIO::tone(1200, 200);
-            delay(80);
-            BoardIO::tone(1500, 200);
+            BoardIO::toneAsync(1200, 200, 80);  // fora do tick: UI livre p/ tocar
+            BoardIO::toneAsync(1500, 200);
         }
     }
     bool allowsBackGesture() const override { return false; }
@@ -107,6 +106,7 @@ private:
     void finish(int action) {
         if (m_done) return;
         m_done = true;
+        BoardIO::toneStop();  // nao segue bipando apos atender/recusar
         PhoneLink::callAnswer(action);
         kui::Navigator::pop();
     }

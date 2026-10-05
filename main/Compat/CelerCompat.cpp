@@ -134,6 +134,16 @@ void celerLedcRelease(int ch) {
     if (ch >= 0 && ch < CELER_LEDC_MAX_CH && s_ledc_pin[ch] == -2) s_ledc_pin[ch] = -1;
 }
 
+void celerAnalogWriteReset() {
+    for (int ch = 0; ch < CELER_LEDC_MAX_CH; ch++) {
+        if (s_ledc_pin[ch] >= 0) {
+            ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)ch, 0);  // pino em 0
+            s_ledc_pin[ch] = -1;
+        }
+        // reservas de servo (-2) intocadas: o servosOff do kernel e dono delas
+    }
+}
+
 void analogWrite(int pin, int val) {
     int ch = -1;
     for (int i = 0; i < CELER_LEDC_MAX_CH; i++) {

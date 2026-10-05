@@ -415,12 +415,15 @@ void Icon::draw(lgfx::LGFXBase* tft, const char* name, int x, int y) {
 // O launcher pode redesenhar varias vezes por gesto; o cache evita reler o
 // arquivo a cada frame. Invalidado no rescan (app reinstalado = arte nova).
 namespace {
-constexpr int FILE_CACHE = 12;
+// PSRAM: duas paginas da grade do launcher cabem inteiras (o drag desenha a
+// pagina atual E a vizinha no mesmo frame). Sem PSRAM continua uma pagina.
+constexpr int FILE_CACHE = 24;
 std::string g_filePath[FILE_CACHE];
 uint16_t* g_filePx[FILE_CACHE] = {};
 uint8_t* g_fileA[FILE_CACHE] = {};
 uint32_t g_fileLastUse[FILE_CACHE] = {};  // LRU (F3): vitima = mais antigo
-// caminhos cujo load falhou (sem re-tentar por frame); limpo na invalidacao
+// caminhos cujo load FALHOU de verdade (arquivo ausente/corrompido; sem
+// re-tentar por frame); limpo na invalidacao
 constexpr int FAIL_MEMO = 8;
 std::string g_failPath[FAIL_MEMO];
 int g_failNext = 0;
@@ -506,13 +509,18 @@ bool Icon::availableFile(const char* path) {
     // o slot 0 — apps alternando muitos icones recarregavam sempre os mesmos)
     if (slot < 0) {
         slot = lruSlot(2000);
-        if (slot < 0) return giveUp();  // todos em uso neste frame: tile
+        // "Todos em uso neste frame" e TRANSITORIO (o drag desenha a pagina
+        // atual antes da vizinha e marca tudo como recente): NAO memoiza —
+        // antes virava giveUp e a pagina vizinha ficava eternamente em tile
+        // de letra ate um rescan. false seco = tile so neste frame
+        if (slot < 0) return false;
         freeFileSlot(slot);
     }
-    // Sem PSRAM: abre espaco devolvendo os ociosos antes de alocar
+    // Sem PSRAM: abre espaco devolvendo os ociosos antes de alocar (idem:
+    // falta de vitima agora nao e falha do ARQUIVO, nao memoiza)
     while (!roomForIcon()) {
         int victim = lruSlot(2000);
-        if (victim < 0) return giveUp();  // sem RAM: tile no lugar
+        if (victim < 0) return false;  // sem RAM neste frame: tile no lugar
         freeFileSlot(victim);
     }
     uint8_t* a = nullptr;

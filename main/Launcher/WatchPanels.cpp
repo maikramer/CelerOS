@@ -126,8 +126,19 @@ public:
 
     void onTick(uint32_t dtMs) override {
         m_clockAccum += dtMs;
-        if (m_clockAccum >= 1000) {  // hora/bateria/wifi no cabecalho
-            m_clockAccum = 0;
+        if (m_clockAccum < 1000) return;
+        m_clockAccum = 0;
+        // Cabecalho muda de VALOR raramente (HH:MM por minuto, bateria com
+        // cache de 2s, wifi raramente): comparar antes de sujar evita o
+        // compose+push full-frame por segundo com o painel aberto (mesmo
+        // padrao do relogio do launcher em Screens.cpp)
+        std::string clock = TimeManager::getFormattedTime();
+        const bool wifi = WebManager::isActive();
+        const int pct = BoardIO::batteryPct();
+        if (clock != m_lastClock || wifi != m_lastWifi || pct != m_lastBatt) {
+            m_lastClock = clock;
+            m_lastWifi = wifi;
+            m_lastBatt = pct;
             markDirty();
         }
     }
@@ -143,6 +154,9 @@ private:
     kui::Slider m_bright;
     kui::Slider m_vol;
     uint32_t m_clockAccum = 0;
+    std::string m_lastClock;
+    bool m_lastWifi = false;
+    int m_lastBatt = -999;
 
     kui::Rect tileRect(int i) const {
         const int m = sideMargin();

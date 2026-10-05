@@ -4,6 +4,7 @@
 // (JSBindings.cpp = nucleo: topbar/quadro/init; Js*.cpp = um dominio cada).
 #include "sdkconfig.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include "JSBindings.h"
 #include "../Display/Layout.h"
@@ -51,6 +52,25 @@ extern bool s_appExitPending;
 // limpa do X da topbar — o kernel volta ao launcher normalmente.
 inline void checkRemoteAppExit(duk_context* ctx) {
     if (s_appExitPending || LauncherUI::consumeAppExitRequest()) throwAppExit(ctx);
+}
+
+// Handoff de buffer malloc para o heap JS: duk_push_lstring LANCA (longjmp)
+// se faltar RAM para a string, e o free do dono nunca rodaria — o buffer
+// vazaria ate o reboot (pior caso: o WAV do Mic.stop, centenas de KB). O
+// push roda sob duk_safe_call; o dono e sempre liberado e o erro, repassado
+// ao script. Devolve 1 (string no stack).
+struct JsPushBuf { const char* p; size_t len; };
+inline duk_ret_t jsPushBufSafe(duk_context* ctx, void* u) {
+    JsPushBuf* b = (JsPushBuf*)u;
+    duk_push_lstring(ctx, b->p, b->len);
+    return 1;
+}
+inline int jsPushOwnedString(duk_context* ctx, char* p, size_t len) {
+    JsPushBuf b{p, len};
+    duk_int_t rc = duk_safe_call(ctx, jsPushBufSafe, &b, 0, 1);
+    free(p);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
+    return 1;
 }
 
 bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y);
