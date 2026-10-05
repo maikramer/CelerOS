@@ -13,7 +13,6 @@ CelerOS/
 ├── main/            # firmware core (boot, kernel, UI, launcher, BLE, power, OTA, board HAL)
 │   └── Runtime/     # JS API surface: JSBindings core + Js*.cpp modules (own AGENTS.md)
 ├── components/      # everything here is built (Network, Http, System, Storage/NVS, Utility, ErrorCodes, duktape, LovyanGFX)
-├── extras/esp_components/  # shared-lib code CelerOS does NOT build (dormant; outside IDF search)
 ├── data/            # LittleFS image contents: system JS apps + icons (flashed separately)
 ├── hub_apps/        # App Store apps, same layout as data/apps (covered by data/AGENTS.md)
 ├── boards/<b>/      # per-board sdkconfig.defaults (+ data/ overlay & data-exclude.txt on the watch)
@@ -31,7 +30,7 @@ CelerOS/
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
 | Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 23) |
-| Component membership, reviving dormant ones | `components/AGENTS.md` | `components/README.md` (PT) = patch list |
+| Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
 | Boards, adding a board, per-board data image | `boards/AGENTS.md` | 6 boards |
 | Test suites and what CI runs | `test/AGENTS.md` | |
@@ -76,7 +75,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 ## CONVENTIONS
 - Board selected via CMake cache `-DCELEROS_BOARD=smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit` (default smartdisplay; any other value is FATAL_ERROR). See `boards/AGENTS.md` for the differences.
 - Version lives in TWO places: root `CMakeLists.txt` `project(CelerOS VERSION x)` and `main/CMakeLists.txt` `CELEROS_VERSION`. Keep them in sync.
-- Dormant shared-lib code lives in `extras/esp_components/` (no `EXCLUDE_COMPONENTS` list). Subsystems compile out per board via Kconfig: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog).
+- Subsystems compile out per board via Kconfig (the dormant remainder of the old shared `esp_components` lib left the tree in 2026-10; git tag `archive/esp_components` keeps it): `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog).
 - Built with `-fno-exceptions` and an ES5-lean Duktape (`components/duktape/celeros_duk_config.yaml`) whose builtins live in ROM (base heap ~8KB); JS bindings are lightfuncs. A `std::string`/`new` that cannot grow **aborts** the device: on the no-PSRAM path use malloc/realloc (see `HttpClient::setBodySink`, `CelerKernel` source loader).
 - CYD runs **unicore** with `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: the free IRAM holds the app source during compile, the TLS buffers, and Duktape overflow past a 24KB DRAM reserve. Tasks must not be pinned to core 1 (use `portNUM_PROCESSORS - 1`).
 - The littlefs partition has CSV subtype `spiffs` but is mounted as LittleFS at `/local`. The SD card is at `/sd`. Boards may overlay (`boards/<b>/data/`) or exclude (`data-exclude.txt`) apps from the factory image — see `tools/flash_data.sh`.
@@ -119,7 +118,7 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 ```
 
 ## NOTES
-- **SECURITY:** the Supabase service_role key was removed from the tree AND purged from the whole git history with `git filter-repo` + force-push (2026-10-01; every commit hash changed). ROTATION in the Supabase dashboard is STILL MANDATORY: the old history remains reachable through old clones, forks and GitHub's PR refs (`refs/pull/1/head`). The key file lives locally at `extras/esp_components/config/config/supabase_config.h` (gitignored, never commit).
+- **SECURITY:** the Supabase service_role key was removed from the tree AND purged from the whole git history with `git filter-repo` + force-push (2026-10-01; every commit hash changed). ROTATION in the Supabase dashboard is STILL MANDATORY: the old history remains reachable through old clones, forks and GitHub's PR refs (`refs/pull/1/head`). Its last local copy (`extras/esp_components/config/config/supabase_config.h`, gitignored, never committed) was deleted together with the `extras/` removal (2026-10-05).
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
 - CI: `build.yml` (tests above + firmware for all 6 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.

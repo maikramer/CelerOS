@@ -1,7 +1,7 @@
 # components/ - ESP-IDF component layer
 
 ## OVERVIEW
-Everything in `components/` is built. Code from the shared `esp_components` lib (satisfaction-hub) that CelerOS does not compile lives in `extras/esp_components/`, which is outside IDF's component search. Adoption map and CelerOS patch list: `README.md` (Portuguese, authoritative).
+Everything in `components/` is built and CelerOS-owned: it descends from the old shared `esp_components` lib (satisfaction-hub) with CelerOS-only patches. The unbuilt remainder was removed from the tree (2026-10; git tag `archive/esp_components` keeps it). Adoption map and CelerOS patch list: `README.md` (Portuguese, authoritative).
 
 ## BUILD MEMBERSHIP
 | Component | Role |
@@ -22,7 +22,7 @@ Everything in `components/` is built. Code from the shared `esp_components` lib 
 | Pub/sub, singleton base | `Utility/Event.h`, `Singleton.h` | Header templates |
 | Error codes | `ErrorCodes/ErrorCode.*`, `CommonErrorCodes.h` | One `<Category>ErrorCodes.{h,cpp}` pair per domain |
 | Change JS engine features | `duktape/celeros_duk_config.yaml` | Regenerate `duktape.c`/`duktape.h`/`duk_config.h` with the recipe in the YAML header (configure.py needs Python 2.7) |
-| Revive a dormant component | `extras/esp_components/<name>` | Move it back, satisfy its `idf_component.yml`, maybe re-enable exceptions |
+| Revive archived code | tag `archive/esp_components` | `git show archive/esp_components:extras/esp_components/<name>`; copy in, satisfy its `idf_component.yml`, maybe re-enable exceptions |
 
 ## CONVENTIONS
 - Registry deps only in `idf_component.yml`; sibling deps in CMake `REQUIRES`, never `path:` entries.
@@ -37,7 +37,7 @@ Everything in `components/` is built. Code from the shared `esp_components` lib 
 - NEVER hand-edit `duktape/duktape.c` or `duk_config.h`; they are generated. Change the YAML and regenerate.
 - NEVER add ES6+ builtins back to Duktape "just in case": apps are ES5 and every builtin costs flash on the CYD.
 - Do not "sync" `Network/` from upstream `esp_components` blindly: `CaptivePortal`, `WifiAP`, `WifiConnection`, `NetworkCredentialStore` carry CelerOS-only patches (see `README.md`).
-- `extras/esp_components/config/config/supabase_config.h` holds a hardcoded Supabase service_role key. Never copy it anywhere; rotate it.
+- Never reintroduce the old `esp_components` config: its `supabase_config.h` carries a leaked Supabase service_role key (see SECURITY in the root `AGENTS.md`). Secrets never live in source.
 
 ## NOTES
 - No unit tests in any component. Verify by building both boards and running on hardware.

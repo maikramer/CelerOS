@@ -30,20 +30,17 @@ for each kind of change.
 +------------------------------^-------------------------------+
                                | includes/REQUIRES
 +------------------------------|-------------------------------+
-| components/  (vendored from esp_components + third parties)  |
-|   Wifi, Connection (NetworkManager: sole radio owner),       |
-|   Http, System (SystemInfo), Utility (Event/Singleton),      |
-|   ErrorCodes, JsonModels, config, LovyanGFX, duktape         |
+| components/  (CelerOS-owned + vendored third parties)        |
+|   Network (NetworkManager: sole radio owner), Http, System   |
+|   (SystemInfo), Storage (NVS), Utility (Event/Singleton),    |
+|   ErrorCodes, LovyanGFX, duktape                             |
 +--------------------------------------------------------------+
 ```
 
-The `BluetoothServer`, `Drivers`, `IoUtility`, `SafeContainers`,
-`Supabase`, `UI` (LVGL), `UserManaging` and `Time` components are excluded
-from the build by the root `EXCLUDE_COMPONENTS` — they are dormant.
-
-Watch the names: `main/` has its own `TimeManager`, `OtaManager`, `UI/Kui`
-and `UI/Keyboard`, which are **not** the classes of the same name in
-`components/`.
+The unused remainder of the old shared `esp_components` lib was removed
+from the tree (Oct 2026) — everything in `components/` is built. The old
+code remains reachable in git history through the `archive/esp_components`
+tag (or the upstream repo).
 
 ## Boot flow
 

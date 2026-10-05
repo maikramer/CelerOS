@@ -1,8 +1,9 @@
 # Componentes do CelerOS
 
-Tudo que esta em `components/` entra no build. Codigo da lib compartilhada
-`esp_components` (satisfaction-hub) que o CelerOS nao compila fica em
-`extras/esp_components/` (fora do alcance do IDF, preservado para reuso).
+Tudo que esta em `components/` entra no build e e codigo do CelerOS: nasceu
+da lib compartilhada `esp_components` (satisfaction-hub) e ganhou patches
+proprios (lista abaixo). As sobras nao adotadas sairam do tree em out/2026;
+estao arquivadas na tag `archive/esp_components` (ou no repo upstream).
 Os `idf_component.yml` declaram apenas dependencias de registry; dependencias
 entre irmaos ficam nos `REQUIRES` dos CMakeLists, sem `path:`.
 
@@ -39,20 +40,23 @@ O flash de OTA nao depende de componente: `main/OTA/OtaManager` chama o
   de uma rede salva — com uma so ele apenas derrubava pacotes de
   requisicoes em curso a cada 30s.
 - **`Utility`**: sem `nlohmann/json` (`ListJsonKeys` removido).
-- **`Storage`**: so `NVS.cpp` compila (o resto esta em `extras/`).
+- **`Storage`**: so `NVS.cpp` compila (o resto foi arquivado).
 
-## extras/esp_components (fora do build)
+## Arquivo (tag archive/esp_components)
 
-`BluetoothServer`, `Drivers`, `IoUtility`, `SafeContainers`, `Supabase`, `UI`
-(LVGL), `UserManaging`, `Time`, `JsonModels`, `config`, e as sobras de
-`Connection` (BaseConnection/Commander), `Wifi` (WifiClient/WifiServer/Telnet/
-WifiOta/OtaManager do upstream/WirelessDevice) e `Storage`
-(Storage::initialize/SdCard/Flash). Para usar algum: mover de volta para
-`components/`, garantir as dependencias do `idf_component.yml` dele e, se
-precisar de try/catch, reabilitar `CONFIG_COMPILER_CXX_EXCEPTIONS`.
+As sobras da lib (`BluetoothServer`, `Drivers`, `IoUtility`, `SafeContainers`,
+`Supabase`, `UI` LVGL, `UserManaging`, `Time`, `JsonModels`, `config`, restos
+de `Connection`/`Wifi`/`Storage`) sairam do tree em out/2026: o repo nao
+carrega mais codigo dormente. Para reaver algo: `git show
+archive/esp_components:extras/esp_components/<nome>` (ou o repo upstream);
+para reviver: copiar para `components/`, garantir as dependencias do
+`idf_component.yml` dele e, se precisar de try/catch, reabilitar
+`CONFIG_COMPILER_CXX_EXCEPTIONS`.
 
-**Atencao:** `extras/esp_components/config/config/supabase_config.h` tem a
-service_role key do Supabase commitada — trate como vazada e rotacione.
+**Atencao:** o config dessa lib tinha a service_role key do Supabase
+commitada — trate como vazada e rotacione. A copia local
+(`extras/esp_components/config/config/`, gitignored) foi destruida junto com
+a exclusao; a chave nunca esteve no git do CelerOS (historico purgado).
 
 ## Requisitos no projeto raiz
 

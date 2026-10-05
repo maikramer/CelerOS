@@ -2,7 +2,8 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 
 # Sem excecoes C++: nenhum codigo do build usa try/catch (nlohmann/JsonModels
-# sairam para extras/). Erro de alocacao/std:: vira abort, como ja era na
+# sairam do tree; sobras da lib esp_components arquivadas na tag
+# archive/esp_components). Erro de alocacao/std:: vira abort, como ja era na
 # pratica (nada capturava). Economiza .eh_frame + runtime de unwinding.
 # CONFIG_COMPILER_CXX_EXCEPTIONS is not set
 

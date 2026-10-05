@@ -23,7 +23,6 @@ __pycache__/
 .omo/
 
 # segredos locais (nunca commitar; ver nota de seguranca no AGENTS.md)
-extras/esp_components/config/config/
 celer_screencap.png
 .env
 .env.local

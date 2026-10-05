@@ -30,20 +30,17 @@ cada tipo de mudança.
 +------------------------------^-------------------------------+
                                | inclui/REQUIRES
 +------------------------------|-------------------------------+
-| components/  (vendados da lib esp_components + terceiros)    |
-|   Wifi, Connection (NetworkManager: unico dono do radio),    |
-|   Http, System (SystemInfo), Utility (Event/Singleton),      |
-|   ErrorCodes, JsonModels, config, LovyanGFX, duktape         |
+| components/  (codigo proprio do CelerOS + terceiros)         |
+|   Network (NetworkManager: unico dono do radio), Http,       |
+|   System (SystemInfo), Storage (NVS), Utility (Event/        |
+|   Singleton), ErrorCodes, LovyanGFX, duktape                 |
 +--------------------------------------------------------------+
 ```
 
-Os componentes `BluetoothServer`, `Drivers`, `IoUtility`,
-`SafeContainers`, `Supabase`, `UI` (LVGL), `UserManaging` e `Time` são
-excluídos da build pelo `EXCLUDE_COMPONENTS` da raiz — estão dormantes.
-
-Atenção aos nomes: `main/` tem os seus próprios `TimeManager`, `OtaManager`,
-`UI/Kui` e `UI/Keyboard`, que **não** são as classes de mesmo nome em
-`components/`.
+As sobras da antiga lib compartilhada `esp_components` saíram do tree
+(out/2026) — tudo em `components/` entra no build. O código antigo segue
+acessível no histórico do git pela tag `archive/esp_components` (ou no
+repo upstream).
 
 ## Boot flow
 
