@@ -1,6 +1,7 @@
 #include "PowerPolicy.h"
 #include "BoardIO.h"
 #include "../Boards/Board.h"
+#include "../Display/Backlight.h"
 #include "../Display/ScreenPower.h"
 #include "../Utils/CelerSettings.h"
 #include "../WebManager/WebManager.h"
@@ -106,7 +107,10 @@ void tick() {
 }
 
 int loopDelayMs() {
-    if (!s_on) return 5;
+    // Sem PM (CYD, SmartDisplay, cao, devkit): com o backlight apagado pelo
+    // timeout o loop so precisa ver o toque que acorda — 20 ms (50 Hz de
+    // poll do touch) em vez de 200 voltas/s de I2C/SPI e servicos a toa.
+    if (!s_on) return Backlight::isOff() ? 20 : 5;
     return ScreenPower::state() >= 2 ? 5 : 50;
 }
 

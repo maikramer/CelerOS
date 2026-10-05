@@ -268,13 +268,32 @@ int Canvas::fontHeight(const lgfx::IFont* font) { return m_target->fontHeight(fo
 
 std::string Canvas::ellipsize(const std::string& s, const lgfx::IFont* font, int maxW) {
     if (textWidth(s.c_str(), font) <= maxW) return s;
-    std::string out = s;
-    while (!out.empty()) {
-        out.pop_back();
+    // Busca binaria do maior prefixo que cabe com ".." — antes era um byte
+    // por vez, com uma string temporaria e um textWidth a cada passo, e na
+    // CYD o render em faixas repete o draw da tela ~19x por quadro. Um
+    // buffer so, reaproveitado entre as medidas.
+    std::string out;
+    out.reserve(s.size() + 2);
+    auto withDots = [&](size_t n) {
+        out.assign(s, 0, n);
         while (!out.empty() && out.back() == ' ') out.pop_back();
-        if (textWidth((out + "..").c_str(), font) <= maxW) return out + "..";
+        out += "..";
+    };
+    size_t lo = 0, hi = s.size();  // s inteira nao coube: hi nunca cabe
+    while (hi - lo > 1) {
+        const size_t mid = lo + (hi - lo) / 2;
+        withDots(mid);
+        if (textWidth(out.c_str(), font) <= maxW) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
     }
-    return "..";
+    // nao corta no meio de um caractere UTF-8 (byte de continuacao 10xxxxxx):
+    // o byte inicial sozinho virava um glifo lixo
+    while (lo > 0 && ((uint8_t)s[lo] & 0xC0) == 0x80) lo--;
+    withDots(lo);
+    return out;
 }
 
 std::vector<std::string> Canvas::wrapText(const std::string& s, const lgfx::IFont* font, int maxW,
@@ -966,6 +985,7 @@ bool offUiTask() {
 }
 
 bool s_repaint = true;
+bool s_repaintOnWake = false;   // tela apagou com o Navigator vivo: redesenha ao acender
 bool s_inputSuspended = false;  // app JS em task propria: UI pausa o pump
 uint32_t s_lastTickMs = 0;
 TouchPump s_pump;
@@ -1211,6 +1231,19 @@ void Navigator::tick() {
             if (!s_toasts.empty()) s_toasts.front().shownAtMs = 0;  // conta do desenho
             s_repaint = true;
         }
+    }
+
+    // Tela apagada (timeout do Backlight / watch em off): compor e empurrar
+    // quadros para um vidro escuro so gasta CPU, SPI e bateria (relogio do
+    // launcher, spinner...). O pedido fica pendente e o primeiro tick com a
+    // tela acesa redesenha tudo (o toque que acorda e engolido no readTouch).
+    if (Backlight::isOff()) {
+        s_repaintOnWake = true;
+        return;
+    }
+    if (s_repaintOnWake) {
+        s_repaintOnWake = false;
+        s_repaint = true;
     }
 
     // suppressRedraw: app JS rodando em task propria e dono do vidro — nem
