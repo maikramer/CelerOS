@@ -15,6 +15,7 @@
 #include "../../Launcher/AlarmScreen.h"
 #include "../../Launcher/WatchPanels.h"
 #include "../../Launcher/NotificationAlert.h"
+#include "../../USBDevice/LogPersist.h"
 #include "../../USBDevice/DebugBridge.h"
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../../Bluetooth/PhoneLink.h"
@@ -43,7 +44,9 @@ void svcPhoneScreens(bool) { PhoneScreens::service(); }
 #endif
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
 void svcOtaConfirm(bool) { confirmPendingOta(); }
-
+// LogPersist (kern.log/apps.log): flush a cada ~3 s — ALWAYS para roda com
+// app aberto (o teste de voz do cao acontece DENTRO do Dog Face)
+void svcLogPersist(bool) { LogPersist::tick(); }
 // ALWAYS: com app aberto o bridge segue vivo (logcat/debug de um app em run)
 void svcDebugBridge(bool inApp) { DebugBridge::tick(inApp); }
 
@@ -86,6 +89,7 @@ const CelerServices::Service kServices[] = {
 #endif
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},
+    {"logpersist", svcLogPersist, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
     // fim da fila no present(): erro no callback de alarme nao pula o resto
     {"alarmscheck", svcAlarmsCheck, CelerServices::PRESENT},

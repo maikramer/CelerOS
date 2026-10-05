@@ -18,6 +18,11 @@ bool celer_log_silent(void);
 void celer_log_println(const char* s);
 void celer_log_print(const char* s);
 
+// Print de APP JS (System.print): roteacao igual a do celer_log_printf com
+// o pacote na frente ("[app:dogface]") e persistencia no apps.log (o
+// celer_log_* comum e firmware e vai pro kern.log — ver LogPersist.h)
+void celer_log_app(const char* pkg, const char* msg);
+
 // Logcat (uso do HostLink)
 void celer_logcat_set(bool on);
 bool celer_logcat_active(void);

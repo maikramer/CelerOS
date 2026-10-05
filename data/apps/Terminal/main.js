@@ -134,6 +134,22 @@ function fmtUptime(ms) {
     return h + "h" + (m < 10 ? "0" : "") + m + "m" + (s < 10 ? "0" : "") + s;
 }
 
+// tail de arquivo (logs): ultimas n linhas na tela
+function tailFile(p, n) {
+    var txt = FS.readTextFile(p);
+    if (txt === null || txt === "") { out(p + ": vazio ou inexistente", T.err); return; }
+    var ls = txt.replace(/\n+$/, "").split("\n");
+    var skip = ls.length - n;
+    if (skip < 0) skip = 0;
+    for (var i = skip; i < ls.length; i++) out(ls[i]);
+    if (skip > 0) out("... (" + skip + " linhas anteriores em " + p + ")", T.textDim);
+}
+function tailN(a, idx, dflt) {
+    var n = a.length > idx ? parseInt(a[idx], 10) : dflt;
+    if (!n || n < 1) n = dflt;
+    return n > 200 ? 200 : n;
+}
+
 var LOGO = [
     " _  ___  ___ ",
     "| |/ _ \\/ __|",
@@ -144,7 +160,8 @@ var LOGO = [
 var cmds = {
     help: function(a) {
         out("Comandos:", T.accent);
-        out("  ls cd pwd cat echo touch mkdir rmdir rm");
+        out("  ls cd pwd cat tail echo touch mkdir rmdir rm");
+        out("  dmesg appslog  (logs: kern.log / apps.log)");
         out("  mv cp df free uname date uptime whoami");
         out("  apps vol tone battery sensors");
         out("  history !! !n clear neofetch js wifi reboot exit");
@@ -186,6 +203,15 @@ var cmds = {
             var ls = txt.split("\n");
             for (var i = 0; i < ls.length; i++) out(ls[i]);
         }
+    },
+    // ---- logs persistentes (/local/log ou /sd/log, padrao /var/log) ----
+    // dmesg = kern.log (firmware/ESP_LOG), appslog = apps.log (System.print
+    // dos apps, com o pacote na frente); tail serve qualquer arquivo
+    dmesg: function(a) { tailFile("/local/log/kern.log", tailN(a, 0, 24)); },
+    appslog: function(a) { tailFile("/local/log/apps.log", tailN(a, 0, 24)); },
+    tail: function(a) {
+        if (!a.length) { out("uso: tail <arquivo> [linhas]", T.warn); return; }
+        tailFile(resolve(a[0]), tailN(a, 1, 10));
     },
     echo: function(a) {
         var txt = [], redir = 0, rp = null;

@@ -78,6 +78,10 @@ static void bootSplash(const char* status) {
 
 static void celerSetup() {
     Serial.begin(115200);
+    // NimBLE em INFO dispara "GATT procedure initiated" a cada notify (o
+    // link vivo manda um ~1,6 s): afogava ring e kern.log. WARN basta — os
+    // erros reais do host continuam aparecendo (bancada 2026-10-05)
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
     celer_log_println("\n--- CelerOS Booting ---");
     celer_log_printf("board: %s\n", Board::profile().name);
     if (Board::profile().hasPsram) {

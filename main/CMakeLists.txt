@@ -52,6 +52,7 @@ set(CELEROS_SRCS
     "USBDevice/DebugBridge.cpp"
     "USBDevice/HostLink.cpp"
     "USBDevice/JsDebugger.cpp"
+    "USBDevice/LogPersist.cpp"
     "USBDevice/SerialLink.cpp"
     "UI/Kui.cpp"
     "UI/Keyboard.cpp"

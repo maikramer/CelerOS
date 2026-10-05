@@ -2,6 +2,7 @@
 #include "HostLink.h"
 #include "esp_attr.h"
 #include "CelerShell.h"
+#include "LogPersist.h"
 #include "LogSink.h"
 
 #include <stdio.h>
@@ -237,6 +238,7 @@ bool SerialLink::initLogOnly() {
     s_writeMutex = xSemaphoreCreateMutex();
     s_logMutex = xSemaphoreCreateMutex();
     if (s_writeMutex == nullptr || s_logMutex == nullptr) return false;
+    LogPersist::init();  // staging dos logs em arquivo (kern.log/apps.log)
     s_defaultVprintf = esp_log_set_vprintf(logHookVprintf);
     s_defaultVprintfSaved = true;
     return true;
@@ -257,6 +259,7 @@ bool SerialLink::init() {
         ESP_LOGE(TAG, "sem memoria para mutexes do console");
         return false;
     }
+    LogPersist::init();  // staging dos logs em arquivo (kern.log/apps.log)
 
     // hook permanente: ESP_LOG* passa pelo LogSink (ring + logcat), mantendo
     // a saida normal na UART fora de sessoes celerctl
@@ -334,6 +337,7 @@ void celer_log_vprintf(const char* fmt, va_list args) {
     } else {
         ringPush(line, (size_t)n);
     }
+    LogPersist::kern(line, (size_t)n);  // /log/kern.log (dedup + rotacao)
     if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
 
     if (s_mode != MODE_LINK) printf("%.*s", n, line);
@@ -348,6 +352,30 @@ void celer_log_printf(const char* fmt, ...) {
 
 void celer_log_println(const char* s) { celer_log_printf("%s\n", s); }
 void celer_log_print(const char* s) { celer_log_printf("%s", s); }
+
+// Print de APP JS (System.print): mesma roteacao do celer_log_printf com o
+// pacote na frente ("[app:dogface]" — o filtro "logcat --grep app" segue
+// funcionando) e a linha vai pro apps.log do LogPersist com o nome por
+// extenso (programname do syslog). O celer_log_* comum e firmware/kern.log.
+void celer_log_app(const char* pkg, const char* msg) {
+    const char* name = (pkg != nullptr && pkg[0] != '\0') ? pkg : "js";
+    const char* base = strstr(name, "celeros.") == name ? name + 8 : name;
+    char line[240];
+    int n = snprintf(line, sizeof(line), "[app:%.20s] %.190s\n", base, msg != nullptr ? msg : "");
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof(line)) n = (int)sizeof(line) - 1;
+
+    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    if (s_logcat) {
+        HostLink::sendLogFrame(line, (size_t)n);
+    } else {
+        ringPush(line, (size_t)n);
+    }
+    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+
+    if (s_mode != MODE_LINK) printf("%.*s", n, line);
+    LogPersist::app(base, msg != nullptr ? msg : "");  // /log/apps.log
+}
 
 void celer_logcat_set(bool on) {
     if (s_logMutex == nullptr) return;
