@@ -634,6 +634,7 @@ struct MultipartCtx {
     // destino
     FILE* file = nullptr;
     std::string filePath;
+    std::string partPath;      // escrita em curso (renomeada para filePath no fim)
     bool isFirmware = false;
     esp_ota_handle_t ota = 0;
     const esp_partition_t* part = nullptr;
@@ -684,7 +685,12 @@ struct MultipartCtx {
             }
         }
 
-        file = fopen(filePath.c_str(), "wb");
+        // Escreve ao lado e so troca no fim: abrir o destino com "wb" zerava
+        // o arquivo existente e uma queda no meio do upload (WiFi, aba
+        // fechada) o apagava de vez — reenviar o main.js de um app que
+        // falhava deixava o app sem fonte
+        partPath = filePath + ".part";
+        file = fopen(partPath.c_str(), "wb");
         if (file == nullptr) fail("cannot open " + filePath);
     }
 
@@ -699,9 +705,14 @@ struct MultipartCtx {
 
     void closeDest(bool finished) {
         if (file != nullptr) {
-            fclose(file);
+            if (fclose(file) != 0) fail("file write");  // flush final (disco cheio)
             file = nullptr;
-            if (errored) remove(filePath.c_str());  // nao deixa parcial
+            if (errored || !finished) {
+                remove(partPath.c_str());  // nao deixa parcial; o original fica
+            } else if (!FileSystem::renameFile(partPath.c_str(), filePath.c_str())) {
+                remove(partPath.c_str());
+                fail("cannot replace " + filePath);
+            }
         }
         if (isFirmware && ota != 0) {
             if (errored || !finished) {

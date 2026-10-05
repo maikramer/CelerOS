@@ -13,7 +13,6 @@ public:
                         const char* appPkg = "", uint32_t perms = 0xFFFFFFFFu);
     static void loop();
     static void executeJS(const char* jsCode);
-    static std::string checkSyntax(const char* jsCode);
     static duk_context *ctx;
     static CelerDisplay *tftInstance;
     // Heap livre para o app corrente no inicio (DRAM + IRAM de transbordo,

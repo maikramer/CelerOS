@@ -106,9 +106,10 @@ public:
     ErrorCode setNetworkPriority(const std::string& ssid, int8_t priority);
 
     /**
-     * @brief Update the last connected timestamp for a network.
+     * @brief Update the last connected timestamp for a network (memoria so;
+     *        nao vai ao NVS, como o lastRssi).
      * @param ssid The SSID of the network.
-     * @param timestamp The timestamp (epoch seconds). If 0, uses current time.
+     * @param timestamp The timestamp (uptime seconds). If 0, uses current time.
      * @return ErrorCode indicating success or failure.
      */
     ErrorCode updateLastConnected(const std::string& ssid, uint32_t timestamp = 0);

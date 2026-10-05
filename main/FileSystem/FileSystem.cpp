@@ -357,7 +357,12 @@ bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
         return false;
     }
 
-    FILE* dst = fopen(dstPath, "wb");
+    // Copia ao lado e troca no fim (como o writeTextFile): o "wb" direto
+    // zerava o destino e uma falha no meio (disco cheio, SD solto) apagava
+    // o arquivo que existia — atualizar um app instalado o deixava sem
+    // main.js. renameFile cobre o FAT (remove o destino antes).
+    std::string tmp = std::string(dstPath) + ".tmp";
+    FILE* dst = fopen(tmp.c_str(), "wb");
     if (dst == nullptr) {
         fclose(src);
         return false;
@@ -376,7 +381,8 @@ bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
     free(buf);
     fclose(src);
     ok = (fclose(dst) == 0) && ok;
-    if (!ok) unlink(dstPath);  // sem copia pela metade com cara de valida
+    if (ok) ok = renameFile(tmp.c_str(), dstPath);
+    if (!ok) unlink(tmp.c_str());  // sem copia pela metade com cara de valida
     return ok;
 }
 

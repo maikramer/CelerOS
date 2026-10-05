@@ -131,6 +131,19 @@ HttpResponse HttpClient::request(HttpMethod method,
 
 // ========== Internal ==========
 
+bool HttpClient::interimResponse(esp_http_client_handle_t client) const {
+    // O esp_http_client_perform le o corpo da resposta 3xx/401 inteiro (e o
+    // entrega em ON_DATA) ANTES de refazer a requisicao: sem este filtro o
+    // "Moved"/"Unauthorized" do servidor ia parar na frente do corpo real
+    // (Net.get) ou do arquivo baixado (Net.download/instalacao de app).
+    const int st = esp_http_client_get_status_code(client);
+    if (_config.followRedirects &&
+        (st == 301 || st == 302 || st == 303 || st == 307 || st == 308)) {
+        return true;
+    }
+    return st == 401 && !_username.empty();
+}
+
 int HttpClient::eventHandler(esp_http_client_event_t* event) {
     HttpClient* self = static_cast<HttpClient*>(event->user_data);
 
@@ -157,6 +170,7 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
 
         case HTTP_EVENT_ON_DATA:
             ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", event->data_len);
+            if (self != nullptr && self->interimResponse(event->client)) break;
             if (self != nullptr && self->_bodySink && event->data_len > 0 && !self->_bodyOom) {
                 if (!self->_bodySink(static_cast<const char*>(event->data), (size_t)event->data_len)) {
                     self->_bodyOom = true;
@@ -362,12 +376,20 @@ int HttpClient::dlFileEventHandler(esp_http_client_event_t* evt) {
 
     switch (evt->event_id) {
         case HTTP_EVENT_ON_HEADER:
-            // esp_http_client ja acumula headers padrao; nada a fazer aqui
+            // total para o progresso (antes ficava sempre -1); um redirect
+            // reescreve com o Content-Length da resposta final
+            if (strcasecmp(evt->header_key, "Content-Length") == 0) {
+                self->_contentLength = strtoll(evt->header_value, nullptr, 10);
+            }
             break;
         case HTTP_EVENT_ON_DATA: {
+            if (self->interimResponse(evt->client)) break;  // corpo do 3xx/401
             FILE* f = static_cast<FILE*>(self->_dlFile);
-            if (f != nullptr && evt->data != nullptr && evt->data_len > 0) {
+            if (f != nullptr && evt->data != nullptr && evt->data_len > 0 && !self->_dlWriteErr) {
                 size_t written = fwrite(evt->data, 1, evt->data_len, f);
+                // disco cheio: o fwrite curto antes passava em silencio e o
+                // arquivo truncado era renomeado por cima do destino
+                if (written != (size_t)evt->data_len) self->_dlWriteErr = true;
                 self->_dlReceived += (int64_t)written;
                 if (self->_progressCallback) {
                     self->_progressCallback(self->_dlReceived, self->_contentLength);
@@ -386,6 +408,7 @@ HttpResponse HttpClient::downloadToFile(const std::string& url, const std::strin
     _responseBody = nullptr;
     _contentLength = -1;
     _dlReceived = 0;
+    _dlWriteErr = false;
 
     uint64_t startTime = esp_timer_get_time();
 
@@ -432,14 +455,18 @@ HttpResponse HttpClient::downloadToFile(const std::string& url, const std::strin
         esp_http_client_cleanup(client);
     }
 
-    fclose(f);
+    // fclose faz o flush final: o erro de disco cheio tambem aparece aqui
+    if (fclose(f) != 0) _dlWriteErr = true;
     _dlFile = nullptr;
+    if (err == ESP_OK && _dlWriteErr) err = ESP_ERR_NO_MEM;
 
     response.success = (err == ESP_OK && response.statusCode >= 200 && response.statusCode < 300);
     response.durationMs = (uint32_t)((esp_timer_get_time() - startTime) / 1000);
 
     if (!response.success) {
-        if (err != ESP_OK) {
+        if (_dlWriteErr) {
+            response.errorMessage = "write failed (disk full?)";
+        } else if (err != ESP_OK) {
             response.errorMessage = esp_err_to_name(err);
         } else {
             response.errorMessage = "HTTP status " + std::to_string(response.statusCode);

@@ -202,7 +202,12 @@ ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, u
     ESP_LOGD(TAG, "Updated lastConnected for %s to %lu", ssid.c_str(), 
              static_cast<unsigned long>(timestamp));
 
-    return saveToNvs();
+    // So em memoria (como o lastRssi): o timestamp e uptime (esp_timer), sem
+    // sentido depois de um reboot, e cada conexao chamava isto DUAS vezes
+    // (connect + evento) — cada saveToNvs reescrevia a lista inteira com
+    // ~160 open/commit de NVS no caminho da conexao, desgastando a flash a
+    // cada religada do WiFi (o watch religa a cada vez que a tela acende).
+    return CommonErrorCodes::None;
 }
 
 ErrorCode NetworkCredentialStore::updateLastRssi(const std::string& ssid, int8_t rssi) {

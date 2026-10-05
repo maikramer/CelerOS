@@ -480,7 +480,7 @@ static void my_fatal(void *udata, const char *msg) {
 void CelerKernel::init(CelerDisplay *tft) {
     tftInstance = tft;
     // Duktape heap is no longer initialized here to save 60-80KB of RAM for the WebServer/WiFi.
-    // It will be allocated on-demand in runFile() and checkSyntax().
+    // It will be allocated on-demand in runFile().
     celer_log_println("CelerKernel initialized successfully.");
 }
 
@@ -504,20 +504,21 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             return;
         }
 
-        std::string errorMsg;
+        // Texto do erro direto do value stack (vivo ate o duk_pop abaixo):
+        // sem std::string — no OOM o heap do sistema pode nao ter o bloco
+        // para copiar uma stack longa e o new sem excecao abortava o
+        // aparelho justamente no caminho que devia mostrar o erro
         if (duk_is_error(ctx, -1)) {
             duk_get_prop_string(ctx, -1, "stack");
-            errorMsg = duk_safe_to_string(ctx, -1);
-            duk_pop(ctx);
-        } else {
-            errorMsg = duk_safe_to_string(ctx, -1);
+            duk_replace(ctx, -2);  // a stack substitui o objeto de erro
         }
+        const char* errorMsg = duk_safe_to_string(ctx, -1);
 
         // Intercept OOM signals
-        if (errorMsg.find("alloc") != std::string::npos || errorMsg.find("out of memory") != std::string::npos) {
+        if (strstr(errorMsg, "alloc") != nullptr || strstr(errorMsg, "out of memory") != nullptr) {
             // antes este caminho era mudo (nem no UART): morte silenciosa do app
-            celer_log_printf("JS OOM (sem memoria): %s\n", errorMsg.c_str());
-            recordCrash("OOM (sem memoria)", errorMsg.c_str());
+            celer_log_printf("JS OOM (sem memoria): %s\n", errorMsg);
+            recordCrash("OOM (sem memoria)", errorMsg);
             showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
             duk_pop(ctx);
             // This is a soft-error (not Duktape fatal), so we can just return safely to Launcher
@@ -525,8 +526,8 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
         }
 
         celer_log_print("JS Execution Error: ");
-        celer_log_println(errorMsg.c_str());
-        recordCrash("Erro no app", errorMsg.c_str());
+        celer_log_println(errorMsg);
+        recordCrash("Erro no app", errorMsg);
 
         showRuntimeError(i18n::TR("Erro no app", "App error"), errorMsg);
     }
@@ -538,67 +539,6 @@ void CelerKernel::executeJS(const char* jsCode) {
     
     duk_int_t rc = duk_peval_string(ctx, jsCode);
     checkJSError(ctx, rc);
-}
-
-// Struct to pass data to the syntax check task
-struct SyntaxCheckParams {
-    const char* jsCode;
-    std::string result;
-    bool done;
-};
-
-static void syntaxCheckTask(void* param) {
-    SyntaxCheckParams* p = (SyntaxCheckParams*)param;
-    
-    duk_context *tempCtx = duk_create_heap(my_alloc, my_realloc, my_free, nullptr, nullptr);
-    if (!tempCtx) {
-        p->result = "Out of Memory allocating JS heap";
-        p->done = true;
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    duk_int_t rc = duk_pcompile_string(tempCtx, 0, p->jsCode);
-    if (rc != 0) {
-        p->result = duk_safe_to_string(tempCtx, -1);
-        celer_log_printf("Syntax Error: %s\n", p->result.c_str());
-    } else {
-        p->result = "";
-    }
-    duk_pop(tempCtx);
-    duk_destroy_heap(tempCtx);
-    
-    p->done = true;
-    vTaskDelete(NULL);
-}
-
-std::string CelerKernel::checkSyntax(const char* jsCode) {
-    SyntaxCheckParams params;
-    params.jsCode = jsCode;
-    params.result = "";
-    params.done = false;
-    
-    // Run in a dedicated task with 16KB stack to avoid overflowing loopTask
-    BaseType_t created = xTaskCreatePinnedToCore(
-        syntaxCheckTask,
-        "syntaxChk",
-        16384,        // 16KB stack just for this task
-        &params,
-        1,            // Low priority
-        NULL,
-        portNUM_PROCESSORS - 1  // core 1 (APP) no dual-core; 0 na CYD unicore
-    );
-    
-    if (created != pdPASS) {
-        return "Failed to create syntax check task";
-    }
-    
-    // Block until the task finishes
-    while (!params.done) {
-        delay(10);
-    }
-    
-    return params.result;
 }
 
 void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed,

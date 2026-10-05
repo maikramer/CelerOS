@@ -325,6 +325,13 @@ private:
     static int dlFileEventHandler(esp_http_client_event_t* evt);
 
     /**
+     * @brief Resposta intermediaria que o esp_http_client_perform descarta
+     * (redirect seguido, 401 com retry de auth): o corpo dela tambem chega
+     * em HTTP_EVENT_ON_DATA e nao pode ir para o corpo/arquivo final.
+     */
+    bool interimResponse(esp_http_client_handle_t client) const;
+
+    /**
      * @brief Convert HttpMethod to esp_http_client method.
      */
     static int toEspMethod(HttpMethod method);
@@ -346,6 +353,7 @@ private:
     // For downloadToFile
     void* _dlFile = nullptr;        // FILE* em curso
     int64_t _dlReceived = 0;
+    bool _dlWriteErr = false;       // fwrite curto (disco cheio): download falha
 
     static constexpr const char* TAG = "HttpClient";
 };
