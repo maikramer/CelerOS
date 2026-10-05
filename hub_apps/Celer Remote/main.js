@@ -70,7 +70,9 @@ function bars(rssi) {
 }
 
 // Esvazia a fila do link: telemetria nova, respostas do cao (say) e, se
-// pedido, devolve a primeira mensagem do tipo `want`
+// pedido, devolve a primeira mensagem do tipo `want`. Ecos do afino
+// ({type:"hop"}/{type:"stance"}) alimentam o painel de afino.
+var lastHop = null, lastStance = null;
 function pollLink(want) {
     for (var k = 0; k < 8; k++) {
         var m = CelerLink.poll();
@@ -80,6 +82,8 @@ function pollLink(want) {
         if (!v) continue;
         if (v.type === "tel") tel = v;
         else if (v.type === "say") note("cão: " + String(v.text || "").substring(0, 60), 6000);
+        else if (v.type === "hop") lastHop = v;
+        else if (v.type === "stance") lastStance = v;
         if (want && v.type === want) return v;
     }
     return null;
@@ -189,8 +193,9 @@ var PAD = [
     [94, 144, 52, 48, "stop"]
 ];
 var STOP_IDX = 4;
-var MODE_BTN = [LX, 256, 108, 30];
-var TRICK_BTN = [LX + 116, 256, 108, 30];
+var MODE_BTN = [LX, 256, 92, 30];
+var TRICK_BTN = [LX + 96, 256, 62, 30];
+var TUNE_BTN = [LX + 162, 256, 70, 30];
 var WIFI_BTN = [W - 62, 4, 56, 32];
 var held = -1;
 var padDrawn = -2;      // seta desenhada por ultimo (-2 = redesenhar)
@@ -202,6 +207,7 @@ function wifiAvailable() {
 }
 function hasModes() { return !!(tel && tel.mode && tel.modes && tel.modes.length > 1); }
 function hasTricks() { return !!(tel && tel.tricks && tel.tricks.length); }
+function hasTune() { return !!(tel && tel.tune); }
 
 // Desenho proprio do D-pad: so quando a seta segurada muda ou frame total
 function drawPad(full) {
@@ -313,11 +319,21 @@ function ctrlFrame(full) {
         CelerLink.send({type: "mode", walk: next});
     }
     // Truques que o ROBO anunciou (tel.tricks): robo velho/sem truques nao mostra
-    if (hasTricks() && UI.button("truques (" + tel.tricks.length + ")", TRICK_BTN[0], TRICK_BTN[1],
+    if (hasTricks() && UI.button("truques", TRICK_BTN[0], TRICK_BTN[1],
                                  TRICK_BTN[2], TRICK_BTN[3], { style: "ghost", role: "caption" })) {
         held = -1;
         var tnote = trickScreen();
         if (tnote) note(tnote, 6000);
+        UI.invalidate();
+        return;
+    }
+    // Afino de bancada (Dog Face 1.9.7 anuncia tel.tune): ajusta o hop do
+    // robo ao vivo pelo BLE — sem cabo
+    if (hasTune() && UI.button("afinar", TUNE_BTN[0], TUNE_BTN[1],
+                               TUNE_BTN[2], TUNE_BTN[3], { style: "ghost", role: "caption" })) {
+        held = -1;
+        var anote = tuneScreen();
+        if (anote) note(anote, 6000);
         UI.invalidate();
         return;
     }
@@ -422,6 +438,72 @@ function trickScreen() {
     }
 }
 
+// ---- afino do cao (Dog Face 1.9.7) -------------------------------------------
+// Bancada SEM CABO: cada toque manda um {type:"tune"} — o cao aplica NA
+// HORA (postura/defasagem) ou no proximo pulo (esperas) e persiste no
+// dogtune dele; o eco ({type:"hop"} / {type:"stance"}) e a verdade. O
+// vencedor da sessao vira default no Dog Face na proxima gravada por cabo.
+var TUNE_ROWS = [
+    { k: "air",    lbl: "abertura",  min: -200, max: 800,  stp: 10, grp: "hop" },
+    { k: "leanR",  lbl: "traseira",  min: 0,    max: 40,   stp: 5,  grp: "stance" },
+    { k: "fall",   lbl: "queda",     min: 0,    max: 1200, stp: 20, grp: "hop" },
+    { k: "land",   lbl: "pouso",     min: 0,    max: 600,  stp: 10, grp: "hop" },
+    { k: "settle", lbl: "deslize",   min: 0,    max: 800,  stp: 10, grp: "hop" },
+    { k: "rest",   lbl: "descanso",  min: 0,    max: 2000, stp: 25, grp: "hop" }
+];
+function tuneVal(r) {
+    var src = r.grp === "hop" ? lastHop : lastStance;
+    var v = src ? src[r.k] : null;
+    return (typeof v === "number") ? v : 0;
+}
+function tuneBump(r, delta) {
+    var v = Math.max(r.min, Math.min(r.max, tuneVal(r) + delta));
+    var msg = { type: "tune" };
+    if (r.grp === "hop") { msg.hop = {}; msg.hop[r.k] = v; } else msg[r.k] = v;
+    if (CelerLink.send(msg)) {
+        var eco = waitMsg(r.grp === "hop" ? "hop" : "stance", 2000);
+        if (eco) note("afinado: " + r.lbl + " = " + v, 2500);
+        else note("mandado (sem eco)", 2500);
+    } else note("falha ao enviar", 3000);
+}
+function tuneScreen() {
+    if (!CelerLink.send({ type: "tune" })) return "afino: falha ao pedir estado";
+    lastHop = waitMsg("hop", 3000);
+    lastStance = waitMsg("stance", 1500);
+    if (!lastHop) return "afino: robo não respondeu (Dog Face 1.9.7+)";
+    var dirty = true;
+    while (true) {
+        if (dirty) { UI.invalidate(); dirty = false; }
+        UI.begin(TH.bg);
+        var back = UI.header("Afinar marcha", { back: true, sub: "vale na hora · fica salvo no robô" });
+        var y = 50;
+        for (var i = 0; i < TUNE_ROWS.length; i++) {
+            var r = TUNE_ROWS[i];
+            UI.text(r.lbl, LX + 2, y + 19, { role: "caption", color: TH.textDim, w: 92 });
+            UI.text("" + tuneVal(r), 158, y + 19,
+                    { role: "caption", align: "right", w: 54, color: TH.text });
+            if (UI.button("-", 162, y, 30, 30, { style: "ghost", role: "caption" })) { tuneBump(r, -r.stp); dirty = true; }
+            if (UI.button("+", 198, y, 30, 30, { style: "ghost", role: "caption" })) { tuneBump(r, r.stp); dirty = true; }
+            y += 34;
+        }
+        UI.text("abertura < 0: dianteira lidera o chute", 120, y + 4,
+                { role: "caption", align: "center", color: TH.textDim, w: LW });
+        if (UI.button("testar: andar 3 s", LX, y + 20, LW, 36)) {
+            UI.end();
+            busy("Afinar marcha", "andando 3 s (solto o robô!)...");
+            CelerLink.send({ type: "gait", name: "walk", repeat: true });
+            System.delay(3000);
+            CelerLink.send({ type: "stop" });
+            dirty = true;
+            continue;
+        }
+        UI.end();
+        if (back) { CelerLink.send({ type: "stop" }); return null; }
+        pollLink(null);
+        if (!CelerLink.status().connected) return "conexão perdida";
+    }
+}
+
 // ---- sem Celer Link (placa sem BT) ---------------------------------------
 if (typeof CelerLink === "undefined") {
     UI.begin(TH.bg);
@@ -447,7 +529,7 @@ while (true) {
         // esvazia a fila: so a telemetria mais nova importa; botoes que
         // aparecem/somem com a telemetria pedem frame total
         pollLink(null);
-        var sig = (hasModes() ? "m" : "") + (hasTricks() ? "t" + tel.tricks.length : "") + (wifiAvailable() ? "w" : "");
+        var sig = (hasModes() ? "m" : "") + (hasTricks() ? "t" : "") + (hasTune() ? "a" : "") + (wifiAvailable() ? "w" : "");
         if (sig !== chromeSig) {
             chromeSig = sig;
             UI.invalidate();

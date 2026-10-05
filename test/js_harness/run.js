@@ -2047,13 +2047,13 @@ function holdFrames(x, y, n) {
         };
         env.__harness.tap(120, 80);                    // conecta no dog
         env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
-        env.__harness.tap(180, 268);                   // botao truques (metade direita)
+        env.__harness.tap(135, 271);                   // botao truques (fileira de baixo)
         env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }]);
         env.__harness.tap(120, 77);                    // 1o truque da grade (dance)
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('botao de truques com tel.tricks', j.indexOf('truques (3)') >= 0);
+    check('botao de truques com tel.tricks', j.indexOf('truques') >= 0);
     check('grade lista os truques do robo (incl. do dono)',
           j.indexOf('dance') >= 0 && j.indexOf('super_truco') >= 0);
     check('toque manda {type:trick} pelo nome', j.indexOf('[link] tx {"type":"trick","name":"dance"}') >= 0);
@@ -2074,8 +2074,44 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('sem tel.tricks o botao nao aparece', j.indexOf('truques (') < 0);
+    check('sem tel.tricks o botao nao aparece', j.indexOf('truques') < 0);
     check('nenhum trick sai do remote', j.indexOf('[link] tx {"type":"trick"') < 0);
+})();
+
+(function() {
+    console.log('Celer Remote 1.7 (painel de afino, Dog Face 1.9.7):');
+    var r = runApp('hub_apps/Celer Remote/main.js', function(env) {
+        var lg = env.__harness.log;
+        env.CelerLink.scan = function() { return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-Dog', rssi: -48 }]; };
+        env.CelerLink.connect = function() { return true; };
+        env.CelerLink.status = function() { return { connected: true, peer: 'AA:BB:CC:DD:EE:FF' }; };
+        // robo simulado: tel.tune anuncia o painel; cada tune recebido volta
+        // com eco hop (air do eco = -50 + 10 por ajuste, como se aplicasse)
+        var telSent = false, echoes = 0;
+        env.CelerLink.poll = function() {
+            var j = lg.join('\n');
+            if (!telSent) {
+                telSent = true;
+                return '{"type":"tel","batt":4100,"state":"stand","tune":1}';
+            }
+            var n = (j.match(/tx \{"type":"tune"/g) || []).length;
+            if (n > echoes) {
+                echoes = n;
+                return JSON.stringify({ type: 'hop', air: -50 + 10 * (n - 1), fall: 120 });
+            }
+            return null;
+        };
+        env.__harness.tap(120, 80);            // conecta no dog
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }, { x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(195, 271);           // botao afinar (fileira de baixo)
+        env.__harness.pushTouch([{ x: 0, y: 0, touched: 0 }]);
+        env.__harness.tap(212, 64);            // "+" da 1a linha (abertura/air)
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('painel pede estado com tune vazio', j.indexOf('tx {"type":"tune"}') >= 0);
+    check('ajuste manda o knob pelo link', j.indexOf('tx {"type":"tune","hop":{"air":-40}}') >= 0, j.slice(-200));
+    check('painel desenha a linha da abertura', j.indexOf('abertura') >= 0);
 })();
 
 (function() {
