@@ -635,6 +635,15 @@ int cmdBridge(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "token novo: %s\r\n", DebugBridge::token());
         return 0;
     }
+    if (argc >= 3 && strcmp(argv[1], "set") == 0) {
+        // caminho de automacao do "celerctl provision": token escolhido
+        if (!DebugBridge::tokenSet(argv[2])) {
+            print(ctx, "bridge set: token invalido (6..31 chars, sem espacos)\r\n");
+            return 1;
+        }
+        print(ctx, "token gravado: %s\r\n", DebugBridge::token());
+        return 0;
+    }
     char ip[16] = "";
     bool hasIp = ipOf(ip, sizeof(ip));
     print(ctx,

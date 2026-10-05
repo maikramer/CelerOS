@@ -11,6 +11,7 @@ dois lados em sincronia.
 Comandos:
   devices [-l]                lista placas CelerOS conectadas (USB e WiFi)
   pair IP[:PORTA] [--token T] pareia com o bridge WiFi e guarda o token
+  provision [--wifi SSID SENHA] [--grant APP]  WiFi + token + permissoes (1a vez)
   info                        versao/board/heap/rede/filesystems
   top [-w] [--sort cpu|stack|name]  profiling: CPU% por task em janela,
                               heap interna/PSRAM, consumo do app JS, fps
@@ -53,6 +54,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import select
 import socket
 import struct
@@ -720,7 +722,10 @@ class HostLink:
         return self._read_frame(timeout=timeout)
 
     def ota_write(self, local_path, progress=True):
-        _, payload = self.xfer(KL["OTA_BEGIN"])
+        # 8 s: o primeiro esp_ota_begin apos o boot (particao fria, erase
+        # inicial) passa com folga dos 3 s do timeout comum (bancada
+        # 2026-10-05: primeira OTA WiFi por placa falhava nele)
+        _, payload = self.xfer(KL["OTA_BEGIN"], timeout=8.0)
         part = payload[1:].decode("utf-8", "replace")
         total = os.path.getsize(local_path)
         try:
@@ -995,6 +1000,51 @@ def cmd_pair(args):
     print(f"pareado: {addr}  {ident}")
     print(f"board {info.get('board')}, versao {info.get('version')}; "
           f"token salvo em {token_store_path()}")
+
+
+def cmd_provision(args):
+    """Provisiona a placa pelo canal aberto (USB na 1a vez): credenciais
+    WiFi, token do bridge (OTA por WiFi) e permissoes de apps — e ja deixa
+    o token no cache pelo IP, para o '-p IP' funcionar na hora.
+
+    O token do bridge e gravado com "bridge set" (o device aceita o valor
+    escolhido); sem --token, um novo e gerado aqui. Sem --wifi, so espera a
+    rede ja salva conectar (caso da placa que ja tem credenciais).
+    """
+    link = open_link(args)
+    try:
+        if args.wifi:
+            code, out = link.exec("wifi %s %s" % tuple(args.wifi))
+            print((out or "").strip())
+            if code != 0:
+                die("falha ao salvar as credenciais WiFi")
+        token = args.token or "".join(
+            secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(8))
+        code, out = link.exec(f"bridge set {token}")
+        if code != 0:
+            die(f"bridge set recusado: {(out or '').strip()}")
+        print(f"token do bridge gravado: {token}")
+        for app in args.grant or []:
+            code, out = link.exec(f"grant {app}")
+            print(f"grant {app}: {(out or '').strip()}")
+        # WiFi novo conecta em segundo plano: espera o IP aparecer
+        ip = None
+        for _ in range(15):  # ~45 s
+            code, out = link.exec("bridge")
+            m = re.search(r"ip\s+:\s+(\d+\.\d+\.\d+\.\d+)", out or "")
+            if m:
+                ip = m.group(1)
+                break
+            time.sleep(3)
+        if ip is None:
+            die("WiFi nao subiu a tempo (conferir credenciais/sinal) — o token "
+                "ja esta gravado; repita quando a rede conectar")
+        addr = f"{ip}:{BRIDGE_PORT}"
+        save_token(addr, token)
+        print(f"provisionado: {addr} (token no cache)")
+        print(f"ota wifi: python3 tools/celerctl.py -p {addr} ota push build/CelerOS.bin")
+    finally:
+        link.close()
 
 
 def cmd_info(args):
@@ -2127,6 +2177,16 @@ def main():
     p.add_argument("--token", default=None,
                    help="token do bridge (default: pergunta no terminal)")
     p.set_defaults(func=cmd_pair)
+
+    p = sub.add_parser("provision", help="provisiona WiFi + token do bridge + "
+                                         "permissoes (1a vez, geralmente por USB)")
+    p.add_argument("--wifi", nargs=2, metavar=("SSID", "SENHA"),
+                   help="credenciais WiFi a salvar (SSID sem espacos)")
+    p.add_argument("--token", default=None,
+                   help="token do bridge a gravar (default: gera um novo)")
+    p.add_argument("--grant", action="append", metavar="APP",
+                   help="concede as permissoes declaradas ao app (repetivel)")
+    p.set_defaults(func=cmd_provision)
 
     p = sub.add_parser("info", help="informacoes do sistema")
     p.set_defaults(func=cmd_info)

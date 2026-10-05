@@ -34,6 +34,9 @@ bool sessionActive();
 // Token de pareamento (NVS ns "celer", key "bridge_token"; 8 chars gerados
 // na 1a leitura). Ponteiro estatico — o caller copia imediatamente.
 const char* token();
+// Fixa um token escolhido (6..31 chars, sem espacos/controle) — o caminho
+// de automacao do "celerctl provision". false = token invalido ou NVS fora.
+bool tokenSet(const char* t);
 // Gera um token novo (comando "bridge reset" do shell).
 void tokenReset();
 

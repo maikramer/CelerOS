@@ -971,8 +971,9 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
 
 }  // namespace
 
-HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window)
+HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window, uint32_t silenceUs)
     : m_writer(writer), m_baudHook(baudHook), m_window(window), m_parser(m_small, SMALL_PAYLOAD) {
+    m_parser.setSilenceUs((int64_t)silenceUs);
     if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
     if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
     if (s_dbgFrameMutex == nullptr) s_dbgFrameMutex = xSemaphoreCreateMutex();

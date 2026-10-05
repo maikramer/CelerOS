@@ -39,8 +39,13 @@ public:
     // Hook de troca de baud (so faz sentido em canais com baud, ex. UART)
     typedef void (*BaudFn)(uint32_t baud);
 
-    // window: chunks em voo que o canal aceita (anunciado no HELLO proto 2)
-    HostLink(WriteFn writer, BaudFn baudHook = nullptr, uint8_t window = 4);
+    // window: chunks em voo que o canal aceita (anunciado no HELLO proto 2).
+    // silenceUs: resync do parser por silencio no meio de um frame — UART
+    // usa 250ms (ruido corta frame); canais com retransmissao propria (TCP
+    // do DebugBridge) passam 0: uma perda de segmento WiFi volta apos o RTO
+    // (300ms+) e o silencio nao pode derrubar o frame no meio.
+    HostLink(WriteFn writer, BaudFn baudHook = nullptr, uint8_t window = 4,
+             uint32_t silenceUs = 250000);
 
     // Loop da task do canal CDC (USB nativo): consome o stream buffer e
     // alimenta a maquina de frames. Nunca retorna.

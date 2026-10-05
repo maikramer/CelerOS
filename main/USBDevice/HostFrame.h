@@ -113,9 +113,13 @@ public:
 
     // nowUs: relogio monotonico em microssegundos do caller (no device,
     // esp_timer_get_time) — usado no resync de silencio (>250ms no meio
-    // de um frame = frame cortado).
+    // de um frame = frame cortado). Canais com retransmissao propria (TCP:
+    // uma perda de segmento volta apos o RTO, 300ms+) desligam com
+    // setSilenceUs(0) — la o silencio e normal e o CRC protege a integridade.
+    void setSilenceUs(int64_t us) { m_silenceUs = us; }
+
     void feed(uint8_t b, int64_t nowUs, FrameFn fn, void* ctx) {
-        if (m_state != WANT_MAGIC && nowUs - m_lastUs > 250000) {
+        if (m_silenceUs > 0 && m_state != WANT_MAGIC && nowUs - m_lastUs > m_silenceUs) {
             m_state = WANT_MAGIC;
             m_got = 0;
         }
@@ -200,6 +204,7 @@ private:
     uint16_t m_need = 0, m_got = 0;
     uint32_t m_crcRx = 0;
     int64_t m_lastUs = 0;
+    int64_t m_silenceUs = 250000;
     Reject m_reject = REJ_NONE;
 };
 

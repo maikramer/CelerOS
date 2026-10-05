@@ -296,7 +296,13 @@ void handleClientRx() {
 }
 
 void bridgeTask(void*) {
-    EXT_RAM_BSS_ATTR static HostLink link(&tcpWrite, nullptr, kWindow);
+    // silenceUs=0: o resync por silencio do parser e curativo de UART (ruido
+    // cortando frame no meio). Em TCP ele e veneno: uma perda de segmento
+    // WiFi volta apos o RTO (300ms+), o parser descartava o frame parcial e
+    // os bytes retransmitidos viravam lixo ("payload grande demais" no meio
+    // do ota push, bancada 2026-10-05). Integridade vem do CRC32 do proto 2;
+    // disconnect limpa o parser via endSession.
+    EXT_RAM_BSS_ATTR static HostLink link(&tcpWrite, nullptr, kWindow, 0);
     s_link = &link;
     TickType_t lastTry = 0;
 
@@ -328,7 +334,17 @@ void bridgeTask(void*) {
         if (select(maxFd + 1, &rfds, nullptr, nullptr, &tv) > 0) {
             if (FD_ISSET(s_udpFd, &rfds)) handleProbe();
             if (s_listenFd >= 0 && FD_ISSET(s_listenFd, &rfds)) handleAccept();
-            if (s_clientFd >= 0 && FD_ISSET(s_clientFd, &rfds)) handleClientRx();
+            if (s_clientFd >= 0 && FD_ISSET(s_clientFd, &rfds)) {
+                handleClientRx();
+                // O TCP chega na velocidade do WiFi: sem esta pausa a task
+                // (prio 4) processa lote apos lote sem nunca bloquear e
+                // inania a main task (prio 1, inscrita no TWDT) — o push de
+                // 2,5 MB reiniciava o device no meio pelo watchdog (bancada
+                // 2026-10-05). 1 ms por lote de ~1 KB: teto ~1 MB/s, muito
+                // acima do que a gravacao na flash acompanha. O lado TX se
+                // auto-limita pelo buffer do socket (SO_SNDTIMEO).
+                vTaskDelay(1);
+            }
         }
         // AUTH que nunca chega = cliente morto segurando o slot unico
         if (s_clientFd >= 0 && !s_authOk && esp_timer_get_time() > s_authDeadline) {
@@ -364,10 +380,22 @@ void DebugBridge::tick(bool) {
     TickType_t now = xTaskGetTickCount();
     if (failAt != 0 && now - failAt < pdMS_TO_TICKS(5000)) return;
     creating = true;
-    if (xTaskCreate(bridgeTask, "dbg_bridge", 8192, nullptr, 4, &s_task) != pdPASS) {
-        s_task = nullptr;
+    // Stack em RAM INTERNA, sem excecao: o dispatch roda na propria task e
+    // os handlers tocam flash (esp_ota_*, LittleFS) — na janela de cache
+    // desativado da operacao SPI, stack na PSRAM derruba o device (bancada
+    // 2026-10-05: o OTA_BEGIN por WiFi reiniciava o cao). 6144 cobre o pico
+    // medido do dispatch (~3,4 KB, watermark do dbg_link); 5120 e o plano B
+    // para o heap interno apertado do cao com wakeword (~8 KB livres).
+    TaskHandle_t h = nullptr;
+    BaseType_t ok = xTaskCreate(bridgeTask, "dbg_bridge", 6144, nullptr, 4, &h);
+    if (ok != pdPASS) {
+        ok = xTaskCreate(bridgeTask, "dbg_bridge", 5120, nullptr, 4, &h);
+    }
+    if (ok == pdPASS) {
+        s_task = h;
+    } else {
         failAt = now;
-        ESP_LOGE(TAG, "sem memoria para a task do bridge (tento de novo em 5s)");
+        ESP_LOGE(TAG, "sem RAM interna para a task do bridge (tento em 5s)");
     }
     creating = false;
 }
@@ -375,6 +403,21 @@ void DebugBridge::tick(bool) {
 bool DebugBridge::sessionActive() { return s_clientOn; }
 
 const char* DebugBridge::token() { return s_token; }
+
+bool DebugBridge::tokenSet(const char* t) {
+    if (t == nullptr) return false;
+    size_t len = strlen(t);
+    if (len < 6 || len >= sizeof(s_token)) return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = t[i];
+        if (c <= ' ' || c >= 0x7F) return false;  // sem espacos/controle
+    }
+    snprintf(s_token, sizeof(s_token), "%s", t);
+    if (!tokenPersist()) {
+        ESP_LOGW(TAG, "NVS rejeitou o token novo (vale ate reiniciar)");
+    }
+    return true;  // validacao e persistencia independentes: sessao nova funciona
+}
 
 void DebugBridge::tokenReset() {
     // Shell chama (main/app task) fora do caminho do auth: a janela de troca
@@ -393,6 +436,7 @@ void DebugBridge::begin() {}
 void DebugBridge::tick(bool) {}
 bool DebugBridge::sessionActive() { return false; }
 const char* DebugBridge::token() { return ""; }
+bool DebugBridge::tokenSet(const char*) { return false; }
 void DebugBridge::tokenReset() {}
 uint16_t DebugBridge::port() { return 0; }
 bool DebugBridge::listening() { return false; }
