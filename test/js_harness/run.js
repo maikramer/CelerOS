@@ -401,7 +401,10 @@ function makeEnv() {
         micLevel: function() { return 12; },
         touchPad: function() { return 0; },
         print: function(s) { log.push('[print] ' + s); },
-        neopixel: function() { return true; },
+        neopixel: function(s, px) {
+            log.push('[neopixel] ' + s + ' ' + (px || []).join(','));
+            return true;
+        },
         getAutoBrightness: function() { return env.__autoBri; },
         setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
         present: function() { fireTimers(); }, isBuffered: function() { return false; },
@@ -1513,6 +1516,34 @@ function holdMoves(ms) {
 })();
 
 (function() {
+    console.log('Dog Face (giro de barriga: left/right por golpes opostos):');
+    var S = D_HOP.spin;
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.CelerLink.status = function() { return { connected: true }; };
+        linkSchedule(env, [
+            [0, '{"type":"gait","name":"left","repeat":true}'],
+            [5000, '{"type":"stop"}'],
+            [6000, '{"type":"gait","name":"right","repeat":true}'],
+            [11000, '{"type":"stop"}']
+        ]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var q = dogSeqs(r.log);
+    // left (d=1): estica torcido (esquerdas atras, direitas a frente) e GOLPE
+    // com esquerdas pra frente / direitas pra tras (amplitudes fracionarias)
+    check('left: golpe esquerdas frente', q.FL.indexOf(physAng('FL', S)) >= 0 &&
+          q.BL.indexOf(physAng('BL', S)) >= 0);
+    check('left: golpe direitas tras', q.FR.indexOf(physAng('FR', -S)) >= 0 &&
+          q.BR.indexOf(physAng('BR', -S)) >= 0);
+    check('left: estica antes (esquerdas atras)', q.FL.indexOf(physAng('FL', -S)) >= 0 &&
+          q.FR.indexOf(physAng('FR', S)) >= 0);
+    // right espelha o golpe
+    check('right: golpe espelhado', q.FL.indexOf(physAng('FL', -S)) >= 0 &&
+          q.FR.indexOf(physAng('FR', S)) >= 0);
+    check('volta ao neutro (recolheu)', allNeutralAtEnd(q));
+})();
+
+(function() {
     console.log('Dog Face (centopeia, modo creep):');
     var P = 20, T = 25;
     var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
@@ -1615,7 +1646,7 @@ function holdMoves(ms) {
     var q = dogSeqs(r.log);
     check('coreografia aceita e logada', j.indexOf('[voz] coreografia:') >= 0 &&
           j.indexOf('[dog] sequencia voz:sequencia: 3 passos') >= 0);
-    check('passo bark tocou o yip', j.indexOf('[wav] /local/apps/Dog Face/bark_yip.wav') >= 0);
+    check('passo bark tocou o yip', j.indexOf('[wav] /local/apps/Dog Face/assets/bark_yip.qoa') >= 0);
     check('passo pose sentou', q.FL.indexOf(rawAng('FL', 30)) >= 0);
     check('passo say vai pro controle', j.indexOf('"type":"say","text":"pronto chefe!"') >= 0);
 })();
@@ -1643,6 +1674,45 @@ function holdMoves(ms) {
     // 'moonwalk' e descartado sem derrubar nada
     check('teto de duracao trunca a fila (4 passos)', j.indexOf('[dog] sequencia voz:sequencia: 4 passos') >= 0,
           j.split('\n').filter(function(l) { return l.indexOf('sequencia voz:sequencia') >= 0; })[0]);
+})();
+
+// --- Dog Face (voz 3.0): dog_speak — a IA responde FALANDO no idioma ------
+(function() {
+    console.log('Dog Face (dog_speak: TTS no idioma da pergunta):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'c4', name: 'dog_speak',
+                          args: { text: 'Tudo otimo, chefe!', lang: 'pt-BR' } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    // tool nova no payload e o prompt ensinando o idioma da fala
+    var req = r.env.__harness.aiChats[0] || '';
+    check('tool dog_speak oferecida a IA', req.indexOf('dog_speak') >= 0 &&
+          req.indexOf('NO MESMO IDIOMA') >= 0, req.slice(0, 250));
+    // a fala pediu ao TTS exatamente o texto que a tool trouxe
+    var sp = r.env.__harness.aiSpeaks[0] || '';
+    check('AI.speak recebeu o texto da tool', sp.indexOf('Tudo otimo, chefe!') >= 0, sp);
+    check('telemetria da fala com o idioma', j.indexOf('[voz] speak (pt-BR): Tudo otimo') >= 0, j);
+    // eco pro controle carrega o lang; detector de wake word volta no fim
+    check('say com lang vai pro controle',
+          j.indexOf('"type":"say","text":"Tudo otimo, chefe!","lang":"pt-BR"') >= 0, j);
+    check('wake word religou apos a fala', r.env.__harness.wakeState.on === true);
+    // bipes de estado da cadeia: wake 2 notas -> enviado 1 -> recebido 2 ->
+    // fim da fala 3 (o yip do showSay vai como [wav], nao vira tone)
+    var tones = j.split('\n').filter(function(l) { return l.indexOf('[tone] ') >= 0; })
+                 .map(function(l) { return l.replace(/.*\[tone\] (\d+) notas.*/, '$1'); });
+    check('sequencia de bipes 2-1-2-3', tones.join(',') === '2,1,2,3', tones.join(','));
 })();
 
 // --- Dog Face (voz 2.0): truques do dono (/local/dogtricks.json) -------------
@@ -1703,6 +1773,137 @@ function holdMoves(ms) {
     check('roda sem erro', r.err === null, r.err || '');
     var q = dogSeqs(r.log);
     check('pose lie aplicada via texto', q.FL.indexOf(rawAng('FL', -60)) >= 0,
+          JSON.stringify(q.FL.slice(-4)));
+})();
+
+// Sequencia de angulos escritos num pino, na ordem ('[servo] pin@ang') —
+// versao tolerante do indexOf para alvos de rampa (o passo final pode
+// parar a meio grau do alvo e o put arredonda).
+function nearAng(seq, want, tol) {
+    for (var i = 0; i < seq.length; i++) if (Math.abs(seq[i] - want) <= tol) return true;
+    return false;
+}
+
+// --- Dog Face (dog_script): a IA escreve e o cao roda a performance -------
+(function() {
+    console.log('Dog Face (dog_script: performance escrita pela IA):');
+    // o "script" que a LLM comporia: cara + LEDs + perna + som + say
+    var aiCode = 'face.clear();' +
+        'face.eyes(1, 0, 0, 10);' +
+        'face.heart(38, 22, 14);' +
+        'leds.set(0, ["#ff2000", "#ff2000"]);' +
+        'legs.set("FL", 30);' +
+        'wait(100);' +
+        'sound.tone([[880, 120], [660, 180]]);' +
+        'say("pronta!");' +
+        'print("fim");';
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'cs1', name: 'dog_script', args: { code: aiCode } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var req = r.env.__harness.aiChats[0] || '';
+    check('tool dog_script oferecida com as regras ES5',
+          req.indexOf('dog_script') >= 0 && req.indexOf('ES5') >= 0 &&
+          req.indexOf('max_tokens":800') >= 0, req.slice(0, 250));
+    check('prompt ensina performance livre', req.indexOf('PROPRIO') >= 0);
+    check('performance rodou ok', j.indexOf('[voz] script ok') >= 0, j.slice(-400));
+    // pata: legs.set("FL",30) chega ao angulo fisico (clamp nao interfere)
+    var q = dogSeqs(r.log);
+    check('legs.set move a pata pro alvo fisico', nearAng(q.FL, physAng('FL', 30), 1),
+          JSON.stringify(q.FL.slice(-4)));
+    // LEDs da cor pedida ("#ff2000") na fita 0 e zero no fim (restore)
+    var ledOn = '[neopixel] 0 ' + [0xFF2000, 0xFF2000].join(',');
+    check('leds.set acende a cor na fita 0', j.indexOf(ledOn) >= 0, ledOn);
+    check('leds zerados no fim da performance', j.indexOf('[neopixel] 0 0,0,0,0') >= 0);
+    check('sound.tone tocou 2 notas', j.indexOf('[tone] 2 notas') >= 0);
+    check('say chega ao controle pareado', j.indexOf('"type":"say","text":"pronta!"') >= 0);
+    check('eco da performance com ok', j.indexOf('"type":"script","ok":true') >= 0);
+})();
+
+// --- Dog Face (dog_script): sandbox, clamps e guardas ----------------------
+(function() {
+    console.log('Dog Face (dog_script: sandbox + clamps + guardas):');
+    // 1) codigo que tenta System (shadowing) DEPOIS de um legs.set fora da
+    //    faixa: o clamp segura a pata em 45 e o System undefined nao derruba
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'cs2', name: 'dog_script',
+                          args: { code: 'legs.set("FL", 999); wait(50); System.print("hack");' } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('legs.set clampado em 45 graus', nearAng(q.FL, physAng('FL', 45), 1),
+          JSON.stringify(q.FL.slice(-4)));
+    check('System invisivel ao script (erro capturado)',
+          j.indexOf('[voz] script erro') >= 0, j.slice(-400));
+    check('app vivo apos o erro (eco ok:false)', j.indexOf('"type":"script","ok":false') >= 0);
+
+    // 2) guardas de entrada: loop infinito e codigo longo sao rejeitados
+    //    ANTES do eval (dois tool_calls na mesma resposta)
+    var longo = 'face.clear();';
+    while (longo.length < 1700) longo += ' wait(10);';
+    var r2 = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [
+                { id: 'cs3', name: 'dog_script', args: { code: 'while(true){ face.clear(); }' } },
+                { id: 'cs4', name: 'dog_script', args: { code: longo } }
+            ],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro (guardas)', r2.err === null, r2.err || '');
+    var j2 = joinLog(r2.log);
+    check('while(true) rejeitado', j2.indexOf('[voz] script rejeitado: loop infinito') >= 0, j2.slice(-400));
+    check('codigo longo rejeitado', j2.indexOf('script rejeitado: codigo passa') >= 0);
+    check('nada rodou (sem [voz] script ok)', j2.indexOf('[voz] script ok') < 0);
+})();
+
+// --- Dog Face (dog_script pelo link): performance sem voz (bancada) --------
+(function() {
+    console.log('Dog Face (dog_script pelo Celer Link):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.__harness.setLink({ conn: true });
+        env.__harness.pushLink([JSON.stringify({
+            type: 'script',
+            code: 'leds.set(1, [255]); wait(60); legs.pose("sit");'
+        })]);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var q = dogSeqs(r.log);
+    check('performance rodada pelo link', j.indexOf('[voz] script ok') >= 0);
+    check('fita 1 acesa pelo script', j.indexOf('[neopixel] 1 255') >= 0);
+    check('pose sit aplicada (raw ±50)', nearAng(q.FL, rawAng('FL', 50), 1),
           JSON.stringify(q.FL.slice(-4)));
 })();
 
@@ -1843,7 +2044,7 @@ function padSchedule(env, spans) {
     // offset +30 da FL (mesmo padrao da pose sit do teste da voz)
     check('pose crouch alcancada', q.FL.indexOf(rawAng('FL', 30)) >= 0);
     check('volta ao pe entre as flexoes', count(q.FL, D_NEU.FL) >= 2, count(q.FL, D_NEU.FL) + 'x');
-    check('termina com latido WAV', j.indexOf('[wav] /local/apps/Dog Face/bark_woof.wav') >= 0,
+    check('termina com latido WAV', j.indexOf('[wav] /local/apps/Dog Face/assets/bark_woof.qoa') >= 0,
           j.slice(-300));
     check('responde trick_res ok', j.indexOf('[link] tx {"type":"trick_res","ok":true,"name":"pushup"}') >= 0);
 })();
@@ -1858,7 +2059,7 @@ function padSchedule(env, spans) {
     var j = joinLog(r.log);
     var q = dogSeqs(r.log);
     check('say via link (texto inteiro no controle)', j.indexOf('[link] tx {"type":"say","text":"OLA"}') >= 0);
-    check('yip WAV no fim', j.indexOf('[wav] /local/apps/Dog Face/bark_yip.wav') >= 0);
+    check('yip WAV no fim', j.indexOf('[wav] /local/apps/Dog Face/assets/bark_yip.qoa') >= 0);
     // hello senta (FL/BL +30 na rampa) antes de oferecer a pata
     check('senta antes da patinha', q.FL.indexOf(rawAng('FL', 30)) >= 0);
 })();
@@ -1916,7 +2117,7 @@ function padSchedule(env, spans) {
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('danca recusada (sem sequencia)', j.indexOf('[dog] sequencia trick:dance') < 0);
-    check('recusa com ganido', j.indexOf('[wav] /local/apps/Dog Face/bark_whine.wav') >= 0);
+    check('recusa com ganido', j.indexOf('[wav] /local/apps/Dog Face/assets/bark_whine.qoa') >= 0);
     check('recusa fala "cansado" pro controle', j.indexOf('"type":"say","text":"cansado"') >= 0);
     check('trick_res negativo', j.indexOf('"type":"trick_res","ok":false,"name":"dance"') >= 0);
     // truque leve (nao pesado) NAO e bloqueado pela guarda
@@ -1930,7 +2131,7 @@ function padSchedule(env, spans) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    var n = j.split('[wav] /local/apps/Dog Face/bark_whine.wav').length - 1;
+    var n = j.split('[wav] /local/apps/Dog Face/assets/bark_whine.qoa').length - 1;
     check('ganido unico no boot fraco', n === 1, n + ' whines');
 })();
 

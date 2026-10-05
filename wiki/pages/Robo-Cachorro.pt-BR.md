@@ -128,7 +128,7 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   mesma permissão `mic` no app.json do `Mic.*`.
 * **[feito]** **Voz 2.0 — a LLM coreografa** (Dog Face 1.8): "hi celer"
   abre a janela de escuta (beep + anel de LED), grava até 3,5 s e envia o
-  áudio ao qwen omni (OpenRouter) — que agora recebe **8 tools** e não um
+  áudio ao qwen omni (OpenRouter) — que agora recebe **9 tools** e não um
   enum de 8 comandos:
   * `dog_move(direction, ms)` — "anda um pouquinho pra frente", "vira à
     esquerda" viram movimento com duração;
@@ -139,11 +139,17 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
     cada vez);
   * `dog_bark(kind, times)` — escolhe woof/yip/growl/whine/howl;
   * `dog_emotion(mood)` — cara + anel de LED;
-  * `dog_say(text)` — **responde perguntas**: "tudo bem?", "qual sua
-    bateria?" → frase no controle pareado + resumo em sete-segmentos no
-    vidro + yip. A telemetria viva (bateria, postura, marcha) vai no
-    system prompt com a persona **Celercão**, então a resposta sai em uma
-    rodada;
+  * `dog_say(text)` — resposta **silenciosa**: frase no controle pareado +
+    resumo em sete-segmentos no vidro + yip;
+  * `dog_speak(text, lang)` — **o cachorro FALA** (Dog Face 1.9.14, API 24):
+    a IA escreve a resposta **no idioma da pergunta** (português, inglês,
+    espanhol...) e o TTS do firmware (`AI.speak`, gemini tts pela chave
+    OpenRouter, voz grave Charon) fala em voz alta no alto-falante —
+    download direto pro arquivo (nada na RAM) e playback em task própria.
+    Durante a fala o detector de wake word desliga (o cachorro não pode se
+    ouvir) e a bolha fica no vidro; o campo `lang` vai no eco
+    `{"type":"say"}` pro controle. Sem chave/WiFi, degrada no visual do
+    `dog_say`;
   * `dog_stop` — para tudo.
   Fallback offline por palavra-chave (modelo sem tool_call/chave) cobre
   posturas/marchas **e** truques/latidos/emoções: dança, patinha, xixi,
@@ -151,7 +157,7 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   variantes acentuadas do STT). Andar por voz sem duração explícita
   continua limitado a 3 s.
 * Pilha de voz na API JS: **18** AI, **19** `Mic.*`, **20** function
-  calling + `WakeWord.*`.
+  calling + `WakeWord.*`, **24** `AI.speak` (TTS).
 
 Restaurar o firmware original a qualquer momento é um comando único a partir
 do dump completo (`tools/flash_backup_restore.sh` no repo do cachorro) — o

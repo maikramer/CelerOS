@@ -279,8 +279,10 @@ function startGait(name, repeat) {
         // (walkMode hop): frente = hop, tras = hop reverso, giros = esphi
         if (name === "hop") gait = { frames: true, hop: true, d: 1, list: null };
         else if (walkMode === "hop") {
-            gait = (name === "walk") ? { frames: true, hop: true, d: 1, list: null }
-                : (name === "back") ? { frames: true, hop: true, d: -1, list: null }
+            gait = (name === "walk") ? { frames: true, hop: true, d: 1, bias: 0, list: null }
+                : (name === "back") ? { frames: true, hop: true, d: -1, bias: 0, list: null }
+                : (name === "left") ? { frames: true, spin: true, d: 1, list: null }
+                : (name === "right") ? { frames: true, spin: true, d: -1, list: null }
                 : WALKS[name];
         }
         else gait = walkMode === "creep" ? { frames: true, d: DIRS[name], list: null } : WALKS[name];
@@ -337,7 +339,8 @@ function gaitTick(dt) {
     }
     var len;
     if (gait.frames) {
-        if (gaitPhase === 0 || !gait.list) gait.list = gait.hop ? hopFrames(gait.d) : creepFrames(gait.d);
+        if (gaitPhase === 0 || !gait.list) gait.list = gait.hop ? hopFrames(gait.d, gait.bias)
+            : (gait.spin ? spinFrames(gait.d) : creepFrames(gait.d));
         runFrame(gait.list[gaitPhase]);
         len = gait.list.length;
     } else {
@@ -507,11 +510,40 @@ function runFrame(fr) {
 // OFICIAL (plan_hop4 #13 + axugos 2026-10-04): 660 ms/ciclo; air -50
 // (dianteira lidera) e leanR 25 (traseiras do repouso 5 graus mais pra
 // frente — pedido da bancada). Esperas curtas DEMAIS plantavam bananeira.
+//   turn   = assimetria por LADO para VIRAR (gait left/right do modo hop):
+//            % de diferenca entre os lados em TODAS as amplitudes — um lado
+//            da o pulo cheio, o outro um pulo menor; o empuxo desigual
+//            guina e as dianteiras plantam tortas ancorando o giro
 var HOP = { prep: 20, rear: 40, kick: 50, front: 40, pull: 35, msDeg: 0,
-            air: -50, fall: 120, land: 60, settle: 100, rest: 200 };
+            air: -50, fall: 120, land: 60, settle: 100, rest: 200, spin: 90 };
 
-function hopFrames(dir) {
+// spinFrames: VIRAR DE BARRIGA (receita da bancada 2026-10-04 — o hop
+// assimetrico nao girou). Ciclo: (1) ESTICA torcido — esquerdas atras,
+// direitas a frente — o corpo bate de barriga no chao (perna horizontal nao
+// sustenta; atrito de barriga e baixo); (2) GOLPE rapido: as ESQUERDAS
+// varrem pra FRENTE e as DIREITAS pra TRAS ao mesmo tempo (sentidos
+// opostos) — a reacao gira o corpo deitado; (3) recolhe LENTO ate em pe
+// (varredura devagar nao gira de volta; o "rest" e a duracao desse recolhe)
+// e assenta pro proximo ciclo. d=-1 espelha (golpe pro outro lado). Nos
+// extremos o servo satura no fim de curso — e o "esticar" pedido.
+function spinFrames(dir) {
+    var d = dir || 1, s = HOP.spin, m = HOP.msDeg;
+    function ms(deg, extra) { return Math.max(60, Math.round(m * deg) + (extra || 0)); }
+    return [
+        { p: { FL: -s * d, FR: s * d, BL: -s * d, BR: s * d }, ms: ms(2 * s, HOP.fall) },   // estica: barriga no chao
+        { p: { FL: s * d, FR: -s * d, BL: s * d, BR: -s * d }, ms: ms(2 * s, HOP.settle) }, // GOLPE: lados opostos
+        { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: Math.max(500, HOP.rest * 3) },             // recolhe LENTO e levanta
+        { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: HOP.land }                                 // assenta antes do proximo
+    ];
+}
+
+// hopFrames(dir, bias): dir -1 = hop reverso; bias (assimetria por lado)
+// fica DORMENTE apos o giro virar spinFrames (bancada: o hop assimetrico
+// nao girava) — walk/back passam 0.
+function hopFrames(dir, bias) {
     var d = dir || 1;   // -1 = hop REVERSO (seta pra tras): coreografia espelhada
+    var t = bias || 0;
+    var mL = 1 - t, mR = 1 + t;   // multiplicador das pernas esquerdas/direitas
     var b = HOP.prep, r = HOP.rear, k = HOP.kick, f = HOP.front, p = HOP.pull, m = HOP.msDeg;
     function ms(deg, extra) { return Math.max(60, Math.round(m * deg) + (extra || 0)); }
     // chute e abertura NUM quadro so. air < 0: dianteiras LIDERAM (o atraso
@@ -522,10 +554,10 @@ function hopFrames(dir) {
     if (air > 0) dly = { FL: air, FR: air };
     else if (air < 0) dly = { BL: -air, BR: -air };
     return [
-        { p: { FL: -b * d, FR: -b * d, BL: r * d, BR: r * d }, ms: ms(r + b + 40) },               // pronto: encolhido
-        { p: { FL: -b * d, FR: -b * d, BL: -k * d, BR: -k * d }, dly: dly, ms: abre },             // CHUTE + ABRE no ar
-        { p: { FL: f * d, FR: f * d, BL: -k * d, BR: -k * d }, ms: HOP.fall + HOP.land },          // queda + pouso plantado
-        { p: { FL: -p * d, FR: -p * d, BL: -k * d, BR: -k * d }, ms: ms(f + p, HOP.settle) },      // CHUTE DIANTEIRO: puxa o corpo
+        { p: { FL: -b * d * mL, FR: -b * d * mR, BL: r * d * mL, BR: r * d * mR }, ms: ms(r + b + 40) },          // pronto: encolhido
+        { p: { FL: -b * d * mL, FR: -b * d * mR, BL: -k * d * mL, BR: -k * d * mR }, dly: dly, ms: abre },        // CHUTE + ABRE no ar
+        { p: { FL: f * d * mL, FR: f * d * mR, BL: -k * d * mL, BR: -k * d * mR }, ms: HOP.fall + HOP.land },     // queda + pouso plantado
+        { p: { FL: -p * d * mL, FR: -p * d * mR, BL: -k * d * mL, BR: -k * d * mR }, ms: ms(f + p, HOP.settle) }, // CHUTE DIANTEIRO: puxa o corpo
         { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: ms(k + 40) },                     // repouso: em pe (frente ereta)
         { p: { FL: 0, FR: 0, BL: 0, BR: 0 }, ms: HOP.rest }                        // assenta antes do proximo ciclo
     ];
@@ -581,6 +613,7 @@ function applyTune(t) {
         HOP.land = clampNum(t.hop.land, 0, 600, HOP.land);
         HOP.settle = clampNum(t.hop.settle, 0, 800, HOP.settle);
         HOP.rest = clampNum(t.hop.rest, 0, 2000, HOP.rest);
+        HOP.spin = clampNum(t.hop.spin, 40, 110, HOP.spin);
     }
     if (t.leanF !== undefined) { LEAN_F = clampNum(t.leanF, 0, 40, LEAN_F); applyStance(); }
     if (t.leanR !== undefined) { LEAN_R = clampNum(t.leanR, 0, 40, LEAN_R); applyStance(); }
@@ -620,7 +653,10 @@ loadTune();
 // fila nao passa de 12 passos nem de 12 s de relogio.
 
 // ---- latidos ----
-var BARK_DIR = "/local/apps/Dog Face/";
+// Latidos em assets/bark_*.qoa (decoder QOA do firmware, ~60 linhas):
+// 5x menores que WAV; sem suporte (firmware velho) playWav devolve false e
+// cai na melodia do playTone.
+var BARK_DIR = "/local/apps/Dog Face/assets/";
 var BARKS = ["woof", "yip", "growl", "whine", "howl"];
 var BARK_FALLBACK = {  // sem WAV (imagem antiga): melodia aproximada
     woof: [[220, 90], [150, 130]],
@@ -634,7 +670,7 @@ function playBark(kind, n) {
     n = Math.round(clampNum(n, 1, 3, 1));
     for (var i = 0; i < n; i++) {
         var played = false;
-        try { played = System.playWav(BARK_DIR + "bark_" + kind + ".wav"); } catch (e) { played = false; }
+        try { played = System.playWav(BARK_DIR + "bark_" + kind + ".qoa"); } catch (e) { played = false; }
         if (!played) System.playTone(BARK_FALLBACK[kind]);
         if (i + 1 < n) System.delay(140);
     }
@@ -712,7 +748,7 @@ function setMood(m, ms) {
 // Bolha na cara + ate 5 caracteres em sete-segmentos (texto e ilegivel no
 // vidro; OLA/SIM/87% cabem) + o texto INTEIRO no controle pareado via link.
 var sayText = "", sayRaw = "", sayUntil = 0;
-function showSay(text) {
+function showSay(text, lang, quiet) {
     sayRaw = String(text || "");
     var ok = "";
     for (var i = 0; i < sayRaw.length && ok.length < 5; i++) {
@@ -722,8 +758,67 @@ function showSay(text) {
     sayText = ok;
     sayUntil = System.millis() + 3500;
     lastActivity = System.millis();
-    reply({ type: "say", text: sayRaw.substring(0, 120) });
-    playBark("yip", 1);
+    reply({ type: "say", text: sayRaw.substring(0, 120), lang: lang || undefined });
+    if (!quiet) playBark("yip", 1);   // dog_speak: a voz ja e o som (yip so atrasava)
+}
+
+// ---- fala por voz (TTS, API 24) ----
+// A tool dog_speak deixa a PROPRIA IA escolher o idioma: ela escreve a
+// resposta no idioma da pergunta e o TTS fala o que esta escrito (o gemini
+// nao tem parametro de lingua — a lingua e o texto). O download e o
+// playback rodam na worker do firmware: aqui so animamos a bolha e
+// SURDAMOS o wake word enquanto o cao fala (o proprio alto-falante
+// acordaria o "hi celer"). Sem chave/TTS/firmware novo, a tool degrada no
+// visual do dog_say de sempre.
+var speakBusy = false;
+var pendingSpeak = null;   // dog_speak so AGENDA: o loop executa (bancada:
+                           // a cadeia inteira dentro do callback do chat
+                           // (tom + reply + yip + WakeWord.stop + speak)
+                           // estourava a janela de 1 s e matava o app)
+function speakReady() {
+    return hasAI && typeof AI.speak === "function" &&
+           AI.configured("openrouter") && Net.isConnected();
+}
+// Detector SURDO durante a fala, sem stop/start: o WakeWord.stop+start
+// desmontava e remontava modelo TFLite + frontend + task A CADA fala (o
+// stop ainda espera a task sair — pesava na janela de 1 s) e as alocacoes
+// pequenas do frontend picotavam a RAM interna, a mesma que o TLS precisa.
+// O voiceTick drena o poll() enquanto surdo; a cauda cobre o eco do falante.
+var WAKE_ECHO_MS = 700;
+var wakeMuted = false, wakeMuteUntil = 0;
+function speakWake(on) {
+    wakeMuted = !on;
+    if (on) wakeMuteUntil = System.millis() + WAKE_ECHO_MS;
+}
+function speakStart(text, lang) {
+    showSay(text, lang, speakReady());  // com voz: sem o yip na frente
+    System.delay(1);       // cede: a janela renova entre as etapas pesadas
+    if (!speakReady()) return true;   // so o visual (fallback silencioso)
+    speakWake(false);                 // o cao nao pode se ouvir
+    var ok = false;
+    try {
+        ok = AI.speak({ text: String(text).substring(0, 290) }, function (r) {
+            speakBusy = false;
+            speakWake(true);          // eco da fala ja passou (cb e pos-playback)
+            if (r.ok) cueDone();      // fim da fala: interacao completa
+            else {
+                cueVoice(false);
+                System.print('[voz] speak erro: ' + (r.error || r.status) +
+                             (r.detail ? ' - ' + r.detail : ''));
+            }
+            lastActivity = System.millis();
+        });
+    } catch (e) {
+        System.print('[voz] speak erro: ' + e);
+    }
+    if (ok) {
+        speakBusy = true;
+        System.print('[voz] speak (' + (lang || '?') + '): ' +
+                     String(text).substring(0, 80));
+    } else {
+        speakWake(true);              // pedido nao entrou: detector de volta
+    }
+    return true;
 }
 
 // ---- sequenciador ----
@@ -1027,15 +1122,17 @@ function cycleGait() {
     happyUntil = System.millis() + 800;
 }
 
-function drawEyes(open, pupilR) {
+function drawEyes(open, pupilR, lx, ly) {
     if (sleeping) open = false;
     var ey = 24 + Math.round(Math.sin(breath) * 1.5);
     var eh = open ? 22 : 3;
     System.fillRoundRect(PX(18), PY(ey - eh / 2), PW_(34), PH_(eh), PH_(6), 0xFFFF);
     System.fillRoundRect(PX(76), PY(ey - eh / 2), PW_(34), PH_(eh), PH_(6), 0xFFFF);
     if (open) {
-        var px = Math.round(lookX * 6);
-        var py = Math.round(lookY * 3);
+        // lx/ly explicitos = rosto de performance (dog_script); sem eles o
+        // olhar vivo do loop (lookX/lookY)
+        var px = Math.round((lx === undefined ? lookX : lx) * 6);
+        var py = Math.round((ly === undefined ? lookY : ly) * 3);
         System.fillCircle(PX(35 + px), PY(ey + py), PW_(pupilR), 0xFFFF);
         System.fillCircle(PX(93 + px), PY(ey + py), PW_(pupilR), 0xFFFF);
     }
@@ -1160,13 +1257,21 @@ function drawVoice(now) {
 }
 
 // Fala do cao na tela: balao + rabo + ate 5 caracteres em sete-segmentos
-// (o texto inteiro vai pro controle pareado via link).
+// (o texto inteiro vai pro controle pareado via link). Enquanto o TTS
+// desce/rola (speakBusy) os pontinhos passeiam: a bolha "viva" mascara a
+// espera da voz.
 function drawSay() {
     System.drawRoundRect(PX(4), PY(6), PW_(120), PH_(42), PW_(8), 0xFFFF);
     System.fillTriangle(PX(28), PY(48), PX(40), PY(48), PX(33), PY(57), 0xFFFF);
     var n = sayText.length;
     var x0 = Math.round((PW - n * 14) / 2);
     for (var i = 0; i < n; i++) drawSegDigit(x0 + i * 14, 14, sayText.charAt(i));
+    if (speakBusy) {
+        var on = ((System.millis() / 300) | 0) % 3;
+        for (var i = 0; i < 3; i++) {
+            System.fillCircle(PX(50 + i * 14), PY(40), PW_(i === on ? 2 : 1), 0xFFFF);
+        }
+    }
 }
 
 function draw() {
@@ -1176,8 +1281,8 @@ function draw() {
         drawPair();      // codigo de pareamento no lugar da cara
     } else if (voiceBusy) {
         drawVoice(now);  // ouvindo o comando / esperando a IA
-    } else if (now < sayUntil) {
-        drawSay();       // respondendo (dog_say)
+    } else if (now < sayUntil || speakBusy) {
+        drawSay();       // respondendo (dog_say) / falando (dog_speak)
     } else if (now < happyUntil) {
         drawHappy();
     } else if (mood) {
@@ -1350,6 +1455,11 @@ function handleMsg(m) {
             loadCustomTricks();
             reply({ type: "tricks_res", names: trickNames() });
             break;
+        case "script":
+            // {"type":"script","code":"..."} — performance da IA direto do
+            // controle pareado (bancada: dispara sem passar pela voz)
+            if (m.code) runAiScript(String(m.code));
+            break;
         case "gait":
             if (startGait(String(m.name), !!m.repeat)) {
                 linkGait = !!m.repeat;
@@ -1388,7 +1498,7 @@ function handleMsg(m) {
             reply({ type: "hop", prep: HOP.prep, rear: HOP.rear, kick: HOP.kick,
                     front: HOP.front, pull: HOP.pull, msDeg: HOP.msDeg,
                     air: HOP.air, fall: HOP.fall, land: HOP.land,
-                    settle: HOP.settle, rest: HOP.rest });
+                    settle: HOP.settle, rest: HOP.rest, spin: HOP.spin });
             reply({ type: "stance", leanF: LEAN_F, leanR: LEAN_R });
             break;
     }
@@ -1411,6 +1521,8 @@ var VOICE_MOVE_MAX_MS = 60000;  // teto do dog_move da voz: steps x ciclo ou dur
 var hasAI = (typeof AI !== "undefined" && typeof Net !== "undefined");
 var voiceErrorAt = 0;
 var voiceLvl = 0;             // volume ao vivo da janela de gravacao (tela)
+var voiceT0 = 0;              // marcos de latencia (logcat): wake, fim da fala
+var voiceTEnd = 0;
 
 function cueVoice(ok) {
     // ack do wake: duas notas subindo (ouvindo) ou duas graves (erro)
@@ -1419,6 +1531,15 @@ function cueVoice(ok) {
     if (ok) System.playTone([[900, 60], [1350, 90]]);
     else System.playTone([[400, 90], [330, 120]]);
 }
+
+// ---- bipes de estado da cadeia da voz (pedido da bancada) ----
+// Marcos audiveis curtos entre as etapas: ENVIADO (1 blip: a fala saiu pro
+// servidor), RECEBIDO (2 notas claras: a IA respondeu) e FIM (trinado de 3;
+// no dog_speak ele toca no fim da FALA, nao no fim do dispatch). Todos
+// bloqueantes curtos (~0,1 s), como o ack do wake.
+function cueSent() { System.playTone([[1320, 70]]); }
+function cueGot()  { System.playTone([[1180, 45], [1480, 60]]); }
+function cueDone() { System.playTone([[980, 40], [1240, 40], [1560, 70]]); }
 
 function voiceRing(on, err) {
     // anel de LED: azul = ouvindo/pensando, vermelho = erro (os anims do
@@ -1443,6 +1564,8 @@ var VOICE_GAITS = {
     stretch: "stretch", alonga: "stretch", alongar: "stretch", bow: "stretch",
     walk: "walk", anda: "walk", andar: "walk", "vai": "walk", frente: "walk",
     pula: "hop", pulo: "hop", salta: "hop", saltar: "hop", hop: "hop", empina: "hop",
+    esquerda: "left", esquerdo: "left", left: "left",
+    direita: "right", direito: "right", right: "right",
     back: "back", tras: "back", recua: "back",
     stop: "stop", para: "stop", pare: "stop", passo: "stop", quieta: "stop"
 };
@@ -1529,10 +1652,19 @@ function voicePrompt() {
     p += "Responda chamando EXATAMENTE UMA ferramenta. Pedido simples de " +
         "movimento: dog_move ou dog_posture. Truque conhecido: dog_trick. " +
         "Pedido com varios passos ou coreografia livre: dog_sequence (compoe " +
-        "os passos voce mesmo, criativo e ritmado). Reacao ou animo: dog_bark " +
-        "ou dog_emotion. Pergunta do dono (bateria, nome, como voce esta): " +
-        "dog_say com resposta curta e com graca (ate 60 caracteres). Audio " +
-        "vazio, ruido ou conversa sem pedido: nao chame nenhuma ferramenta.";
+        "os passos voce mesmo, criativo e ritmado). Se expressar de um jeito " +
+        "PROPRIO e original (dancinha so sua, comemorar a sua maneira, " +
+        "performance criativa que nenhuma tool cobre): dog_script — voce " +
+        "ESCREVE o script JS ES5 pela API descrita na ferramenta (cara, " +
+        "pernas, LEDs e som juntos). " +
+        "Reacao ou animo: dog_bark " +
+        "ou dog_emotion. Pergunta ou conversa com o dono (bateria, nome, " +
+        "como voce esta, oi): dog_speak com resposta CURTA e com graca (ate " +
+        "150 caracteres — e FALADA) NO IDIOMA em que o dono falou (portugues, " +
+        "ingles, espanhol...). Pedido de 'fala'/'diga algo' tambem e dog_speak " +
+        "(voz), NAO dog_bark. Frase silenciosa (so no controle pareado, sem " +
+        "voz): dog_say. Audio vazio, ruido ou conversa sem pedido: nao chame " +
+        "nenhuma ferramenta.";
     return p;
 }
 
@@ -1579,10 +1711,31 @@ function voiceTools() {
               mood: { type: "string", enum: MOODS }
           }, required: ["mood"] } } },
         { type: "function", function: { name: "dog_say",
-          description: "Responde o dono: frase curta no controle pareado e resumo no vidro",
+          description: "Frase curta SILENCIOSA: so no controle pareado e resumo no vidro (sem voz)",
           parameters: { type: "object", properties: {
               text: { type: "string", description: "ate 60 caracteres, portugues" }
           }, required: ["text"] } } },
+        { type: "function", function: { name: "dog_speak",
+          description: "FALA em voz alta (voz do cao): perguntas, conversa, saudacao e pedidos de 'fala'/'diga algo' (isto NAO e latido). Frase CURTA (ate 150 caracteres) NO MESMO IDIOMA em que o dono falou — a voz fala o que esta escrito. Pode prefixar o tom (ex.: 'Diga animado: ...')",
+          parameters: { type: "object", properties: {
+              text: { type: "string", description: "frase para FALAR no idioma da pergunta, ate 150 caracteres" },
+              lang: { type: "string", description: "idioma da fala, ex.: pt-BR, en-US, es-ES" }
+          }, required: ["text"] } } },
+        { type: "function", function: { name: "dog_script",
+          description: "Performance LIVRE e unica: voce escreve um script JS ES5 e o cao roda ao vivo (cara no display, pernas, LEDs e som juntos). Use para se expressar do seu jeito",
+          parameters: { type: "object", properties: {
+              code: { type: "string", description:
+                  'JS ES5 puro (SEM const/let/arrow/template string), ate 1200 chars, ' +
+                  'loops com limite fixo (max 30) e SEMPRE wait(ms) entre passos. ' +
+                  'API: face.clear() face.eyes(open,lx,ly,pupilaR) face.heart(x,y,s) ' +
+                  'face.fillRect(x,y,w,h) face.rect/circle/fillCircle/line/tri(x0,y0,x1,y1,x2,y2)/roundRect/fillRoundRect — ' +
+                  'coordenadas do vidro 0..127 x 0..63, display MONO (aceso/apagado). ' +
+                  'legs.set("FL"|"FR"|"BL"|"BR",graus -45..45) legs.pose("stand|sit|lie|stretch|beg|pee") ' +
+                  'legs.step("walk|back|left|right",ciclos 1..20) legs.release(). ' +
+                  'leds.set(fita 0|1,[cores 0xRRGGBB ou "#rrggbb", 1..4]) leds.off(). ' +
+                  'sound.bark("woof|yip|growl|whine|howl",n 1..3) sound.tone([[freq,ms],...]). ' +
+                  'say("frase curta") wait(ms) print(msg)' }
+          }, required: ["code"] } } },
         { type: "function", function: { name: "dog_stop",
           description: "Para movimento/truque na hora",
           parameters: { type: "object", properties: {} } } }
@@ -1640,6 +1793,18 @@ function voiceRunTool(call) {
         showSay(String(a.text));
         return true;
     }
+    if (call.name === "dog_speak") {
+        if (!a.text) return false;
+        pendingSpeak = { text: String(a.text), lang: a.lang ? String(a.lang) : "" };
+        return true;   // o loop executa com cedidas entre as etapas
+    }
+    if (call.name === "dog_script") {
+        var scode = String(a.code || "");
+        var sguard = scriptGuards(scode);
+        if (sguard) { System.print('[voz] script rejeitado: ' + sguard); return false; }
+        pendingScript = scode;
+        return true;   // o loop executa com cedidas entre as etapas
+    }
     if (call.name === "dog_stop") {
         seqClear();
         stopGait();
@@ -1651,6 +1816,8 @@ function voiceRunTool(call) {
 
 function voiceRequest(audioB64) {
     if (!hasAI) { voiceDone(false); return; }
+    var tStop = System.millis();
+    voiceTEnd = voiceTEnd || tStop;
     try {
         var started = AI.chat({
             provider: "openrouter",
@@ -1662,10 +1829,16 @@ function voiceRequest(audioB64) {
             ],
             tools: voiceTools(),
             tool_choice: "auto",
-            max_tokens: 400,   // sequencia composta e maior que um enum
+            max_tokens: 800,   // script ES5 composto e maior que um enum
             reasoning: { effort: "low" }
         }, function (r) {
+            cueGot();   // resposta da IA chegou (bancada: fim da espera muda)
             var done = false;
+            var tCb = System.millis();
+            System.print('[voz] tempos: fala ' + (voiceTEnd - voiceT0) + ' ms, stop ' +
+                (tStop - voiceTEnd) + ' ms, chat ' + (tChat - tStop) + ' ms, ia ' +
+                (tCb - tChat) + ' ms, total pos-fala ' + (tCb - voiceTEnd) + ' ms, audio ' +
+                (audioB64 ? audioB64.length : 0) + ' B');
             // o que o modelo respondeu (diagnostico no logcat: sem isto um
             // "nao deu certo" nao tinha como ser explicado)
             System.print('[voz] ia: ' + JSON.stringify({
@@ -1678,7 +1851,9 @@ function voiceRequest(audioB64) {
             if (!done && r && r.ok) done = voiceFromText(r.content);
             voiceDone(done);
         });
+        var tChat = System.millis();
         if (!started) voiceDone(false);
+        else cueSent();   // fala enviada: blip unico (bancada: saber que saiu)
     } catch (e) {
         System.print('[voz] erro: ' + e);
         voiceDone(false);
@@ -1688,7 +1863,10 @@ function voiceRequest(audioB64) {
 function voiceDone(ok) {
     voiceBusy = false;
     voiceRing(false, !ok);
-    cueVoice(ok);
+    // fim: trinado de sucesso — salvo quando a fala ainda vai tocar (ja
+    // agendada ou em curso: o "fim" dessa interacao e o fim do PLAYBACK)
+    if (ok && !speakBusy && pendingSpeak === null) cueDone();
+    else if (!ok) cueVoice(false);
     if (ok) happyUntil = System.millis() + 1600;
     lastActivity = System.millis();
     voiceErrorAt = ok ? 0 : System.millis();
@@ -1703,25 +1881,36 @@ function voiceTick(now) {
         if (lvl > 22) { voiceHeard = true; voiceQuietAt = 0; }
         else if (voiceHeard && lvl < 5) {
             if (!voiceQuietAt) voiceQuietAt = now + 550;
-            else if (now >= voiceQuietAt) { voiceRec = false; voiceRequest(Mic.stop()); }
+            else if (now >= voiceQuietAt) { voiceRec = false; voiceTEnd = now; voiceRequest(Mic.stop()); }
         }
-        if (voiceRec && !Mic.recording()) { voiceRec = false; voiceRequest(Mic.stop()); }
+        if (voiceRec && !Mic.recording()) { voiceRec = false; voiceTEnd = now; voiceRequest(Mic.stop()); }
         return;
     }
     // wake -> abre a janela (a task do detector descansa sozinha durante
-    // a gravacao — micRecActive no firmware)
-    if (!voiceBusy && (voiceErrorAt === 0 || now - voiceErrorAt > 2500) && WakeWord.poll()) {
+    // a gravacao — micRecActive no firmware). Fala do TTS em curso (e a
+    // cauda do eco): o detector segue vivo, mas surdo — o poll e drenado.
+    if (wakeMuted || speakBusy || now < wakeMuteUntil) {
+        WakeWord.poll();   // drena: deteccao do eco da propria voz nao vale
+        return;
+    }
+    if (!voiceBusy &&
+        (voiceErrorAt === 0 || now - voiceErrorAt > 2500) && WakeWord.poll()) {
         if (seqActive() || voiceWalkUntil) {   // "hi celer" corta dancinha/marcha
             seqClear(); stopGait(); voiceWalkUntil = 0;
         }
         voiceBusy = true;
         voiceHeard = false;
         voiceQuietAt = 0;
+        voiceT0 = now;
+        voiceTEnd = 0;
         lastActivity = now;
         cueVoice(true);
         voiceRing(true, false);
         if (Mic.start({ ms: 3500 })) {
             voiceRec = true;
+            // TLS aberto enquanto o dono fala: o chat do fim da janela pula
+            // DNS+TCP+handshake (~2,2 s medidos no log de bancada)
+            if (hasAI && typeof AI.warm === "function") AI.warm("openrouter");
         } else {
             voiceDone(false);
         }
@@ -1735,6 +1924,247 @@ if (voiceReady) {
         System.print('[voz] wake word indisponivel (modelo/RAM)');
         voiceReady = false;
     }
+}
+
+// ------------------------------ performances da IA (dog_script) -----------
+// A tool dog_script deixa a LLM ESCREVER a propria performance: um script
+// ES5 que roda aqui com uma mini-API de coreografia (cara, pernas, LEDs e
+// som) e so isso — os bindings do app (System, FS, Net, AI...) ficam
+// invisiveis por shadowing de parametros do new Function (o mesmo eval que
+// o Terminal ja usa, so que cercado). Clamps fisicos moram na propria API
+// (angulos ±45, 4 LEDs por fita, teto de notas), a entrada rejeita loop
+// infinito obvio e ha teto de relogio; o exec-timeout de 1 s do firmware e
+// o ultimo guarda-chuva (loop que nao cede mata o app, nao o cao). A
+// performance bloqueia o loop pelo mesmo modelo das marchas (runFrame):
+// cada wait() cede via System.delay -> present(). Cutucar o touch pad
+// interrompe na hora (scriptAlive) — bench e dono sempre tem um freio.
+var SCRIPT_MAX = 1600;   // chars de codigo (o prompt pede <= 1200)
+var SCRIPT_MS = 20000;   // teto de relogio da performance
+var SCRIPT_AMP = 45;     // graus fisicos do legs.set (poses nativas podem mais)
+var scriptUntil = 0, scriptAbort = false;
+var pendingScript = null;   // dog_script so AGENDA: o loop executa (o padrao
+                            // pendingSpeak — a cadeia inteira dentro do
+                            // callback do chat estourava a janela de 1 s)
+
+function scriptAlive() {
+    if (scriptAbort) return false;
+    if (System.touchPad() === 1) { scriptAbort = true; return false; }
+    return System.millis() <= scriptUntil;
+}
+
+function scriptGuards(code) {
+    if (code.length < 10) return "codigo curto demais";
+    if (code.length > SCRIPT_MAX) return "codigo passa de " + SCRIPT_MAX + " chars";
+    var z = code.replace(/\s+/g, "");   // sem espacos: while ( true ) nao escapa
+    if (z.indexOf("while(true)") >= 0 || z.indexOf("while(1)") >= 0 ||
+        z.indexOf("for(;") >= 0)
+        return "loop infinito proibido (use for com limite + wait)";
+    return "";
+}
+
+// Rampa ate target[] — a mesma do legTick do loop, so que bloqueante (o
+// loop esta parado dentro da performance). Cada passo cede com delay(10).
+function scriptRamp() {
+    var last = System.millis();
+    while (scriptAlive()) {
+        var now = System.millis();
+        var dt = now - last; last = now;
+        if (dt > 150) dt = 150;
+        legTick(dt);
+        var done = true;
+        for (var i = 0; i < KEYS.length; i++)
+            if (Math.abs(target[KEYS[i]] - off[KEYS[i]]) > 0.5) { done = false; break; }
+        if (done) break;
+        System.delay(10);
+    }
+    return true;
+}
+
+// Anda N ciclos da marcha SEM dono de tela: ninguem desenha, o rosto do
+// script fica congelado no vidro enquanto as pernas trabalham.
+function scriptStep(dir, cycles) {
+    if (!WALKS[dir]) return false;
+    cycles = Math.round(clampNum(cycles, 1, 20, 1));
+    seqClear();
+    if (!startGait(dir, true)) return false;
+    var until = System.millis() + cycles * gaitCycleMs(dir);
+    var last = System.millis();
+    while (scriptAlive()) {
+        var now = System.millis();
+        var dt = now - last; last = now;
+        if (dt > 150) dt = 150;
+        gaitTick(dt);
+        if (now >= until) break;
+        System.delay(15);
+    }
+    if (gait !== null) stopGait();
+    return true;
+}
+
+// Cor "0xRRGGBB" numero ou "#rrggbb" -> 0xRRGGBB (o que o neopixel fala).
+function scriptLedColor(c) {
+    if (typeof c === "number") return c & 0xFFFFFF;
+    if (typeof c === "string") {
+        var h = c.charAt(0) === "#" ? c.substring(1) : c;
+        if (/^[0-9a-fA-F]{6}$/.test(h)) return parseInt(h, 16);
+    }
+    return 0;
+}
+
+// A mini-API que o script da IA ve (e tudo o que ele ve): coordenadas de
+// cara no vidro FISICO 128x64 (conversao PX/PY interna), pernas na
+// convencao fisica + = pata pra frente, LEDs 2 fitas x 4, sons clampados.
+function scriptApi() {
+    function cx(v) { return clampNum(v, -512, 512, 0); }
+    function cw(v) { return Math.abs(cx(v)) || 1; }
+    function cr(v, dflt) { return clampNum(v, 1, 64, dflt); }
+    var face = {
+        clear: function () { System.fillScreen(0); },
+        // olhos do cachorro: open (0/1), olhar lx/ly -1..1, raio da pupila
+        eyes: function (open, lx, ly, r) {
+            drawEyes(!!open, clampNum(r, 2, 14, 10),
+                     clampNum(lx, -1, 1, 0), clampNum(ly, -1, 1, 0));
+        },
+        heart: function (x, y, s) { drawHeart(cx(x), cx(y), clampNum(s, 4, 40, 12)); },
+        rect: function (x, y, w, h) {
+            System.drawRect(PX(cx(x)), PY(cx(y)), PW_(cw(w)), PH_(cw(h)), 0xFFFF); },
+        fillRect: function (x, y, w, h) {
+            System.fillRect(PX(cx(x)), PY(cx(y)), PW_(cw(w)), PH_(cw(h)), 0xFFFF); },
+        circle: function (x, y, r) {
+            System.drawCircle(PX(cx(x)), PY(cx(y)), PW_(cr(r, 4)), 0xFFFF); },
+        fillCircle: function (x, y, r) {
+            System.fillCircle(PX(cx(x)), PY(cx(y)), PW_(cr(r, 4)), 0xFFFF); },
+        line: function (x0, y0, x1, y1) {
+            System.drawLine(PX(cx(x0)), PY(cx(y0)), PX(cx(x1)), PY(cx(y1)), 0xFFFF); },
+        tri: function (x0, y0, x1, y1, x2, y2) {
+            System.fillTriangle(PX(cx(x0)), PY(cx(y0)), PX(cx(x1)), PY(cx(y1)),
+                                PX(cx(x2)), PY(cx(y2)), 0xFFFF); },
+        roundRect: function (x, y, w, h, r) {
+            System.drawRoundRect(PX(cx(x)), PY(cx(y)), PW_(cw(w)), PH_(cw(h)),
+                                 PW_(clampNum(r, 0, 32, 4)), 0xFFFF); },
+        fillRoundRect: function (x, y, w, h, r) {
+            System.fillRoundRect(PX(cx(x)), PY(cx(y)), PW_(cw(w)), PH_(cw(h)),
+                                 PW_(clampNum(r, 0, 32, 4)), 0xFFFF); }
+    };
+    var legs = {
+        set: function (k, deg) {
+            k = String(k || "").toUpperCase();
+            if (KEYS.indexOf(k) < 0) return false;
+            if (gait !== null) stopGait();
+            target[k] = FWD[k] * clampNum(deg, -SCRIPT_AMP, SCRIPT_AMP, 0);
+            return scriptRamp();
+        },
+        pose: function (name) {
+            if (!POSES[name]) return false;
+            if (gait !== null) stopGait();
+            setPose(POSES[name]);
+            return scriptRamp();
+        },
+        step: function (dir, cycles) { return scriptStep(String(dir), cycles); },
+        release: function () { legsRelease(); return true; }
+    };
+    var leds = {
+        set: function (strip, colors) {
+            var s = strip === 1 || strip === "b" ? 1 : 0;
+            var px = [];
+            if (colors && colors.length)
+                for (var i = 0; i < colors.length && i < 4; i++)
+                    px.push(scriptLedColor(colors[i]));
+            if (!px.length) return false;
+            ledAnim = "off";   // o ledTick do loop nao briga com o script
+            return !!System.neopixel(s, px);
+        },
+        off: function () { return ledsOff(); }
+    };
+    var sound = {
+        bark: function (kind, n) { playBark(kind, n); return true; },
+        tone: function (notes) {
+            // firmware: 64 notas / 15 s no total / nota 1-2000 ms — clampado
+            // aqui em 32 notas e 15 s antes de chegar no RangeError dele
+            var seq = [], total = 0;
+            if (notes && notes.length)
+                for (var i = 0; i < notes.length && seq.length < 32; i++) {
+                    var nt = notes[i];
+                    if (!nt || nt.length < 2) continue;
+                    var ms = Math.round(clampNum(nt[1], 1, 2000, 100));
+                    if (total + ms > 15000) break;
+                    total += ms;
+                    seq.push([Math.round(clampNum(nt[0], 20, 20000, 440)), ms]);
+                }
+            if (!seq.length) return false;
+            return System.playTone(seq) > 0;
+        }
+    };
+    return {
+        face: face, legs: legs, leds: leds, sound: sound,
+        say: function (text) {
+            showSay(String(text || "").substring(0, 60), "", true);
+            return true;
+        },
+        wait: function (ms) {
+            ms = Math.round(clampNum(ms, 0, 3000, 0));
+            var t0 = System.millis();
+            while (System.millis() - t0 < ms) {
+                if (!scriptAlive()) return false;
+                var left = ms - (System.millis() - t0);
+                System.delay(left > 100 ? 100 : left);   // fatia: aborta rapido
+            }
+            return true;
+        },
+        print: function (msg) { System.print('[script] ' + msg); }
+    };
+}
+
+// Globais que o script NAO ve: entram como parametro do new Function com
+// valor undefined (shadowing). Sandbox soft por intencao: o modelo so
+// conhece a mini-API documentada na tool e os clamps fisicos estao na
+// propria API — nao e uma barreira contra codigo hostil.
+var SCRIPT_SHADOW = "System,FS,Net,AI,Mic,WakeWord,CelerLink,Storage,UI,Sensors," +
+    "Phone,setTimeout,setInterval,clearTimeout,clearInterval,require," +
+    "face,legs,leds,sound,say,wait,print";
+
+function runAiScript(code) {
+    var t0 = System.millis();
+    code = String(code || "");
+    var err = scriptGuards(code);
+    if (!err) {
+        // a performance e dona do cao: para marcha/fila, acorda e surda o
+        // wake word (os proprios tons/latidos acordariam o "hi celer")
+        seqClear();
+        if (gait !== null) stopGait();
+        if (legsLimp) { legsLimp = false; legsHold(); }
+        sleeping = false;
+        scriptUntil = t0 + SCRIPT_MS;
+        scriptAbort = false;
+        speakWake(false);
+        try {
+            var fn = new Function(SCRIPT_SHADOW, code);
+            var api = scriptApi();
+            fn(undefined, undefined, undefined, undefined, undefined, undefined,
+               undefined, undefined, undefined, undefined, undefined, undefined,
+               undefined, undefined, undefined, undefined,
+               api.face, api.legs, api.leds, api.sound, api.say, api.wait, api.print);
+        } catch (e) {
+            err = String(e && e.message ? e.message : e).substring(0, 120);
+        }
+        // restaura: target = off para a rampa do loop nao desfazer a pose
+        // final; LEDs apagados (mood/happy do after reacendem; zero direto —
+        // o setLeds("off") early-returna se ledAnim ja vale "off" do script);
+        // detector de volta com a cauda de eco coberta
+        for (var i = 0; i < KEYS.length; i++) target[KEYS[i]] = off[KEYS[i]];
+        ledAnim = "off";
+        System.neopixel(0, [0, 0, 0, 0]);
+        System.neopixel(1, [0, 0, 0, 0]);
+        speakWake(true);
+        happyUntil = System.millis() + 900;
+        lastActivity = System.millis();
+        draw();
+    }
+    var ms = System.millis() - t0;
+    System.print('[voz] script ' + (err ? 'erro: ' + err : 'ok') +
+                 ' (' + ms + ' ms, ' + code.length + ' chars)');
+    reply({ type: "script", ok: !err, ms: ms, err: err || undefined });
+    return !err;
 }
 
 var telAt = 0;
@@ -1885,6 +2315,21 @@ while (true) {
         voiceWalkUntil = 0;
         seqClear();
         stopGait();
+    }
+    // fala agendada pelo dog_speak (fora do callback do chat: cada etapa
+    // pesada ganha sua propria janela de execucao entre cedidas)
+    if (pendingSpeak !== null && !voiceBusy) {
+        var ps = pendingSpeak;
+        pendingSpeak = null;
+        speakStart(ps.text, ps.lang);
+    }
+    // performance da IA (dog_script): depois de qualquer fala — mover
+    // durante o TTS trocaria os sons
+    if (pendingScript !== null && !voiceBusy && !speakBusy &&
+        pendingSpeak === null) {
+        var aiCode = pendingScript;
+        pendingScript = null;
+        runAiScript(aiCode);
     }
     linkTick(now);
     if (mood && now > moodUntil) mood = "";

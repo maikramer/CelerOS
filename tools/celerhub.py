@@ -55,7 +55,7 @@ VALID_REQUIRES = ("psram",)
 # regras do servidor (CelerOS-Server app.py). O hub computa o campo gerenciado
 # "files" {nome: {size, md5}} no publish — nunca setar a mao. Modulos contam
 # na SOMA do teto de compile; assets (nao-.js) tem tetos proprios.
-ASSET_EXTS = (".js", ".png", ".wav", ".json", ".bin")
+ASSET_EXTS = (".js", ".png", ".wav", ".qoa", ".json", ".bin")
 FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 MAX_ASSET_FILE = 128 * 1024
 MAX_ASSETS_TOTAL = 256 * 1024

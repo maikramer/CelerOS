@@ -1,5 +1,6 @@
 #include "Boards/Board.h"
 #include "DogUlp.h"
+#include "../../Hardware/BoardIO.h"  // speakerChannel no boot (mesma forma da smartdisplay)
 
 // Cao robotico SpotBear/ZZPET (ESP32-S3-Ai-Dog-(A), SKU zzpet-s3): ESP32-S3R8
 // (8MB PSRAM octal EMBUTIDA — o anuncio diz "S3R2" mas o chip reporta R8),
@@ -49,6 +50,12 @@ void init() {
     DogUlp::wake();
     s_display.init();
     // Painel 1-bit monochromo: sem conversao RGB565 (nada a trocar).
+    // Canal do alto-falante NASCE AQUI (persistente): criado lazy no 1o som
+    // podia perder a disputa de RAM interna (~3,8 KB de DMA) para o NimBLE
+    // recem-conectado e o cao ficava MUDO ate o reboot (bancada 2026-10-05:
+    // i2s_alloc_dma_desc failed com o Remote pareado). No boot a interna
+    // esta na melhor faixa livre do ciclo.
+    BoardIO::speakerChannel(16000);
 }
 
 CelerDisplay& display() {
