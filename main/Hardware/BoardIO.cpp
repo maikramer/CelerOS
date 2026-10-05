@@ -1,4 +1,5 @@
 #include "BoardIO.h"
+#include "AudioPlayer.h"
 
 #include <Arduino.h>
 #include <math.h>
@@ -118,7 +119,21 @@ constexpr uint32_t kToneBlock = 512;
 // MCLK; ES8311 do watch: 16 kHz com MCLK 256x e codec no I2C — wake/sleep
 // em volta do tom, PA so durante a transmissao). Aloca o canal, transmite
 // a senoide pelo tempo pedido e devolve os pinos ao GPIO matrix.
+static bool toneI2sOut(int freqHz, int ms);
+
+// Guarda de saida do AudioPlayer: o I2S0 e UM so (no cao, canal persistente
+// compartilhado). Tom no meio de uma fala ao vivo do AI.speak (worker) ou de
+// um playWav reconfigurava o clock do canal enquanto a outra task escrevia
+// nele — voz distorcida/driver em estado invalido. Ocupado: o tom e pulado
+// (os bipes sao melhor esforco; o chamador ja trata false).
 bool toneI2s(int freqHz, int ms) {
+    if (!AudioPlayer::acquireOutput()) return false;
+    const bool ok = toneI2sOut(freqHz, ms);
+    AudioPlayer::releaseOutput();
+    return ok;
+}
+
+static bool toneI2sOut(int freqHz, int ms) {
     const BoardProfile& bp = Board::profile();
     const AudioI2sPins& p = bp.i2s;
     const bool hasCodec = bp.audioCodecWake != nullptr;
@@ -200,7 +215,7 @@ bool toneI2s(int freqHz, int ms) {
             }
             size_t written = 0;
             i2s_channel_write(tx, frames, n * 2 * sizeof(int16_t), &written, portMAX_DELAY);
-            esp_task_wdt_reset();
+            AudioPlayer::feedWatchdog();  // celerbeep nao e inscrita
             sent += n;
         }
         free(frames);
@@ -220,28 +235,110 @@ bool tone(int freqHz, int ms) {
     const int pin = Board::profile().speakerPin;
     if (pin < 0 && Board::profile().i2s.dout < 0) return false;
     if (freqHz < 20 || freqHz > 20000 || ms <= 0 || ms > 5000) return false;
-    if (pin < 0) return toneI2s(freqHz, ms);
-    ledc_timer_config_t tim = {};
-    tim.speed_mode = kMode;
-    tim.timer_num = kToneTimer;
-    tim.duty_resolution = LEDC_TIMER_10_BIT;
-    tim.freq_hz = (uint32_t)freqHz;
-    tim.clk_cfg = LEDC_AUTO_CLK;
-    if (ledc_timer_config(&tim) != ESP_OK) return false;
-    ledc_channel_config_t ch = {};
-    ch.speed_mode = kMode;
-    ch.channel = kToneCh;
-    ch.timer_sel = kToneTimer;
-    ch.gpio_num = pin;
-    ch.duty = 512;  // onda quadrada 50%
-    if (ledc_channel_config(&ch) != ESP_OK) return false;
-    const uint32_t t0 = millis();
-    while ((int)(millis() - t0) < ms) {
-        esp_task_wdt_reset();
-        delay(10);
+    // Serializa contra a task de beep e outros chamadores (o canal I2S e o
+    // timer LEDC do tom nao admitem dois donos simultaneos)
+    static StaticSemaphore_t sToneMuBuf;
+    static SemaphoreHandle_t sToneMu = xSemaphoreCreateMutexStatic(&sToneMuBuf);
+    if (xSemaphoreTake(sToneMu, pdMS_TO_TICKS(10000)) != pdTRUE) return false;
+    bool ok;
+    if (pin < 0) {
+        ok = toneI2s(freqHz, ms);
+    } else {
+        ledc_timer_config_t tim = {};
+        tim.speed_mode = kMode;
+        tim.timer_num = kToneTimer;
+        tim.duty_resolution = LEDC_TIMER_10_BIT;
+        tim.freq_hz = (uint32_t)freqHz;
+        tim.clk_cfg = LEDC_AUTO_CLK;
+        if (ledc_timer_config(&tim) != ESP_OK) {
+            xSemaphoreGive(sToneMu);
+            return false;
+        }
+        ledc_channel_config_t ch = {};
+        ch.speed_mode = kMode;
+        ch.channel = kToneCh;
+        ch.timer_sel = kToneTimer;
+        ch.gpio_num = pin;
+        ch.duty = 512;  // onda quadrada 50%
+        if (ledc_channel_config(&ch) != ESP_OK) {
+            xSemaphoreGive(sToneMu);
+            return false;
+        }
+        const uint32_t t0 = millis();
+        while ((int)(millis() - t0) < ms) {
+            AudioPlayer::feedWatchdog();
+            delay(10);
+        }
+        ledc_stop(kMode, kToneCh, 0);
+        ok = true;
     }
-    ledc_stop(kMode, kToneCh, 0);
-    return true;
+    xSemaphoreGive(sToneMu);
+    return ok;
+}
+
+// ---- beep assincrono (UI nao trava tocando) ----
+
+namespace {
+constexpr int kBeepQLen = 8;
+struct BeepItem { int freq; int ms; int gap; };
+BeepItem s_beepQ[kBeepQLen];
+int s_beepHead = 0, s_beepTail = 0;
+StaticSemaphore_t sBeepMuBuf;
+SemaphoreHandle_t sBeepMu = nullptr;
+TaskHandle_t s_beepTask = nullptr;
+
+SemaphoreHandle_t beepMu() {
+    if (!sBeepMu) sBeepMu = xSemaphoreCreateMutexStatic(&sBeepMuBuf);
+    return sBeepMu;
+}
+
+// Dorme em task notification entre rajadas: nenhum wakeup periodico que
+// impediria o light sleep do watch. Consome a fila inteira a cada acordar.
+void beepTaskFunc(void*) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        for (;;) {
+            BeepItem it;
+            bool has = false;
+            xSemaphoreTake(beepMu(), portMAX_DELAY);
+            if (s_beepHead != s_beepTail) {
+                it = s_beepQ[s_beepHead];
+                s_beepHead = (s_beepHead + 1) % kBeepQLen;
+                has = true;
+            }
+            xSemaphoreGive(beepMu());
+            if (!has) break;
+            tone(it.freq, it.ms);
+            if (it.gap > 0) vTaskDelay(pdMS_TO_TICKS(it.gap));
+        }
+    }
+}
+}  // namespace
+
+void toneAsync(int freqHz, int ms, int gapMs) {
+    if (freqHz < 20 || freqHz > 20000 || ms <= 0 || ms > 5000) return;
+    xSemaphoreTake(beepMu(), portMAX_DELAY);
+    if (s_beepTask == nullptr) {  // criacao sob o lock: sem janela de task dupla
+        if (xTaskCreate(beepTaskFunc, "celerbeep", 4096, nullptr, 2, &s_beepTask) != pdPASS) {
+            s_beepTask = nullptr;
+            xSemaphoreGive(beepMu());
+            return;
+        }
+    }
+    const int next = (s_beepTail + 1) % kBeepQLen;
+    if (next != s_beepHead) {  // fila cheia: descarta (beep e best-effort)
+        s_beepQ[s_beepTail] = {freqHz, ms, gapMs};
+        s_beepTail = next;
+    }
+    xSemaphoreGive(beepMu());
+    xTaskNotifyGive(s_beepTask);
+}
+
+void toneStop() {
+    if (sBeepMu == nullptr) return;
+    xSemaphoreTake(beepMu(), portMAX_DELAY);
+    s_beepHead = s_beepTail = 0;
+    xSemaphoreGive(beepMu());
 }
 
 // ---- reles ----

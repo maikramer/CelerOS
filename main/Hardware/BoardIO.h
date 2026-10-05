@@ -44,6 +44,13 @@ int lightRaw();
 bool hasSpeaker();
 // Tom bloqueante (alimenta o watchdog). false sem alto-falante ou fora da faixa.
 bool tone(int freqHz, int ms);
+// Enfileira o tom numa task propria (celerbeep) e volta na hora: bipes de
+// alarme/chamada/notificacao nao podem rodar dentro do tick da UI, que
+// congelava pela duracao do som. gapMs e a pausa apos o tom (padroes de
+// varios bipes). Fila curta: beep e best-effort, item novo em fila cheia
+// e descartado. toneStop() limpa a fila (o tom corrente termina sozinho).
+void toneAsync(int freqHz, int ms, int gapMs = 0);
+void toneStop();
 
 // ---- reles ----
 // Configura as saidas em nivel baixo (desligadas) no boot; no-op sem reles.

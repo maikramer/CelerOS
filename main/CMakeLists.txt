@@ -11,6 +11,7 @@ set(CELEROS_SRCS
     "Assets/Fonts/CelerFonts.cpp"
     "Hardware/BoardIO.cpp"
     "Hardware/AudioPlayer.cpp"
+    "Hardware/Audio/qoa.c"
     "Display/ScreenCapture.cpp"
     "main.cpp"
     "Compat/CelerCompat.cpp"
