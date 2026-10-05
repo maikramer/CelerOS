@@ -1,0 +1,382 @@
+[
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 0,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 80,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 150,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 50,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 100,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 320,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 0,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 250,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 150,
+    "land": 200,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 60,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 45,
+    "kick": 60,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 20,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 45,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 50,
+    "pull": 50,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 220,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 250
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 40,
+    "pull": 35,
+    "msDeg": 0,
+    "air": 40,
+    "fall": 200,
+    "land": 120,
+    "settle": 160,
+    "rest": 700
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 25,
+    "rear": 45,
+    "kick": 60,
+    "front": 50,
+    "pull": 45,
+    "msDeg": 0,
+    "air": 60,
+    "fall": 280,
+    "land": 120,
+    "settle": 160,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ },
+ {
+  "tune": {
+   "hop": {
+    "prep": 20,
+    "rear": 35,
+    "kick": 50,
+    "front": 50,
+    "pull": 45,
+    "msDeg": 0,
+    "air": 80,
+    "fall": 150,
+    "land": 200,
+    "settle": 220,
+    "rest": 400
+   }
+  },
+  "gait": "hop",
+  "walk_ms": 5000
+ }
+]
