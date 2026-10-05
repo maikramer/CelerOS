@@ -322,6 +322,8 @@ private:
     // opts.provider). A chave fica no aparelho (/local/<provider>_key.txt,
     // protegida pelo jail do FS) e nunca entra no JS
     static duk_ret_t js_aiChat(duk_context *ctx);        // opts + cb 1x
+    static duk_ret_t js_aiSpeak(duk_context *ctx);       // opts + cb 1x (TTS, API 24)
+    static duk_ret_t js_aiWarm(duk_context *ctx);        // [provider] -> abre o TLS antes (API 24)
     static duk_ret_t js_aiConfigured(duk_context *ctx);  // chave presente?
     static duk_ret_t js_aiCancel(duk_context *ctx);      // esquece a requisicao
     static void aiTick(duk_context *ctx);                // entrega no present()

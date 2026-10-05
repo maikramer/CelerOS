@@ -1062,6 +1062,39 @@ void micRecFree() {
 // Monta WAV (ou base64 dele) do buffer gravado. Chamado SO com done=true
 // (nenhum escritor vivo). Pico transitorio: WAV + base64 na PSRAM.
 char* micRecBuildOut(bool base64, size_t* lenOut, uint32_t* msOut) {
+    // Corta o SILENCIO das pontas antes de montar: a janela abre antes da
+    // fala e fecha 550 ms DEPOIS dela (a guarda de quietud) — esse colchao
+    // viajava inteiro no base64/upload e a LLM cobra por token de audio
+    // (menos audio = resposta mais rapida). 160 ms antes da 1a voz, 240 ms
+    // depois da ultima, minimo de 100 ms; gravacao toda muda segue como
+    // esta (o fluxo "comando none" precisa do audio que havia).
+    if (s_rec.n > 1600) {  // acima de 100 ms: menos que isso nao ha o cortar
+        // nivel 0-3 do Mic.level (RMS%) e o ruido de sala: o corte fica
+        // ACIMA dele e ABAIXO da fala (15-40). Ajuste fino na bancada.
+        const int kThresh = 1200;  // ~3,7% da escala
+        // A busca da 1a voz comeca DEPOIS dos primeiros 300 ms: o beep do
+        // cue/beep do proprio alto-falante entra no microfone e era tomado
+        // como "fala" — o trim mantinha so a janela do beep e cortava a
+        // frase de verdade (bancada 2026-10-05: clips de 0,26 s)
+        const size_t scanFrom = s_rec.n > 4800 ? 4800 : 0;  // 300 ms
+        size_t first = s_rec.n, last = 0;
+        for (size_t i = scanFrom; i < s_rec.n; i++) {
+            if (s_rec.pcm[i] > kThresh || s_rec.pcm[i] < -kThresh) { first = i; break; }
+        }
+        if (first < s_rec.n) {
+            for (size_t i = s_rec.n; i-- > 0;) {
+                if (s_rec.pcm[i] > kThresh || s_rec.pcm[i] < -kThresh) { last = i; break; }
+            }
+            size_t a = first > 2560 ? first - 2560 : 0;  // 160 ms de pre-roll
+            size_t b = last + 3840 < s_rec.n ? last + 3840 : s_rec.n;  // 240 ms pos
+            if (b - a < 1600) {  // minimo de 100 ms em volta da voz
+                a = first > 800 ? first - 800 : 0;
+                b = a + 1600 < s_rec.n ? a + 1600 : s_rec.n;
+            }
+            if (a > 0) memmove(s_rec.pcm, s_rec.pcm + a, (b - a) * sizeof(int16_t));
+            s_rec.n = b - a;
+        }
+    }
     if (msOut != nullptr) *msOut = (uint32_t)(s_rec.n / 16);  // 16000 amostras/s
     const size_t dataLen = s_rec.n * sizeof(int16_t);
     uint8_t* wav = (uint8_t*)malloc(44 + dataLen);

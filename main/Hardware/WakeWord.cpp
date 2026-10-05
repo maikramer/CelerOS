@@ -21,6 +21,7 @@
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend.h"
 #include "tensorflow/lite/experimental/microfrontend/lib/frontend_util.h"
 #include "BoardIO.h"
+#include "AudioPlayer.h"  // active(): detector dorme enquanto o falante toca
 #include "esp_log.h"
 #include <math.h>
 #include <new>
@@ -150,6 +151,15 @@ void wakeTask(void*) {
     while (!s_stopReq) {
         if (BoardIO::micRecActive()) {
             vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        // Alto-falante tocando (wav/tom/fala do TTS): a task DORME em vez de
+        // inferir — o cao nao precisa se ouvir e a CPU do slice de TFLite
+        // fica livre para o feed do I2S (engasgo da voz, bancada 2026-10-05).
+        // Sem desmontar nada: o modelo/task seguem de pe, resume no proximo
+        // ciclo; o eco acustico da cauda e coberto pelo mute do app.
+        if (AudioPlayer::active()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
         const int n = BoardIO::micReadMonoLocked(buf, 512);

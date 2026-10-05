@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 23
+### API Level: 24
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1442,7 +1442,7 @@ framework reads it at call time (replacing the key does not need a reboot).
   - `cb` (Function) — called **exactly once** with the result object when the request finishes.
 - **Returns:** Boolean — `true` when the request started (callback will fire); `false` when busy (another request in flight — no callback).
 - **Throws:** readable error when WiFi is down, no key is provisioned or the provider name is unknown.
-- **Description:** Asynchronous: the HTTPS POST runs on its own task (90 s timeout) while the app keeps drawing. The callback receives `{ok, status, content, usage, raw, error}`:
+- **Description:** Asynchronous: the HTTPS POST runs on its own task (60 s timeout) while the app keeps drawing. The callback receives `{ok, status, content, usage, raw, error}`:
   - `ok` — `true` on HTTP 2xx;
   - `content` — the reply text (`choices[0].message.content`), `null` when the body could not be parsed;
   - `usage` — `{prompt_tokens, completion_tokens, total_tokens}` when present;
@@ -1505,7 +1505,7 @@ while audio is captured.
 #### `Mic.stop([opts])` (API 19)
 - **Parameters:** `opts` (Object, optional) — `{raw: true}` to get the raw WAV bytes instead of base64.
 - **Returns:** String — base64 of the WAV (44-byte PCM16/mono/16 kHz header + samples) ready for `input_audio`; `null` when it was not recording or memory ran out.
-- **Description:** Ends the capture and returns the audio. One recording at a time.
+- **Description:** Ends the capture and returns the audio. One recording at a time. **Leading/trailing silence is trimmed** (160 ms before the first voice, 240 ms after the last, 100 ms floor): the capture window opens before the speech and closes ~0.5 s after it — without the cut that padding travels in the base64/upload and makes the LLM process more audio than needed.
 
 #### `Mic.recording()` (API 19)
 - **Returns:** Boolean — `true` while the capture task is running.
@@ -1794,3 +1794,65 @@ module.exports = {                   // replacing module.exports also works
 - Duktape's `line N` in errors matches line N of the module file.
 - The cache lasts for the app run (reopening reloads from disk).
 - A bare `.js` run from the shell has no app folder: `require` throws.
+
+## 29. API Level 24 — Speech: `AI.speak` (text to voice)
+
+Text becomes voice on the board speaker. `AI.speak` posts the text to the
+OpenRouter `/audio/speech` endpoint (default model
+`google/gemini-3.8-flash-lite-tts`, 30 natural voices — speaks Portuguese
+out of the box) and plays the audio **live** as it downloads: **nothing goes
+through RAM**, download and playback run on their own task while the app
+stays free (animating the robot's mouth, say). It shares the serial slot
+with `AI.chat`: while a speech is in flight, `AI.chat`/`AI.speak` return
+`false`.
+
+Works on any board with an I2S speaker (dog, SmartDisplay, watch). Needs
+the OpenRouter key (`AI.configured("openrouter")`) and WiFi. Live speech
+touches no storage; a saved `.wav` (`save:true` or `play:false`) takes ~48 KB
+of LittleFS per second of speech (24 kHz): 300 chars of text ≈ 20 s ≈
+960 KB — hence the 300-char cap on `text`.
+
+#### `AI.speak(opts, cb)` (API 24)
+- **Parameters:**
+  - `opts` (Object) — `text` (String, required, 1..300 chars; style can be embedded in the text itself, e.g. `"Say it cheerfully: dinner time!"`), `voice` (String, optional; default `"Charon"` — a deep voice that suits the robot dog; Puck, Kore, Fenrir, Aoede... are others), `model` (String, optional; defaults to `google/gemini-3.8-flash-lite-tts`), `path` (String, optional; destination of the `.wav` when one is saved — default is `tts.wav` inside the app's private folder, `FS.appData()`), `play` (Boolean, optional, default `true` — `false` only downloads the file for a later `System.playWav(path)`), `save` (Boolean, optional, default `false` — `true` also keeps the `.wav` in `path` while playing live).
+  - `cb` (Function) — called **exactly once** at the end (after playback, when it runs).
+- **Returns:** Boolean — `true` when the request started; `false` when busy (no callback).
+- **Throws:** readable error when WiFi is down, no key, missing `text`, text above 300 chars or a path denied by the FS jail.
+- **Description:** the download plays **live** (sound starts at the first byte of the response, not at the end of the file; an error body never reaches the speaker). The callback receives `{ok, status, path, bytes, played, error?, detail?}`:
+  - `ok` — `true` when the audio was downloaded (and, when saved, sealed into `path`);
+  - `path` — where the `.wav` lives when saved (`save:true`/`play:false`; valid for `System.playWav` and for the app's cache: the same phrase can play offline afterwards), `""` when it only played live;
+  - `bytes` — downloaded PCM (~48 KB per second of speech);
+  - `played` — `true` when it played to the end; `false` with `ok` true means `play:false` or cut by `AI.cancel()` (a speaker busy at the first byte falls back to playing the finished file);
+  - `error`/`detail` — transport error and the API's own message (invalid voice, balance...).
+- `AI.cancel()` cuts the speech mid-flight (sound stops at the next chunk).
+
+#### `AI.warm([provider])` (API 24)
+- **Parameters:** `provider` (String, optional; `"deepseek"` default or `"openrouter"`).
+- **Returns:** Boolean — `true` when the warm-up was queued; `false` when there is nothing to do (no WiFi, no key, unknown provider, a board without PSRAM, or a request already in flight). Never throws, no callback.
+- **Description:** opens the TLS connection to the provider **now**, so the next `AI.chat`/`AI.speak` skips DNS + TCP + handshake (~2 s on the S3). It does not take the serial slot: an `AI.chat` right after it is accepted and runs as soon as the warm-up finishes. Typical use: a voice app calls it at the wake word, while the user is still speaking.
+
+```javascript
+if (WakeWord.poll()) {
+    AI.warm("openrouter");   // connection opens while the user talks
+    Mic.start({ ms: 3500 });
+}
+```
+
+### Example — the dog answers
+
+```javascript
+if (AI.configured("openrouter") && Net.isConnected()) {
+    AI.speak({ text: "Hi! Everything alright?" }, function (r) {
+        if (!r.ok) System.print("erro: " + r.error);
+    });
+    while (true) System.delay(20);  // callback fires while yielding
+}
+```
+
+### Example — download without playing (fixed-phrase cache)
+
+```javascript
+// download once on WiFi, play offline whenever
+AI.speak({ text: "low battery, time to charge", path: FS.appData() + "aviso.wav", play: false },
+         function (r) { if (r.ok) System.playWav(r.path); });
+```

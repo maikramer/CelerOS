@@ -558,8 +558,11 @@ function makeEnv() {
     // proximo yield (setTimeout 0) como o aiTick no present() do firmware.
     // env.__aiConfigured=false simula aparelho sem chave nenhuma;
     // env.__aiKeys={openrouter:false} tira um provider so.
-    var aiCb = null, aiResponse = null;
+    // AI.speak (API 24) compartilha o MESMO slot serial do chat: fala em
+    // curso deixa chat/speak devolvendo false, como no firmware.
+    var aiCb = null, aiResponse = null, aiSpeakResult = null;
     var aiChats = [];
+    var aiSpeaks = [];
     var AI_MODELS = { deepseek: 'deepseek-flash', openrouter: 'qwen/qwen3.8-omni-flash' };
     env.AI = {
         chat: function(opts, cb) {
@@ -584,12 +587,42 @@ function makeEnv() {
             }, 0);
             return true;
         },
+        speak: function(opts, cb) {
+            if (!opts || typeof opts.text !== 'string' || !opts.text.length) {
+                throw new TypeError('AI.speak: opts.text (string) e obrigatorio');
+            }
+            if (opts.text.length > 300) {
+                throw new Error('AI.speak: texto passa o teto de 300 chars');
+            }
+            aiSpeaks.push(JSON.stringify(opts));
+            if (typeof cb !== 'function') return false;
+            if (aiCb !== null) return false;  // slot serial (mesma regra do firmware)
+            aiCb = cb;
+            env.setTimeout(function() {
+                var f = aiCb;
+                aiCb = null;
+                if (!f) return;
+                var r = typeof aiSpeakResult === 'function' ? aiSpeakResult(opts) : aiSpeakResult;
+                // path so vem quando ha .wav salvo (save:true ou play:false)
+                var saved = opts.save === true || opts.play === false;
+                f(r || { ok: true, status: 200,
+                         path: saved ? (opts.path || '/local/data/test/tts.wav') : '',
+                         bytes: 48000, played: opts.play !== false });
+            }, 0);
+            return true;
+        },
         configured: function(p) {
             if (env.__aiConfigured === false) return false;
             var keys = env.__aiKeys || {};
             return keys[p || 'deepseek'] !== false;
         },
-        cancel: function() { var had = aiCb !== null; aiCb = null; return had; }
+        cancel: function() { var had = aiCb !== null; aiCb = null; return had; },
+        // AI.warm (API 24): melhor esforco, sem callback nem slot
+        warm: function(p) {
+            if (env.__aiConfigured === false) return false;
+            var keys = env.__aiKeys || {};
+            return keys[p || 'deepseek'] !== false && aiCb === null;
+        }
     };
 
     // Mic (API 19): gravacao simulada (o firmware grava em task propria).
@@ -671,6 +704,8 @@ function makeEnv() {
         log: log,
         setAiResponse: function(r) { aiResponse = r; },
         aiChats: aiChats,
+        setAiSpeakResult: function(r) { aiSpeakResult = r; },
+        aiSpeaks: aiSpeaks,
         setMicB64: function(s) { micB64 = s; },
         mic: micState,
         wake: function() { wakeQueue.push(true); },

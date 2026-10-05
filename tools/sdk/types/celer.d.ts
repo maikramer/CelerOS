@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 23 — 251 funcoes.
+// API level 24 — 253 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -371,9 +371,15 @@ declare const Net: {
 };
 
 declare const AI: {
-    /** Assíncrono: o POST HTTPS roda em task própria (timeout de 90 s) enquanto o app continua desenhando. O callback recebe {ok, status, content,  (API 18) */
+    /** Assíncrono: o POST HTTPS roda em task própria (timeout de 60 s) enquanto o app continua desenhando. O callback recebe {ok, status, content,  (API 18) */
     /** @permission "net" */
     chat(opts: number, cb: number): any;
+    /** o download toca ao vivo (o som sai no primeiro byte da resposta, não no fim do arquivo; corpo de erro nunca toca no alto-falante). O callbac (API 24) */
+    /** @permission "net" */
+    speak(opts: number, cb: number): any;
+    /** abre a conexão TLS com o provider agora, para o próximo AI.chat/AI.speak pular DNS + TCP + handshake (~2 s no S3). Não ocupa o slot serial:  (API 24) */
+    /** @permission "net" */
+    warm(provider?: number): any;
     /** true quando existe chave daquele provider provisionada no aparelho. Use junto de Net.isConnected() antes de conversar. (API 18) */
     /** @permission "net" */
     configured(provider?: number): any;
@@ -385,7 +391,7 @@ declare const Mic: {
     /** Inicia a captura. No teto de ms o gravador para sozinho (Mic.recording() vira false; o buffer espera o Mic.stop()). (API 19) */
     /** @permission "mic" */
     start(opts?: number): any;
-    /** Encerra a captura e devolve o áudio. Uma gravação por vez. (API 19) */
+    /** Encerra a captura e devolve o áudio. Uma gravação por vez. O silêncio das pontas sai cortado (160 ms antes da primeira voz, 240 ms depois da (API 19) */
     /** @permission "mic" */
     stop(opts?: number): any;
     /** @permission "mic" */

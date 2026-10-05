@@ -1279,11 +1279,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     }
 
     // --- AI Object (API 18): chat LLM (opts.provider: deepseek|openrouter)
-    // — capability "net" (HTTPS) ---
+    // + AI.speak TTS (API 24, openrouter) — capability "net" (HTTPS) ---
     if (perm(celer::PERM_NET)) {
     duk_push_object(ctx); // AI
     static const JsFn kFnsAI[] = {
         {"chat", js_aiChat, 2},              // cb({ok,content,raw,status,usage,toolCalls[{id,name,args}],finishReason}) 1x (API 20: toolCalls)
+        {"speak", js_aiSpeak, 2},            // cb({ok,status,path,bytes,played,error?,detail?}) 1x (TTS, API 24)
+        {"warm", js_aiWarm, 1},              // [provider]: abre o TLS antes do chat (API 24)
         {"configured", js_aiConfigured, 1},  // chave no aparelho? ([provider])
         {"cancel", js_aiCancel, 0},          // esquece a requisicao em curso
     };
