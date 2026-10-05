@@ -41,12 +41,10 @@ function goState(s) {
     state = s;
     UI.invalidate();
 }
-// entrada no jogo: consome um frame cheio do toolkit (limpa o chrome e deixa
-// os slots de texto do HUD em modo redesenho enquanto durar a partida)
+// entrada no jogo: o drawScene pinta a tela inteira por cima do chrome
 function enterPlay() {
     resetGame();
-    UI.begin(T.bg);
-    UI.end();
+    state = "play";
 }
 
 var playerLane, playerY, playerBob, playerX;   // playerX anima a troca
@@ -232,9 +230,8 @@ while (true) {
     if (state === "menu" || state === "ajustes" || state === "over") {
         UI.begin(T.bg);
         if (state === "menu") {
-            var bob = Math.round(Math.sin(now / 400.0) * 4);
-            UI.text("NEON", W / 2, 70 + bob, { role: "display", align: "center", color: T.accent });
-            UI.text("SURFER", W / 2, 112 + bob, { role: "display", align: "center", color: T.text });
+            UI.text("NÉON", W / 2, 70, { role: "display", align: "center", color: T.accent });
+            UI.text("SURFER", W / 2, 112, { role: "display", align: "center", color: T.text });
             UI.badge("recorde " + hi, 12, 150, { color: T.accentD });
             if (UI.button("JOGAR", 40, 190, 160, 48)) enterPlay();
             if (UI.button("Ajustes", 40, 246, 160, 44, { style: "ghost" })) goState("ajustes");
@@ -247,7 +244,7 @@ while (true) {
             showFPS = UI.toggle(180, 90, showFPS);
             UI.text("temperatura do chip", 16, 136);
             showTemp = UI.toggle(180, 130, showTemp);
-            UI.text("os ajustes nao sao salvos", W / 2, 300,
+            UI.text("os ajustes não são salvos", W / 2, 300,
                     { role: "caption", align: "center", color: T.textDim });
         } else if (state === "over") {
             UI.text("BATEU!", W / 2, 70, { role: "display", align: "center", color: T.err });
