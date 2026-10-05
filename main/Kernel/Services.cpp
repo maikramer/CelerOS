@@ -15,6 +15,7 @@
 #include "../../Launcher/AlarmScreen.h"
 #include "../../Launcher/WatchPanels.h"
 #include "../../Launcher/NotificationAlert.h"
+#include "../../USBDevice/DebugBridge.h"
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../../Bluetooth/PhoneLink.h"
 #include "../../Launcher/PhoneScreens.h"
@@ -42,6 +43,9 @@ void svcPhoneScreens(bool) { PhoneScreens::service(); }
 #endif
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
 void svcOtaConfirm(bool) { confirmPendingOta(); }
+
+// ALWAYS: com app aberto o bridge segue vivo (logcat/debug de um app em run)
+void svcDebugBridge(bool inApp) { DebugBridge::tick(inApp); }
 
 // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD: com a
 // tela apagada/AOD (o normal no watchface) o alarme toca do mesmo jeito. O
@@ -82,6 +86,7 @@ const CelerServices::Service kServices[] = {
 #endif
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},
+    {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
     // fim da fila no present(): erro no callback de alarme nao pula o resto
     {"alarmscheck", svcAlarmsCheck, CelerServices::PRESENT},
 };

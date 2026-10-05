@@ -5,6 +5,7 @@
 #include "../Display/ScreenPower.h"
 #include "../Utils/CelerSettings.h"
 #include "../WebManager/WebManager.h"
+#include "../USBDevice/DebugBridge.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include <Arduino.h>
@@ -98,6 +99,7 @@ void tick() {
     } else if (st == 0) {
         if (s_offSince == 0) s_offSince = now;
         if (s_wifiSleepMin > 0 && !s_wifiAutoOff && WebManager::isActive() &&
+            !DebugBridge::sessionActive() &&  // celerctl por WiFi em uso: radio fica
             now - s_offSince >= (uint32_t)s_wifiSleepMin * 60000UL) {
             s_wifiAutoOff = true;
             WebManager::disable();  // nao persiste: a flag nowifi segue intacta

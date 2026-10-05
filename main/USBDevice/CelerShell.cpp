@@ -7,6 +7,7 @@
 #include "Display/Theme.h"
 #include "Kernel/DeviceStats.h"
 #include "NetworkManager.h"
+#include "DebugBridge.h"
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
@@ -625,6 +626,31 @@ int cmdWifi(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 }
 
 #include "sdkconfig.h"
+#if CONFIG_CELEROS_DEBUG_BRIDGE
+// Estado do Celer Debug Bridge (celerctl por TCP/WiFi) e o token de
+// pareamento — e daqui que a bancada le o token na 1a conexao sem cabo.
+int cmdBridge(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc >= 2 && strcmp(argv[1], "reset") == 0) {
+        DebugBridge::tokenReset();
+        print(ctx, "token novo: %s\r\n", DebugBridge::token());
+        return 0;
+    }
+    char ip[16] = "";
+    bool hasIp = ipOf(ip, sizeof(ip));
+    print(ctx,
+          "bridge  : %s (%s)\r\n"
+          "ip      : %s\r\n"
+          "porta   : %u (TCP celerctl + UDP sonda)\r\n"
+          "cliente : %s\r\n"
+          "token   : %s (celerctl pair / --token; \"bridge reset\" troca)\r\n",
+          DebugBridge::listening() ? "escutando" : "aguardando WiFi",
+          DebugBridge::sessionActive() ? "sessao ativa" : "livre",
+          hasIp ? ip : "(desconectado)", (unsigned)DebugBridge::port(),
+          DebugBridge::sessionActive() ? "conectado" : "nenhum", DebugBridge::token());
+    return 0;
+}
+#endif
+
 #if CONFIG_CELEROS_PHONE_LINK
 // Injeta uma linha do protocolo do Gadgetbridge na mesma fila do RX do BLE
 // (teste do protocolo sem o Android). O shell nao trata aspas: mande a linha
@@ -657,6 +683,9 @@ const ShellCmd kCommands[] = {
     {"lasterror", cmdLastError},
     {"debug", cmdDebug},
     {"wifi", cmdWifi},
+#if CONFIG_CELEROS_DEBUG_BRIDGE
+    {"bridge", cmdBridge},
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},
 #endif

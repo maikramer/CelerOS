@@ -38,6 +38,7 @@
 #include "Kernel/TimeManager.h"
 #include "Launcher/Screens.h"
 #include "USBDevice/SerialLink.h"
+#include "USBDevice/DebugBridge.h"
 #include "Utils/I18n.h"
 #include "Boards/Board.h"
 #if CONFIG_CELEROS_USB_NATIVE
@@ -156,6 +157,10 @@ static void celerSetup() {
     // scan de apps: sem PSRAM, o prewarm dos icones (decode PNG, ~44KB
     // transitorios) precisa do heap cheio.
     WebManager::startAsync();
+
+    // Celer Debug Bridge (celerctl por TCP/WiFi): assina o evento de rede e
+    // sobe o listener quando o WiFi conectar (task nasce lazy no 1o tick).
+    DebugBridge::begin();
 
     // Touch resistivo sem calibracao salva: roda o calibrador antes da UI.
     // Placas com touch capacitivo (GT911) pulam a calibracao.

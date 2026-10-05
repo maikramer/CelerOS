@@ -8,7 +8,8 @@
 #include "HostFrame.h"
 
 // Protocolo HostLink: canal binario da ferramenta celerctl sobre a CDC1
-// nativa ou a UART do CH340 (multiplexada com o console).
+// nativa, a UART do CH340 (multiplexada com o console) ou o Celer Debug
+// Bridge TCP/WiFi (DebugBridge.h — banner/AUTH por token antes dos frames).
 //
 // Frame (little-endian) — ver HostFrame.h (framer puro, testado no host):
 //   proto 1: [0x43 'C'][cmd u8][len u16][payload]
@@ -24,11 +25,12 @@
 // ESTE ARQUIVO E A FONTE UNICA DOS OPCODES: tools/celerctl.py extrai os
 // valores por regex para manter os dois lados em sincronia.
 //
-// Cada transporte (UART0 do SerialLink, CDC1 do USBDevice) cria a SUA
-// instancia — a maquina de frames e por canal. A sessao de comandos e
-// unica no device: o frame HELLO define o canal ativo (o ultimo ganha) e
-// respostas, logs (KL_LOG_DATA) e demais frames de saida seguem sempre
-// pelo canal que abriu a sessao. Comandos por canal inativo recebem erro.
+// Cada transporte (UART0 do SerialLink, CDC1 do USBDevice, TCP do
+// DebugBridge) cria a SUA instancia — a maquina de frames e por canal. A
+// sessao de comandos e unica no device: o frame HELLO define o canal ativo
+// (o ultimo ganha) e respostas, logs (KL_LOG_DATA) e demais frames de saida
+// seguem sempre pelo canal que abriu a sessao. Comandos por canal inativo
+// recebem erro.
 
 class HostLink {
 public:

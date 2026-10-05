@@ -20,6 +20,7 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
 #include "../Kernel/TimeManager.h"
+#include "../OTA/OtaGuard.h"
 #include "../Display/ScreenCapture.h"
 #include "../UI/Kui.h"
 #include "../Boards/Board.h"
@@ -652,10 +653,14 @@ struct MultipartCtx {
     void openDest(const std::string& fieldName, std::string fname) {
         if (fieldName == "firmware") {
             isFirmware = true;
+            if (!OtaGuard::acquire()) {  // celerctl push em curso: nao pisa
+                fail("another OTA write in progress (celerctl?)");
+                return;
+            }
             part = esp_ota_get_next_update_partition(nullptr);
-            if (part == nullptr) { fail("no ota partition"); return; }
+            if (part == nullptr) { fail("no ota partition"); OtaGuard::release(); return; }
             esp_err_t err = esp_ota_begin(part, OTA_SIZE_UNKNOWN, &ota);
-            if (err != ESP_OK) { fail(esp_err_to_name(err)); return; }
+            if (err != ESP_OK) { fail(esp_err_to_name(err)); OtaGuard::release(); return; }
             ESP_LOGI(WM_TAG, "OTA web: escrevendo em %s", part->label);
             return;
         }
@@ -726,6 +731,7 @@ struct MultipartCtx {
                 s_rebootPending = true;
             }
             ota = 0;
+            OtaGuard::release();  // slot livre p/ celerctl/hub de novo
         }
     }
 };

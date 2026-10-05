@@ -40,6 +40,26 @@ config CELEROS_WEB_SERVER
       com senha (WebAuth). O captive portal de configuracao do WiFi nao
       depende desta opcao.
 
+config CELEROS_DEBUG_BRIDGE
+    bool "Celer Debug Bridge (celerctl por TCP/WiFi)"
+    default y
+    help
+      Canal do celerctl (HostLink proto 2) sobre TCP na rede WiFi: shell,
+      push/pull, logcat, debugger e ota push sem cabo, com token de
+      pareamento em NVS (comando "bridge" do shell mostra). Na mesma porta,
+      um socket UDP responde a sonda de descoberta do "celerctl devices".
+      Sobe so com o WiFi STA conectado (re-listena sozinho apos reconectar)
+      e aceita 1 cliente por vez — a sessao HostLink e unica no device.
+
+config CELEROS_DEBUG_BRIDGE_PORT
+    int "Porta TCP/UDP do Celer Debug Bridge"
+    range 1024 65535
+    default 5555
+    depends on CELEROS_DEBUG_BRIDGE
+    help
+      Porta do servidor TCP (celerctl -p IP) e do responder UDP (sonda do
+      "celerctl devices"). TCP e UDP usam o mesmo numero.
+
 config CELEROS_SD_CARD
     bool "Cartao SD (/sd via SPI + FAT)"
     default y

@@ -49,6 +49,7 @@ set(CELEROS_SRCS
     "Utils/AppGrants.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
+    "USBDevice/DebugBridge.cpp"
     "USBDevice/HostLink.cpp"
     "USBDevice/JsDebugger.cpp"
     "USBDevice/SerialLink.cpp"

@@ -25,6 +25,8 @@
 #include "freertos/task.h"
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
+#include "../OTA/OtaGuard.h"
+#include "DebugBridge.h"
 #include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
 #include "../WebManager/WebAuth.h"  // senha do web server no `celerctl info`
 #include "../Kernel/DeviceStats.h"  // KL_STATS: foto de profiling (top)
@@ -248,14 +250,22 @@ void handleInfo() {
         su = FileSystem::getUsedSpace("/sd");
     }
 
-    char json[640];
+    char json[704];
+#if CONFIG_CELEROS_DEBUG_BRIDGE
+    // mesmo precedente do web_pass: segredo visivel a quem ja tem sessao
+    char bridge[72];
+    snprintf(bridge, sizeof(bridge), ",\"bridge\":{\"port\":%u,\"token\":\"%s\"}",
+             (unsigned)DebugBridge::port(), DebugBridge::token());
+#else
+    const char* bridge = "";
+#endif
     snprintf(json, sizeof(json),
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":%d,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"largest_block\":%u,\"psram_free\":%u,\"psram_total\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
              "\"web_user\":\"admin\",\"web_pass\":\"%s\","
-             "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
+             "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}%s",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
              (linkCtx() != nullptr && linkCtx()->v2()) ? 2 : 1,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
@@ -265,7 +275,7 @@ void handleInfo() {
              (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
              hasIp ? ip : "", hasSd ? "true" : "false",
              WebAuth::password(),
-             lt, lu, st, su);
+             lt, lu, st, su, bridge);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
 }
 
@@ -675,17 +685,23 @@ uint32_t s_otaCrc = 0;
 
 void handleOtaBegin() {
     if (s_ota != 0) {
-        esp_ota_abort(s_ota);
+        esp_ota_abort(s_ota);  // OTA nossa pendente (sessao morreu no meio)
         s_ota = 0;
+    } else if (!OtaGuard::acquire()) {
+        // upload web / hub escrevendo o slot agora: recusa em vez de pisar
+        respondError(KL_OTA_BEGIN, "outra gravacao OTA em curso (web/hub?)");
+        return;
     }
     s_otaPart = esp_ota_get_next_update_partition(nullptr);
     if (s_otaPart == nullptr) {
+        OtaGuard::release();
         respondError(KL_OTA_BEGIN, "sem particao OTA disponivel");
         return;
     }
     esp_err_t err = esp_ota_begin(s_otaPart, OTA_SIZE_UNKNOWN, &s_ota);
     if (err != ESP_OK) {
         s_ota = 0;
+        OtaGuard::release();
         respondError(KL_OTA_BEGIN, esp_err_to_name(err));
         return;
     }
@@ -722,6 +738,7 @@ void handleOtaChunk(const uint8_t* payload, uint16_t len) {
     if (n > 0 && esp_ota_write(s_ota, data, n) != ESP_OK) {
         esp_ota_abort(s_ota);
         s_ota = 0;
+        OtaGuard::release();
         respondError(KL_OTA_CHUNK, "falha ao gravar particao");
         return;
     }
@@ -749,12 +766,14 @@ void handleOtaEnd(const uint8_t* payload, uint16_t len) {
         if (sizeHost != s_otaWritten || crcHost != s_otaCrc) {
             esp_ota_abort(s_ota);
             s_ota = 0;
+            OtaGuard::release();
             respondError(KL_OTA_END, "crc/tamanho divergem no fim da OTA");
             return;
         }
     }
     esp_err_t errEnd = esp_ota_end(s_ota);
     s_ota = 0;
+    OtaGuard::release();  // sessao fechada: libera o slot p/ web/hub
     if (errEnd != ESP_OK) {
         respondError(KL_OTA_END, esp_err_to_name(errEnd));
         return;
@@ -772,6 +791,7 @@ void handleOtaAbort() {
     if (s_ota != 0) {
         esp_ota_abort(s_ota);
         s_ota = 0;
+        OtaGuard::release();
     }
     respond(KL_OTA_ABORT, 0);
 }
