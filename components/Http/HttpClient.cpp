@@ -19,7 +19,10 @@ HttpClient::HttpClient(const HttpConfig& config) :
 }
 
 HttpClient::~HttpClient() {
-    // Nothing to cleanup
+    if (_handle != nullptr) {  // handle persistente (setKeepHandle)
+        esp_http_client_cleanup(_handle);
+        _handle = nullptr;
+    }
 }
 
 // ========== Configuration ==========
@@ -32,6 +35,13 @@ HttpClient& HttpClient::setTimeout(uint32_t timeoutMs) {
 HttpClient& HttpClient::setBufferSize(uint32_t bytes) {
     if (bytes >= 512 && bytes <= 64 * 1024) {
         _config.bufferSize = bytes;
+    }
+    return *this;
+}
+
+HttpClient& HttpClient::setBufferSizeTx(uint32_t bytes) {
+    if (bytes >= 512 && bytes <= 64 * 1024) {
+        _config.bufferSizeTx = bytes;
     }
     return *this;
 }
@@ -81,6 +91,20 @@ HttpClient& HttpClient::setProgressCallback(ProgressCallback callback) {
 
 HttpClient& HttpClient::setBodySink(BodySink sink) {
     _bodySink = std::move(sink);
+    return *this;
+}
+
+HttpClient& HttpClient::setOnStatus(std::function<void(int, int64_t)> cb) {
+    _onStatus = std::move(cb);
+    return *this;
+}
+
+HttpClient& HttpClient::setKeepHandle(bool on) {
+    if (!on && _handle != nullptr) {
+        esp_http_client_cleanup(_handle);
+        _handle = nullptr;
+    }
+    _keepHandle = on;
     return *this;
 }
 
@@ -154,6 +178,9 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
 
         case HTTP_EVENT_ON_CONNECTED:
             ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+            if (self != nullptr && self->_connectMs == 0) {
+                self->_connectMs = (uint32_t)((esp_timer_get_time() - self->_t0) / 1000);
+            }
             break;
 
         case HTTP_EVENT_HEADER_SENT:
@@ -162,6 +189,9 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
 
         case HTTP_EVENT_ON_HEADER:
             ESP_LOGD(TAG, "Header: %s = %s", event->header_key, event->header_value);
+            if (self != nullptr && self->_firstByteMs == 0) {
+                self->_firstByteMs = (uint32_t)((esp_timer_get_time() - self->_t0) / 1000);
+            }
             // tamanho conhecido: o corpo cresce uma vez so (sem dobrar)
             if (self != nullptr && strcasecmp(event->header_key, "Content-Length") == 0) {
                 self->_contentLength = strtoll(event->header_value, nullptr, 10);
@@ -171,6 +201,12 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
         case HTTP_EVENT_ON_DATA:
             ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", event->data_len);
             if (self != nullptr && self->interimResponse(event->client)) break;
+            if (self != nullptr && self->_onStatus && !self->_statusSeen) {
+                // status da resposta FINAL, 1x, antes do 1o byte do corpo: o
+                // sink decide o que fazer (AI.speak so toca PCM de 2xx)
+                self->_statusSeen = true;
+                self->_onStatus(esp_http_client_get_status_code(event->client), self->_contentLength);
+            }
             if (self != nullptr && self->_bodySink && event->data_len > 0 && !self->_bodyOom) {
                 if (!self->_bodySink(static_cast<const char*>(event->data), (size_t)event->data_len)) {
                     self->_bodyOom = true;
@@ -270,8 +306,12 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     _contentLength = -1;
     _bodyOom = false;
     _sinkBytes = 0;
+    _connectMs = 0;
+    _firstByteMs = 0;
+    _statusSeen = false;
 
     uint64_t startTime = esp_timer_get_time();
+    _t0 = (int64_t)startTime;
 
     // Configure HTTP client
     esp_http_client_config_t config = {};
@@ -306,8 +346,11 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
         config.auth_type = HTTP_AUTH_TYPE_BASIC;
     }
 
-    // Create client
-    esp_http_client_handle_t client = esp_http_client_init(&config);
+    // Handle persistente (setKeepHandle): pedidos em serie no mesmo host
+    // pulam DNS+TCP+TLS (segundos de handshake neste chip). Host diferente
+    // reconecta sozinho dentro do perform.
+    const bool reuse = (_keepHandle && _handle != nullptr);
+    esp_http_client_handle_t client = reuse ? _handle : esp_http_client_init(&config);
     if (client == nullptr) {
         response.success = false;
         response.errorMessage = "Failed to create HTTP client";
@@ -316,24 +359,50 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
         _responseBody = nullptr;
         return response;
     }
+    if (_keepHandle) _handle = client;
 
-    // Set method
-    esp_http_client_set_method(client, static_cast<esp_http_client_method_t>(toEspMethod(method)));
-
-    // Set custom headers
-    for (const auto& header : _headers) {
-        esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
-    }
-
-    // Set body for POST/PUT/PATCH
-    if (!body.empty() && (method == HttpMethod::POST || 
-                          method == HttpMethod::PUT || 
-                          method == HttpMethod::PATCH)) {
-        esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.length()));
-    }
+    // Arma metodo/headers/corpo no handle (o mesmo roteiro no pedido fresco
+    // do retry — os headers do pedido ANTERIOR persistem no handle reusado,
+    // os de mesmo nome sao substituidos aqui)
+    auto armRequest = [&]() {
+        esp_http_client_set_url(client, url.c_str());
+        esp_http_client_set_method(client, static_cast<esp_http_client_method_t>(toEspMethod(method)));
+        for (const auto& header : _headers) {
+            esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
+        }
+        if (!body.empty() && (method == HttpMethod::POST ||
+                              method == HttpMethod::PUT ||
+                              method == HttpMethod::PATCH)) {
+            esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.length()));
+        } else if (reuse) {
+            // handle reusado: o post_field do pedido ANTERIOR (ponteiro para
+            // um corpo ja destruido) iria junto de um GET/HEAD
+            esp_http_client_set_post_field(client, nullptr, 0);
+        }
+    };
+    armRequest();
 
     // Perform request
     esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK && reuse) {
+        // conexao idle caiu (servidor fechou entre pedidos): descarta o
+        // handle e REFAZ limpo — o erro chega antes de qualquer corpo
+        ESP_LOGW(TAG, "conexao keep-alive parada (0x%x): reconectando", err);
+        esp_http_client_cleanup(client);
+        client = esp_http_client_init(&config);
+        _handle = client;
+        if (client != nullptr) {
+            armRequest();
+            err = esp_http_client_perform(client);
+        }
+    }
+    if (client == nullptr) {  // init do retry falhou: nao ha o que ler
+        response.success = false;
+        response.errorMessage = "Failed to create HTTP client";
+        onError.trigger(url, response.errorMessage);
+        _responseBody = nullptr;
+        return response;
+    }
 
     // Get results
     response.statusCode = esp_http_client_get_status_code(client);
@@ -341,11 +410,13 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     if (err == ESP_OK && _bodyOom) err = ESP_ERR_NO_MEM;
     response.body = std::move(responseBody);
     response.durationMs = static_cast<uint32_t>((esp_timer_get_time() - startTime) / 1000);
+    response.connectMs = _connectMs;
+    response.firstByteMs = _firstByteMs;
 
     if (err == ESP_OK) {
         response.success = true;
         ESP_LOGI(TAG, "Request to %s completed: %d (%d bytes in %lu ms)",
-                 url.c_str(), response.statusCode, 
+                 url.c_str(), response.statusCode,
                  static_cast<int>(response.body.length() + _sinkBytes),
                  (unsigned long)response.durationMs);
     } else {
@@ -361,7 +432,7 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     }
 
     // Cleanup
-    esp_http_client_cleanup(client);
+    if (!_keepHandle) esp_http_client_cleanup(client);
     _responseBody = nullptr;
 
     // Trigger completion event

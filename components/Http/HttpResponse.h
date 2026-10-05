@@ -23,12 +23,16 @@ struct HttpResponse {
     std::string errorMessage;                   /**< Error message if !success */
     int64_t contentLength;                      /**< Content length (-1 if unknown) */
     uint32_t durationMs;                        /**< Request duration in milliseconds */
+    uint32_t connectMs;                         /**< Ate a conexao (DNS+TCP+TLS) pronta; 0 = nao conectou */
+    uint32_t firstByteMs;                       /**< Ate o 1o header da resposta (inclui upload do corpo e o servidor); 0 = sem resposta */
 
     HttpResponse() :
         success(false),
         statusCode(0),
         contentLength(-1),
-        durationMs(0) {}
+        durationMs(0),
+        connectMs(0),
+        firstByteMs(0) {}
 
     /**
      * @brief Check if status code indicates success (2xx).

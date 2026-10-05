@@ -134,6 +134,13 @@ public:
     HttpClient& setBufferSize(uint32_t bytes);
 
     /**
+     * @brief Set the transmit buffer size (upload path).
+     * @param bytes Buffer size in bytes (default 1024).
+     * @return Reference to this for chaining.
+     */
+    HttpClient& setBufferSizeTx(uint32_t bytes);
+
+    /**
      * @brief Set a request header.
      * @param name Header name.
      * @param value Header value.
@@ -200,6 +207,31 @@ public:
      * @return Reference to this for chaining.
      */
     HttpClient& setBodySink(BodySink sink);
+
+    /**
+     * @brief One-shot callback with the response status, right before the
+     *        first body byte reaches the sink/body.
+     *
+     * Lets a BodySink decide per-response what to do with the bytes (e.g.
+     * AI.speak only live-plays the PCM when the status is 2xx; an error
+     * body is JSON and must not touch the speaker). Skipped for interim
+     * (redirect/401-retry) responses.
+     */
+    HttpClient& setOnStatus(std::function<void(int statusCode, int64_t contentLength)> cb);
+
+    /**
+     * @brief Keep the esp_http_client handle (and its TLS connection) alive
+     *        between requests on this HttpClient.
+     *
+     * Default off: the handle is created and destroyed per request, as
+     * always. With it on, a sequential request to the same host skips
+     * DNS+TCP+TLS (seconds on this chip); a different host reconnects
+     * transparently, and a stale idle connection (closed by the server)
+     * fails once and is retried fresh. The handle holds its buffers/TLS
+     * context in RAM until the next request or the destructor — use it
+     * from a single task (the AI worker) on boards with RAM to spare.
+     */
+    HttpClient& setKeepHandle(bool on);
 
     /**
      * @brief Get current configuration.
@@ -343,12 +375,21 @@ private:
     std::string _password;
     ProgressCallback _progressCallback;
     BodySink _bodySink;
+    std::function<void(int, int64_t)> _onStatus;  // status+Content-Length, 1x antes do corpo
+    bool _statusSeen = false;
+
+    // Handle persistente (setKeepHandle): reuso de conexao TLS entre pedidos
+    bool _keepHandle = false;
+    esp_http_client_handle_t _handle = nullptr;
 
     // For event handler
     std::string* _responseBody;
     int64_t _contentLength;
     bool _bodyOom = false;          // corpo nao coube na RAM: resposta vira erro
     size_t _sinkBytes = 0;          // bytes entregues ao BodySink (log)
+    int64_t _t0 = 0;                // inicio do pedido (esp_timer, us)
+    uint32_t _connectMs = 0;        // marcos de latencia (HttpResponse)
+    uint32_t _firstByteMs = 0;
 
     // For downloadToFile
     void* _dlFile = nullptr;        // FILE* em curso
