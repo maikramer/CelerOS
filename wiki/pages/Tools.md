@@ -23,6 +23,8 @@ python3 tools/celerctl.py devices            # list devices
 python3 tools/celerctl.py shell              # interactive shell on the device
 python3 tools/celerctl.py push main.js /local/apps/MyApp/main.js
 python3 tools/celerctl.py logcat --dump      # log ring buffer (repeatable; --ts/--grep)
+python3 tools/celerctl.py top -w             # profiling: per-task CPU%, heap, app, fps
+python3 tools/celerctl.py stats --json       # one profiling snapshot (raw JSON)
 python3 tools/celerctl.py debug MyApp        # JS debugger: breakpoints/step/eval
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware over serial
 python3 tools/celerctl.py screencap out.png  # framebuffer capture
@@ -46,6 +48,18 @@ host. Every app error is persisted to `/local/lastcrash.txt` (OS version,
 date, uptime, app + full stack) and survives a reboot — the serial shell's
 `lasterror` reports its size and write time; the web file manager reads the
 file.
+
+`top` is the profiling view: per-task CPU% measured over a sampling window
+(two snapshots; `--sort cpu|stack|name`, `-n` limits rows, `-w` refreshes
+like the classic `top`), heap internals/PSRAM (free/min/largest block),
+watermark of free stack per task, live Duktape allocation count, the JS
+app's heap usage since launch, OS-loop busy% and the app's real fps/present
+cost. Rates are computed host-side from cumulative counters (the device
+stays stateless); on a dual-core chip per-task CPU sums to ~200%. `stats`
+prints a single snapshot with since-boot rates (`--json` for the raw
+payload). The serial shell has the same view as `top [ms]` for
+hardware-only sessions. Requires firmware with the `KL_STATS` opcode —
+older firmware answers with an upgrade hint.
 
 `celerctl debug MyApp` (boards with `CONFIG_CELEROS_JS_DEBUGGER`, default
 on the ESP32-S3 targets) brings up a TCP proxy and the Duktape debugger

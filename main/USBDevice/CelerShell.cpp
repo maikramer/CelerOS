@@ -5,6 +5,7 @@
 #include "Display/Backlight.h"
 #include "Boards/Board.h"
 #include "Display/Theme.h"
+#include "Kernel/DeviceStats.h"
 #include "NetworkManager.h"
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
@@ -75,6 +76,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  df              espaco em /local e /sd\n"
         "  free            heap livre\n"
         "  ps              tarefas FreeRTOS\n"
+        "  top [ms]        profiling: CPU%% por task + heap/app (janela ms)\n"
         "  uptime          tempo ligado\n"
         "  info            versao/board/rede\n"
         "  reboot          reinicia o sistema\n"
@@ -255,6 +257,109 @@ int cmdPs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "task            estado  prio  stack\r\n");
     print(ctx, "%s", table);
     free(table);
+    return 0;
+}
+
+// top [ms]: CPU% por task numa janela (default 300 ms) + resumo de heap e do
+// app aberto. Duas fotos do DeviceStats — a taxa e o delta de runtime por
+// task, a mesma conta que o celerctl top faz no host (la o device nao bloqueia).
+int cmdTop(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    uint32_t windowMs = 300;
+    if (argc > 1) {
+        windowMs = (uint32_t)atoi(argv[1]);
+        if (windowMs < 50) windowMs = 50;
+        if (windowMs > 10000) windowMs = 10000;
+    }
+    // fotos no heap (~1.4KB cada): este comando roda na task do canal
+    DeviceStats::Snapshot* a =
+        (DeviceStats::Snapshot*)malloc(sizeof(DeviceStats::Snapshot));
+    DeviceStats::Snapshot* b =
+        (DeviceStats::Snapshot*)malloc(sizeof(DeviceStats::Snapshot));
+    if (a == nullptr || b == nullptr || !DeviceStats::take(*a)) {
+        free(a);
+        free(b);
+        print(ctx, "sem memoria\r\n");
+        return 1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(windowMs));
+    DeviceStats::take(*b);
+
+    const uint64_t dTotalRt = b->totalRunTimeUs - a->totalRunTimeUs;
+    const uint32_t secs = (uint32_t)(b->uptimeUs / 1000000ULL);
+    print(ctx, "up %uh%um%us  CPU %u MHz  janela %ums%s\r\n",
+          secs / 3600, (secs / 60) % 60, secs % 60, b->cpuFreqMHz, windowMs,
+          b->truncated ? "  (lista truncada)" : "");
+    print(ctx, "heap %s (min %s, maior %s)  interna %s (min %s)\r\n",
+          humanSize(b->heapFree).c_str(), humanSize(b->heapMin).c_str(),
+          humanSize(b->heapLargest).c_str(), humanSize(b->intFree).c_str(),
+          humanSize(b->intMin).c_str());
+    if (b->psramTotal > 0) {
+        print(ctx, "PSRAM %s de %s (min %s, maior %s)\r\n",
+              humanSize(b->psramFree).c_str(), humanSize(b->psramTotal).c_str(),
+              humanSize(b->psramMin).c_str(), humanSize(b->psramLargest).c_str());
+    }
+    if (b->jsActive) {
+        print(ctx, "app: heap %s (livre no lancamento %s)  aloc JS %u (pico %u)\r\n",
+              humanSize(b->jsLaunchFree > b->jsNowFree ? b->jsLaunchFree - b->jsNowFree : 0).c_str(),
+              humanSize(b->jsLaunchFree).c_str(), b->jsAllocs, b->jsAllocsPeak);
+    }
+    const uint64_t dLoopBusy = b->loopBusyUs - a->loopBusyUs;
+    const uint64_t dLoopTotal = b->loopTotalUs - a->loopTotalUs;
+    if (dLoopTotal > 0) {
+        print(ctx, "loop OS: %u.%u%% busy\r\n", (unsigned)(dLoopBusy * 100 / dLoopTotal),
+              (unsigned)((dLoopBusy * 10000 / dLoopTotal) % 100));
+    } else {
+        print(ctx, "loop OS: parado (app aberto bombeia pelo present)\r\n");
+    }
+    const uint64_t dFrames = b->uiFrames - a->uiFrames;
+    const uint64_t dPresents = b->uiPresents - a->uiPresents;
+    if (dPresents > 0) {
+        print(ctx, "present: %u fps  medio %uus (pico %uus)\r\n",
+              (unsigned)(dFrames * 1000ULL / windowMs),
+              (unsigned)((b->uiFrameUs - a->uiFrameUs) / dPresents),
+              (unsigned)b->uiFrameUsMax);
+    }
+
+    // delta de runtime por task (pareada pelo nome) + ordenacao por CPU desc
+    uint32_t idx[DeviceStats::kMaxTasks];
+    uint64_t dRt[DeviceStats::kMaxTasks];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < b->taskCount; i++) {
+        uint64_t base = 0;
+        for (uint32_t j = 0; j < a->taskCount; j++) {
+            if (strcmp(a->tasks[j].name, b->tasks[i].name) == 0) {
+                base = a->tasks[j].runTimeUs;
+                a->tasks[j].name[0] = '\0';  // nomes iguais: parea 1 a 1
+                break;
+            }
+        }
+        dRt[n] = b->tasks[i].runTimeUs - base;
+        idx[n] = i;
+        n++;
+    }
+    for (uint32_t i = 1; i < n; i++) {  // insertion sort: n <= 32
+        const uint64_t key = dRt[i];
+        const uint32_t ki = idx[i];
+        uint32_t j = i;
+        while (j > 0 && dRt[j - 1] < key) {
+            dRt[j] = dRt[j - 1];
+            idx[j] = idx[j - 1];
+            j--;
+        }
+        dRt[j] = key;
+        idx[j] = ki;
+    }
+
+    print(ctx, "task              est  prio  stack  cpu\r\n");
+    for (uint32_t i = 0; i < n; i++) {
+        const DeviceStats::TaskInfo& t = b->tasks[idx[i]];
+        const unsigned centi =
+            dTotalRt > 0 ? (unsigned)(dRt[i] * 10000ULL / dTotalRt) : 0;
+        print(ctx, "%-16s  %c   %3u  %5u  %2u.%02u\r\n",
+              t.name, t.state, t.prio, t.stackFree, centi / 100, centi % 100);
+    }
+    free(a);
+    free(b);
     return 0;
 }
 
@@ -546,6 +651,7 @@ const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
+    {"top", cmdTop},
     {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},

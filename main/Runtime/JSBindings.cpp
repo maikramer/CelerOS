@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Kernel/Services.h"
+#include "../Kernel/DeviceStats.h"
 #include "../USBDevice/JsDebugger.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
@@ -17,6 +18,7 @@
 #include "SystemInfo.h"
 #include "esp_rom_md5.h"
 #include "esp_task_wdt.h"
+#include "esp_timer.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenCapture.h"
 #include "../Display/ScreenPower.h"
@@ -448,6 +450,17 @@ void JSBindings::applyDisplayClip() {
 }
 
 void JSBindings::present() {
+    // Profiling (celerctl top): duracao do present e quais chamadas levaram
+    // quadro ao vidro (fps real). RAII cobre os returns antecipados (sem
+    // display, AOD suprimindo) sem espalhar nota por cada saida.
+    bool pushedFrame = false;
+    const int64_t presStart = esp_timer_get_time();
+    struct PresentNote {
+        const int64_t t0;
+        const bool& pushed;
+        ~PresentNote() { DeviceStats::notePresent((uint32_t)(esp_timer_get_time() - t0), pushed); }
+    } presentNote{presStart, pushedFrame};
+
     // App vivo e cedendo: alimenta o TWDT AQUI, no ponto de cedida
     // universal. Antes so o delay() alimentava (em fatias): um loop de jogo
     // `while(true){System.getTouch()}` legitimo derrubava o aparelho inteiro
@@ -527,6 +540,7 @@ void JSBindings::present() {
             // Recorte no destino: o pushImage do LovyanGFX so transfere a
             // area recortada (no watch, o framebuffer do painel so faz flush
             // dela, ja alinhada)
+            pushedFrame = true;  // profiling: quadro que chegou ao vidro
             int32_t cx, cy, cw, ch;
             tftInstance->getClipRect(&cx, &cy, &cw, &ch);
             tftInstance->setClipRect(dx, dy, dw, dh);

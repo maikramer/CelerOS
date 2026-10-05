@@ -9,12 +9,15 @@ HostFrame.h (test/cpp/run_tests.cpp) e pela bancada.
     python3 -m unittest test.test_celerctl -v
 """
 
+import io
+import json
 import os
 import struct
 import sys
 import tempfile
 import unittest
 import zlib
+from contextlib import redirect_stderr
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -36,6 +39,49 @@ def frame_v1(cmd, payload=b"", status=None):
     if status is not None:
         payload = bytes([status]) + payload
     return bytes([MAGIC, cmd]) + struct.pack("<H", len(payload)) + payload
+
+
+# ---- fotos de profiling (KL_STATS) sinteticas: A e B separadas por uma
+# janela de ~300ms. Runtime por task e cumulativo; total_rt em 2 nucleos
+# avanca ~2x a janela. Deltas esperados: IDLE0 +1.000.000us, main +50.000us,
+# "nova" nasceu na janela (base 0, rt inteiro).
+STATS_SNAP_A = {
+    "uptime_us": 60_000_000, "cpu_mhz": 240,
+    "heap": {"free": 200_000, "min": 150_000, "largest": 90_000,
+             "int_free": 100_000, "int_min": 80_000, "int_largest": 60_000,
+             "psram_free": 4_000_000, "psram_total": 8_000_000,
+             "psram_min": 3_900_000, "psram_largest": 3_000_000},
+    "js": {"active": 1, "launch_free": 180_000, "now_free": 160_000,
+           "allocs": 500, "allocs_peak": 700},
+    "loop": {"busy_us": 1_000_000, "total_us": 10_000_000},
+    "ui": {"frames": 100, "presents": 200, "us": 400_000, "us_max": 8_000},
+    "total_rt_us": 55_000_000,
+    "tasks": [
+        {"n": "main", "s": "R", "p": 1, "stk": 12_000, "rt": 20_000_000},
+        {"n": "IDLE0", "s": "r", "p": 0, "stk": 900, "rt": 30_000_000},
+        {"n": "wifi", "s": "B", "p": 23, "stk": 4_000, "rt": 5_000_000},
+    ],
+    "trunc": 0,
+}
+STATS_SNAP_B = {
+    "uptime_us": 60_300_000, "cpu_mhz": 240,
+    "heap": {"free": 195_000, "min": 150_000, "largest": 88_000,
+             "int_free": 98_000, "int_min": 80_000, "int_largest": 60_000,
+             "psram_free": 3_900_000, "psram_total": 8_000_000,
+             "psram_min": 3_900_000, "psram_largest": 3_000_000},
+    "js": {"active": 1, "launch_free": 180_000, "now_free": 155_000,
+           "allocs": 560, "allocs_peak": 700},
+    "loop": {"busy_us": 1_050_000, "total_us": 10_100_000},
+    "ui": {"frames": 107, "presents": 215, "us": 431_000, "us_max": 9_500},
+    "total_rt_us": 56_060_000,
+    "tasks": [
+        {"n": "main", "s": "R", "p": 1, "stk": 11_800, "rt": 20_050_000},
+        {"n": "IDLE0", "s": "r", "p": 0, "stk": 890, "rt": 31_000_000},
+        {"n": "wifi", "s": "B", "p": 23, "stk": 4_000, "rt": 5_000_000},
+        {"n": "nova", "s": "B", "p": 2, "stk": 2_048, "rt": 10_000},
+    ],
+    "trunc": 0,
+}
 
 
 class FakeDevice:
@@ -60,6 +106,9 @@ class FakeDevice:
         self.wr_crc = 0
         self.drop_chunk = []      # seqs cujo WRITE_CHUNK some no caminho (1x cada)
         self.corrupt_chunk = []   # seqs que chegam com 1 byte virado (1x cada)
+        # fila de fotos de profiling: cada KL_STATS devolve a proxima (a
+        # ultima repete — o celerctl top pede 2+ seguidas)
+        self.stats_q = [STATS_SNAP_A]
 
     # ---- envio de resposta
     def reply(self, cmd, payload=b"", status=0):
@@ -118,6 +167,10 @@ class FakeDevice:
         # para o frame SEGUINTE (espelho do handleHello do firmware)
         self.reply(KL["HELLO"], ident.encode())
         self.proto = 2 if v2 else 1
+
+    def op_20(self, p):  # STATS: foto de profiling (JSON)
+        snap = self.stats_q.pop(0) if len(self.stats_q) > 1 else self.stats_q[0]
+        self.reply(KL["STATS"], json.dumps(snap).encode())
 
     def op_06(self, p):  # WRITE_BEGIN
         self.wr_path = p.rstrip(b"\0").decode()
@@ -418,6 +471,69 @@ class TestDebugProxy(unittest.TestCase):
     def test_proto1(self):
         frames, _ = C.split_frames(frame_v1(KL["LOG_DATA"], b"\x00linha\n"), 1)
         self.assertEqual(frames, [(KL["LOG_DATA"], b"\x00linha\n")])
+
+
+class TestStats(unittest.TestCase):
+    """KL_STATS (celerctl top/stats): round-trip do protocolo e a matematica
+    de delta (CPU% por task, fps, busy%) feita no host."""
+
+    def test_stats_round_trip(self):
+        link, dev = make_link()
+        link.hello()
+        snap = link.stats()
+        self.assertEqual(snap["uptime_us"], 60_000_000)
+        self.assertEqual(snap["heap"]["psram_total"], 8_000_000)
+        self.assertEqual(len(snap["tasks"]), 3)
+        self.assertEqual(snap["tasks"][0]["n"], "main")
+
+    def test_delta_cpu_por_task(self):
+        rows, total = C._task_rows(STATS_SNAP_A, STATS_SNAP_B)
+        self.assertEqual(total, 1_060_000)  # 56.060.000 - 55.000.000
+        by_name = {r["n"]: r for r in rows}
+        self.assertEqual(by_name["IDLE0"]["drt"], 1_000_000)
+        self.assertAlmostEqual(by_name["IDLE0"]["cpu"], 100.0 * 1_000_000 / 1_060_000)
+        self.assertEqual(by_name["main"]["drt"], 50_000)
+        self.assertEqual(by_name["wifi"]["drt"], 0)  # nada rodou na janela
+        self.assertEqual(by_name["nova"]["drt"], 10_000)  # nasceu: base 0
+        # soma das taxas ~ nucleos x 100 (2 cores)
+        self.assertAlmostEqual(sum(r["cpu"] for r in rows), 100.0 * 1_060_000 / 1_060_000)
+
+    def test_render_top(self):
+        text = C._render_top(STATS_SNAP_A, STATS_SNAP_B, 0.3)
+        self.assertIn("CPU 240 MHz", text)
+        self.assertIn("janela 300 ms", text)
+        self.assertIn("PSRAM", text)
+        self.assertIn("app JS", text)  # js.active
+        # ordenado por CPU: IDLE0 (janela dominante) antes de main
+        self.assertLess(text.index("IDLE0"), text.index("main"))
+        # taxa da UI na janela: 7 quadros em 300ms ~ 23 fps
+        self.assertIn("23 fps", text)
+        # task nascida na janela aparece
+        self.assertIn("nova", text)
+
+    def test_render_top_limite_e_ordenacao(self):
+        text = C._render_top(STATS_SNAP_A, STATS_SNAP_B, 0.3, sort="stack", limit=2)
+        self.assertNotIn("main", text)  # maior stack: cortada pelo -n 2
+        # stack crescente: IDLE0 (890) antes de nova (2048)
+        self.assertLess(text.index("IDLE0"), text.index("nova"))
+
+    def test_resumo_loop_parado_sem_app(self):
+        # sem foto anterior e sem app: nao renderiza linhas de taxa
+        a = dict(STATS_SNAP_A, js={"active": 0, "launch_free": 0, "now_free": 0,
+                                  "allocs": 0, "allocs_peak": 0})
+        lines = C._summary_lines(a)
+        self.assertTrue(any("heap" in ln for ln in lines))
+        self.assertFalse(any("app JS" in ln for ln in lines))
+
+    def test_firmware_antigo_recusado_com_mensagem(self):
+        link, dev = make_link()
+        link.hello()
+        # firmware anterior a rodada: responde "opcode desconhecido"
+        dev.op_20 = lambda p: dev.reply(KL["STATS"], b"opcode desconhecido", 1)
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            C._poll_stats(link)
+        self.assertIn("firmware antigo", err.getvalue())
 
 
 if __name__ == "__main__":

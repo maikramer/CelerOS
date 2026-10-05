@@ -10,6 +10,10 @@ lados em sincronia.
 Comandos:
   devices [-l]                lista placas CelerOS conectadas
   info                        versao/board/heap/rede/filesystems
+  top [-w] [--sort cpu|stack|name]  profiling: CPU% por task em janela,
+                              heap interna/PSRAM, consumo do app JS, fps
+                              (-w atualiza como o top; taxas = delta de fotos)
+  stats [--json]              uma foto de profiling (taxas desde o boot)
   shell [cmd...]              shell interativo (ou executa um comando)
   ls [-l] CAMINHO             lista diretorio (/local ou /sd)
   cat ARQUIVO                 escreve conteudo no stdout
@@ -162,7 +166,7 @@ class HostLink:
             return cmd, payload
 
     # comandos que podem ser reenviados sem efeito colateral (retry do xfer)
-    _IDEMPOTENT = {"HELLO", "INFO", "LS", "STAT", "READ", "MKDIR", "DELETE", "RENAME",
+    _IDEMPOTENT = {"HELLO", "INFO", "STATS", "LS", "STAT", "READ", "MKDIR", "DELETE", "RENAME",
                    "LOG_ON", "LOG_OFF", "LOG_DUMP", "TOUCH", "SCREENSHOT", "COREDUMP"}
 
     def xfer(self, cmd, payload=b"", timeout=None, retries=None):
@@ -242,6 +246,14 @@ class HostLink:
 
     def info(self):
         _, payload = self.xfer(KL["INFO"])
+        return json.loads(payload[1:].decode())
+
+    def stats(self):
+        """Foto de profiling (KL_STATS): heap interna/PSRAM, tasks com
+        watermark de stack e runtime acumulado, carga do loop/present e
+        consumo do app JS. Contadores cumulativos: taxas (CPU%, fps) sao
+        deltas entre duas fotos, calculados aqui no host."""
+        _, payload = self.xfer(KL["STATS"])
         return json.loads(payload[1:].decode())
 
     def ls(self, path):
@@ -739,6 +751,146 @@ def cmd_info(args):
     finally:
         link.close()
     print(json.dumps(info, indent=2, ensure_ascii=False))
+
+
+# --------------------------------------------------------------- top / stats
+
+def _poll_stats(link):
+    try:
+        return link.stats()
+    except CelerError as e:
+        if "opcode" in str(e):
+            die("firmware antigo sem KL_STATS: atualize primeiro (celerctl ota push)")
+        raise
+
+
+def _task_rows(a, b):
+    """CPU% por task na janela entre duas fotos: runtime e cumulativo no
+    device, a taxa e o delta (tasks pareadas pelo nome; task que nasceu na
+    janela entra com o runtime todo — base 0)."""
+    base = {}
+    for t in a["tasks"]:
+        base.setdefault(t["n"], t["rt"])  # nomes duplicados: parea 1 a 1
+    rows = []
+    matched = set()
+    for t in b["tasks"]:
+        prev = base.get(t["n"], 0)
+        if t["n"] in matched:
+            prev = t["rt"]  # 2a task com o mesmo nome: sem par, delta 0
+        matched.add(t["n"])
+        rows.append(dict(t, drt=t["rt"] - prev))
+    total = b["total_rt_us"] - a["total_rt_us"]
+    for r in rows:
+        r["cpu"] = 100.0 * r["drt"] / total if total > 0 else 0.0
+    return rows, total
+
+
+def _summary_lines(b, a=None, window_s=None):
+    """Cabecalho do top/stats: heap, PSRAM, app JS e carga. Com `a` (foto
+    anterior) calcula taxas da janela; sem ela, o acumulado do boot."""
+    lines = []
+    secs = b["uptime_us"] / 1e6
+    up = f"{int(secs // 3600)}h{int(secs % 3600 // 60)}m{int(secs % 60)}s"
+    win = f"  janela {window_s * 1000:.0f} ms" if window_s else ""
+    trunc = "  (tasks truncadas)" if b.get("trunc") else ""
+    lines.append(f"up {up}  CPU {b['cpu_mhz']} MHz{win}{trunc}")
+    h = b["heap"]
+    psram = ""
+    if h["psram_total"]:
+        psram = (f"  PSRAM {human_size(h['psram_free'])}/{human_size(h['psram_total'])}"
+                 f" (min {human_size(h['psram_min'])}, maior {human_size(h['psram_largest'])})")
+    lines.append(f"heap {human_size(h['free'])} (min {human_size(h['min'])}, "
+                 f"maior {human_size(h['largest'])})  "
+                 f"interna {human_size(h['int_free'])} (min {human_size(h['int_min'])}){psram}")
+    js = b["js"]
+    if js["active"]:
+        uso = max(0, js["launch_free"] - js["now_free"])
+        lines.append(f"app JS: heap {human_size(uso)} desde o lancamento  "
+                     f"aloc Duktape {js['allocs']} (pico {js['allocs_peak']})")
+    if a is not None:
+        d_total = b["loop"]["total_us"] - a["loop"]["total_us"]
+        d_busy = b["loop"]["busy_us"] - a["loop"]["busy_us"]
+        loop = (f"{100.0 * d_busy / d_total:.1f}% busy" if d_total > 0
+                else "parado (com app aberto quem bombeia e o present)")
+        ui_txt = ""
+        d_pres = b["ui"]["presents"] - a["ui"]["presents"]
+        if d_pres > 0:
+            avg_us = (b["ui"]["us"] - a["ui"]["us"]) / d_pres
+            fps = (b["ui"]["frames"] - a["ui"]["frames"]) / window_s if window_s else 0
+            ui_txt = (f"  UI {fps:.0f} fps (present medio {avg_us / 1000:.1f} ms, "
+                      f"pico {b['ui']['us_max'] / 1000:.1f} ms)")
+        lines.append(f"loop OS: {loop}{ui_txt}")
+    return lines
+
+
+def _render_top(a, b, window_s, sort="cpu", limit=0):
+    lines = _summary_lines(b, a, window_s)
+    lines.append("")
+    rows, _total = _task_rows(a, b)
+    if sort == "stack":
+        rows.sort(key=lambda r: r["stk"])
+    elif sort == "name":
+        rows.sort(key=lambda r: r["n"])
+    else:
+        rows.sort(key=lambda r: -r["drt"])
+    if limit:
+        rows = rows[:limit]
+    lines.append(f"{'TAREFA':<16} {'EST':>3} {'PRIO':>4} {'STACK':>7} {'CPU%':>6}")
+    for r in rows:
+        lines.append(f"{r['n']:<16.16} {r['s']:>3} {r['p']:>4} {r['stk']:>7} {r['cpu']:>6.1f}")
+    return "\n".join(lines)
+
+
+def cmd_top(args):
+    if "STATS" not in KL:
+        die("HostLink.h deste tree nao define KL_STATS")
+    link = open_link(args)
+    ansi = sys.stdout.isatty() and not args.plain
+    try:
+        prev = _poll_stats(link)
+        while True:
+            # one-shot: 2 fotos separadas por --window; watch: cada refresh e
+            # a propria janela (--interval). O poll em si mantem a UART viva
+            # (idle de 8s) — nada de keepalive manual.
+            time.sleep(args.interval if args.watch else args.window)
+            snap = _poll_stats(link)
+            window = args.interval if args.watch else args.window
+            text = _render_top(prev, snap, window, args.sort, args.n)
+            if args.watch:
+                if ansi:
+                    sys.stdout.write("\x1b[H\x1b[2J")
+                else:
+                    print()
+            print(text)
+            sys.stdout.flush()
+            if not args.watch:
+                break
+            prev = snap
+    except KeyboardInterrupt:
+        print()
+    finally:
+        link.close()
+
+
+def cmd_stats(args):
+    link = open_link(args)
+    try:
+        snap = _poll_stats(link)
+    finally:
+        link.close()
+    if args.json:
+        print(json.dumps(snap, indent=2))
+        return
+    # foto unica: taxas de CPU vem do acumulado desde o boot
+    lines = _summary_lines(snap)
+    lines.append("")
+    total = snap["total_rt_us"]
+    rows = sorted(snap["tasks"], key=lambda t: -t["rt"])
+    lines.append(f"{'TAREFA':<16} {'EST':>3} {'PRIO':>4} {'STACK':>7} {'CPU%':>6}  (desde o boot)")
+    for t in rows:
+        cpu = 100.0 * t["rt"] / total if total > 0 else 0.0
+        lines.append(f"{t['n']:<16.16} {t['s']:>3} {t['p']:>4} {t['stk']:>7} {cpu:>6.1f}")
+    print("\n".join(lines))
 
 
 def cmd_shell(args):
@@ -1714,6 +1866,25 @@ def main():
 
     p = sub.add_parser("info", help="informacoes do sistema")
     p.set_defaults(func=cmd_info)
+
+    p = sub.add_parser("top", help="profiling: CPU%% por task, heap, app (estilo top)")
+    p.add_argument("-w", "--watch", action="store_true",
+                   help="atualiza continuamente a cada --interval (Ctrl-C sai)")
+    p.add_argument("--interval", type=float, default=1.0, metavar="S",
+                   help="periodo do --watch em segundos (default 1)")
+    p.add_argument("--window", type=float, default=0.3, metavar="S",
+                   help="janela de amostragem do one-shot (default 0.3s)")
+    p.add_argument("--sort", choices=("cpu", "stack", "name"), default="cpu",
+                   help="ordena a tabela (default cpu)")
+    p.add_argument("-n", type=int, default=0, metavar="N",
+                   help="mostra so as N primeiras tasks")
+    p.add_argument("--plain", action="store_true",
+                   help="sem ANSI (nao limpa a tela no --watch)")
+    p.set_defaults(func=cmd_top)
+
+    p = sub.add_parser("stats", help="uma foto de profiling (taxas desde o boot; --json cru)")
+    p.add_argument("--json", action="store_true", help="JSON puro do device")
+    p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser("shell", help="shell interativo ou executa comando")
     p.add_argument("cmd", nargs="*", help="comando a executar")

@@ -133,6 +133,9 @@ constexpr uint8_t KL_LS = 0x03;           // path\0 [u32 cursor] -> [u32 next] u
 constexpr uint8_t KL_LOG_DUMP = 0x1D;     // -> u32 total; conteudo do ring em seguida, em frames KL_LOG_DATA
 constexpr uint8_t KL_DEBUG_CTL = 0x1E;    // u8 1=on 0=off -> u8 estado (arma o attach do proximo app)
 constexpr uint8_t KL_DEBUG_DATA = 0x1F;   // payload binario do debugger Duktape (dmsg; sem resposta)
+constexpr uint8_t KL_STATS = 0x20;        // -> JSON de profiling (celerctl top/stats): heap, tasks com
+                                          //    watermark/runtime acumulado e carga do loop/present. Taxas
+                                          //    (CPU%, fps) sao calculadas pelo host por delta de 2 fotos
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

@@ -20,9 +20,15 @@ CONFIG_FREERTOS_HZ=1000
 # a stack padrao (4KB) transborda com os handlers encadeados -> stack overflow
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
 
-# vTaskList (comando ps do shell celerctl/console)
+# vTaskList (comando ps do shell celerctl/console) + CPU% por task (top).
+# Clock = esp_timer (1 MHz, imune a DFS do watch, sem interrupcao nova) e
+# contador U64 para nao dar wrap (~71 min no U32). Custo: incremento por
+# context switch. Consumido por uxTaskGetSystemState no DeviceStats.
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
 
 # Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y

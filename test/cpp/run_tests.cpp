@@ -10,6 +10,7 @@
 #include "../../main/USBDevice/HostFrame.h"
 #include "../../main/Utils/AlarmCalc.h"
 #include "../../main/Utils/GbProto.h"
+#include "../../main/Kernel/DeviceStats.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -422,6 +423,66 @@ static void testGbProto() {
     CHECK(jsonStr("a\"b\\c\n") == "\"a\\\"b\\\\c\\u000a\"");
 }
 
+static DeviceStats::Snapshot statsFixture() {
+    DeviceStats::Snapshot s{};
+    s.uptimeUs = 1234567890ULL;
+    s.cpuFreqMHz = 240;
+    s.heapFree = 100000; s.heapMin = 80000; s.heapLargest = 60000;
+    s.intFree = 90000; s.intMin = 70000; s.intLargest = 50000;
+    s.psramFree = 4000000; s.psramTotal = 8000000; s.psramMin = 3900000; s.psramLargest = 3000000;
+    s.jsActive = true; s.jsLaunchFree = 180000; s.jsNowFree = 160000;
+    s.jsAllocs = 500; s.jsAllocsPeak = 700;
+    s.loopBusyUs = 1000; s.loopTotalUs = 10000;
+    s.uiFrames = 20; s.uiPresents = 30; s.uiFrameUs = 40000; s.uiFrameUsMax = 8000;
+    s.totalRunTimeUs = 999999;
+    strcpy(s.tasks[0].name, "IDLE0");
+    s.tasks[0].state = 'r'; s.tasks[0].prio = 0; s.tasks[0].stackFree = 900;
+    s.tasks[0].runTimeUs = 500000;
+    strcpy(s.tasks[1].name, "main");
+    s.tasks[1].state = 'R'; s.tasks[1].prio = 1; s.tasks[1].stackFree = 12000;
+    s.tasks[1].runTimeUs = 499999;
+    s.taskCount = 2;
+    return s;
+}
+
+// toJson do DeviceStats: a resposta KL_STATS inteira. Pura sobre a struct —
+// aqui valida o formato e a degradacao graciosa quando o cap nao basta
+// (task parcial volta para tras, "trunc":1, nunca JSON quebrado).
+static void testDeviceStatsJson() {
+    DeviceStats::Snapshot s = statsFixture();
+    char buf[2048];
+    size_t n = DeviceStats::toJson(s, buf, sizeof(buf));
+    CHECK(n > 0 && n < sizeof(buf));
+    std::string js(buf, n);
+    CHECK(js.front() == '{' && js.back() == '}');
+    CHECK(js.find("\"uptime_us\":1234567890") != std::string::npos);
+    CHECK(js.find("\"cpu_mhz\":240") != std::string::npos);
+    CHECK(js.find("\"psram_total\":8000000") != std::string::npos);
+    CHECK(js.find("\"n\":\"IDLE0\"") != std::string::npos);
+    CHECK(js.find("\"rt\":499999") != std::string::npos);
+    CHECK(js.find("\"stk\":12000") != std::string::npos);
+    CHECK(js.find("\"trunc\":0") != std::string::npos);
+    CHECK(js.find("\"allocs_peak\":700") != std::string::npos);
+
+    // caps cada vez maiores: JSON sempre fechado, nunca estoura o buffer
+    for (size_t cap : {40u, 200u, 400u, 520u, 700u, 1000u}) {
+        char small[1000];
+        CHECK(cap <= sizeof(small));
+        size_t m = DeviceStats::toJson(s, small, cap);
+        CHECK(m > 0 && m < cap);
+        CHECK(small[0] == '{' && small[m - 1] == '}');
+    }
+    // buffer impossivel: 0 (host descarta em vez de parsear lixo)
+    char tiny[16];
+    CHECK(DeviceStats::toJson(s, tiny, sizeof(tiny)) == 0);
+    // sem tasks: lista vazia fecha certo
+    DeviceStats::Snapshot e = statsFixture();
+    e.taskCount = 0;
+    char eb[600];
+    size_t en = DeviceStats::toJson(e, eb, sizeof(eb));
+    CHECK(en > 0 && std::string(eb, en).find("\"tasks\":[],\"trunc\":0") != std::string::npos);
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -431,6 +492,7 @@ int main() {
     testHostFrame();
     testAlarmCalc();
     testGbProto();
+    testDeviceStatsJson();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

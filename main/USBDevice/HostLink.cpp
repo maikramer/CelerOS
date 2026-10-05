@@ -27,6 +27,7 @@
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
 #include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
 #include "../WebManager/WebAuth.h"  // senha do web server no `celerctl info`
+#include "../Kernel/DeviceStats.h"  // KL_STATS: foto de profiling (top)
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
@@ -251,6 +252,7 @@ void handleInfo() {
     snprintf(json, sizeof(json),
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":%d,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
+             "\"largest_block\":%u,\"psram_free\":%u,\"psram_total\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
              "\"web_user\":\"admin\",\"web_pass\":\"%s\","
              "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}}}",
@@ -258,10 +260,34 @@ void handleInfo() {
              (linkCtx() != nullptr && linkCtx()->v2()) ? 2 : 1,
              (unsigned long long)(esp_timer_get_time() / 1000000ULL),
              (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
              hasIp ? ip : "", hasSd ? "true" : "false",
              WebAuth::password(),
              lt, lu, st, su);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
+}
+
+// KL_STATS: foto de profiling do celerctl top/stats — heap (interna/PSRAM/
+// maior bloco), tasks com watermark de stack e runtime acumulado, carga do
+// loop e dos presents. Contadores cumulativos: taxa e calculada pelo host
+// por delta entre duas fotos. Snapshot no heap (~1.4KB com 32 tasks): o
+// handler roda na task do canal, de stack apertada.
+void handleStats() {
+    DeviceStats::Snapshot* snap = (DeviceStats::Snapshot*)malloc(sizeof(DeviceStats::Snapshot));
+    if (snap == nullptr || !DeviceStats::take(*snap)) {
+        free(snap);
+        respondError(KL_STATS, "sem memoria");
+        return;
+    }
+    size_t n = DeviceStats::toJson(*snap, (char*)txData(), HostLink::MAX_PAYLOAD - 1);
+    free(snap);
+    if (n == 0) {
+        respondError(KL_STATS, "stats nao coube");
+        return;
+    }
+    sendFrame(KL_STATS, 0, (uint16_t)n);
 }
 
 void handleLs(const uint8_t* payload, uint16_t len) {
@@ -889,6 +915,7 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_TOUCH: handleTouch(payload, len); break;
         case KL_DEBUG_CTL: handleDebugCtl(payload, len); break;
         case KL_DEBUG_DATA: handleDebugData(payload, len); break;
+        case KL_STATS: handleStats(); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }

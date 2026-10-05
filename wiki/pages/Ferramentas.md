@@ -23,6 +23,8 @@ python3 tools/celerctl.py devices            # lista dispositivos
 python3 tools/celerctl.py shell              # shell interativo no aparelho
 python3 tools/celerctl.py push main.js /local/apps/MeuApp/main.js
 python3 tools/celerctl.py logcat --dump      # copia o ring de logs (repetível; --ts/--grep)
+python3 tools/celerctl.py top -w             # profiling: CPU% por task, heap, app, fps
+python3 tools/celerctl.py stats --json       # uma foto de profiling (JSON cru)
 python3 tools/celerctl.py debug MeuApp       # debugger JS: breakpoints/step/eval
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware pela serial
 python3 tools/celerctl.py screencap out.png  # captura do framebuffer
@@ -46,6 +48,19 @@ app é persistido em `/local/lastcrash.txt` (versão do OS, data, uptime,
 app + stack completa) e sobrevive a reboot — o `lasterror` do shell
 serial mostra tamanho e horário da gravação; o file manager web lê o
 arquivo.
+
+`top` é a visão de profiling: CPU% por task medida numa janela de
+amostragem (duas fotos; `--sort cpu|stack|name`, `-n` limita linhas, `-w`
+atualiza como o `top` clássico), heap interna/PSRAM (livre/mínimo/maior
+bloco), watermark de stack livre por task, contagem viva de alocações
+Duktape, heap consumido pelo app JS desde o lançamento, busy% do loop do
+OS e o fps real/custo do present do app. As taxas são calculadas no host a
+partir de contadores cumulativos (o device fica stateless); em chip
+dual-core o somatório por task dá ~200%. `stats` imprime uma foto única
+com taxas desde o boot (`--json` para o payload cru). O shell serial tem a
+mesma visão como `top [ms]` para sessões só de hardware. Exige firmware
+com o opcode `KL_STATS` — firmware antigo responde com um aviso para
+atualizar.
 
 `celerctl debug MeuApp` (placas com `CONFIG_CELEROS_JS_DEBUGGER`, default
 nos alvos ESP32-S3) sobe um proxy TCP e o REPL do debugger Duktape: o app

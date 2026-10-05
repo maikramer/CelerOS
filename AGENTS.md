@@ -102,6 +102,7 @@ idf.py -B build build flash -p /dev/ttyUSB0 monitor
 
 tools/flash_data.sh [smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit] [PORT]  # LittleFS data partition (needs IDF env)
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART/CDC
+python3 tools/celerctl.py top -w                                             # profiling: CPU% por task, heap, app, fps (KL_STATS)
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool (the watch's path)
 python3 tools/celerctl.py debug MyApp                                       # JS debugger REPL (S3 boards: CELEROS_JS_DEBUGGER)
 

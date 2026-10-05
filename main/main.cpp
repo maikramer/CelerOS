@@ -28,6 +28,7 @@
 #endif
 #include "Kernel/Alarms.h"
 #include "Kernel/Services.h"
+#include "Kernel/DeviceStats.h"
 #include "Settings/TouchCalibrator.h"
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
@@ -244,6 +245,7 @@ void confirmPendingOta() {
 }
 
 static void celerLoop() {
+    const int64_t iterStart = esp_timer_get_time();
     esp_task_wdt_reset();  // coracao do watchdog: UI viva
 
     // UI (input + redraw)
@@ -254,7 +256,12 @@ static void celerLoop() {
     // dos apps percorre — um lugar so, dois contextos.
     CelerServices::tickLoop();
 
+    // Profiling (celerctl top): busy = iteracao sem o delay. Com app aberto
+    // este loop nao roda (quem bombeia e o present) e os contadores congelam.
+    const int64_t busyEnd = esp_timer_get_time();
     delay(PowerPolicy::loopDelayMs());  // tela apagada: loop lento, CPU dorme
+    DeviceStats::noteLoopIter((uint32_t)(busyEnd - iterStart),
+                              (uint32_t)(esp_timer_get_time() - iterStart));
 }
 
 // Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)

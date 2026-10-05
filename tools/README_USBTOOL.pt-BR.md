@@ -61,6 +61,9 @@ python3 tools/celerctl.py rm /local/old.txt
 python3 tools/celerctl.py rm -r /local/apps/AppVelho   # apaga recursivo
 python3 tools/celerctl.py reboot
 python3 tools/celerctl.py logcat             # logs ao vivo (Ctrl-C sai)
+python3 tools/celerctl.py top                # foto de profiling: CPU% por task, stack, heap
+python3 tools/celerctl.py top -w --sort cpu  # ao vivo como o top classico (Ctrl-C sai)
+python3 tools/celerctl.py stats --json       # uma foto crua em JSON (taxas desde o boot)
 python3 tools/celerctl.py ota push build/CelerOS.bin   # firmware sem esptool
 python3 tools/celerctl.py screencap tela.png # captura do display -> PNG (RLE: ~10x mais rapida)
 python3 tools/celerctl.py coredump            # dump do ultimo crash (ELF) -> coredump.elf

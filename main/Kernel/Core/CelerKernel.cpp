@@ -13,6 +13,7 @@
 #include "../../Hardware/BoardIO.h"
 #include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
+#include "../DeviceStats.h"
 #include <vector>
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
@@ -348,6 +349,8 @@ static void *my_alloc(void *udata, duk_size_t size) {
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
             celer_log_println(b);
         }
+    } else {
+        DeviceStats::noteJsAlloc();  // profiling (celerctl top): vivas + pico
     }
     return p;
 }
@@ -356,17 +359,24 @@ static void *my_realloc(void *udata, void *ptr, duk_size_t size) {
     (void)udata;
     if (size == 0) {
         free(ptr);
+        if (ptr) DeviceStats::noteJsFree();
         return nullptr;
     }
     uint32_t first, second;
     duk_caps(size, &first, &second);
     void *p = heap_caps_realloc(ptr, size, first);
     if (!p && second != first) p = heap_caps_realloc(ptr, size, second);
-    if (!p) celer_log_println("out of memory");
+    if (!p) {
+        celer_log_println("out of memory");
+    } else if (ptr == nullptr) {
+        DeviceStats::noteJsAlloc();  // realloc(nullptr) = alloc novo bloco
+    }
+    // realloc de bloco existente: contagem viva nao muda
     return p;
 }
 
 static void my_free(void *udata, void *ptr) {
+    if (ptr) DeviceStats::noteJsFree();
     free(ptr);
 }
 
