@@ -51,11 +51,13 @@ pip install -r tools/requirements.txt   # pyserial (screencap needs Pillow)
 ```bash
 python3 tools/celerctl.py devices            # list connected boards (USB + WiFi)
 python3 tools/celerctl.py pair 192.168.0.50  # pair a WiFi bridge once (token)
+python3 tools/celerctl.py provision --wifi MyNet secret --grant "Dog Face"   # WiFi + token + permissions, once
 python3 tools/celerctl.py info               # version/board/heap/network/FS
 python3 tools/celerctl.py shell              # interactive shell (help)
 python3 tools/celerctl.py shell "ls /local"  # run and print
 python3 tools/celerctl.py ls -l /local/apps
 python3 tools/celerctl.py cat /local/wifi.txt
+python3 tools/celerctl.py cat /local/log/kern.log   # persistent kernel log (also apps.log)
 python3 tools/celerctl.py push app.zip /local/tmp_download/app.zip
 python3 tools/celerctl.py pull /local/apps/HTTP\ Demo/app.json .
 python3 tools/celerctl.py rm /local/old.txt
@@ -155,10 +157,45 @@ python3 tools/celerctl.py -p 192.168.0.50 dev hub_apps/Celer Remote
 
 Token resolution order: `--token`, env `CELEROS_BRIDGE_TOKEN`, the
 `celerctl pair` cache (`~/.config/celerctl/tokens.json`), then a prompt.
-`bridge reset` (device shell) rotates the token. Everything works over the
+`bridge reset` (device shell) rotates the token; `bridge set <token>`
+writes a token of your choosing (the automation path — see `provision`).
+Everything works over the
 bridge — shell, push/pull, logcat, `debug` (the local proxy select()s the
 socket directly), screencap/tap/swipe, `apps` and `dev`. Throughput is WiFi
 bound (no baud to negotiate: `-b` is a no-op).
+
+### `provision` — first boot in one command
+
+```bash
+# over USB, on a fresh board: WiFi credentials + bridge token + app permissions
+python3 tools/celerctl.py provision --wifi MyNet mysecret --grant "Dog Face"
+# prints the address and leaves the token cached: from then on, no cable
+python3 tools/celerctl.py -p 192.168.0.50 ota push build-x/CelerOS.bin
+```
+
+It runs on the open channel (USB on a fresh board): saves the Wi-Fi
+credentials, writes a freshly generated bridge token (`bridge set`), grants
+the listed app permissions (`grant <pkg|name>`), waits for the IP and saves
+`ip:port -> token` in the `pair` cache — the `-p IP` form works immediately
+after. On a board that already has Wi-Fi, drop `--wifi` and it provisions
+just the token.
+
+## Persistent logs (`/local/log`)
+
+The log ring that `logcat` drains is RAM-only; since 1.7 the firmware also
+keeps Linux-style persistent logs, rotated like logrotate
+(`<name>.log.1` holds the previous generation):
+
+* `/local/log/kern.log` — firmware (`ESP_LOG` I/W/E + internal prints)
+* `/local/log/apps.log` — `System.print` from JS apps, prefixed by package
+  (`[app:dogface]` — `logcat --grep app` keeps working)
+
+With an SD card mounted the house moves to `/sd/log/` and the caps grow
+(the LittleFS of SD-less boards is small: 8 KB per file). Read them from
+the Terminal app (`dmesg`, `appslog`, `tail <file> [n]`) or from the host
+(`celerctl cat /local/log/kern.log`) — they survive reboots, which is the
+point: the trace of "what did it say before it died" is there after the
+fact.
 
 `celerctl devices` also discovers boards on the LAN: a `CELERPROBE1` UDP
 broadcast on port 5555, answered unicast with the same version line the

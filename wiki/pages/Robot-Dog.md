@@ -101,6 +101,29 @@ implementation in the bring-up firmware's `oled_px()`/`glyph_px()`.
   * **Protocol**: `{"type":"trick","name":"dance"}` over Celer Link
     answers `{"type":"trick_res","ok":...}`; "hi celer", the D-pad, the
     touch pad and stop interrupt a running sequence instantly.
+* **[done]** **Locomotion 2.0 — the hop** (Dog Face 1.9): the **hop gait**
+  (rear kick unweights the body, front legs swing open in the air, land
+  planted, front kick pulls) is the official walk — 660 ms/cycle, tuned on
+  the bench over ~80 sweep variants (`tools/dog/plan_hop*.json`, applied
+  live via `dogtune`). Voice gains **steps and duration** in `dog_move`
+  ("walk 10 steps", "walk for a minute" → continuous walk with a
+  deadline); **turning** is an asymmetric hop (one side kicks full, the
+  other shorter — knob `turn`) and the **belly spin** drops the dog on
+  its belly to twist around (knob `spin`, 40..110°). Every gait knob is
+  **live-tunable over BLE** from the Celer Remote's **AFINAR panel**
+  (Remote 1.7+: opening, rear lean, hop waits, turn/spin — each tap sends
+  `{type:"tune"}`, the dog applies instantly and persists to
+  `/local/dogtune.json`) — a bench with no cable attached. Bench
+  hardening that made it stable: SHA in software + static WiFi RX
+  buffers + speaker channel created at boot (lazy creation lost the
+  internal-RAM race to NimBLE and the dog went mute until reboot).
+* **[done]** **Barks 2.0** — real dog takes rendered by AI
+  (text-to-sound, then mastered for the tiny speaker: high-pass 250 Hz,
+  tanh saturation, an octave up from the first cut) ship as **QOA** files
+  (`assets/*.qoa`, ~40 KB for all five — 5x smaller than WAV), decoded by
+  the firmware's ~60-line fixed-point QOA decoder (the MP3 stack is
+  gone). Pipeline + prompts in `tools/dog/barks_ai.py`; the synthetic
+  `barks.py` remains as fallback.
 * **[done]** **Teachable tricks** (`/local/dogtricks.json`): the owner
   registers named sequences in **the same schema the LLM composes** —
   `{"Super Truco":[{"do":"bark","kind":"howl"},{"do":"pose","name":"lie",
@@ -130,21 +153,35 @@ implementation in the bring-up firmware's `oled_px()`/`glyph_px()`.
 * **[done]** **Voice 2.0 — the LLM choreographs** (Dog Face 1.8): "hi
   celer" opens a listening window (ack beep + LED ring), records up to
   3.5 s and sends the audio to qwen omni (OpenRouter) — which now gets
-  **8 tools** instead of an 8-value enum:
-  * `dog_move(direction, ms)` — "walk a little forward" / "turn left"
-    become timed movement;
+  **10 tools** instead of an 8-value enum:
+  * `dog_move(direction, ms, steps)` — "walk a little forward" / "turn
+    left" / "walk 10 steps" become timed movement;
   * `dog_posture(pose)` — postures including `beg` and `pee`;
   * `dog_trick(name)` — native **and owner-taught** tricks;
   * `dog_sequence(steps[])` — **free choreography**: the model writes up
     to 10 steps on the spot ("dance and then bark happily" becomes a
     different queue every time);
+  * `dog_script(code)` — **the model writes JavaScript** (Dog Face
+    1.10.0): its own ES5 script runs on the dog inside a choreography
+    sandbox — face, legs, LEDs and sound together through a mini-API
+    (`face.*`, `legs.*` ±45°, `leds.set`, `sound.*`), with input guards,
+    physical clamps, a 20 s clock, touch-to-abort and the firmware's
+    exec-timeout as the last umbrella. Ask for something unique and it
+    composes on the spot; `{"type":"script","code":...}` over Celer Link
+    triggers a performance from the remote (bench without voice);
   * `dog_bark(kind, times)` — picks woof/yip/growl/whine/howl;
   * `dog_emotion(mood)` — face + LED ring;
-  * `dog_say(text)` — **answers questions**: "you okay?", "what's your
-    battery?" → full sentence on the paired remote + seven-segment
-    summary on the glass + a yip. Live telemetry (battery, posture,
-    gait) rides in the system prompt with the **Celercão** persona, so
-    the answer comes out in a single round;
+  * `dog_say(text)` — **silent** reply: full sentence on the paired
+    remote + seven-segment summary on the glass + a yip;
+  * `dog_speak(text, lang)` — **the dog TALKS** (Dog Face 1.9.14, API
+    24): the model writes the answer **in the language of the question**
+    (Portuguese, English, Spanish...) and the firmware TTS (`AI.speak`,
+    Gemini voice models through the OpenRouter key, deep voice Charon)
+    speaks it out loud — the download plays live (nothing in RAM) on its
+    own task. While it speaks the wake-word detector turns off (the dog
+    can't hear itself); the `lang` field rides the `{"type":"say"}` echo
+    to the remote. Without a key/Wi-Fi it degrades to the `dog_say`
+    visuals.
   * `dog_stop` — stop everything.
   Offline keyword fallback (no tool_call/no key) covers postures/gaits
   **and** tricks/barks/emotions: dance, paw, pee, spin, pushups, bark,
@@ -152,7 +189,7 @@ implementation in the bring-up firmware's `oled_px()`/`glyph_px()`.
   variants the STT produces). Voice walk without an explicit duration
   stays capped at 3 s.
 * Voice stack on the JS API: **18** AI, **19** `Mic.*`, **20** function
-  calling + `WakeWord.*`.
+  calling + `WakeWord.*`, **24** `AI.speak` (TTS).
 
 Restoring the stock firmware at any time is a single command from a full dump
 (`tools/flash_backup_restore.sh` in the dog repo) — the CelerOS port never

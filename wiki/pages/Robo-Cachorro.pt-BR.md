@@ -101,6 +101,30 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   * **Protocolo**: `{"type":"trick","name":"dance"}` pelo Celer Link
     responde `{"type":"trick_res","ok":...}`; "hi celer", D-pad, touch pad
     e stop interrompem a sequência na hora.
+* **[feito]** **Locomoção 2.0 — o hop** (Dog Face 1.9): a **marcha hop**
+  (o chute das traseiras alivia o corpo, as dianteiras abrem no ar,
+  pousam plantadas e o chute frontal puxa) é a caminhada oficial —
+  660 ms/ciclo, afinada na bancada em ~80 variantes de sweep
+  (`tools/dog/plan_hop*.json`, aplicadas ao vivo pelo dogtune). A voz
+  ganha **passos e duração** no `dog_move` ("ande 10 passos", "ande por
+  1 minuto" → marcha contínua com prazo); **virar** é um hop
+  assimétrico (um lado chuta cheio, o outro menor — knob `turn`) e o
+  **giro de barriga** derruba o cachorro de barriga para torcer o corpo
+  (knob `spin`, 40..110°). Todo knob da marcha é **afinável ao vivo por
+  BLE** no painel **AFINAR do Celer Remote** (Remote 1.7+: abertura,
+  inclinação traseira, esperas do hop, turn/spin — cada toque manda
+  `{type:"tune"}`, o robô aplica na hora e persiste no
+  `/local/dogtune.json`) — bancada sem cabo. Endurecimento de bancada
+  que estabilizou: SHA em software + buffers RX do WiFi estáticos +
+  canal do alto-falante criado no boot (criação lazy perdia a disputa de
+  RAM interna para o NimBLE e o cachorro ficava mudo até reiniciar).
+* **[feito]** **Latidos 2.0** — takes reais de cachorro renderizados por
+  IA (text-to-sound, masterizados para o alto-falante pequeno:
+  high-pass 250 Hz, saturação tanh, uma oitava acima do primeiro corte)
+  viajam como arquivos **QOA** (`assets/*.qoa`, ~40 KB os cinco — 5x
+  menores que WAV), decodificados pelo decoder ponto-fixo de ~60 linhas
+  do firmware (a pilha MP3 saiu). Pipeline + prompts em
+  `tools/dog/barks_ai.py`; o sintético `barks.py` segue de fallback.
 * **[feito]** **Truques ensináveis** (`/local/dogtricks.json`): o dono
   cadastra sequências com nome no **mesmo schema que a LLM compõe** —
   `{"Super Truco":[{"do":"bark","kind":"howl"},{"do":"pose","name":"lie",
@@ -128,15 +152,23 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   mesma permissão `mic` no app.json do `Mic.*`.
 * **[feito]** **Voz 2.0 — a LLM coreografa** (Dog Face 1.8): "hi celer"
   abre a janela de escuta (beep + anel de LED), grava até 3,5 s e envia o
-  áudio ao qwen omni (OpenRouter) — que agora recebe **9 tools** e não um
+  áudio ao qwen omni (OpenRouter) — que agora recebe **10 tools** e não um
   enum de 8 comandos:
-  * `dog_move(direction, ms)` — "anda um pouquinho pra frente", "vira à
-    esquerda" viram movimento com duração;
+  * `dog_move(direction, ms, steps)` — "anda um pouquinho pra frente", "vira
+    à esquerda", "ande 10 passos" viram movimento com duração;
   * `dog_posture(pose)` — posturas incluindo `beg` e `pee`;
   * `dog_trick(name)` — truques nativos **e os ensináveis**;
   * `dog_sequence(steps[])` — **coreografia livre**: a IA compõe até 10
     passos na hora ("dança e depois late feliz" vira uma fila diferente a
     cada vez);
+  * `dog_script(code)` — **a IA escreve JavaScript** (Dog Face 1.10.0):
+    o próprio script ES5 dela roda no cachorro numa sandbox de
+    coreografia — cara, pernas, LEDs e som juntos por uma mini-API
+    (`face.*`, `legs.*` ±45°, `leds.set`, `sound.*`), com guardas de
+    entrada, clamps físicos, relógio de 20 s, toque aborta e o
+    exec-timeout do firmware como último guarda-chuva. Peça algo único e
+    ela compõe na hora; `{"type":"script","code":...}` pelo Celer Link
+    dispara performance direto do controle (bancada sem voz);
   * `dog_bark(kind, times)` — escolhe woof/yip/growl/whine/howl;
   * `dog_emotion(mood)` — cara + anel de LED;
   * `dog_say(text)` — resposta **silenciosa**: frase no controle pareado +
@@ -144,12 +176,11 @@ referência no `oled_px()`/`glyph_px()` do firmware de bring-up.
   * `dog_speak(text, lang)` — **o cachorro FALA** (Dog Face 1.9.14, API 24):
     a IA escreve a resposta **no idioma da pergunta** (português, inglês,
     espanhol...) e o TTS do firmware (`AI.speak`, gemini tts pela chave
-    OpenRouter, voz grave Charon) fala em voz alta no alto-falante —
-    download direto pro arquivo (nada na RAM) e playback em task própria.
-    Durante a fala o detector de wake word desliga (o cachorro não pode se
-    ouvir) e a bolha fica no vidro; o campo `lang` vai no eco
-    `{"type":"say"}` pro controle. Sem chave/WiFi, degrada no visual do
-    `dog_say`;
+    OpenRouter, voz grave Charon) fala em voz alta no alto-falante — o
+    download toca AO VIVO (nada na RAM), em task própria. Durante a fala
+    o detector de wake word desliga (o cachorro não pode se ouvir) e a
+    bolha fica no vidro; o campo `lang` vai no eco `{"type":"say"}`
+    pro controle. Sem chave/WiFi, degrada no visual do `dog_say`;
   * `dog_stop` — para tudo.
   Fallback offline por palavra-chave (modelo sem tool_call/chave) cobre
   posturas/marchas **e** truques/latidos/emoções: dança, patinha, xixi,
