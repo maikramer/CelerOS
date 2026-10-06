@@ -215,6 +215,7 @@ APP_PKG_ICONS = {
     "Snake": "snake",
     "HTTP Demo": "httpdemo",
     "Touch Test": "touchtest",
+    "CelerNet": "celernet",
 }
 
 # Apps do CelerOS Hub (hub_apps/<Nome>/) e o id do icone do pacote
