@@ -1121,6 +1121,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"unreadNotifications", js_unreadNotifications, 0},
         {"playTone", js_playTone, 1},
         {"playWav", js_playWav, 1},
+        {"playMusic", js_playMusic, 1},        // API 25: chiptune N trilhas
+        {"musicStop", js_musicStop, 0},        // API 25
+        {"musicPlaying", js_musicPlaying, 0},  // API 25
+        {"musicPos", js_musicPos, 0},          // API 25
         {"notify", js_notify, 2},
     };
     putFns(ctx, kFns16);

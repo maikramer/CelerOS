@@ -1652,9 +1652,13 @@ function voicePrompt() {
     p += "Responda chamando EXATAMENTE UMA ferramenta. Pedido simples de " +
         "movimento: dog_move ou dog_posture. Truque conhecido: dog_trick. " +
         "Pedido com varios passos ou coreografia livre: dog_sequence (compoe " +
-        "os passos voce mesmo, criativo e ritmado). Se expressar de um jeito " +
+        "os passos voce mesmo, criativo e ritmado). Pedido de musica, batida, " +
+        "som animado ou FESTA com cores: dog_music (voce orquestra o groove " +
+        "bateria+baixo+tema no mesmo compasso; as luzes e a dancinha sao " +
+        "automaticas). " +
+        "Se expressar de um jeito " +
         "PROPRIO e original (dancinha so sua, comemorar a sua maneira, " +
-        "performance criativa que nenhuma tool cobre): dog_script — voce " +
+        "performance criativa que nenhuma tool cobre): dog_script, voce " +
         "ESCREVE o script JS ES5 pela API descrita na ferramenta (cara, " +
         "pernas, LEDs e som juntos). " +
         "Reacao ou animo: dog_bark " +
@@ -1721,6 +1725,17 @@ function voiceTools() {
               text: { type: "string", description: "frase para FALAR no idioma da pergunta, ate 150 caracteres" },
               lang: { type: "string", description: "idioma da fala, ex.: pt-BR, en-US, es-ES" }
           }, required: ["text"] } } },
+        { type: "function", function: { name: "dog_music",
+          description: "Musica ao vivo (chiptune de ate 4 canais) com festa de LEDs e dancinha AUTOMATICAS: voce orquestra um groove (bateria + baixo + tema curto) e o cao toca piscando as luzes e balancando no ritmo",
+          parameters: { type: "object", properties: {
+              bpm: { type: "integer", description: "andamento 60..200 (128 = festa)" },
+              loops: { type: "integer", description: "repeticoes do padrao, 1..8 (default 4)" },
+              tracks: { type: "array", maxItems: 4, items: { type: "object" },
+                  description: 'trilhas: {drum:true,vol,notes:[[36,2],[42,1],[42,1],[38,2],[42,1],[42,1]]} = bateria GM ' +
+                      '(36 bumbo, 38 caixa, 42 chimbal); {wave:"sq"|"sq25"|"tri"|"saw",vol,notes:[[midi,semicolcheias],...]} = melodia/baixo. ' +
+                      'Nota [midi 0..96, duracao em SEMICOLCHEIAS; 0 = pausa]. COMPACTO: 8..16 notas por trilha, ' +
+                      'todas as trilhas do mesmo comprimento total (somam as semicolcheias) para girarem juntas' }
+          }, required: ["tracks"] } } },
         { type: "function", function: { name: "dog_script",
           description: "Performance LIVRE e unica: voce escreve um script JS ES5 e o cao roda ao vivo (cara no display, pernas, LEDs e som juntos). Use para se expressar do seu jeito",
           parameters: { type: "object", properties: {
@@ -1728,13 +1743,15 @@ function voiceTools() {
                   'JS ES5 puro (SEM const/let/arrow/template string), ate 1200 chars, ' +
                   'loops com limite fixo (max 30) e SEMPRE wait(ms) entre passos. ' +
                   'API: face.clear() face.eyes(open,lx,ly,pupilaR) face.heart(x,y,s) ' +
-                  'face.fillRect(x,y,w,h) face.rect/circle/fillCircle/line/tri(x0,y0,x1,y1,x2,y2)/roundRect/fillRoundRect — ' +
+                  'face.fillRect(x,y,w,h) face.rect/circle/fillCircle/line/tri(x0,y0,x1,y1,x2,y2)/roundRect/fillRoundRect. ' +
                   'coordenadas do vidro 0..127 x 0..63, display MONO (aceso/apagado). ' +
                   'legs.set("FL"|"FR"|"BL"|"BR",graus -45..45) legs.pose("stand|sit|lie|stretch|beg|pee") ' +
                   'legs.step("walk|back|left|right",ciclos 1..20) legs.release(). ' +
                   'leds.set(fita 0|1,[cores 0xRRGGBB ou "#rrggbb", 1..4]) leds.off(). ' +
                   'sound.bark("woof|yip|growl|whine|howl",n 1..3) sound.tone([[freq,ms],...]). ' +
-                  'say("frase curta") wait(ms) print(msg)' }
+                  'say("frase curta") wait(ms) print(msg). ' +
+                  'Musica nao bloqueante: music.play({bpm,loops,tracks}(como dog_music)) music.stop() ' +
+                  'music.playing() music.pos(): coreografe luzes/patas no loop enquanto toca' }
           }, required: ["code"] } } },
         { type: "function", function: { name: "dog_stop",
           description: "Para movimento/truque na hora",
@@ -1798,6 +1815,12 @@ function voiceRunTool(call) {
         pendingSpeak = { text: String(a.text), lang: a.lang ? String(a.lang) : "" };
         return true;   // o loop executa com cedidas entre as etapas
     }
+    if (call.name === "dog_music") {
+        var aiSong = musicClampSong(a);
+        if (!aiSong) { System.print('[voz] musica rejeitada: vazia'); return false; }
+        pendingMusic = aiSong;
+        return true;   // o loop executa (a festa dura segundos)
+    }
     if (call.name === "dog_script") {
         var scode = String(a.code || "");
         var sguard = scriptGuards(scode);
@@ -1829,7 +1852,7 @@ function voiceRequest(audioB64) {
             ],
             tools: voiceTools(),
             tool_choice: "auto",
-            max_tokens: 800,   // script ES5 composto e maior que um enum
+            max_tokens: 1000,  // groove de 3 trilhas em notas compactas
             reasoning: { effort: "low" }
         }, function (r) {
             cueGot();   // resposta da IA chegou (bancada: fim da espera muda)
@@ -2111,6 +2134,24 @@ function scriptApi() {
             }
             return true;
         },
+        music: {
+            // a musica roda no firmware (nao bloqueia): coreografe luzes e
+            // patas no loop do script enquanto ela toca
+            play: function (song) {
+                var s2 = musicClampSong(song);
+                if (!s2 || typeof System.playMusic !== "function") return false;
+                try { return !!System.playMusic(s2); } catch (e) { return false; }
+            },
+            stop: function () { if (System.musicStop) System.musicStop(); return true; },
+            playing: function () {
+                if (typeof System.musicPlaying !== "function") return false;
+                try { return System.musicPlaying() === true; } catch (e) { return false; }
+            },
+            pos: function () {
+                if (typeof System.musicPos !== "function") return -1;
+                try { return System.musicPos(); } catch (e) { return -1; }
+            }
+        },
         print: function (msg) { System.print('[script] ' + msg); }
     };
 }
@@ -2121,7 +2162,7 @@ function scriptApi() {
 // propria API — nao e uma barreira contra codigo hostil.
 var SCRIPT_SHADOW = "System,FS,Net,AI,Mic,WakeWord,CelerLink,Storage,UI,Sensors," +
     "Phone,setTimeout,setInterval,clearTimeout,clearInterval,require," +
-    "face,legs,leds,sound,say,wait,print";
+    "face,legs,leds,sound,say,wait,music,print";
 
 function runAiScript(code) {
     var t0 = System.millis();
@@ -2143,7 +2184,8 @@ function runAiScript(code) {
             fn(undefined, undefined, undefined, undefined, undefined, undefined,
                undefined, undefined, undefined, undefined, undefined, undefined,
                undefined, undefined, undefined, undefined,
-               api.face, api.legs, api.leds, api.sound, api.say, api.wait, api.print);
+               api.face, api.legs, api.leds, api.sound, api.say, api.wait,
+               api.music, api.print);
         } catch (e) {
             err = String(e && e.message ? e.message : e).substring(0, 120);
         }
@@ -2165,6 +2207,134 @@ function runAiScript(code) {
                  ' (' + ms + ' ms, ' + code.length + ' chars)');
     reply({ type: "script", ok: !err, ms: ms, err: err || undefined });
     return !err;
+}
+
+// ------------------------------ musica da IA (dog_music) -------------------
+// "Clima de festa": a LLM orquestra um MIDI de poucos canais (tool
+// dog_music) e o firmware mistura ao vivo (System.playMusic, API 25 —
+// chiptune com bateria GM). Aqui nos so coreografamos: LEDs piscam na
+// colcheia e as dianteiras balancam na batida, acompanhando musicPos().
+// Firmware antigo (sem playMusic) cai no jingle de playTone com a MESMA
+// festa de luz/patas — a tool funciona sempre.
+var pendingMusic = null;
+
+function musicClampSong(a) {
+    if (!a) return null;
+    var s = { bpm: Math.round(clampNum(a.bpm, 60, 200, 120)),
+              loops: Math.round(clampNum(a.loops, 1, 8, 4)), tracks: [] };
+    var tr = a.tracks || [];
+    var WAVES = ["sq", "sq25", "tri", "saw"];
+    for (var i = 0; i < tr.length && s.tracks.length < 4; i++) {
+        var t = tr[i] || {};
+        var nt = { drum: t.drum === true,
+                   wave: WAVES.indexOf(t.wave) >= 0 ? t.wave : "sq",
+                   vol: Math.round(clampNum(t.vol, 0, 100, 80)), notes: [] };
+        var ns = t.notes || [];
+        for (var k = 0; k < ns.length && nt.notes.length < 48; k++) {
+            var pr = ns[k];
+            if (!pr || pr.length < 2) continue;
+            nt.notes.push([Math.round(clampNum(pr[0], 0, 96, 0)),
+                           Math.round(clampNum(pr[1], 1, 64, 4))]);
+        }
+        if (nt.notes.length) s.tracks.push(nt);
+    }
+    return s.tracks.length ? s : null;
+}
+
+// Duracao total estimada (mesma conta do motor: trilha mais longa manda).
+function musicTotalMs(song) {
+    var beatMs = 60000 / song.bpm;
+    var longest = 0;
+    for (var i = 0; i < song.tracks.length; i++) {
+        var sum = 0;
+        var ns = song.tracks[i].notes;
+        for (var k = 0; k < ns.length; k++) sum += ns[k][1];
+        if (sum > longest) longest = sum;
+    }
+    return longest * beatMs / 4 * song.loops;
+}
+
+// Festa de luzes: hue gira por colcheia, strobe forte/fraco no tempo.
+function partyLights(step) {
+    var c = ledHsv((step * 0.125) % 1);
+    var lo = ledDim(c, 0.25);
+    var px = (step & 1) ? [c, lo, c, lo] : [lo, c, lo, c];
+    System.neopixel(0, px);
+    System.neopixel(1, px);
+}
+
+function musicShow(song) {
+    var t0 = System.millis();
+    seqClear();
+    if (gait !== null) stopGait();
+    if (legsLimp) { legsLimp = false; legsHold(); }
+    sleeping = false;
+    speakWake(false);   // a propria musica acordaria o "hi celer"
+    ledAnim = "off";
+    var totalMs = musicTotalMs(song);
+    if (totalMs > 120000) totalMs = 120000;
+    var beatMs = 60000 / song.bpm;
+    var live = false;
+    if (typeof System.playMusic === "function") {
+        try { live = System.playMusic(song); } catch (e) { live = false; }
+    }
+    if (!live) {
+        // firmware antigo / falante ocupado: jingle da 1a trilha melodica
+        var mel = null;
+        for (var i = 0; i < song.tracks.length && !mel; i++)
+            if (!song.tracks[i].drum) mel = song.tracks[i];
+        if (mel) {
+            var seqT = [];
+            for (var k = 0; k < mel.notes.length && seqT.length < 24; k++) {
+                var nn = mel.notes[k];
+                if (nn[0] > 0) seqT.push([
+                    Math.round(440 * Math.pow(2, (nn[0] - 69) / 12)),
+                    Math.round(nn[1] * beatMs / 4)]);
+            }
+            if (seqT.length) System.playTone(seqT);
+        } else {
+            playBark("yip", 2);
+        }
+    }
+    System.print('[musica] festa ' + song.bpm + ' bpm, ' + song.tracks.length +
+                 ' trilhas, ' + Math.round(totalMs) + ' ms (' +
+                 (live ? 'synth' : 'jingle') + ')');
+    var lastStep = -1, last = System.millis();
+    while (true) {
+        var now = System.millis();
+        var pos = live ? System.musicPos() : (now - t0 < totalMs ? now - t0 : -1);
+        if (pos < 0) break;                        // acabou (ou cortaram)
+        if (System.touchPad() === 1) {             // cutucar para a festa
+            if (live && System.musicStop) System.musicStop();
+            break;
+        }
+        var step = Math.floor(pos / (beatMs / 2));  // colcheias
+        if (step !== lastStep) {
+            lastStep = step;
+            partyLights(step);
+            if (step % 2 === 0) {                   // na batida: bob das dianteiras
+                var a = (step % 4 === 0) ? 12 : -12;
+                target.FL = FWD.FL * a;
+                target.FR = FWD.FR * a;             // opostas: balanco
+            }
+        }
+        var dt = now - last; last = now;
+        if (dt > 150) dt = 150;
+        legTick(dt);    // rampa suave das patinhas
+        System.delay(30);
+    }
+    setPose(POSES.stand);
+    var settle0 = System.millis();
+    while (System.millis() - settle0 < 300) { legTick(30); System.delay(30); }
+    ledAnim = "off";
+    System.neopixel(0, [0, 0, 0, 0]);
+    System.neopixel(1, [0, 0, 0, 0]);
+    speakWake(true);
+    happyUntil = System.millis() + 1200;
+    lastActivity = System.millis();
+    draw();
+    reply({ type: "music", ok: true, ms: System.millis() - t0, bpm: song.bpm });
+    return true;
 }
 
 var telAt = 0;
@@ -2330,6 +2500,13 @@ while (true) {
         var aiCode = pendingScript;
         pendingScript = null;
         runAiScript(aiCode);
+    }
+    // festa musical (dog_music): por ultimo — dura mais que tudo
+    if (pendingMusic !== null && !voiceBusy && !speakBusy &&
+        pendingSpeak === null && pendingScript === null) {
+        var aiTune = pendingMusic;
+        pendingMusic = null;
+        musicShow(aiTune);
     }
     linkTick(now);
     if (mood && now > moodUntil) mood = "";

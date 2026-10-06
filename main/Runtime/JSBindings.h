@@ -125,6 +125,10 @@ private:
     static duk_ret_t js_unreadNotifications(duk_context *ctx);  // API 15
     static duk_ret_t js_playTone(duk_context *ctx);   // sequencia de notas
     static duk_ret_t js_playWav(duk_context *ctx);   // arquivo WAV (API 13)
+    static duk_ret_t js_playMusic(duk_context *ctx);   // chiptune N trilhas (API 25)
+    static duk_ret_t js_musicStop(duk_context *ctx);   // corta a musica (API 25)
+    static duk_ret_t js_musicPlaying(duk_context *ctx);  // tocando? (API 25)
+    static duk_ret_t js_musicPos(duk_context *ctx);   // ms desde o inicio (API 25)
 
     // Sensors do IMU da placa (API 13: watch)
     static duk_ret_t js_sensorsAccel(duk_context *ctx);   // {x,y,z} em g

@@ -1856,3 +1856,62 @@ if (AI.configured("openrouter") && Net.isConnected()) {
 AI.speak({ text: "low battery, time to charge", path: FS.appData() + "aviso.wav", play: false },
          function (r) { if (r.ok) System.playWav(r.path); });
 ```
+
+## 30. API Level 25 — Music: `System.playMusic` (chiptune mixer)
+
+A few channels of music, mixed live on the board speaker. The app (or the
+LLM behind it) orchestrates a small "MIDI" — up to **4 tracks** of
+`[midi, 16ths]` note events — and a synth task mixes them as a chiptune:
+square 50%/25%, triangle and saw waves for melodies/bass, and a percussion
+track using **General MIDI drum notes** (36 kick, 38 snare, 42 hi-hat).
+Playback is **non-blocking**: the app stays free to blink LEDs and move
+servos in rhythm while it plays.
+
+Works on any board with an I2S speaker (dog, SmartDisplay, watch). Shares
+the exclusive speaker slot with `playWav`/`playTone`/`AI.speak`:
+`playMusic` returns `false` when the speaker is busy. Everything is
+clamped (here and again in the engine — the app is never trusted): bpm
+60..200, loops 1..8 with a 120 s total cap, 4 tracks × 48 notes, midi
+0..96 (0 = rest), duration 1..64 sixteenths, volume 0..100.
+
+#### `System.playMusic(song)` (API 25)
+- **Parameters:** `song` (Object) — `{bpm: 60..200 (default 120), loops: 1..8 (default 4), tracks: [...]}`; each track `{wave: "sq"|"sq25"|"tri"|"saw" (default "sq"), drum: Boolean (notes become GM percussion), vol: 0..100 (default 80), notes: [[midi, sixteenths], ...]}` — midi 0 is a rest that still advances time, so tracks line up by the sum of their durations.
+- **Returns:** Boolean — `true` when the song started; `false` when the speaker is busy, the board has no I2S audio or the song has no notes.
+- **Description:** one song at a time; a new `playMusic` only starts after the previous one ends (or is stopped). While it plays the on-device wake word detector sleeps (same as any playback).
+
+#### `System.musicStop()` (API 25)
+Cuts the song at the next mixer block (~15 ms). Returns `true` when
+something was playing. Idempotent.
+
+#### `System.musicPlaying()` (API 25)
+`true` while the synth task is playing (until the loops run out or a
+`musicStop` lands).
+
+#### `System.musicPos()` (API 25)
+Milliseconds of audio already written to the speaker since the song
+started — for beat-synced lights/choreography — or `-1` when idle.
+
+### Example — party: AI-orchestrated beat + blinking LEDs
+
+```javascript
+var song = {
+    bpm: 128, loops: 4,
+    tracks: [
+        { drum: true, vol: 100,
+          notes: [[36,2],[42,1],[42,1],[38,2],[42,1],[42,1]] },   // kick/hat/snare
+        { wave: "tri", vol: 90,
+          notes: [[40,4],[40,2],[47,2],[45,4],[43,4]] },          // bass line
+        { wave: "sq", vol: 70,
+          notes: [[64,2],[67,2],[72,4],[0,4],[71,2],[67,2]] }     // short lead (0 = rest)
+    ]
+};
+if (System.playMusic(song)) {
+    var beatMs = 60000 / song.bpm;
+    while (System.musicPos() >= 0) {          // dance while it plays
+        var step = Math.floor(System.musicPos() / (beatMs / 2));
+        System.neopixel(0, [step % 2 ? 0xFF2000 : 0x20C020, 0, 0, 0]);
+        System.delay(30);
+    }
+    System.neopixel(0, [0, 0, 0, 0]);
+}
+```

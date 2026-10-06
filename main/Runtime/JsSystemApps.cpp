@@ -1,9 +1,11 @@
 #include "JSBindings.h"
 #include <algorithm>
 #include <stdio.h>
+#include <string.h>
 #include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
 #include "../Kernel/Core/CelerKernel.h"
+#include "../Hardware/MusicSynth.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -725,6 +727,102 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
         if (BoardIO::tone(f, ms)) played++;
     }
     duk_push_int(ctx, played);
+    return 1;
+}
+
+// System.playMusic(song) (API 25): chiptune de ate 4 trilhas misturadas ao
+// vivo na task do MusicSynth — NAO bloqueia (System.musicPos acompanha o
+// progresso, System.musicStop corta). song = {bpm:60..200, loops:1..8,
+// tracks:[{wave:"sq"|"sq25"|"tri"|"saw", drum:true, vol:0..100,
+// notes:[[midi,semicolcheias],...]}]} — midi 0 = pausa; trilha drum usa as
+// notas GM (36 bumbo, 38 caixa, 42 chimbal). Valores sao clampados AQUI e
+// de novo no MusicEngine::compile (o app nunca e confiavel o suficiente).
+// false = alto-falante ocupado (fala do AI.speak/tom/playWav em curso),
+// sem audio na placa ou musica vazia.
+duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
+    present();  // o app segue livre: so acordamos a task do sintetizador
+    if (!duk_is_object(ctx, 0)) {
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "playMusic: esperado objeto {bpm,loops,tracks}");
+    }
+    MusicEngine::Song song;
+    duk_get_prop_string(ctx, 0, "bpm");
+    if (duk_is_number(ctx, -1)) song.bpm = (uint16_t)duk_get_int(ctx, -1);
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "loops");
+    if (duk_is_number(ctx, -1)) song.loops = (uint8_t)duk_get_int(ctx, -1);
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "tracks");
+    if (!duk_is_array(ctx, -1)) {
+        duk_pop(ctx);
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "playMusic: tracks deve ser um array");
+    }
+    const duk_uarridx_t nTracks = duk_get_length(ctx, -1);
+    for (duk_uarridx_t t = 0; t < nTracks && song.nTracks < MusicEngine::kMaxTracks; t++) {
+        duk_get_prop_index(ctx, -1, t);
+        if (!duk_is_object(ctx, -1)) { duk_pop(ctx); continue; }
+        MusicEngine::Track& tr = song.tracks[song.nTracks];
+        duk_get_prop_string(ctx, -1, "drum");
+        tr.drum = duk_get_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, -1, "wave");
+        if (duk_is_string(ctx, -1)) {
+            const char* w = duk_get_string(ctx, -1);
+            tr.wave = strcmp(w, "sq25") == 0 ? MusicEngine::kWaveSq25
+                    : strcmp(w, "tri") == 0 ? MusicEngine::kWaveTri
+                    : strcmp(w, "saw") == 0 ? MusicEngine::kWaveSaw
+                    : MusicEngine::kWaveSq;
+        }
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, -1, "vol");
+        if (duk_is_number(ctx, -1)) tr.vol = (uint8_t)duk_get_int(ctx, -1);
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, -1, "notes");
+        if (duk_is_array(ctx, -1)) {
+            const duk_uarridx_t n = duk_get_length(ctx, -1);
+            for (duk_uarridx_t i = 0; i < n && tr.count < MusicEngine::kMaxNotes; i++) {
+                duk_get_prop_index(ctx, -1, i);
+                if (duk_is_array(ctx, -1) && duk_get_length(ctx, -1) >= 2) {
+                    duk_get_prop_index(ctx, -1, 0);
+                    const int midi = duk_get_int(ctx, -1);
+                    duk_pop(ctx);
+                    duk_get_prop_index(ctx, -1, 1);
+                    const int len = duk_get_int(ctx, -1);
+                    duk_pop(ctx);
+                    if (midi >= 0 && midi <= 127 && len >= 1) {
+                        tr.notes[tr.count].midi = (uint8_t)midi;
+                        tr.notes[tr.count].len16 = (uint8_t)(len > 64 ? 64 : len);
+                        tr.count++;
+                    }
+                }
+                duk_pop(ctx);
+            }
+        }
+        duk_pop(ctx);  // notes
+        duk_pop(ctx);  // track
+        if (tr.count > 0) song.nTracks++;  // trilha sem nota nao ocupa slot
+    }
+    duk_pop(ctx);  // tracks
+    duk_push_boolean(ctx, MusicSynth::play(song) ? 1 : 0);
+    return 1;
+}
+
+// System.musicStop() (API 25): corta a musica no proximo bloco (~15 ms).
+duk_ret_t JSBindings::js_musicStop(duk_context *ctx) {
+    const bool had = MusicSynth::playing();
+    MusicSynth::stop();
+    duk_push_boolean(ctx, had ? 1 : 0);
+    return 1;
+}
+
+// System.musicPlaying() (API 25): true enquanto a task do sintetizador toca.
+duk_ret_t JSBindings::js_musicPlaying(duk_context *ctx) {
+    duk_push_boolean(ctx, MusicSynth::playing() ? 1 : 0);
+    return 1;
+}
+
+// System.musicPos() (API 25): ms desde o inicio do audio, ou -1 se parado.
+duk_ret_t JSBindings::js_musicPos(duk_context *ctx) {
+    duk_push_int(ctx, MusicSynth::posMs());
     return 1;
 }
 

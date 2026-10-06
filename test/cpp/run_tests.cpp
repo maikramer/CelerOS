@@ -11,6 +11,7 @@
 #include "../../main/Utils/AlarmCalc.h"
 #include "../../main/Utils/GbProto.h"
 #include "../../main/Kernel/DeviceStats.h"
+#include "../../main/Hardware/MusicEngine.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -483,6 +484,105 @@ static void testDeviceStatsJson() {
     CHECK(en > 0 && std::string(eb, en).find("\"tasks\":[],\"trunc\":0") != std::string::npos);
 }
 
+// ---- MusicEngine (System.playMusic, API 25) ----
+// O motor puro e o mesmo do device: compilacao (clamps + eventos em
+// amostras) e renderizacao inteira/deterministica.
+static void testMusicEngine() {
+    using namespace MusicEngine;
+    const uint32_t kRate = 16000;
+
+    // musica valida: bateria + baixo, 8 semicolcheias por volta
+    Song s;
+    s.bpm = 120;   // semicolcheia = 125 ms = 2000 amostras
+    s.loops = 2;
+    s.nTracks = 2;
+    s.tracks[0].drum = true;
+    s.tracks[0].vol = 100;
+    s.tracks[0].count = 4;
+    s.tracks[0].notes[0] = {36, 2};
+    s.tracks[0].notes[1] = {42, 2};
+    s.tracks[0].notes[2] = {38, 2};
+    s.tracks[0].notes[3] = {42, 2};
+    s.tracks[1].wave = kWaveTri;
+    s.tracks[1].vol = 90;
+    s.tracks[1].count = 2;
+    s.tracks[1].notes[0] = {40, 4};
+    s.tracks[1].notes[1] = {47, 4};
+
+    Compiled c;
+    CHECK(compile(s, kRate, c));
+    CHECK(c.nTracks == 2);
+    CHECK(c.loopSamples == 8 * 2000);      // trilha mais longa manda
+    CHECK(c.totalSamples == 2 * c.loopSamples);
+    CHECK(c.loops == 2);
+    // eventos do baixo: 2 notas, 4 semicolcheias cada
+    CHECK(c.tracks[1].count == 2);
+    CHECK(c.tracks[1].evs[0].start == 0);
+    CHECK(c.tracks[1].evs[0].end == 4 * 2000);
+    CHECK(c.tracks[1].evs[1].start == 4 * 2000);
+
+    // clamps: bpm fora da faixa, loops altos demais (teto de 120 s corta),
+    // midi > 96, duracao 0 -> 1
+    Song bad = s;
+    bad.bpm = 999;   // clampado a 200: semicolcheia = 75 ms = 1200 amostras
+    bad.loops = 8;
+    bad.tracks[1].notes[0] = {120, 0};
+    Compiled cb;
+    CHECK(compile(bad, kRate, cb));
+    CHECK(cb.loops < 8 || cb.totalSamples <= kMaxTotalMs * kRate / 1000);
+    CHECK(cb.tracks[1].evs[0].midi == 96);
+    CHECK(cb.tracks[1].evs[0].end - cb.tracks[1].evs[0].start == 1200);  // len 0 -> 1
+
+    // musica vazia (so pausas / sem trilhas): nao compila
+    Song empty; empty.nTracks = 1; empty.tracks[0].count = 1; empty.tracks[0].notes[0] = {0, 4};
+    Compiled ce;
+    CHECK(!compile(empty, kRate, ce));
+
+    // render: nota melodica produz som na regiao da nota
+    Renderer r;
+    r.reset(&c, 100);
+    static int16_t buf[16000];
+    r.render(buf, 16000);
+    bool noteLoud = false;
+    for (int i = 1000; i < 7000; i++)   // dentro da nota do baixo
+        if (buf[i] > 500 || buf[i] < -500) noteLoud = true;
+    CHECK(noteLoud);
+    CHECK(r.pos == 16000);
+    // mistura inteira/deterministica: dois renderers iguais, mesma saida
+    Renderer r2;
+    r2.reset(&c, 100);
+    static int16_t buf2[16000];
+    r2.render(buf2, 16000);
+    CHECK(memcmp(buf, buf2, sizeof(buf)) == 0);
+
+    // bateria: bumbo na 1a semicolcheia produz graves fortes
+    r.reset(&c, 100);
+    int16_t one[2000];
+    r.render(one, 2000);
+    bool kick = false;
+    for (int i = 0; i < 2000; i++) if (one[i] > 1000 || one[i] < -1000) kick = true;
+    CHECK(kick);
+
+    // teto de amplitude: nunca estoura o int16
+    Song loud = s;
+    loud.nTracks = 1;
+    loud.tracks[0].drum = false;
+    loud.tracks[0].vol = 100;
+    loud.tracks[0].count = 1;
+    loud.tracks[0].notes[0] = {96, 8};
+    Compiled cl;
+    CHECK(compile(loud, kRate, cl));
+    Renderer rl;
+    rl.reset(&cl, 100);
+    int16_t lb[8000];
+    rl.render(lb, 8000);
+    bool clipped = false;
+    for (int i = 0; i < 8000; i++) {
+        if (lb[i] > 24000 || lb[i] < -24000) clipped = true;
+    }
+    CHECK(!clipped);
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -493,6 +593,7 @@ int main() {
     testAlarmCalc();
     testGbProto();
     testDeviceStatsJson();
+    testMusicEngine();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

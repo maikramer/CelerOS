@@ -11,6 +11,7 @@ set(CELEROS_SRCS
     "Assets/Fonts/CelerFonts.cpp"
     "Hardware/BoardIO.cpp"
     "Hardware/AudioPlayer.cpp"
+    "Hardware/MusicSynth.cpp"
     "Hardware/Audio/qoa.c"
     "Display/ScreenCapture.cpp"
     "main.cpp"
@@ -246,7 +247,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.7.0"
-    CELEROS_API_LEVEL=24
+    CELEROS_API_LEVEL=25
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

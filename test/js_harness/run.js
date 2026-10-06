@@ -79,6 +79,9 @@ function makeEnv() {
     // ---- Storage (API 12): NVS privado do app — mapa em memoria por runApp
     var storageMap = {};
 
+    // Musica (API 25): estado do playMusic stub — pos e derivada do clock
+    var musicState = { playing: false, startAt: 0, totalMs: 0, songs: [] };
+
     // Cores do tema no espaco do JS: RGB565, igual ao firmware (js_theme
     // converte THEME_* de RGB888 antes do push — o stub faz o mesmo)
     function to565(c) {
@@ -488,6 +491,43 @@ function makeEnv() {
             log.push('[tone] ' + (seq && seq.length ? seq.length : 0) + ' notas');
             return seq ? Math.floor(seq.length / (seq.length > 0 && seq[0].length !== undefined ? 1 : 2)) : 0;
         },
+        // Musica (API 25): chiptune N trilhas — duracao REAL do song (mesma
+        // conta do MusicEngine: trilha mais longa em semicolcheias x bpm);
+        // __harness.music expoe o estado p/ assercoes
+        playMusic: function(song) {
+            if (!song || !song.tracks || !song.tracks.length) return false;
+            var beatMs = 60000 / (song.bpm || 120);
+            var longest = 0;
+            for (var i = 0; i < song.tracks.length; i++) {
+                var sum = 0;
+                var ns = song.tracks[i].notes || [];
+                for (var k = 0; k < ns.length; k++) sum += (ns[k] && ns[k][1]) || 0;
+                if (sum > longest) longest = sum;
+            }
+            musicState.playing = true;
+            musicState.startAt = clock;
+            musicState.totalMs = Math.round(longest * beatMs / 4 * (song.loops || 1));
+            musicState.songs.push(JSON.stringify(song));
+            log.push('[music] ' + musicState.totalMs + ' ms');
+            return true;
+        },
+        musicStop: function() {
+            var had = musicState.playing;
+            musicState.playing = false;
+            log.push('[music] stop');
+            return had;
+        },
+        musicPlaying: function() {
+            if (musicState.playing && clock - musicState.startAt >= musicState.totalMs)
+                musicState.playing = false;   // task do synth acabou
+            return musicState.playing;
+        },
+        musicPos: function() {
+            if (!musicState.playing) return -1;
+            var el = clock - musicState.startAt;
+            if (el >= musicState.totalMs) { musicState.playing = false; return -1; }
+            return el;
+        },
         notify: function(t, m) { log.push('[notify] ' + t + '|' + (m || '')); },
         notifications: function() { return env.__notifs || []; },
         notificationsClear: function() { env.__notifs = []; }
@@ -711,6 +751,7 @@ function makeEnv() {
         aiSpeaks: aiSpeaks,
         setMicB64: function(s) { micB64 = s; },
         mic: micState,
+        music: musicState,
         wake: function() { wakeQueue.push(true); },
         wakeState: wakeState,
         setLink: function(st) {
@@ -1816,7 +1857,7 @@ function nearAng(seq, want, tol) {
     var req = r.env.__harness.aiChats[0] || '';
     check('tool dog_script oferecida com as regras ES5',
           req.indexOf('dog_script') >= 0 && req.indexOf('ES5') >= 0 &&
-          req.indexOf('max_tokens":800') >= 0, req.slice(0, 250));
+          req.indexOf('max_tokens":1000') >= 0, req.slice(0, 250));
     check('prompt ensina performance livre', req.indexOf('PROPRIO') >= 0);
     check('performance rodou ok', j.indexOf('[voz] script ok') >= 0, j.slice(-400));
     // pata: legs.set("FL",30) chega ao angulo fisico (clamp nao interfere)
@@ -1905,6 +1946,130 @@ function nearAng(seq, want, tol) {
     check('fita 1 acesa pelo script', j.indexOf('[neopixel] 1 255') >= 0);
     check('pose sit aplicada (raw ±50)', nearAng(q.FL, rawAng('FL', 50), 1),
           JSON.stringify(q.FL.slice(-4)));
+})();
+
+// --- Dog Face (dog_music): "clima de festa" — groove + LEDs + patinhas ----
+(function() {
+    console.log('Dog Face (dog_music: festa com sons e cores):');
+    var groove = {
+        bpm: 128, loops: 2,
+        tracks: [
+            { drum: true, vol: 100,
+              notes: [[36, 2], [42, 1], [42, 1], [38, 2], [42, 1], [42, 1]] },
+            { wave: 'tri', vol: 90, notes: [[40, 4], [47, 2], [45, 2]] },
+            { wave: 'sq', vol: 70, notes: [[64, 2], [67, 2], [72, 4]] }
+        ]
+    };
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'cm1', name: 'dog_music', args: groove }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var req = r.env.__harness.aiChats[0] || '';
+    check('tool dog_music oferecida com as regras GM',
+          req.indexOf('dog_music') >= 0 && req.indexOf('36 bumbo') >= 0, req.slice(0, 250));
+    check('musica tocou no sintetizador', j.indexOf('[music] ') >= 0, j.slice(-300));
+    check('festa de LEDs acompanhou (varias cores)',
+          j.split('\n').filter(function(l) { return l.indexOf('[neopixel] 0 ') === 0; }).length >= 8);
+    check('patinhas balancaram (bob alem do neutro)',
+          dogSeqs(r.log).FL.some(function(v) { return Math.abs(v - D_NEU.FL) >= 8; }));
+    check('musica acabou sozinha (pos volta a -1)',
+          r.env.__harness.music.playing === false);
+    check('LEDs apagados no fim', j.indexOf('[neopixel] 0 0,0,0,0') >= 0);
+    check('eco da festa com bpm', j.indexOf('"type":"music","ok":true') >= 0 &&
+          j.indexOf('"bpm":128') >= 0);
+})();
+
+// --- Dog Face (dog_music): clamps do song + interrupcao pelo toque --------
+(function() {
+    console.log('Dog Face (dog_music: clamps + cutucar para):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'cm2', name: 'dog_music', args: {
+                bpm: 999, loops: 8,
+                tracks: [
+                    { drum: true, notes: [[36, 2], [38, 2], [42, 4]] },
+                    { wave: 'tri', notes: [[40, 8]] },
+                    { wave: 'sq', notes: [[64, 8]] },
+                    { wave: 'sq', notes: [[72, 8]] },
+                    { wave: 'sq', notes: [[80, 8]] },
+                    { wave: 'sq', notes: [[88, 8]] }
+                ]
+            } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+        // cutuca o pad a partir de ~600 ms do inicio da festa
+        var t0 = null;
+        env.System.touchPad = function() {
+            if (t0 === null && env.__harness.music.playing) t0 = env.System.millis();
+            return t0 !== null && env.System.millis() - t0 > 600 ? 1 : 0;
+        };
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    var song = r.env.__harness.music.songs[0] || '';
+    check('bpm clampado em 200', song.indexOf('"bpm":200') >= 0, song.slice(0, 120));
+    check('maximo 4 trilhas', song ? JSON.parse(song).tracks.length === 4 : false,
+          song.slice(0, 200));
+    check('loops clampado em 8', song.indexOf('"loops":8') >= 0);
+    check('cutucar cortou a musica', j.indexOf('[music] stop') >= 0, j.slice(-300));
+    check('eco da festa interrompida ainda e ok', j.indexOf('"type":"music","ok":true') >= 0);
+})();
+
+// --- Dog Face (dog_music): firmware antigo cai no jingle -------------------
+(function() {
+    console.log('Dog Face (dog_music: fallback sem playMusic):');
+    var r = runApp('boards/spotpear-dog/data/apps/Dog Face/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.__harness.setLink({ conn: true });
+        env.__harness.setAiResponse({
+            ok: true, status: 200, content: null, finishReason: 'tool_calls',
+            toolCalls: [{ id: 'cm3', name: 'dog_music', args: {
+                bpm: 120, loops: 1,
+                tracks: [
+                    { drum: true, notes: [[36, 4], [38, 4]] },
+                    { wave: 'sq', notes: [[64, 2], [67, 2], [72, 4]] }
+                ]
+            } }],
+            raw: ''
+        });
+        var lvls = [];
+        for (var i = 0; i < 40; i++) lvls.push(30);
+        for (var i = 0; i < 300; i++) lvls.push(2);
+        env.Mic.level = function() { return lvls.length ? lvls.shift() : 2; };
+        env.setTimeout(function() { env.__harness.wake(); }, 120);
+        // firmware 1.7.0 (API 24): nao existe playMusic
+        delete env.System.playMusic;
+        delete env.System.musicPos;
+        delete env.System.musicStop;
+        delete env.System.musicPlaying;
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    // jingle da trilha melodica (3 notas > 0) + festa de luz na MESMA choreo
+    check('jingle playTone da trilha melodica', j.indexOf('[tone] 3 notas') >= 0);
+    check('festa de luzes mesmo no jingle',
+          j.split('\n').filter(function(l) { return l.indexOf('[neopixel] 0 ') === 0; }).length >= 4);
+    check('festa terminou (eco ok)', j.indexOf('"type":"music","ok":true') >= 0);
 })();
 
 (function() {

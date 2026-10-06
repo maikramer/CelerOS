@@ -2132,3 +2132,63 @@ if (AI.configured("openrouter") && Net.isConnected()) {
 AI.speak({ text: "bateria fraca, bora carregar", path: FS.appData() + "aviso.wav", play: false },
          function (r) { if (r.ok) System.playWav(r.path); });
 ```
+
+## 30. Nível de API 25 — Música: `System.playMusic` (mixer chiptune)
+
+Poucos canais de música, misturados ao vivo no alto-falante da placa. O
+app (ou a LLM por trás dele) orquestra um pequeno "MIDI" — até **4 trilhas**
+de eventos de nota `[midi, semicolcheias]` — e uma task de síntese mistura
+tudo como chiptune: ondas quadrada 50%/25%, triangular e dente-de-serra
+para melodias/baixo, e uma trilha de percussão usando as **notas de bateria
+do General MIDI** (36 bumbo, 38 caixa, 42 chimbal). A reprodução é **não
+bloqueante**: o app segue livre para piscar LEDs e mover servos no ritmo
+enquanto toca.
+
+Funciona em qualquer placa com alto-falante I2S (cão, SmartDisplay, watch).
+Compartilha a posse exclusiva do alto-falante com `playWav`/`playTone`/
+`AI.speak`: `playMusic` devolve `false` com o alto-falante ocupado. Tudo é
+clampado (aqui e de novo no motor — o app nunca é confiável): bpm 60..200,
+loops 1..8 com teto total de 120 s, 4 trilhas x 48 notas, midi 0..96
+(0 = pausa), duração 1..64 semicolcheias, volume 0..100.
+
+#### `System.playMusic(song)` (API 25)
+- **Parâmetros:** `song` (Object) — `{bpm: 60..200 (default 120), loops: 1..8 (default 4), tracks: [...]}`; cada trilha `{wave: "sq"|"sq25"|"tri"|"saw" (default "sq"), drum: Boolean (notas viram percussão GM), vol: 0..100 (default 80), notes: [[midi, semicolcheias], ...]}` — midi 0 é uma pausa que ainda avança o tempo, então as trilhas se alinham pela soma das durações.
+- **Retorna:** Boolean — `true` quando a música começou; `false` com o alto-falante ocupado, placa sem áudio I2S ou música sem notas.
+- **Descrição:** uma música por vez; um novo `playMusic` só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorme (como qualquer reprodução).
+
+#### `System.musicStop()` (API 25)
+Corta a música no próximo bloco do mixer (~15 ms). Retorna `true` quando
+havia algo tocando. Idempotente.
+
+#### `System.musicPlaying()` (API 25)
+`true` enquanto a task de síntese toca (até acabarem os loops ou chegar um
+`musicStop`).
+
+#### `System.musicPos()` (API 25)
+Milissegundos de áudio já escritos no alto-falante desde o início — para
+luzes/coreografia sincronizadas na batida — ou `-1` parado.
+
+### Exemplo — festa: batida orquestrada pela IA + LEDs piscando
+
+```javascript
+var song = {
+    bpm: 128, loops: 4,
+    tracks: [
+        { drum: true, vol: 100,
+          notes: [[36,2],[42,1],[42,1],[38,2],[42,1],[42,1]] },   // bumbo/chimbal/caixa
+        { wave: "tri", vol: 90,
+          notes: [[40,4],[40,2],[47,2],[45,4],[43,4]] },          // linha de baixo
+        { wave: "sq", vol: 70,
+          notes: [[64,2],[67,2],[72,4],[0,4],[71,2],[67,2]] }     // tema curto (0 = pausa)
+    ]
+};
+if (System.playMusic(song)) {
+    var beatMs = 60000 / song.bpm;
+    while (System.musicPos() >= 0) {          // dança enquanto toca
+        var step = Math.floor(System.musicPos() / (beatMs / 2));
+        System.neopixel(0, [step % 2 ? 0xFF2000 : 0x20C020, 0, 0, 0]);
+        System.delay(30);
+    }
+    System.neopixel(0, [0, 0, 0, 0]);
+}
+```
