@@ -12,9 +12,9 @@
 // bus) — nessa placa esses pinos nao ligam em nada (tela branca). O pinout
 // abaixo e o da placa fisica, conferido contra um projeto que roda nela
 // (ESP32-Cheap-Yellow-Display/PINS.md). O slot microSD da variante fica no
-// MESMO HSPI do TFT (CS=5): o mount dedicado do FileSystem conflitaria com
-// o display, entao o SD fica desativado no BoardProfile ate o mount aprender
-// bus compartilhado.
+// MESMO HSPI do TFT (CS=5): o FileSystem monta o cartao como segundo
+// dispositivo do bus (multi-device do driver IDF; video e cartao se
+// serializam pelo lock de transacao — ver FileSystem.cpp/mountSD).
 // ----------------------------------------------------------------------------
 
 #include <cstdio>

@@ -13,10 +13,13 @@ static const BoardProfile s_profile = {
     .id = "cyd",
     .otaChannel = "esp32",
     .name = "cyd (ESP32-2432S028R classica)",
-    // Slot microSD desta variante fica no MESMO HSPI do TFT (CS=5): o mount
-    // dedicado do FileSystem conflitaria com o display — desativado ate o
-    // mount suportar bus compartilhado (cs < 0 = sem SD no perfil).
-    .sd = {.cs = -1, .sck = 14, .miso = 12, .mosi = 13, .freqKhz = 0},
+    // Slot microSD desta variante fica no MESMO HSPI do TFT (CS=5): funciona
+    // em bus compartilhado — o display (LovyanGFX) inicializa o host e o
+    // mount do SD anexa um segundo dispositivo; o lock do driver IDF
+    // serializa as transferencias (video x cartao). 10MHz e conservador para
+    // as trilhas compartilhadas da placa; FAT/SPI a essa freq ja e mais
+    // rapido que o flash interno em escrita.
+    .sd = {.cs = 5, .sck = 14, .miso = 12, .mosi = 13, .freqKhz = 10000},
     .hasPsram = false,
     .backlightPwm = true,   // GPIO22 via Light_PWM (antes era fixo 100%)
     .capacitiveTouch = false,

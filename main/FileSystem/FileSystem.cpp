@@ -116,11 +116,25 @@ bool FileSystem::mountSD() {
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 4092;
         esp_err_t err = spi_bus_initialize(sdHost, &buscfg, SPI_DMA_CH_AUTO);
-        if (err != ESP_OK) {
+        if (err == ESP_ERR_INVALID_STATE) {
+            // BUS COMPARTILHADO COM O DISPLAY (ex.: microSD do CYD classico,
+            // que divide o HSPI com o TFT): o LovyanGFX ja inicializou o host
+            // (spi_bus_initialize + spi_device_add_device no boot) e, em modo
+            // IDF, adquire/libera o bus por transacao via
+            // spi_device_acquire_bus. O sdspi adicionado pelo mount abaixo
+            // segue o mesmo lock — as transferencias de video e de cartao se
+            // serializam sozinhas. Contrato: os pinos do perfil DEVEM ser os
+            // mesmos do barramento do display (a config de pinos aqui seria
+            // ignorada: o host ja esta de pe com os pinos do display).
+            ESP_LOGI(FS_TAG, "SPI%d ja pertence ao display: SD em bus compartilhado",
+                     (int)sdHost + 1);
+            s_spi_bus_ready = true;
+        } else if (err != ESP_OK) {
             ESP_LOGE(FS_TAG, "spi_bus_initialize falhou: %s", esp_err_to_name(err));
             return false;
+        } else {
+            s_spi_bus_ready = true;
         }
-        s_spi_bus_ready = true;
     }
 
     // IDF 6: esp_vfs_fat_sdspi_mount continua "all-in-one" — anexa o

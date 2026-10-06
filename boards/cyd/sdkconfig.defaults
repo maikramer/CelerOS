@@ -27,10 +27,12 @@ CONFIG_LOG_DEFAULT_LEVEL_ERROR=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set
 
-# O slot microSD desta variante compartilha o HSPI do TFT (CS=5): o mount
-# dedicado conflitaria com o display. Sem SD até o mount suportar bus
-# compartilhado — e o FAT/SDSPI saem do binário (bônus de tamanho).
-# CONFIG_CELEROS_SD_CARD is not set
+# Slot microSD compartilhando o HSPI do TFT (CS=5): o mount anexa o cartao
+# como segundo dispositivo do bus do display (multi-device do driver IDF —
+# ver FileSystem.cpp/mountSD). FAT/SDSPI voltam ao binario (~30KB no slot
+# de 1.75MB): em troca, apps/configs ganham giagas de cartao em vez dos
+# 768KB do /local.
+CONFIG_CELEROS_SD_CARD=y
 
 # Heap para apps JS (32KB padrao roubam 12KB da RAM interna que o runtime
 # Duktape precisa). Pico medido: ~8,5KB compilando o App Store (o compile
