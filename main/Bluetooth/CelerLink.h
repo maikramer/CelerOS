@@ -109,6 +109,11 @@ public:
     // advertising, volta o nome default e limpa a fila. O NimBLE segue
     // inicializado.
     static void appReset();
+
+    // Scan/connect do app em andamento (procedimentos que tomam o scanner
+    // ou criam conexao): a malha CelerNet pausa o scanner dela enquanto
+    // isto for true (CelerNet::tick).
+    static bool appBusy();
 };
 
 #endif // CELEROS_BT_CELER_LINK_H

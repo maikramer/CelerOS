@@ -12,6 +12,7 @@
 #include "../../main/Utils/GbProto.h"
 #include "../../main/Kernel/DeviceStats.h"
 #include "../../main/Hardware/MusicEngine.h"
+#include "../../main/Bluetooth/NetFrame.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -583,6 +584,110 @@ static void testMusicEngine() {
     CHECK(!clipped);
 }
 
+// CelerNet (NetFrame.h): quadro da malha por flood de advertising —
+// round-trip, fragmentacao/remontagem e dedup, tudo no host.
+static void testNetFrame() {
+    using namespace netframe;
+
+    // round-trip DATA com o payload maximo (18 B)
+    uint8_t buf[ADV_MAX];
+    Frame f;
+    f.type = TYPE_DATA;
+    f.netId = 0xBEEF;
+    f.src = 0x1234;
+    f.seq = 0x5678;
+    f.ttl = 4;
+    f.hops = 2;
+    const uint8_t payload[DATA_MAX] = "0123456789ABCDEFG";  // 17 + NUL = 18
+    f.dlen = DATA_MAX;
+    f.data = payload;
+    size_t n = encode(f, buf, sizeof(buf));
+    CHECK(n == HDR + DATA_MAX);
+    Frame g;
+    CHECK(decode(buf, n, &g));
+    CHECK(g.type == TYPE_DATA && g.netId == 0xBEEF && g.src == 0x1234 && g.seq == 0x5678);
+    CHECK(g.ttl == 4 && g.hops == 2 && g.dlen == DATA_MAX);
+    CHECK(memcmp(g.data, payload, DATA_MAX) == 0);
+
+    // rejeicoes: dados grandes demais, ttl fora da faixa, lixo no ar
+    Frame bad = f;
+    bad.dlen = DATA_MAX + 1;
+    CHECK(encode(bad, buf, sizeof(buf)) == 0);
+    bad = f; bad.ttl = 0;   CHECK(encode(bad, buf, sizeof(buf)) == 0);
+    bad = f; bad.ttl = TTL_MAX + 1; CHECK(encode(bad, buf, sizeof(buf)) == 0);
+    CHECK(!decode(buf, n - 1, &g));                 // tamanho colidindo
+    buf[0] = 'X';            CHECK(!decode(buf, n, &g));  // magic errado
+    buf[0] = 'C'; buf[2] = 2; CHECK(!decode(buf, n, &g));  // versao errada
+
+    // BEAT com nome
+    f.type = TYPE_BEAT;
+    const char* nome = "Celer-Dog";
+    f.dlen = (uint8_t)strlen(nome);
+    f.data = (const uint8_t*)nome;
+    n = encode(f, buf, sizeof(buf));
+    CHECK(n == HDR + strlen(nome));
+    CHECK(decode(buf, n, &g) && g.type == TYPE_BEAT);
+    CHECK(memcmp(g.data, nome, strlen(nome)) == 0);
+
+    // fnv16: deterministico e distingue nomes de rede
+    CHECK(fnv16("celer") == fnv16("celer"));
+    CHECK(fnv16("celer") != fnv16("casa"));
+
+    // dedup: (src, seq, idx) visto 2x; vizinhos distintos passam
+    DedupRing<4> dd;
+    CHECK(!dd.seen(1, 100, 0));   // 1a vez = novo
+    CHECK(dd.seen(1, 100, 0));    // repetido
+    CHECK(!dd.seen(1, 100, 1));   // outro fragmento
+    CHECK(!dd.seen(1, 101, 0));   // outro seq
+    CHECK(!dd.seen(2, 100, 0));   // outro no
+    CHECK(dd.seen(1, 100, 1));    // frag repetido de antes
+    dd.clear();
+    CHECK(!dd.seen(1, 100, 0));   // clear: tudo novo de novo
+
+    // remontagem: mensagem de 240 B = 15 fragmentos de 16 B, fora de ordem
+    uint8_t msg[MSG_MAX];
+    for (size_t i = 0; i < MSG_MAX; i++) msg[i] = (uint8_t)(i * 7);
+    Reassembler ra;
+    uint8_t out[MSG_MAX];
+    size_t outLen = 0;
+    const uint8_t total = (MSG_MAX + CHUNK_MAX - 1) / CHUNK_MAX;  // 15
+    bool done = false;
+    for (int pass = 0; pass < 2 && !done; pass++) {
+        for (int k = 0; k < total && !done; k++) {
+            int idx = (k * 7) % total;  // ordem embaralhada (7 e coprimo de 15)
+            size_t off = (size_t)idx * CHUNK_MAX;
+            uint8_t len = idx + 1 == total ? (uint8_t)(MSG_MAX - off) : CHUNK_MAX;
+            done = ra.feed(0xA1B2, 42, (uint8_t)idx, total, msg + off, len,
+                           pass * 100 + k * 10, out, sizeof(out), &outLen);
+        }
+    }
+    CHECK(done);
+    CHECK(outLen == MSG_MAX);
+    CHECK(memcmp(out, msg, MSG_MAX) == 0);
+
+    // fragmento repetido nao entrega duas vezes nem corrompe o slot
+    ra.reset();
+    done = ra.feed(3, 7, 0, 2, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen);
+    CHECK(!done);
+    done = ra.feed(3, 7, 0, 2, msg, CHUNK_MAX, 1, out, sizeof(out), &outLen);  // repetido
+    CHECK(!done);
+    done = ra.feed(3, 7, 1, 2, msg + CHUNK_MAX, 4, 2, out, sizeof(out), &outLen);
+    CHECK(done && outLen == CHUNK_MAX + 4);
+
+    // chunk curto no MEIO (nao-ultimo) e recusado: buraco nao cola
+    ra.reset();
+    CHECK(!ra.feed(3, 8, 0, 2, msg, CHUNK_MAX - 1, 0, out, sizeof(out), &outLen));
+
+    // slot vence: fragmento perdido libera para a proxima mensagem
+    ra.reset();
+    CHECK(!ra.feed(4, 9, 0, 2, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen));
+    ra.prune(3000, 2000);  // 3 s depois do lastMs=0
+    done = ra.feed(4, 9, 1, 2, msg + CHUNK_MAX, 4, 4000, out, sizeof(out), &outLen);
+    CHECK(!done);  // slot antigo foi podado: frag solto nao entrega
+    done = ra.feed(4, 9, 0, 2, msg, CHUNK_MAX, 4100, out, sizeof(out), &outLen);
+    CHECK(done);   // mensagem nova (mesmo src/seq) recomeca limpa
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -594,6 +699,7 @@ int main() {
     testGbProto();
     testDeviceStatsJson();
     testMusicEngine();
+    testNetFrame();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

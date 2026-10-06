@@ -16,6 +16,8 @@
 #include "nvs.h"
 #include "psa/crypto.h"
 
+#include "CelerNet.h"
+
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_att.h"
@@ -161,6 +163,7 @@ volatile bool s_connActive = false;   // enlace de pe
 volatile bool s_ready = false;        // pronto para send()/connected()
 volatile bool s_isCentral = false;    // nos conectamos no peer
 volatile bool s_connecting = false;   // connect() em andamento (central)
+volatile bool s_appScanning = false;  // scan() do app em andamento (scanner dele)
 volatile bool s_peerSubscribed = false;  // central inscrito no nosso notify
 volatile uint16_t s_mtu = 0;
 volatile uint32_t s_rxDropped = 0;
@@ -841,6 +844,9 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             advRestart();
             return 0;
         case BLE_GAP_EVENT_DISC:
+            // Malha CelerNet primeiro (barato: magic na 1a comparacao); o
+            // resto segue para o cache do scan do app.
+            CelerNet::onAdvReport(event->disc.data, event->disc.length_data, event->disc.rssi);
             onDiscAdv(&event->disc);
             return 0;
         case BLE_GAP_EVENT_DISC_COMPLETE:
@@ -1084,6 +1090,7 @@ bool CelerLink::listening() {
 
 int CelerLink::scan(uint32_t ms, Peer* out, int max) {
     if (!ensureStarted() || max <= 0 || s_connecting) return 0;
+    s_appScanning = true;  // ANTES do cancel: a malha pausa o scanner dela
     if (ble_gap_disc_active()) ble_gap_disc_cancel();
 
     s_scanCount = 0;
@@ -1097,6 +1104,7 @@ int CelerLink::scan(uint32_t ms, Peer* out, int max) {
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, (int32_t)ms, &p, onGapEvent, nullptr);
     if (rc != 0) {
         ESP_LOGW(TAG, "scan: ble_gap_disc rc=%d", rc);
+        s_appScanning = false;
         return 0;
     }
     if (waitBits(EV_SCAN, deadlineIn(ms + 1000)) == 0) {
@@ -1122,7 +1130,12 @@ int CelerLink::scan(uint32_t ms, Peer* out, int max) {
         }
         out[j + 1] = t;
     }
+    s_appScanning = false;
     return n;
+}
+
+bool CelerLink::appBusy() {
+    return s_connecting || s_appScanning;
 }
 
 bool CelerLink::connect(const char* idOrName, uint32_t ms) {

@@ -17,6 +17,9 @@
 #include "../../Launcher/NotificationAlert.h"
 #include "../../USBDevice/LogPersist.h"
 #include "../../USBDevice/DebugBridge.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../../Bluetooth/CelerNet.h"
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../../Bluetooth/PhoneLink.h"
 #include "../../Launcher/PhoneScreens.h"
@@ -41,6 +44,11 @@ void svcPowerPolicy(bool) { PowerPolicy::tick(); }
 #if CONFIG_CELEROS_PHONE_LINK
 void svcPhoneLink(bool inApp) { PhoneLink::tick(inApp); }
 void svcPhoneScreens(bool) { PhoneScreens::service(); }
+#endif
+#if CONFIG_CELEROS_BLUETOOTH
+// Malha CelerNet: infraestrutura (sobrevive a troca de app) — scanner,
+// bursts de repeticao e presenca; o JS drena com CelerNet.poll().
+void svcCelerNet(bool) { CelerNet::tick(); }
 #endif
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
 void svcOtaConfirm(bool) { confirmPendingOta(); }
@@ -86,6 +94,9 @@ const CelerServices::Service kServices[] = {
 #if CONFIG_CELEROS_PHONE_LINK
     {"phonelink", svcPhoneLink, CelerServices::ALWAYS},
     {"phonescreens", svcPhoneScreens, CelerServices::LOOP},
+#endif
+#if CONFIG_CELEROS_BLUETOOTH
+    {"celernet", svcCelerNet, CelerServices::ALWAYS},
 #endif
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},
