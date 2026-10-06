@@ -36,6 +36,13 @@ const RETURNS = {
     'UI.tabs': 'number',
     'UI.scrollBegin': 'number',
     'UI.badge': 'number',
+    // CelerNet (API 26): malha BLE por flood de advertising
+    'CelerNet.start': 'boolean',
+    'CelerNet.stop': 'boolean',
+    'CelerNet.broadcast': 'boolean',
+    'CelerNet.poll': 'MeshMessage | null',
+    'CelerNet.nodes': 'MeshNode[]',
+    'CelerNet.status': 'MeshStatus',
 };
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
@@ -55,6 +62,9 @@ const PARAM_TYPES = {
     'UI.measure.role': 'UITextRole',
     'UI.lineHeight.role': 'UITextRole',
     'UI.measureWrap.role': 'UITextRole',
+    'CelerNet.start.opcoes': '{ name?: string; net?: string; relay?: boolean }',
+    'CelerNet.broadcast.mensagem': 'string | object',
+    'CelerNet.broadcast.ttl': 'number',
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e
@@ -174,6 +184,11 @@ function generate() {
     out.push('}');
     out.push('interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }');
     out.push('interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }');
+    out.push('');
+    out.push('// CelerNet (API 26): malha BLE — poll/nodes/status');
+    out.push('interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }');
+    out.push('interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }');
+    out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; rxDropped: number; relayed: number; heard: number; }');
     out.push('');
     // funcoes globais (ex.: timers API 12): setTimeout e irmãos no escopo global
     if (manifest.objects.global) {

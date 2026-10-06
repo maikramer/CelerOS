@@ -743,6 +743,34 @@ function makeEnv() {
         }
     };
 
+    // CelerNet (malha BLE por flood de advertising, API 26): fila de
+    // mensagens e nos de presenca alimentaveis pelo __harness.pushMesh /
+    // pushMeshNodes — o mesmo contrato de poll()/nodes() do firmware.
+    var meshRx = [];
+    var meshNodes = [];
+    var meshOn = false;
+    env.CelerNet = {
+        start: function(opts) {
+            meshOn = true;
+            log.push('[mesh] on' + (opts && opts.name ? ' ' + opts.name : '') +
+                     (opts && opts.relay === false ? ' so-escuta' : ''));
+            return true;
+        },
+        stop: function() { meshOn = false; return true; },
+        broadcast: function(m, ttl) {
+            log.push('[mesh] tx' + (ttl ? ' ttl' + ttl : '') + ' ' +
+                     (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+            return meshOn;
+        },
+        poll: function() { return meshRx.length ? meshRx.shift() : null; },
+        nodes: function() { return meshNodes.slice(0); },
+        status: function() {
+            return { active: meshOn, relay: true, node: 'A1B2', name: 'Celer-TEST',
+                     net: 'celer', txQueued: 0, txDropped: 0, rxDropped: 0,
+                     relayed: 0, heard: meshNodes.length };
+        }
+    };
+
     env.__harness = {
         log: log,
         setAiResponse: function(r) { aiResponse = r; },
@@ -763,6 +791,8 @@ function makeEnv() {
         pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
         pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
         pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
+        pushMesh: function(list) { meshRx = meshRx.concat(list); },
+        pushMeshNodes: function(list) { meshNodes = list; },
         pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
         typeLine: function(text) {
             // simula digitacao: 1 change por char + enter com o texto completo
@@ -1369,6 +1399,47 @@ function runInline(src, env) {
     check('send string vai crua', j.indexOf('[link] tx ping') >= 0);
     check('poll recebe mensagem', j.indexOf('rx {"ack":1}') >= 0);
     check('getAPILevel = manifest do firmware', env.System.getAPILevel() === fwMeta().api);
+})();
+
+// --- CelerNet (malha BLE, API 26) --------------------------------------------
+(function() {
+    console.log('CelerNet:');
+    var src = [
+        'CelerNet.start({name:"Celer-TEST"});',
+        'CelerNet.broadcast({cmd:"oi", de:"A1B2"});',
+        'CelerNet.broadcast("ping", 6);',
+        'var m = CelerNet.poll();',
+        'System.drawString("rx " + (m === null ? "-" : m.msg + " de " + m.from + " (" + m.hops + " saltos)"), 10, 10);',
+        'var ns = CelerNet.nodes();',
+        'System.drawString(ns.length + " nos: " + (ns.length ? ns[0].name : "-"), 10, 30);',
+        'var st = CelerNet.status();',
+        'System.drawString("malha " + (st.active ? "ativa" : "off") + " " + st.net, 10, 50);',
+        'System.delay(10);',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    env.__harness.pushMesh([{ from: 'BEEF', fromName: 'Celer-Dog', msg: 'au au', hops: 2, rssi: -71 }]);
+    env.__harness.pushMeshNodes([{ id: 'BEEF', name: 'Celer-Dog', rssi: -71, hops: 2, lastSeen: 1 }]);
+    var err = null;
+    try {
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'CelerNet', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
+                              (env.__prelude || '') + '\n' + src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.CelerNet, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
+    } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    var j = joinLog(env.__harness.log);
+    check('start liga o no', j.indexOf('[mesh] on Celer-TEST') >= 0);
+    check('broadcast objeto vira JSON', j.indexOf('[mesh] tx {"cmd":"oi","de":"A1B2"}') >= 0);
+    check('broadcast string com ttl', j.indexOf('[mesh] tx ttl6 ping') >= 0);
+    check('poll traz origem e saltos', j.indexOf('rx au au de BEEF (2 saltos)') >= 0);
+    check('nodes lista presenca', j.indexOf('1 nos: Celer-Dog') >= 0);
+    check('status da malha', j.indexOf('malha ativa celer') >= 0);
+    // broadcast com malha desligada: false (contrato do firmware)
+    check('broadcast sem start = false', env.CelerNet.stop() === true && env.CelerNet.broadcast('x') === false);
 })();
 
 // --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------

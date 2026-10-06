@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 25 — 257 funcoes.
+// API level 26 — 263 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -18,6 +18,11 @@ interface UITextOpts {
 }
 interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }
 interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }
+
+// CelerNet (API 26): malha BLE — poll/nodes/status
+interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }
+interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }
+interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; rxDropped: number; relayed: number; heard: number; }
 
 declare function setTimeout(callback: () => void, ms: number): number;
 declare function setInterval(callback: () => void, ms: number): number;
@@ -503,6 +508,15 @@ interface CelerLinkApi {
     verify(codigo: number): any;
     unpair(id?: string): any;
 }
+
+declare const CelerNet: {
+    start(opcoes?: { name?: string; net?: string; relay?: boolean }): boolean;
+    stop(): boolean;
+    broadcast(mensagem?: string | object, ttl?: number): boolean;
+    poll(): MeshMessage | null;
+    nodes(): MeshNode[];
+    status(): MeshStatus;
+};
 
 declare const Phone: {
     status(): any;

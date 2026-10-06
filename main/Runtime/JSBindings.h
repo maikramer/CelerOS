@@ -368,6 +368,15 @@ private:
     static duk_ret_t js_linkVerify(duk_context *ctx);
     static duk_ret_t js_linkUnpair(duk_context *ctx);
 
+    // CelerNet (objeto global CelerNet, API 26 — malha BLE por flood de
+    // advertising; requer CONFIG_CELEROS_BLUETOOTH).
+    static duk_ret_t js_meshStart(duk_context *ctx);
+    static duk_ret_t js_meshStop(duk_context *ctx);
+    static duk_ret_t js_meshBroadcast(duk_context *ctx);
+    static duk_ret_t js_meshPoll(duk_context *ctx);
+    static duk_ret_t js_meshNodes(duk_context *ctx);
+    static duk_ret_t js_meshStatus(duk_context *ctx);
+
     // Phone (API 15, CONFIG_CELEROS_PHONE_LINK): celular via Gadgetbridge
     static duk_ret_t js_phoneStatus(duk_context *ctx);
     static duk_ret_t js_phoneSetEnabled(duk_context *ctx);

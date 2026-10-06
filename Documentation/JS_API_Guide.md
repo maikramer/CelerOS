@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 24
+### API Level: 26
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1914,4 +1914,92 @@ if (System.playMusic(song)) {
     }
     System.neopixel(0, [0, 0, 0, 0]);
 }
+```
+
+## 31. API Level 26 — CelerNet: BLE mesh between CelerOS devices
+
+A mesh of devices across an area: every CelerOS with Bluetooth announces
+**non-connectable** advertising packets and listens to the air; whoever
+hears a new packet **repeats it** (with one less hop in the TTL budget) —
+the message crosses the area device by device, with no GATT connection at
+all. Spread three boards around the house: a message sent at one end
+arrives at the other end with `hops: 2`, relayed by the middle one.
+
+`CelerLink` (section 15) remains the high-throughput point-to-point
+channel (240 bytes per packet, pairing, sealed messages). The mesh is for
+**coverage**: telemetry, presence, short commands and notices — messages
+up to 240 bytes, but carried in ~18-byte fragments per radio hop (the
+mesh moves a few packets per second per node; it is not for streaming).
+
+**Availability:** only on boards built with Bluetooth
+(`CONFIG_CELEROS_BLUETOOTH`). Detect with
+`typeof CelerNet !== "undefined"`.
+
+**The mesh is infrastructure, not an app session:** once enabled it
+survives app switches and reboots (state lives in the `celernet`
+setting; off by default). On the watch (battery) weigh the cost: the
+radio keeps listening.
+
+**Security (v1):** packets travel **in the clear** and the only filter is
+the **network ID** (`net`, default `"celer"`): only nodes sharing the
+network name hear each other. Anyone sniffing the radio can read the
+messages — use it for telemetry and toy commands, not secrets.
+
+#### `CelerNet.start([options])` → Boolean (API 26)
+Turns this node on. `options`: `{name: "Celer-Dog"` (announced name, up
+to 18 characters; default `Celer-XXXX` from the end of the MAC),
+`net: "celer"` (network name — only nodes with the same name hear each
+other) and `relay: true` (repeat others' packets; `false` = listen and
+announce presence only, for battery). State persists: the node comes
+back on the next boot by itself. The first call may bring Bluetooth up
+(~300 ms). Returns `false` without enough RAM for the radio (the app
+keeps running; try again later).
+
+#### `CelerNet.stop()` → Boolean (API 26)
+Turns the node off (and persists the off state).
+
+#### `CelerNet.broadcast(message, [ttl])` → Boolean (API 26)
+Sends the message to the **whole** network. Same payload rule as
+`CelerLink.send`: raw string or object serialized as JSON, 1–240 bytes
+(outside that a `RangeError` is thrown). `ttl` (1–8, default 4) is the
+reach in hops. Returns `false` with the mesh off or the queue full —
+delivery is asynchronous (the radio transmits over the next few ms).
+
+#### `CelerNet.poll()` → Object|null (API 26)
+A message that arrived (FIFO of 8; full drops the oldest):
+`{from: "9F2A", fromName: "Celer-Dog", msg: "...", hops: 2, rssi: -71}` —
+`from`/`fromName` are the **origin** (not the relayer), `hops` is how
+many hops the message took, `rssi` the last heard hop's signal. `msg` is
+a string (JSON.parse it if the sender used an object). `null` when
+empty. Drain it in the app loop until it returns `null`.
+
+#### `CelerNet.nodes()` → Array (API 26)
+Presence: network nodes heard in the last 15 s, strongest signal first:
+`[{id: "9F2A", name: "Celer-Dog", rssi: -71, hops: 1, lastSeen: 2}]`
+(`lastSeen` in seconds). Every node announces presence every ~3 s.
+
+#### `CelerNet.status()` → Object (API 26)
+`{active, relay, node, name, net, txQueued, txDropped, rxDropped,
+relayed, heard}` — `node` is our id (end of the MAC), `relay` whether we
+are repeating, `relayed` how many others' packets we relayed since
+`start()`, `heard` how many nodes are in the presence table.
+
+### Example — a message crossing the area
+
+```javascript
+// on ANY node (the middle one relays on its own)
+if (typeof CelerNet !== "undefined" && !CelerNet.status().active) {
+    CelerNet.start({name: "Celer-Kitchen"});
+}
+CelerNet.broadcast({type: "notice", text: "coffee is ready"}, 4);
+
+// in every node's loop:
+var m;
+while ((m = CelerNet.poll()) !== null) {
+    var notice = JSON.parse(m.msg);
+    System.drawString(m.fromName + " (" + m.hops + " hops): " +
+                      notice.text, 10, 10);
+}
+var neighbors = CelerNet.nodes();
+System.drawString(neighbors.length + " nodes heard", 10, 30);
 ```

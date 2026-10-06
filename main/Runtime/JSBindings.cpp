@@ -1384,6 +1384,21 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     putFns(ctx, kFns19);
     duk_put_prop_string(ctx, -2, "CelerLink");
+
+    // --- CelerNet Object (malha BLE por flood de advertising, API 26) —
+    // infraestrutura persistente (nao e sessao de app), sem capability
+    // (o filtro e o ID da rede; ver CelerNet.h) ---
+    duk_push_object(ctx);  // CelerNet
+    static const JsFn kFnsMesh[] = {
+        {"start", js_meshStart, 1},          // opts {name, net, relay}
+        {"stop", js_meshStop, 0},
+        {"broadcast", js_meshBroadcast, 2},  // msg, ttl opcional (default 4)
+        {"poll", js_meshPoll, 0},            // {from, fromName, msg, hops, rssi} | null
+        {"nodes", js_meshNodes, 0},          // presenca ouvida
+        {"status", js_meshStatus, 0},
+    };
+    putFns(ctx, kFnsMesh);
+    duk_put_prop_string(ctx, -2, "CelerNet");
 #endif
 
 #if CONFIG_CELEROS_PHONE_LINK
