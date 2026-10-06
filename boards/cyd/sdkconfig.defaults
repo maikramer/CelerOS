@@ -11,8 +11,14 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
 # Logs ESP_LOGI (IDF + componentes) tambem ficam fora: o logcat do CelerOS
-# (celer_log_*) nao passa por ESP_LOG e segue completo.
-CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+# (celer_log_*) nao passa por ESP_LOG e segue completo. Desde o 1.7 o nivel
+# e ERROR (era WARN): as strings ESP_LOGW dos componentes (wifi, lwip,
+# mbedtls...) custavam ~19 KB e o slot OTA da 1.7 (bridge + TTS + QOA +
+# logs persistentes) voltou a apertar — W sai, E fica. O logcat/kern.log
+# do CelerOS (celer_log_*) nao passa por ESP_LOG e segue completo; as
+# outras placas mantem WARN.
+CONFIG_LOG_DEFAULT_LEVEL_ERROR=y
+# CONFIG_LOG_DEFAULT_LEVEL_WARN is not set
 # CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
 
 # Bundle de CAs "comum" (~45 raizes que cobrem a grande maioria dos sites:
