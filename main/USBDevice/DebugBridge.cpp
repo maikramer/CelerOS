@@ -46,6 +46,7 @@ volatile bool s_netUp = false;
 volatile bool s_clientOn = false;
 TaskHandle_t s_task = nullptr;
 HostLink* s_link = nullptr;  // instancia do canal (parser proprio, como UART/CDC)
+bool s_roamPaused = false;   // roaming suspenso enquanto ha cliente (radio dedicado)
 
 int s_listenFd = -1;
 int s_udpFd = -1;
@@ -135,6 +136,11 @@ void closeClient() {
     if (s_clientFd >= 0) {
         close(s_clientFd);
         s_clientFd = -1;
+    }
+    if (s_roamPaused) {
+        // radio de volta ao dono normal (scan de roaming da task de fundo)
+        NetworkManager::instance().setRoamingEnabled(true);
+        s_roamPaused = false;
     }
     if (s_link != nullptr) s_link->endSession();  // devolve a sessao p/ UART/CDC
     s_authOk = false;
@@ -250,6 +256,14 @@ void handleAuthLine() {
         tokenEq(s_authLine + 5, s_authLen - 5)) {
         s_authOk = true;
         s_clientOn = true;
+        // Cliente com sessao = radio dedicado ao bridge: o scan de roaming da
+        // task de fundo tira o radio do canal por ~3,5 s a cada ~30 s e o
+        // ota push rastejava nos ACKs (SmartDisplay, bancada 2026-10-05).
+        // RAM-only no NetworkManager: restaura no closeClient.
+        if (NetworkManager::instance().getConfig().enableRoaming) {
+            NetworkManager::instance().setRoamingEnabled(false);
+            s_roamPaused = true;
+        }
         send(s_clientFd, "OK\n", 3, 0);
         ESP_LOGI(TAG, "cliente bridge autenticado");
         return;
