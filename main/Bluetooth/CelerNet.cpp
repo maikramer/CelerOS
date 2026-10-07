@@ -105,6 +105,11 @@ char s_net[16] = "celer";
 uint32_t s_txDropped = 0;
 uint32_t s_rxDropped = 0;
 uint32_t s_relayed = 0;
+// Telemetria de TX (bench): bursts que SAIram no ar vs tentativas — a
+// diferenca entre "enqueue ok" e "adv_start ok" e invisivel sem isso.
+uint32_t s_txStarted = 0;   // adv_start devolveu 0 (quadro foi pro ar)
+uint32_t s_txFail = 0;      // adv_start/adv_set_data falhou
+uint32_t s_txNoToken = 0;   // fila devida esperando ficha do bucket
 
 // Papel do no na matilha (CAPS_* do NetFrame.h) e assinaturas do kernel
 // (servico Pack): presenca e mensagens sem passar pelo JS.
@@ -118,6 +123,7 @@ bool s_advBusy = false;       // adv da malha no ar (ate o ADV_COMPLETE)
 volatile bool s_burstDone = false;
 bool s_restoreAdv = false;    // paramos o adv do Link: devolver ao final
 uint32_t s_nextSlotMs = 0;
+uint32_t s_advStartMs = 0;    // quando o burst atual subiu (watchdog)
 // Token bucket: 16 de rajada, 8/s — limita o roubo do advertising conectavel.
 uint32_t s_tokens = 16;
 uint32_t s_lastRefillMs = 0;
@@ -379,10 +385,21 @@ void scanStart() {
 // Empurra o proximo quadro devido no advertising (tomado por 60 ms).
 void maybeBurst(uint32_t nowMs) {
     if (s_advBusy) {
-        if (!s_burstDone) return;
+        if (!s_burstDone) {
+            // Watchdog do burst: o ADV_COMPLETE pode SE PERDER (o
+            // refreshAdvertising do Celer Link/Phone Link e a conexao GATT
+            // do celular disputam o radio; bancada 2026-10-07: o TX do
+            // watch morria na 1a disputa e a fila crescia para sempre —
+            // noAr parado com fila subindo). Preso ha >1 s: considera
+            // perdido, derruba o que sobrou do adv e segue a fila.
+            if (nowMs - s_advStartMs < 1000) return;
+            s_txFail++;
+            if (ble_gap_adv_active()) ble_gap_adv_stop();
+            s_restoreAdv = false;  // o stop acima ja resolveu o radio
+        }
         s_advBusy = false;
         s_burstDone = false;
-        s_nextSlotMs = nowMs + 60;  // respiro entre pacotes
+        s_nextSlotMs = nowMs + 25;  // respiro entre pacotes
     }
     if (nowMs < s_nextSlotMs) return;
 
@@ -398,14 +415,23 @@ void maybeBurst(uint32_t nowMs) {
         }
     }
     if (best == nullptr) {
-        // Fila seca: devolve o advertising ao Celer Link/Phone Link.
+        // Fila seca: devolve o advertising ao Celer Link/Phone Link e
+        // religa o scanner — o scanner NAO pode religar a cada tick: cada
+        // burst cancela o scan, e o ciclo religa/cancela por pacote
+        // derrubava a vazao a ~1 burst/s (bancada 2026-10-07: noAr=520 em
+        // 10 min com fila cheia e drops). Com a fila seca o scan fica no
+        // ar ate o proximo burst.
+        scanStart();
         if (s_restoreAdv) {
             s_restoreAdv = false;
             CelerLink::refreshAdvertising();
         }
         return;
     }
-    if (s_tokens < 1) return;  // rajada de muitos pacotes: espera refill
+    if (s_tokens < 1) {  // rajada de muitos pacotes: espera refill
+        s_txNoToken++;
+        return;
+    }
 
     // Scanner e burst NUNCA juntos: scan continuo + reconfiguracao de adv
     // nao-conectavel correm contra o lld_init do controlador (IWDT no
@@ -425,18 +451,22 @@ void maybeBurst(uint32_t nowMs) {
         // 100 ms e o piso da ESPECIFICACAO para ADV_NONCONN (o host aceita
         // 20 ms, o controlador nao: TX silenciosa e, na rajada, IWDT no
         // btController — bancada 2026-10-06 no 4848). Um evento ja cobre os
-        // 3 canais de advertising; o ADV_COMPLETE (~150 ms) conduz a fila.
+        // 3 canais de advertising; 160 ms de duration puxam o COMPLETE
+        // (1 evento + folga) — 250 ms deixava o ciclo em ~1 burst/s.
         p.itvl_min = 160;  // 100 ms em unidades de 0,625 ms
         p.itvl_max = 160;
-        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, 250, &p, meshGapCb, nullptr);
+        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, 160, &p, meshGapCb, nullptr);
     }
     if (rc == 0) {
         best->used = false;
         s_tokens--;
         s_advBusy = true;
+        s_advStartMs = nowMs;
+        s_txStarted++;
         return;
     }
     // EALREADY/EBUSY: radio ocupado agora — o proximo tick tenta de novo
+    s_txFail++;
     if (rc != BLE_HS_EALREADY) ESP_LOGW(TAG, "burst: rc=%d", rc);
     if (s_restoreAdv && !ble_gap_adv_active()) {
         s_restoreAdv = false;
@@ -517,9 +547,19 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     for (int i = 0; i < CelerNet::NODES_MAX; i++) s_heap->nodes[i].used = false;
     xQueueReset(s_raw);
     s_txDropped = s_rxDropped = s_relayed = 0;
+    s_txStarted = s_txFail = s_txNoToken = 0;
     s_tokens = K_TOKEN_MAX;
     s_lastRefillMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     s_lastBeatMs = 0;  // BEAT imediato: presenca aparece logo nos vizinhos
+    // Estado de burst NAO pode atravessar um re-start: um ADV_COMPLETE
+    // perdido antes do start deixaria s_advBusy preso e o TX morto
+    // (bancada 2026-10-07 — era assim que o enlace do watch morria).
+    if (s_advBusy && ble_gap_adv_active()) ble_gap_adv_stop();
+    s_advBusy = false;
+    s_burstDone = false;
+    s_restoreAdv = false;
+    s_nextSlotMs = 0;
+    s_advStartMs = 0;
     s_active = true;
     xSemaphoreGiveRecursive(lock());
 
@@ -732,6 +772,9 @@ void CelerNet::info(Info* out) {
         }
     }
     out->txDropped = s_txDropped;
+    out->txStarted = s_txStarted;
+    out->txFail = s_txFail;
+    out->txNoToken = s_txNoToken;
     out->rxDropped = s_rxDropped;
     out->relayed = s_relayed;
     xSemaphoreGiveRecursive(lock());
@@ -783,9 +826,19 @@ void CelerNet::tick() {
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
-    // O scanner e o bem mais importante da malha: religa sempre (o scan do
-    // app ou um reset do host podem ter derrubado).
-    scanStart();
+    // O scanner e o bem mais importante da malha: religa SE a fila do TX
+    // esta vazia (com fila, o maybeBurst religa ao esvaziar — scan no ar
+    // durante a rajada so serve para o proprio burst cancelar). O scan do
+    // app ou um reset do host podem ter derrubado o nosso.
+    if (s_heap == nullptr || s_advBusy) {
+        scanStart();
+    } else {
+        bool filaVazia = true;
+        for (int i = 0; i < PENDING_DEPTH && filaVazia; i++) {
+            if (s_heap->pending[i].used) filaVazia = false;
+        }
+        if (filaVazia) scanStart();
+    }
 
     // Fichas do token bucket (limita o roubo do advertising conectavel).
     uint32_t add = (nowMs - s_lastRefillMs) / (1000 / K_TOKEN_REFILL_PER_S);
@@ -815,6 +868,15 @@ void CelerNet::tick() {
         if (n == 0 || !pendingPush(frame, (uint8_t)n, true, nowMs)) {
             // fila cheia: o proximo BEAT (3 s) tenta de novo
         }
+        // Telemetria de TX (1 log/3 s, caber no ring): o que importa e a
+        // diferenca entre fila devida e quadro NO AR.
+        uint16_t queued = 0;
+        for (int i = 0; i < PENDING_DEPTH; i++) {
+            if (s_heap->pending[i].used) queued++;
+        }
+        ESP_LOGI(TAG, "beat seq=%u: noAr=%u fail=%u noTok=%u fila=%u relay=%u",
+                 (unsigned)f.seq, (unsigned)s_txStarted, (unsigned)s_txFail,
+                 (unsigned)s_txNoToken, (unsigned)queued, (unsigned)s_relayed);
     }
 
     // Varredura de expiracao (~1x/s): no que passou 15 s sem BEAT sai da

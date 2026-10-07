@@ -207,6 +207,12 @@ duk_ret_t JSBindings::js_meshStatus(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "txQueued");
     duk_push_uint(ctx, st.txDropped);
     duk_put_prop_string(ctx, -2, "txDropped");
+    duk_push_uint(ctx, st.txStarted);  // quadros que SAIRAM no ar (bench)
+    duk_put_prop_string(ctx, -2, "txStarted");
+    duk_push_uint(ctx, st.txFail);
+    duk_put_prop_string(ctx, -2, "txFail");
+    duk_push_uint(ctx, st.txNoToken);
+    duk_put_prop_string(ctx, -2, "txNoToken");
     duk_push_uint(ctx, st.rxDropped);
     duk_put_prop_string(ctx, -2, "rxDropped");
     duk_push_uint(ctx, st.relayed);

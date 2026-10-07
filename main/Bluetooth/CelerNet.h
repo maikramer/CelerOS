@@ -74,6 +74,9 @@ public:
         char net[16];                   // nome da rede (setting)
         uint16_t txQueued;              // quadros proprios na fila
         uint32_t txDropped;             // envios recusados (fila cheia/sem ficha)
+        uint32_t txStarted;             // bursts que SAIRAM no ar (bench)
+        uint32_t txFail;                // adv_start/adv_set_data falhou (bench)
+        uint32_t txNoToken;             // bursts devidos esperando ficha (bench)
         uint32_t rxDropped;             // entregas perdidas (fila RX cheia)
         uint32_t relayed;               // quadros de outros repetidos
         uint16_t heard;                 // nos na tabela de presenca
