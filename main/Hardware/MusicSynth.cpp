@@ -32,6 +32,7 @@ MusicEngine::Song s_song;
 volatile bool s_quit = false;
 volatile bool s_active = false;
 volatile uint32_t s_played = 0;         // amostras ja escritas no I2S
+volatile uint32_t s_startMs = 0;        // offset do handoff (task converte p/ amostras)
 TaskHandle_t s_task = nullptr;
 StaticSemaphore_t s_muBuf;
 SemaphoreHandle_t s_mu = nullptr;
@@ -95,6 +96,12 @@ void taskFunc(void*) {
         }
 
         s_renderer.reset(&s_compiled, BoardIO::volumePct());
+        if (s_startMs > 0) {  // handoff: retoma de onde parou no vizinho
+            const uint32_t off = (uint32_t)((uint64_t)s_startMs * s_compiled.rate / 1000);
+            s_renderer.seek(off);
+            s_played = off;
+        }
+        s_startMs = 0;
         const uint32_t total = s_compiled.totalSamples;
         while (!s_quit && s_renderer.pos < total) {
             s_renderer.render(s_mono, kFrames);
@@ -126,7 +133,7 @@ void taskFunc(void*) {
 
 }  // namespace
 
-bool play(const MusicEngine::Song& song) {
+bool play(const MusicEngine::Song& song, uint32_t startMs) {
     if (!BoardIO::hasSpeaker()) return false;
     xSemaphoreTake(mu(), portMAX_DELAY);
     if (s_task == nullptr) {  // criacao sob o lock: sem janela de task dupla
@@ -152,6 +159,7 @@ bool play(const MusicEngine::Song& song) {
     s_song = song;
     s_quit = false;
     s_active = true;
+    s_startMs = startMs;
     s_played = 0;
     xSemaphoreGive(mu());
     xTaskNotifyGive(s_task);
@@ -165,6 +173,15 @@ bool playing() { return s_active; }
 int32_t posMs() {
     if (!s_active || s_compiled.rate == 0) return -1;
     return (int32_t)(s_played * 1000ULL / s_compiled.rate);
+}
+
+bool currentSong(MusicEngine::Song* out) {
+    if (out == nullptr) return false;
+    xSemaphoreTake(mu(), portMAX_DELAY);
+    const bool ok = s_active;
+    if (ok) *out = s_song;
+    xSemaphoreGive(mu());
+    return ok;
 }
 
 }  // namespace MusicSynth

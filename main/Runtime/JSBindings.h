@@ -369,13 +369,23 @@ private:
     static duk_ret_t js_linkUnpair(duk_context *ctx);
 
     // CelerNet (objeto global CelerNet, API 26 — malha BLE por flood de
-    // advertising; requer CONFIG_CELEROS_BLUETOOTH).
+    // advertising; requer CONFIG_CELEROS_BLUETOOTH). v2 na API 27: send
+    // (unicast), caps no nodes/poll.
     static duk_ret_t js_meshStart(duk_context *ctx);
     static duk_ret_t js_meshStop(duk_context *ctx);
     static duk_ret_t js_meshBroadcast(duk_context *ctx);
+    static duk_ret_t js_meshSend(duk_context *ctx);  // CelerNet.send (API 27)
     static duk_ret_t js_meshPoll(duk_context *ctx);
     static duk_ret_t js_meshNodes(duk_context *ctx);
     static duk_ret_t js_meshStatus(duk_context *ctx);
+
+    // Pack (objeto global Pack, API 27 — matilha: membros com papel,
+    // envelopes custom e handoff de musica; requer CONFIG_CELEROS_BLUETOOTH).
+    static duk_ret_t js_packMe(duk_context *ctx);
+    static duk_ret_t js_packMembers(duk_context *ctx);
+    static duk_ret_t js_packSend(duk_context *ctx);
+    static duk_ret_t js_packPoll(duk_context *ctx);
+    static duk_ret_t js_packHandoffMusic(duk_context *ctx);
 
     // Phone (API 15, CONFIG_CELEROS_PHONE_LINK): celular via Gadgetbridge
     static duk_ret_t js_phoneStatus(duk_context *ctx);

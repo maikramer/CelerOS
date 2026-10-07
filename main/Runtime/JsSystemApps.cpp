@@ -730,19 +730,29 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
     return 1;
 }
 
-// System.playMusic(song) (API 25): chiptune de ate 4 trilhas misturadas ao
-// vivo na task do MusicSynth — NAO bloqueia (System.musicPos acompanha o
-// progresso, System.musicStop corta). song = {bpm:60..200, loops:1..8,
-// tracks:[{wave:"sq"|"sq25"|"tri"|"saw", drum:true, vol:0..100,
-// notes:[[midi,semicolcheias],...]}]} — midi 0 = pausa; trilha drum usa as
-// notas GM (36 bumbo, 38 caixa, 42 chimbal). Valores sao clampados AQUI e
-// de novo no MusicEngine::compile (o app nunca e confiavel o suficiente).
-// false = alto-falante ocupado (fala do AI.speak/tom/playWav em curso),
-// sem audio na placa ou musica vazia.
+// System.playMusic(song[, opts]) (API 25; opts na 27): chiptune de ate 4
+// trilhas misturadas ao vivo na task do MusicSynth — NAO bloqueia
+// (System.musicPos acompanha o progresso, System.musicStop corta). song =
+// {bpm:60..200, loops:1..8, tracks:[{wave:"sq"|"sq25"|"tri"|"saw",
+// drum:true, vol:0..100, notes:[[midi,semicolcheias],...]}]} — midi 0 =
+// pausa; trilha drum usa as notas GM (36 bumbo, 38 caixa, 42 chimbal).
+// opts.startMs pula para o meio (handoff da matilha: retoma de onde parou
+// no vizinho). Valores sao clampados AQUI e de novo no MusicEngine::compile
+// (o app nunca e confiavel o suficiente). false = alto-falante ocupado
+// (fala do AI.speak/tom/playWav em curso), sem audio na placa ou musica vazia.
 duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
     present();  // o app segue livre: so acordamos a task do sintetizador
     if (!duk_is_object(ctx, 0)) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "playMusic: esperado objeto {bpm,loops,tracks}");
+    }
+    uint32_t startMs = 0;
+    if (duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
+        duk_get_prop_string(ctx, 1, "startMs");
+        if (duk_is_number(ctx, -1)) {
+            const int ms = duk_get_int(ctx, -1);
+            if (ms > 0) startMs = (uint32_t)ms;  // negativo = do inicio
+        }
+        duk_pop(ctx);
     }
     MusicEngine::Song song;
     duk_get_prop_string(ctx, 0, "bpm");
@@ -802,7 +812,7 @@ duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
         if (tr.count > 0) song.nTracks++;  // trilha sem nota nao ocupa slot
     }
     duk_pop(ctx);  // tracks
-    duk_push_boolean(ctx, MusicSynth::play(song) ? 1 : 0);
+    duk_push_boolean(ctx, MusicSynth::play(song, startMs) ? 1 : 0);
     return 1;
 }
 

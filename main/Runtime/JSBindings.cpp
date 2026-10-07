@@ -1121,7 +1121,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"unreadNotifications", js_unreadNotifications, 0},
         {"playTone", js_playTone, 1},
         {"playWav", js_playWav, 1},
-        {"playMusic", js_playMusic, 1},        // API 25: chiptune N trilhas
+        {"playMusic", js_playMusic, 2},        // API 25: chiptune N trilhas; opts {startMs} na 27
         {"musicStop", js_musicStop, 0},        // API 25
         {"musicPlaying", js_musicPlaying, 0},  // API 25
         {"musicPos", js_musicPos, 0},          // API 25
@@ -1393,12 +1393,27 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"start", js_meshStart, 1},          // opts {name, net, relay}
         {"stop", js_meshStop, 0},
         {"broadcast", js_meshBroadcast, 2},  // msg, ttl opcional (default 4)
-        {"poll", js_meshPoll, 0},            // {from, fromName, msg, hops, rssi} | null
-        {"nodes", js_meshNodes, 0},          // presenca ouvida
+        {"send", js_meshSend, 3},            // to (id "A1B2" ou nome), msg, opts (API 27)
+        {"poll", js_meshPoll, 0},            // {from, fromName, msg, unicast, hops, rssi} | null
+        {"nodes", js_meshNodes, 0},          // presenca ouvida (com caps na API 27)
         {"status", js_meshStatus, 0},
     };
     putFns(ctx, kFnsMesh);
     duk_put_prop_string(ctx, -2, "CelerNet");
+
+    // --- Pack Object (matilha, API 27) — papeis no BEAT, envelopes
+    // custom unicast e handoff de musica; infraestrutura persistente,
+    // sem capability (mesma porta do CelerNet: o filtro e o ID da rede) ---
+    duk_push_object(ctx);  // Pack
+    static const JsFn kFnsPack[] = {
+        {"me", js_packMe, 0},                        // {id, name, caps}
+        {"members", js_packMembers, 0},              // bando ouvido (caps decodificados)
+        {"send", js_packSend, 3},                    // to (id/nome), msg, opts {urgent}
+        {"poll", js_packPoll, 0},                    // envelopes custom | null
+        {"handoffMusic", js_packHandoffMusic, 1},    // [to] passa a musica em curso
+    };
+    putFns(ctx, kFnsPack);
+    duk_put_prop_string(ctx, -2, "Pack");
 #endif
 
 #if CONFIG_CELEROS_PHONE_LINK

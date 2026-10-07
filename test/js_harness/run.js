@@ -743,12 +743,14 @@ function makeEnv() {
         }
     };
 
-    // CelerNet (malha BLE por flood de advertising, API 26): fila de
-    // mensagens e nos de presenca alimentaveis pelo __harness.pushMesh /
-    // pushMeshNodes — o mesmo contrato de poll()/nodes() do firmware.
+    // CelerNet (malha BLE por flood de advertising, API 26; send/caps na
+    // 27): fila de mensagens e nos de presenca alimentaveis pelo
+    // __harness.pushMesh / pushMeshNodes — o mesmo contrato de
+    // poll()/nodes()/send() do firmware.
     var meshRx = [];
     var meshNodes = [];
     var meshOn = false;
+    var meshSent = [];
     env.CelerNet = {
         start: function(opts) {
             meshOn = true;
@@ -762,12 +764,46 @@ function makeEnv() {
                      (typeof m === 'object' ? JSON.stringify(m) : String(m)));
             return meshOn;
         },
+        send: function(to, m, opts) {
+            if (!meshOn) return false;
+            var known = meshNodes.some(function(n) {
+                return n.id === to || n.name === to;
+            });
+            if (!known && !/^[0-9A-Fa-f]{4}$/.test(to)) return false;
+            meshSent.push({ to: to, msg: m, opts: opts || {} });
+            return true;
+        },
         poll: function() { return meshRx.length ? meshRx.shift() : null; },
         nodes: function() { return meshNodes.slice(0); },
         status: function() {
             return { active: meshOn, relay: true, node: 'A1B2', name: 'Celer-TEST',
                      net: 'celer', txQueued: 0, txDropped: 0, rxDropped: 0,
                      relayed: 0, heard: meshNodes.length };
+        }
+    };
+
+    // Pack (matilha, API 27): membros com papel, envelopes custom e o
+    // handoff de musica — espelho do firmware (dedup/tamanhos ficam la).
+    var packRx = [];
+    var packCaps = { speaker: true, mic: false, display: true, motors: false,
+                     leds: false, hub: false };
+    env.Pack = {
+        me: function() {
+            return { id: 'A1B2', name: 'Celer-TEST', caps: packCaps,
+                     meshActive: meshOn };
+        },
+        members: function() { return meshNodes.slice(0); },
+        send: function(to, m, opts) {
+            if (!meshOn) return false;
+            meshSent.push({ pack: true, to: to, msg: m, opts: opts || {} });
+            return true;
+        },
+        poll: function() { return packRx.length ? packRx.shift() : null; },
+        handoffMusic: function(to) {
+            if (!meshOn || !musicState.playing) return false;
+            log.push('[pack] handoff' + (to ? ' -> ' + to : ' -> melhor-speaker') +
+                     ' @' + (clock - musicState.startAt) + 'ms');
+            return true;
         }
     };
 
@@ -793,6 +829,8 @@ function makeEnv() {
         pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
         pushMesh: function(list) { meshRx = meshRx.concat(list); },
         pushMeshNodes: function(list) { meshNodes = list; },
+        pushPack: function(list) { packRx = packRx.concat(list); },
+        meshSent: meshSent,
         pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
         typeLine: function(text) {
             // simula digitacao: 1 change por char + enter com o texto completo
@@ -1401,31 +1439,35 @@ function runInline(src, env) {
     check('getAPILevel = manifest do firmware', env.System.getAPILevel() === fwMeta().api);
 })();
 
-// --- CelerNet (malha BLE, API 26) --------------------------------------------
+// --- CelerNet (malha BLE, API 26; send/caps na 27) ---------------------------
 (function() {
     console.log('CelerNet:');
     var src = [
         'CelerNet.start({name:"Celer-TEST"});',
         'CelerNet.broadcast({cmd:"oi", de:"A1B2"});',
         'CelerNet.broadcast("ping", 6);',
+        'var okId = CelerNet.send("BEEF", {cmd:"toma"}, {urgent:true});',
+        'var okNome = CelerNet.send("Celer-Dog", "direta");',
+        'var okMorto = CelerNet.send("NINGUEM", "x");',
+        'System.drawString("send " + okId + " " + okNome + " " + okMorto, 10, 10);',
         'var m = CelerNet.poll();',
-        'System.drawString("rx " + (m === null ? "-" : m.msg + " de " + m.from + " (" + m.hops + " saltos)"), 10, 10);',
+        'System.drawString("rx " + (m === null ? "-" : m.msg + " de " + m.from + " (" + m.hops + " saltos)" + (m.unicast ? " [uni]" : "")), 10, 30);',
         'var ns = CelerNet.nodes();',
-        'System.drawString(ns.length + " nos: " + (ns.length ? ns[0].name : "-"), 10, 30);',
+        'System.drawString(ns.length + " nos: " + (ns.length ? ns[0].name + " caps " + ns[0].caps : "-"), 10, 50);',
         'var st = CelerNet.status();',
-        'System.drawString("malha " + (st.active ? "ativa" : "off") + " " + st.net, 10, 50);',
+        'System.drawString("malha " + (st.active ? "ativa" : "off") + " " + st.net, 10, 70);',
         'System.delay(10);',
         'System.exitApp();'
     ].join('\n');
     var env = makeEnv();
     env.__harness.pushMesh([{ from: 'BEEF', fromName: 'Celer-Dog', msg: 'au au', hops: 2, rssi: -71 }]);
-    env.__harness.pushMeshNodes([{ id: 'BEEF', name: 'Celer-Dog', rssi: -71, hops: 2, lastSeen: 1 }]);
+    env.__harness.pushMeshNodes([{ id: 'BEEF', name: 'Celer-Dog', caps: 9, rssi: -71, hops: 2, lastSeen: 1 }]);
     var err = null;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'CelerNet', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'CelerNet', 'Pack', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
                               (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.CelerNet, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.CelerNet, env.Pack, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
     } catch (e) {
         if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
@@ -1435,11 +1477,61 @@ function runInline(src, env) {
     check('start liga o no', j.indexOf('[mesh] on Celer-TEST') >= 0);
     check('broadcast objeto vira JSON', j.indexOf('[mesh] tx {"cmd":"oi","de":"A1B2"}') >= 0);
     check('broadcast string com ttl', j.indexOf('[mesh] tx ttl6 ping') >= 0);
+    check('send por id e por nome; desconhecido recusa', j.indexOf('send true true false') >= 0);
+    check('send urgent vai com opts', env.__harness.meshSent.some(function(s) {
+        return s.to === 'BEEF' && s.opts && s.opts.urgent === true;
+    }));
     check('poll traz origem e saltos', j.indexOf('rx au au de BEEF (2 saltos)') >= 0);
-    check('nodes lista presenca', j.indexOf('1 nos: Celer-Dog') >= 0);
+    check('nodes traz caps do papel', j.indexOf('1 nos: Celer-Dog caps 9') >= 0);
     check('status da malha', j.indexOf('malha ativa celer') >= 0);
     // broadcast com malha desligada: false (contrato do firmware)
     check('broadcast sem start = false', env.CelerNet.stop() === true && env.CelerNet.broadcast('x') === false);
+})();
+
+// --- Pack (matilha, API 27) ---------------------------------------------------
+(function() {
+    console.log('Pack:');
+    var src = [
+        'CelerNet.start({});',
+        'var me = Pack.me();',
+        'System.drawString("eu " + me.name + " id " + me.id + " som=" + me.caps.speaker, 10, 10);',
+        'var ms = Pack.members();',
+        'System.drawString("bando " + ms.length + ": " + (ms.length ? ms[0].name + " patas=" + ms[0].caps.motors + " som=" + ms[0].caps.speaker : "-"), 10, 30);',
+        'var ok = Pack.send("Celer-Dog", {texto:"brincar?"});',
+        'System.drawString("send " + ok, 10, 50);',
+        'var p = Pack.poll();',
+        'System.drawString("env " + (p === null ? "-" : p.fromName + " " + p.data), 10, 70);',
+        'System.playMusic({bpm:120, loops:1, tracks:[{wave:"sq", vol:80, notes:[[69,4],[72,4]]}]});',
+        'var h = Pack.handoffMusic();',
+        'System.drawString("handoff " + h, 10, 90);',
+        'System.delay(10);',
+        'System.exitApp();'
+    ].join('\n');
+    var env = makeEnv();
+    env.__harness.pushMeshNodes([{ id: 'BEEF', name: 'Celer-Dog', caps: { speaker: true, mic: true, display: false, motors: true, leds: true, hub: false }, rssi: -58, hops: 1, lastSeen: 0 }]);
+    env.__harness.pushPack([{ from: 'BEEF', fromName: 'Celer-Dog', data: '{"texto":"au!"}' }]);
+    var err = null;
+    try {
+        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'CelerNet', 'Pack', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
+                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI',
+                              (env.__prelude || '') + '\n' + src);
+        fn(env.System, env.FS, env.Net, env.CelerLink, env.CelerNet, env.Pack, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
+           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI);
+    } catch (e) {
+        if (e !== 'OS_EXIT' && !(e && e.harnessStop)) err = e && (e.stack || String(e)) || String(e);
+    }
+    check('roda sem erro', err === null, err || '');
+    var j = joinLog(env.__harness.log);
+    check('me traz papel decodificado', j.indexOf('eu Celer-TEST id A1B2 som=true') >= 0);
+    check('members traz caps do membro', j.indexOf('bando 1: Celer-Dog patas=true som=true') >= 0);
+    check('send envelope custom', j.indexOf('send true') >= 0 &&
+          env.__harness.meshSent.some(function(s) { return s.pack === true && s.to === 'Celer-Dog'; }));
+    check('poll traz envelope custom', j.indexOf('env Celer-Dog {"texto":"au!"}') >= 0);
+    check('handoff com musica tocando', j.indexOf('handoff true') >= 0 &&
+          j.indexOf('[pack] handoff -> melhor-speaker') >= 0);
+    // sem musica nao ha handoff (contrato do firmware)
+    check('handoff sem musica = false',
+          env.System.musicStop() === true && env.Pack.handoffMusic() === false);
 })();
 
 // --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------

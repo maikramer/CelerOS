@@ -11,7 +11,9 @@ namespace MusicSynth {
 
 // Compila a musica e acorda a task (nao bloqueia). false = alto-falante
 // ocupado (fala/tom/playWav em curso), sem audio na placa ou musica vazia.
-bool play(const MusicEngine::Song& song);
+// startMs pula para o meio da musica (handoff da matilha: retoma de onde
+// parou no vizinho; alem do total a task encerra na hora, posMs final).
+bool play(const MusicEngine::Song& song, uint32_t startMs = 0);
 
 // Corta no proximo bloco (~15 ms). Idempotente.
 void stop();
@@ -21,5 +23,8 @@ bool playing();
 
 // Posicao em ms desde o inicio do audio, ou -1 se parado.
 int32_t posMs();
+
+// Copia a musica em curso (handoff da matilha). false = nada tocando.
+bool currentSong(MusicEngine::Song* out);
 
 }  // namespace MusicSynth

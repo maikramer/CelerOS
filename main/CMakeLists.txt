@@ -94,13 +94,14 @@ else()
     list(REMOVE_ITEM CELEROS_SRCS "USBDevice/USBDevice.cpp")
 endif()
 # Celer Link (Bluetooth BLE entre CelerOS) + CelerNet (malha por flood de
-# advertising, API 26): NimBLE C API do IDF, sem wrapper. As fontes somem
-# do build quando o board nao liga o BT — os objetos JS CelerLink/CelerNet
+# advertising, API 26) + Pack (matilha: caps/envelopes/handoff de musica,
+# API 27): NimBLE C API do IDF, sem wrapper. As fontes somem do build
+# quando o board nao liga o BT — os objetos JS CelerLink/CelerNet/Pack
 # simplesmente nao existem. O bt vai no REQUIRES publico (padrao dos
 # exemplos NimBLE do IDF): os headers do host entram no include path do main.
 set(CELEROS_BT_REQUIRES)
 if(CONFIG_CELEROS_BLUETOOTH)
-    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp")
+    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Pack/Pack.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp" "Runtime/JsPack.cpp")
     list(APPEND CELEROS_BT_REQUIRES bt)
     if(CONFIG_CELEROS_PHONE_LINK)
         list(APPEND CELEROS_SRCS "Bluetooth/PhoneLink.cpp" "Runtime/JsPhone.cpp" "Launcher/PhoneScreens.cpp")
@@ -247,7 +248,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.7.0"
-    CELEROS_API_LEVEL=26
+    CELEROS_API_LEVEL=27
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

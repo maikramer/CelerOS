@@ -584,6 +584,92 @@ static void testMusicEngine() {
     CHECK(!clipped);
 }
 
+// Handoff da musica (API 27): encodeSong/decodeSong compactos (caber numa
+// mensagem da malha) e o seek do Renderer (retomar do meio, deterministico).
+static void testMusicHandoff() {
+    using namespace MusicEngine;
+
+    // song CHEIA: 4 trilhas x 48 notas com timbres/volumes variados
+    Song full;
+    full.bpm = 160;
+    full.loops = 4;
+    full.nTracks = kMaxTracks;
+    for (int t = 0; t < kMaxTracks; t++) {
+        full.tracks[t].drum = (t == 3);
+        full.tracks[t].wave = (uint8_t)(t % 4);
+        full.tracks[t].vol = (uint8_t)(50 + t);
+        full.tracks[t].count = kMaxNotes;
+        for (int i = 0; i < kMaxNotes; i++)
+            full.tracks[t].notes[i] = {(uint8_t)(36 + ((i * 5) % 60)), (uint8_t)(1 + i % 16)};
+    }
+    uint8_t buf[netframe::MSG_MAX];
+    size_t len = encodeSong(full, buf, sizeof(buf));
+    CHECK(len > 0 && len <= 403);  // 4 + 4x3 + 4x48x2 — cabe na msg da malha
+    Song back;
+    CHECK(decodeSong(buf, len, &back));
+    CHECK(back.bpm == 160 && back.loops == 4 && back.nTracks == kMaxTracks);
+    for (int t = 0; t < kMaxTracks; t++) {
+        CHECK(back.tracks[t].drum == full.tracks[t].drum);
+        CHECK(back.tracks[t].wave == full.tracks[t].wave);
+        CHECK(back.tracks[t].vol == full.tracks[t].vol);
+        CHECK(back.tracks[t].count == kMaxNotes);
+    }
+    CHECK(back.tracks[1].notes[47].midi == full.tracks[1].notes[47].midi);
+    CHECK(back.tracks[1].notes[47].len16 == full.tracks[1].notes[47].len16);
+
+    // round-trip por bytes: re-encode da decodificada e identica
+    uint8_t buf2[netframe::MSG_MAX];
+    size_t len2 = encodeSong(back, buf2, sizeof(buf2));
+    CHECK(len2 == len && memcmp(buf, buf2, len) == 0);
+
+    // lixo nao decoda: magic errado e truncado no meio
+    buf[0] = 'X';
+    CHECK(!decodeSong(buf, len, &back));
+    buf[0] = kSongMagic;
+    CHECK(!decodeSong(buf, 3, &back));
+    CHECK(!decodeSong(buf, 10, &back));  // cortado dentro das notas
+
+    // seek: duas instancias pulando para o mesmo ponto geram o MESMO
+    // audio dali em diante, e a nota em curso soa (nao silencio)
+    Song solo;
+    solo.bpm = 120;
+    solo.loops = 1;
+    solo.nTracks = 1;
+    solo.tracks[0].wave = kWaveSq;
+    solo.tracks[0].vol = 80;
+    solo.tracks[0].count = 2;
+    solo.tracks[0].notes[0] = {69, 64};  // notas longas (64 s16 ~ 8 s a 120bpm)
+    solo.tracks[0].notes[1] = {76, 64};
+    constexpr uint32_t rate = 16000;
+    Compiled c1, c2;
+    CHECK(compile(solo, rate, c1));
+    c2 = c1;
+    Renderer a, b;
+    a.reset(&c1, 90);
+    b.reset(&c2, 90);
+    b.seek(rate / 2);  // 500 ms: dentro da 1a nota
+    int16_t ra[400], rb[400];
+    a.render(ra, 400);
+    b.render(rb, 400);
+    CHECK(memcmp(ra, rb, sizeof(ra)) != 0);  // um comecou do zero, outro do meio
+    Renderer d;
+    d.reset(&c2, 90);
+    d.seek(rate / 2);
+    int16_t rd[400];
+    d.render(rd, 400);
+    CHECK(memcmp(rb, rd, sizeof(rb)) == 0);  // seek e deterministico
+    bool sounding = false;
+    for (int i = 0; i < 400; i++)
+        if (rb[i] > 2000 || rb[i] < -2000) sounding = true;
+    CHECK(sounding);  // a nota em curso soa (freqStep calculado no meio)
+
+    // seek alem do fim: clampa no total (task encerra na hora)
+    Renderer e;
+    e.reset(&c2, 90);
+    e.seek(c2.totalSamples + 9999);
+    CHECK(e.pos == c2.totalSamples);
+}
+
 // CelerNet (NetFrame.h): quadro da malha por flood de advertising —
 // round-trip (com dst do unicast), fragmentacao/remontagem e dedup, no host.
 static void testNetFrame() {
@@ -726,6 +812,7 @@ int main() {
     testGbProto();
     testDeviceStatsJson();
     testMusicEngine();
+    testMusicHandoff();
     testNetFrame();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);

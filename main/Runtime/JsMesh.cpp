@@ -84,6 +84,59 @@ duk_ret_t JSBindings::js_meshBroadcast(duk_context *ctx) {
     return 1;
 }
 
+duk_ret_t JSBindings::js_meshSend(duk_context *ctx) {
+    const char* to = duk_require_string(ctx, 0);
+    uint16_t dst = 0;
+    if (!CelerNet::resolveDest(to, &dst)) {
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "destino nao ouvido (use CelerNet.nodes())");
+        return 0;
+    }
+    // Mesma regra do broadcast: string crua, objeto vira JSON.
+    uint8_t buf[CelerNet::MAX_MSG];
+    size_t len;
+    if (duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
+        const char* json = duk_json_encode(ctx, 1);
+        if (json == nullptr) {
+            duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
+            return 0;
+        }
+        len = strlen(json);
+        if (len == 0 || len > CelerNet::MAX_MSG) {
+            throwMeshSize(ctx);
+            return 0;
+        }
+        memcpy(buf, json, len);
+    } else {
+        const char* s = duk_require_lstring(ctx, 1, &len);
+        if (len == 0 || len > CelerNet::MAX_MSG) {
+            throwMeshSize(ctx);
+            return 0;
+        }
+        memcpy(buf, s, len);
+    }
+    uint32_t ttl = CelerNet::TTL_DEFAULT;
+    bool urgent = false;
+    uint32_t copies = 2;  // unicast sem ACK: redundancia por duplicata
+    if (duk_is_object(ctx, 2) && !duk_is_callable(ctx, 2)) {
+        duk_get_prop_string(ctx, 2, "ttl");
+        if (duk_is_number(ctx, -1)) ttl = (uint32_t)duk_get_uint(ctx, -1);
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, 2, "urgent");
+        if (duk_is_boolean(ctx, -1)) urgent = duk_get_boolean(ctx, -1) != 0;
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, 2, "copies");
+        if (duk_is_number(ctx, -1)) copies = (uint32_t)duk_get_uint(ctx, -1);
+        duk_pop(ctx);
+    }
+    if (ttl < 1) ttl = 1;
+    if (ttl > 8) ttl = 8;
+    present();  // fila cheia pode ter acontecido ha pouco: da chance ao tick
+    bool ok = CelerNet::sendTo(dst, buf, len, (uint8_t)ttl, urgent, (uint8_t)copies);
+    CelerKernel::noteAppYield();
+    duk_push_boolean(ctx, ok ? 1 : 0);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_meshPoll(duk_context *ctx) {
     CelerNet::Msg m;
     if (!CelerNet::poll(&m)) {
@@ -99,6 +152,8 @@ duk_ret_t JSBindings::js_meshPoll(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "fromName");
     duk_push_lstring(ctx, (const char*)m.data, (duk_size_t)m.len);
     duk_put_prop_string(ctx, -2, "msg");
+    duk_push_boolean(ctx, m.dst != 0xFFFF ? 1 : 0);
+    duk_put_prop_string(ctx, -2, "unicast");  // API 27: era so pra este no
     duk_push_int(ctx, m.hops);
     duk_put_prop_string(ctx, -2, "hops");
     duk_push_int(ctx, m.rssi);
@@ -118,6 +173,8 @@ duk_ret_t JSBindings::js_meshNodes(duk_context *ctx) {
         duk_put_prop_string(ctx, -2, "id");
         duk_push_string(ctx, list[i].name);
         duk_put_prop_string(ctx, -2, "name");
+        duk_push_uint(ctx, list[i].caps);  // bits CAPS_* (API 27)
+        duk_put_prop_string(ctx, -2, "caps");
         duk_push_int(ctx, list[i].rssi);
         duk_put_prop_string(ctx, -2, "rssi");
         duk_push_int(ctx, list[i].hops);

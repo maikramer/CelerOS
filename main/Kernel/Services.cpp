@@ -19,6 +19,7 @@
 #include "../../USBDevice/DebugBridge.h"
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../../Bluetooth/CelerNet.h"
+#include "../../Pack/Pack.h"
 #endif
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../../Bluetooth/PhoneLink.h"
@@ -49,6 +50,10 @@ void svcPhoneScreens(bool inApp) { PhoneScreens::service(inApp); }
 // Malha CelerNet: infraestrutura (sobrevive a troca de app) — scanner,
 // bursts de repeticao e presenca; o JS drena com CelerNet.poll().
 void svcCelerNet(bool) { CelerNet::tick(); }
+// Matilha (Pack): caps no BEAT, envelopes do OS e handoff de musica —
+// depois do celernet na fila: consume no MESMO giro o que o tick da malha
+// acabou de receber.
+void svcPack(bool) { Pack::tick(); }
 #endif
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
 void svcOtaConfirm(bool) { confirmPendingOta(); }
@@ -97,6 +102,7 @@ const CelerServices::Service kServices[] = {
 #endif
 #if CONFIG_CELEROS_BLUETOOTH
     {"celernet", svcCelerNet, CelerServices::ALWAYS},
+    {"pack", svcPack, CelerServices::ALWAYS},
 #endif
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},

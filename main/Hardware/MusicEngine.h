@@ -113,6 +113,70 @@ inline bool compile(const Song& in, uint32_t rate, Compiled& out) {
     return true;
 }
 
+// ---------------------------------------------------------------- io/handoff ---
+// Serializacao binaria compacta da SONG para o handoff da matilha (Pack,
+// API 27): 4 B de cabecalho + 3 B por trilha + 2 B por nota — no maximo
+// 403 B, cabe inteiro numa mensagem da malha (MSG_MAX 434). O alvo decoda
+// como Song e re-compila com a propria taxa de audio; bpm/loops/vol/notas
+// fora da faixa sao re-clampados pelo compile() (o decode nao precisa
+// confiar nos bytes).
+constexpr uint8_t kSongMagic = 'M';
+
+inline size_t encodeSong(const Song& s, uint8_t* out, size_t cap) {
+    uint8_t nTracks = s.nTracks > kMaxTracks ? (uint8_t)kMaxTracks : s.nTracks;
+    size_t need = 4;
+    for (int t = 0; t < nTracks; t++) {
+        uint8_t count = s.tracks[t].count > kMaxNotes ? (uint8_t)kMaxNotes : s.tracks[t].count;
+        need += 3 + (size_t)count * 2;
+    }
+    if (cap < need) return 0;
+    size_t at = 0;
+    out[at++] = kSongMagic;
+    out[at++] = (uint8_t)(s.bpm > 255 ? 255 : s.bpm);
+    out[at++] = s.loops;
+    out[at++] = nTracks;
+    for (int t = 0; t < nTracks; t++) {
+        const Track& tr = s.tracks[t];
+        uint8_t count = tr.count > kMaxNotes ? (uint8_t)kMaxNotes : tr.count;
+        out[at++] = (uint8_t)((tr.drum ? 4 : 0) | (tr.wave > kWaveSaw ? 0 : tr.wave));
+        out[at++] = tr.vol > 100 ? 100 : tr.vol;
+        out[at++] = count;
+        for (int i = 0; i < count; i++) {
+            out[at++] = tr.notes[i].midi;
+            out[at++] = tr.notes[i].len16;
+        }
+    }
+    return at;
+}
+
+inline bool decodeSong(const uint8_t* in, size_t len, Song* out) {
+    if (len < 4 || in[0] != kSongMagic) return false;
+    *out = Song{};
+    out->bpm = in[1];
+    out->loops = in[2];
+    uint8_t nTracks = in[3];
+    if (nTracks > kMaxTracks) nTracks = kMaxTracks;
+    size_t at = 4;
+    for (int t = 0; t < nTracks; t++) {
+        if (at + 3 > len) return false;
+        Track& tr = out->tracks[t];
+        tr.drum = (in[at] & 4) != 0;
+        tr.wave = in[at] & 3;
+        tr.vol = in[at + 1];
+        uint8_t count = in[at + 2];
+        if (count > kMaxNotes) count = kMaxNotes;
+        at += 3;
+        if (at + (size_t)count * 2 > len) return false;
+        for (int i = 0; i < count; i++) {
+            tr.notes[i].midi = in[at++];
+            tr.notes[i].len16 = in[at++];
+        }
+        tr.count = count;
+    }
+    out->nTracks = nTracks;
+    return true;
+}
+
 // ---------------------------------------------------------------- render ---
 // Estado do mixador: uma voz por trilha com acumulador de fase Q32 (1 ciclo
 // = 2^32), envelope por nota e LFSR compartilhado da percussao.
@@ -134,6 +198,19 @@ struct Renderer {
         if (volPct < 0) volPct = 0;
         if (volPct > 100) volPct = 100;
         master = volPct * 200;   // mesmo territory de amplitude do playTone
+    }
+
+    // Pula para uma posicao absoluta em amostras (handoff da matilha: a
+    // musica continua de onde parou no vizinho). O while do render avanca
+    // idx ate a nota em curso e o guard freqStep==0 do render calcula a
+    // afinacao da nota que ja comecou.
+    void seek(uint32_t samples) {
+        if (c == nullptr) return;
+        if (samples > c->totalSamples) samples = c->totalSamples;
+        pos = samples;
+        loopStart = c->loopSamples ? (samples / c->loopSamples) * c->loopSamples : 0;
+        for (int i = 0; i < kMaxTracks; i++) { idx[i] = 0; phase[i] = 0; freqStep[i] = 0; }
+        noise = 0x12345u;
     }
 
     static uint32_t midiStep(uint8_t midi, uint32_t rate) {  // Q32 por amostra
@@ -238,7 +315,7 @@ struct Renderer {
                 if (tr.drum) {
                     s = drumSample(e.midi, dt, phase[t]);
                 } else {
-                    if (dt == 0) freqStep[t] = midiStep(e.midi, c->rate);
+                    if (dt == 0 || freqStep[t] == 0) freqStep[t] = midiStep(e.midi, c->rate);
                     phase[t] += freqStep[t];
                     s = waveSample(tr.wave, phase[t]) *
                         noteEnv(e.start, r, e.end) / 256;

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 26 — 263 funcoes.
+// API level 27 — 269 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -195,8 +195,8 @@ declare const System: {
     unreadNotifications(): any;
     playTone(arg0?: number): any;
     playWav(arg0: number): any;
-    /** uma música por vez; um novo playMusic só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorm (API 25) */
-    playMusic(song?: number): any;
+    /** uma música por vez; um novo playMusic só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorm */
+    playMusic(song?: number, opcoes?: number): any;
     musicStop(): any;
     musicPlaying(): any;
     musicPos(): any;
@@ -513,9 +513,18 @@ declare const CelerNet: {
     start(opcoes?: { name?: string; net?: string; relay?: boolean }): boolean;
     stop(): boolean;
     broadcast(mensagem?: string | object, ttl?: number): boolean;
+    send(destino: number, mensagem?: number, opcoes?: number): any;
     poll(): MeshMessage | null;
     nodes(): MeshNode[];
     status(): MeshStatus;
+};
+
+declare const Pack: {
+    me(): any;
+    members(): any;
+    send(destino: number, mensagem?: number, opcoes?: number): any;
+    poll(): any;
+    handoffMusic(destino?: number): any;
 };
 
 declare const Phone: {
