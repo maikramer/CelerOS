@@ -1,0 +1,13 @@
+{
+  "name": "Matilha",
+  "packageName": "celeros.matilha",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Painel do bando de CelerOS (API 27): liga a malha, mostra os membros com o papel de cada um (som, mic, tela, patas, leds, rede), manda mensagens diretas ou para todos e passa a música em curso para o vizinho com alto-falante — do mesmo ponto.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "topbar": false,
+  "changelog": "1.0.0 - primeira versao: toggle da malha, membros com papel/RSSI/idade, mensagem direta (Pack.send) e para todos (CelerNet.broadcast), handoff de musica (Pack.handoffMusic) e log do que chega. Absorve o app CelerNet."
+}

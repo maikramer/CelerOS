@@ -1,176 +1,182 @@
 [
- {
-  "id": "appstore",
-  "prompt": "flat minimal vector app icon, simple white shopping bag glyph with handle, centered, solid vivid orange background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "appstore.png",
-  "seed": 101
- },
- {
-  "id": "installer",
-  "prompt": "flat minimal vector app icon, simple white downward arrow going into an open box glyph, centered, solid bright blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "installer.png",
-  "seed": 102
- },
- {
-  "id": "settings",
-  "prompt": "flat minimal vector app icon, simple white gear cogwheel glyph with center hole, centered, solid slate gray blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "settings.png",
-  "seed": 103
- },
- {
-  "id": "help",
-  "prompt": "flat minimal vector app icon, simple bold white question mark glyph, centered, solid violet purple background, rounded square icon tile, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "help.png",
-  "seed": 104
- },
- {
-  "id": "web",
-  "prompt": "flat minimal vector app icon, simple white globe with meridian lines glyph, centered, solid teal cyan background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "web.png",
-  "seed": 105
- },
- {
-  "id": "time",
-  "prompt": "flat minimal vector app icon, simple white analog clock face with hands glyph, centered, solid indigo blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "time.png",
-  "seed": 106
- },
- {
-  "id": "about",
-  "prompt": "flat minimal vector app icon, simple white lowercase letter i inside a circle glyph, centered, solid sky blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "about.png",
-  "seed": 107
- },
- {
-  "id": "update",
-  "prompt": "flat minimal vector app icon, simple white circular refresh arrows glyph, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "update.png",
-  "seed": 108
- },
- {
-  "id": "app",
-  "prompt": "flat minimal vector app icon, simple white two by two grid of rounded squares glyph, centered, solid dark slate background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "app.png",
-  "seed": 109
- },
- {
-  "id": "wifi_on",
-  "prompt": "flat minimal vector app icon, simple white wifi signal arcs glyph with dot, centered, solid green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "wifi_on.png",
-  "seed": 110
- },
- {
-  "id": "wifi_off",
-  "prompt": "flat minimal vector app icon, simple white wifi signal arcs glyph crossed by a diagonal slash, centered, solid gray background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "wifi_off.png",
-  "seed": 111
- },
- {
-  "id": "terminal",
-  "prompt": "flat minimal vector app icon, simple white terminal prompt glyph with angle bracket and underscore cursor, centered, solid deep charcoal green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "terminal.png",
-  "seed": 112
- },
- {
-  "id": "snake",
-  "prompt": "flat minimal vector game icon, simple white coiled snake glyph made of rounded segments with a round dot apple nearby, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "snake.png",
-  "seed": 114
- },
- {
-  "id": "2048",
-  "prompt": "flat minimal vector game icon, simple white 2x2 grid of rounded square tiles with the numbers 2, 0, 4 and 8, one tile in vivid amber accent, centered, solid deep indigo background, rounded square icon tile, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "2048.png",
-  "seed": 115
- },
- {
-  "id": "breakout",
-  "prompt": "flat minimal vector game icon, simple white breakout glyph with three rows of small bricks on top, a round ball in the middle and a horizontal paddle bar at the bottom, centered, solid vivid violet purple background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "breakout.png",
-  "seed": 116
- },
- {
-  "id": "cronometro",
-  "prompt": "flat minimal vector app icon, simple white stopwatch glyph with side button and top crown, centered, solid crimson red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "cronometro.png",
-  "seed": 117
- },
- {
-  "id": "httpdemo",
-  "prompt": "flat minimal vector app icon, simple white globe with two small curved exchange arrows, one up one down glyph, centered, solid vivid teal background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "httpdemo.png",
-  "seed": 118
- },
- {
-  "id": "touchtest",
-  "prompt": "flat minimal vector app icon, simple white fingerprint made of rounded concentric arcs with a small crosshair glyph, centered, solid bright cyan background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "touchtest.png",
-  "seed": 119
- },
- {
-  "id": "remote",
-  "prompt": "flat minimal vector app icon, simple white game remote control with round d-pad cross on the left and two round buttons on the right glyph, centered, solid slate blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "remote.png",
-  "seed": 120
- },
- {
-  "id": "calculator",
-  "prompt": "flat minimal vector app icon, simple white calculator with a display bar on top and a 3x4 grid of rounded keys, one key in amber glyph, centered, solid deep green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "calculator.png",
-  "seed": 121
- },
- {
-  "id": "runner",
-  "prompt": "flat minimal vector game icon, simple white runner silhouette mid stride with three speed lines behind glyph, centered, solid orange red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "runner.png",
-  "seed": 122
- },
- {
-  "id": "clockapp",
-  "prompt": "flat minimal vector app icon, simple white analog clock face with hour and minute hands and four tick marks glyph, centered, solid midnight blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "clockapp.png",
-  "seed": 123
- },
- {
-  "id": "cube",
-  "prompt": "flat minimal vector app icon, simple white isometric cube drawn with clean edges and a lighter top face glyph, centered, solid indigo purple background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "cube.png",
-  "seed": 124
- },
- {
-  "id": "led",
-  "prompt": "flat minimal vector app icon, simple white rounded light bulb with three short rays on each side glyph, centered, solid warm amber background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "led.png",
-  "seed": 125
- },
- {
-  "id": "physics",
-  "prompt": "flat minimal vector game icon, simple white falling ball with a curved motion trail bouncing on a small ramp glyph, centered, solid bright blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "physics.png",
-  "seed": 126
- },
- {
-  "id": "sysinfo",
-  "prompt": "flat minimal vector app icon, simple white letter i in a rounded circle with a small chip outline around glyph, centered, solid steel gray blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "sysinfo.png",
-  "seed": 127
- },
- {
-  "id": "tictactoe",
-  "prompt": "flat minimal vector game icon, simple white tic tac toe board of four lines with one X and one O placed on it glyph, centered, solid rose red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
-  "output": "tictactoe.png",
-  "seed": 128
- },
- {
-  "id": "qwen",
-  "prompt": "flat minimal vector app icon, simple white microphone glyph with two small sound wave arcs, centered, solid deep indigo blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "qwen.png",
-  "seed": 129
- },
- {
-  "id": "celernet",
-  "prompt": "flat minimal vector app icon, three white dots connected by straight lines forming a triangle mesh network glyph, centered, solid teal green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
-  "output": "celernet.png",
-  "seed": 130
- }
+  {
+    "id": "appstore",
+    "prompt": "flat minimal vector app icon, simple white shopping bag glyph with handle, centered, solid vivid orange background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "appstore.png",
+    "seed": 101
+  },
+  {
+    "id": "installer",
+    "prompt": "flat minimal vector app icon, simple white downward arrow going into an open box glyph, centered, solid bright blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "installer.png",
+    "seed": 102
+  },
+  {
+    "id": "settings",
+    "prompt": "flat minimal vector app icon, simple white gear cogwheel glyph with center hole, centered, solid slate gray blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "settings.png",
+    "seed": 103
+  },
+  {
+    "id": "help",
+    "prompt": "flat minimal vector app icon, simple bold white question mark glyph, centered, solid violet purple background, rounded square icon tile, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "help.png",
+    "seed": 104
+  },
+  {
+    "id": "web",
+    "prompt": "flat minimal vector app icon, simple white globe with meridian lines glyph, centered, solid teal cyan background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "web.png",
+    "seed": 105
+  },
+  {
+    "id": "time",
+    "prompt": "flat minimal vector app icon, simple white analog clock face with hands glyph, centered, solid indigo blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "time.png",
+    "seed": 106
+  },
+  {
+    "id": "about",
+    "prompt": "flat minimal vector app icon, simple white lowercase letter i inside a circle glyph, centered, solid sky blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "about.png",
+    "seed": 107
+  },
+  {
+    "id": "update",
+    "prompt": "flat minimal vector app icon, simple white circular refresh arrows glyph, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "update.png",
+    "seed": 108
+  },
+  {
+    "id": "app",
+    "prompt": "flat minimal vector app icon, simple white two by two grid of rounded squares glyph, centered, solid dark slate background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "app.png",
+    "seed": 109
+  },
+  {
+    "id": "wifi_on",
+    "prompt": "flat minimal vector app icon, simple white wifi signal arcs glyph with dot, centered, solid green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "wifi_on.png",
+    "seed": 110
+  },
+  {
+    "id": "wifi_off",
+    "prompt": "flat minimal vector app icon, simple white wifi signal arcs glyph crossed by a diagonal slash, centered, solid gray background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "wifi_off.png",
+    "seed": 111
+  },
+  {
+    "id": "terminal",
+    "prompt": "flat minimal vector app icon, simple white terminal prompt glyph with angle bracket and underscore cursor, centered, solid deep charcoal green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "terminal.png",
+    "seed": 112
+  },
+  {
+    "id": "snake",
+    "prompt": "flat minimal vector game icon, simple white coiled snake glyph made of rounded segments with a round dot apple nearby, centered, solid emerald green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "snake.png",
+    "seed": 114
+  },
+  {
+    "id": "2048",
+    "prompt": "flat minimal vector game icon, simple white 2x2 grid of rounded square tiles with the numbers 2, 0, 4 and 8, one tile in vivid amber accent, centered, solid deep indigo background, rounded square icon tile, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "2048.png",
+    "seed": 115
+  },
+  {
+    "id": "breakout",
+    "prompt": "flat minimal vector game icon, simple white breakout glyph with three rows of small bricks on top, a round ball in the middle and a horizontal paddle bar at the bottom, centered, solid vivid violet purple background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "breakout.png",
+    "seed": 116
+  },
+  {
+    "id": "cronometro",
+    "prompt": "flat minimal vector app icon, simple white stopwatch glyph with side button and top crown, centered, solid crimson red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "cronometro.png",
+    "seed": 117
+  },
+  {
+    "id": "httpdemo",
+    "prompt": "flat minimal vector app icon, simple white globe with two small curved exchange arrows, one up one down glyph, centered, solid vivid teal background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "httpdemo.png",
+    "seed": 118
+  },
+  {
+    "id": "touchtest",
+    "prompt": "flat minimal vector app icon, simple white fingerprint made of rounded concentric arcs with a small crosshair glyph, centered, solid bright cyan background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "touchtest.png",
+    "seed": 119
+  },
+  {
+    "id": "remote",
+    "prompt": "flat minimal vector app icon, simple white game remote control with round d-pad cross on the left and two round buttons on the right glyph, centered, solid slate blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "remote.png",
+    "seed": 120
+  },
+  {
+    "id": "calculator",
+    "prompt": "flat minimal vector app icon, simple white calculator with a display bar on top and a 3x4 grid of rounded keys, one key in amber glyph, centered, solid deep green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "calculator.png",
+    "seed": 121
+  },
+  {
+    "id": "runner",
+    "prompt": "flat minimal vector game icon, simple white runner silhouette mid stride with three speed lines behind glyph, centered, solid orange red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "runner.png",
+    "seed": 122
+  },
+  {
+    "id": "clockapp",
+    "prompt": "flat minimal vector app icon, simple white analog clock face with hour and minute hands and four tick marks glyph, centered, solid midnight blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "clockapp.png",
+    "seed": 123
+  },
+  {
+    "id": "cube",
+    "prompt": "flat minimal vector app icon, simple white isometric cube drawn with clean edges and a lighter top face glyph, centered, solid indigo purple background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "cube.png",
+    "seed": 124
+  },
+  {
+    "id": "led",
+    "prompt": "flat minimal vector app icon, simple white rounded light bulb with three short rays on each side glyph, centered, solid warm amber background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "led.png",
+    "seed": 125
+  },
+  {
+    "id": "physics",
+    "prompt": "flat minimal vector game icon, simple white falling ball with a curved motion trail bouncing on a small ramp glyph, centered, solid bright blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "physics.png",
+    "seed": 126
+  },
+  {
+    "id": "sysinfo",
+    "prompt": "flat minimal vector app icon, simple white letter i in a rounded circle with a small chip outline around glyph, centered, solid steel gray blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "sysinfo.png",
+    "seed": 127
+  },
+  {
+    "id": "tictactoe",
+    "prompt": "flat minimal vector game icon, simple white tic tac toe board of four lines with one X and one O placed on it glyph, centered, solid rose red background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern mobile game icon style",
+    "output": "tictactoe.png",
+    "seed": 128
+  },
+  {
+    "id": "qwen",
+    "prompt": "flat minimal vector app icon, simple white microphone glyph with two small sound wave arcs, centered, solid deep indigo blue background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "qwen.png",
+    "seed": 129
+  },
+  {
+    "id": "celernet",
+    "prompt": "flat minimal vector app icon, three white dots connected by straight lines forming a triangle mesh network glyph, centered, solid teal green background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "celernet.png",
+    "seed": 130
+  },
+  {
+    "id": "matilha",
+    "prompt": "flat minimal vector app icon, three white paw prints of decreasing size walking in a curve, centered, solid warm orange background, rounded square icon tile, no text, no gradients, no shadows, no border, clean modern operating system icon style",
+    "output": "matilha.png",
+    "seed": 131
+  }
 ]
