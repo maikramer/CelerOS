@@ -135,7 +135,10 @@ uint32_t s_lastAutoTryMs = 0;
 
 constexpr uint32_t K_BEAT_MS = 3000;        // presenca a cada 3 s
 constexpr uint32_t K_NODE_TTL_MS = 15000;   // no some apos 15 s sem BEAT
-constexpr uint32_t K_REASM_TTL_MS = 2000;   // fragmento perdido: slot vence
+constexpr uint32_t K_REASM_TTL_MS = 6000;   // fragmento perdido: slot vence
+// (era 2 s: com o relay espalhando os frags no tempo — jitter por salto +
+// fila do repetidor — o slot expirava ANTES do ultimo frag chegar e a
+// mensagem nunca remontava; bancada 2026-10-07)
 constexpr uint32_t K_TOKEN_REFILL_PER_S = 8;
 constexpr uint32_t K_TOKEN_MAX = 16;
 // RAM interna de folga para os restos da malha: so a fila raw (~600 B)
@@ -170,7 +173,7 @@ bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, u
 
 // Mensagem -> quadros (DATA unico ou FRAGs) na fila; seq unico por mensagem.
 bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, bool ours,
-                    uint8_t prio) {
+                    uint8_t prio, uint32_t dueDelayMs = 0) {
     if (len == 0 || len > CelerNet::MAX_MSG || ttl == 0) return false;
     const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     uint8_t frame[netframe::ADV_MAX];
@@ -185,7 +188,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
         f.dlen = (uint8_t)len;
         f.data = data;
         size_t n = netframe::encode(f, frame, sizeof(frame));
-        if (n == 0 || !pendingPush(frame, (uint8_t)n, ours, now, prio)) return false;
+        if (n == 0 || !pendingPush(frame, (uint8_t)n, ours, now + dueDelayMs, prio)) return false;
         return true;
     }
     const uint8_t total = (uint8_t)((len + netframe::CHUNK_MAX - 1) / netframe::CHUNK_MAX);
@@ -202,7 +205,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
         memcpy(chunk + 2, (const uint8_t*)data + off, n);
         f.data = chunk;
         size_t fl = netframe::encode(f, frame, sizeof(frame));
-        if (fl == 0 || !pendingPush(frame, (uint8_t)fl, ours, now, prio)) return false;
+        if (fl == 0 || !pendingPush(frame, (uint8_t)fl, ours, now + dueDelayMs, prio)) return false;
     }
     return true;
 }
@@ -328,9 +331,16 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
             nodeTouch(f.src, nullptr, 0, rssi, f.hops, nowMs);
             uint8_t msg[CelerNet::MAX_MSG];
             size_t len = 0;
+            // Bench: cada frag QUE CHEGA ao remontador vira log — separou
+            // "perdeu no ar" de "chegou e nao remontou" na bancada.
+            ESP_LOGI(TAG, "frag rx %04X seq=%u %u/%u (%u B)",
+                     f.src, (unsigned)f.seq, f.data[0] + 1, f.data[1],
+                     (unsigned)(f.dlen - 2));
             if (s_heap != nullptr &&
                 s_heap->reasm.feed(f.src, f.seq, f.data[0], f.data[1], f.data + 2,
                                    (uint8_t)(f.dlen - 2), nowMs, msg, sizeof(msg), &len)) {
+                ESP_LOGI(TAG, "frag remontou %04X seq=%u (%u B)", f.src,
+                         (unsigned)f.seq, (unsigned)len);
                 rxPush(f.src, nodeName(f.src), f.dst, msg, len, f.hops, rssi);
             }
             break;
@@ -340,6 +350,11 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
     }
 
     // Repeticao (flood): ttl-1/hops+1, jitter escalando com o ttl restante.
+    // FRAG ganha jitter LARGO: repetir frag logo apos ouvi-lo coloca o
+    // proprio repetidor no ar (scanner desligado) exatamente quando o FRAG
+    // SEGUINTE da mesma rajada esta chegando — o no se auto-atolava e perdia
+    // o frag do meio (bancada 2026-10-07: 1/3 de cada tripla sumia). O
+    // repetidor sai da frente e repete a rajada DEPOIS de ouvi-la inteira.
     if (s_relay && f.ttl > 1) {
         netframe::Frame r = f;
         r.ttl = (uint8_t)(f.ttl - 1);
@@ -348,6 +363,7 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
         size_t n = netframe::encode(r, frame, sizeof(frame));
         if (n > 0) {
             uint32_t jitter = 40 + (uint32_t)f.ttl * 40 + (esp_random() % 200);
+            if (f.type == netframe::TYPE_FRAG) jitter += 700 + (esp_random() % 900);
             if (pendingPush(frame, (uint8_t)n, false, nowMs + jitter)) s_relayed++;
         }
     }
@@ -698,7 +714,12 @@ bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, b
         // Cada copia leva seq NOVO: o dedup do vizinho nao pode come-la (a
         // redundancia e a "retransmissao" do unicast sem ACK — a entrega
         // pode duplicar; o consumidor resolve idempotencia por msgId).
-        ok = enqueueMessage(dst, (const uint8_t*)data, len, ttl, true, urgent ? 1 : 0);
+        // E as copias saem ESPACADAS (~1,5 s): consecutivas morriam na
+        // MESMA janela de colisao — o receptor relaya no meio da rajada
+        // (relay = burst = scanner desligado ~300 ms) e perde o frag que
+        // esta chegando; copias no mesmo instante nao sao redundancia.
+        ok = enqueueMessage(dst, (const uint8_t*)data, len, ttl, true, urgent ? 1 : 0,
+                            (uint32_t)c * 1500);
     }
     xSemaphoreGiveRecursive(lock());
     if (!ok) {
