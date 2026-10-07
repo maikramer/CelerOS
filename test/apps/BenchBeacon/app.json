@@ -1,0 +1,13 @@
+{
+  "name": "BenchBeacon",
+  "packageName": "test.benchbeacon",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Isolamento do enlace da matilha: ping unicast + broadcast periodicos com relatorio. App de bancada.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "topbar": false,
+  "changelog": "1.0.0 - diagnostico do enlace"
+}
