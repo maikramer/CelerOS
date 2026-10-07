@@ -7,11 +7,12 @@
 //   - CallScreen: chamada recebida com Recusar/Atender, tocando ate o
 //     celular avisar o fim ou o usuario escolher.
 // service() roda no loop da UI; com app aberto o PhoneLink::tick(true) pede
-// a saida do app para a tela aparecer (como a AlarmScreen).
+// a saida do app para a tela aparecer (como a AlarmScreen) — o inApp so
+// informa o contexto e as telas nao empilham sobre um app.
 
 namespace PhoneScreens {
 
-void service();
+void service(bool inApp);
 
 }  // namespace PhoneScreens
 

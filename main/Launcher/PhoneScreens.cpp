@@ -120,7 +120,8 @@ CallScreen s_call;
 
 namespace PhoneScreens {
 
-void service() {
+void service(bool inApp) {
+    if (inApp) return;  // empurrar tela sobre app aberto e papel do PhoneLink::tick
     kui::Screen* top = kui::Navigator::top();
     std::string n, num;
     if (PhoneLink::callInfo(n, num)) {

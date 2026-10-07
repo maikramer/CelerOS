@@ -43,7 +43,7 @@ void svcWatchPanels(bool) { WatchPanels::service(); }
 void svcPowerPolicy(bool) { PowerPolicy::tick(); }
 #if CONFIG_CELEROS_PHONE_LINK
 void svcPhoneLink(bool inApp) { PhoneLink::tick(inApp); }
-void svcPhoneScreens(bool) { PhoneScreens::service(); }
+void svcPhoneScreens(bool inApp) { PhoneScreens::service(inApp); }
 #endif
 #if CONFIG_CELEROS_BLUETOOTH
 // Malha CelerNet: infraestrutura (sobrevive a troca de app) — scanner,
