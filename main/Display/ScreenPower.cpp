@@ -12,6 +12,9 @@
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../Bluetooth/PhoneLink.h"
 #endif
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Bluetooth/CelerNet.h"
+#endif
 #include "esp_log.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -318,6 +321,19 @@ void tick(bool inApp) {
             return;
         }
         s_plLogged = false;
+#endif
+#if CONFIG_CELEROS_BLUETOOTH
+        // No da malha CelerNet ligado: deep sleep derruba a rede do device
+        // ate para os vizinhos que o escutam como repetidor.
+        static bool s_meshLogged = false;
+        if (CelerNet::active()) {
+            if (!s_meshLogged) {
+                s_meshLogged = true;
+                ESP_LOGI("celer.screen", "deep sleep adiado: malha CelerNet ativa");
+            }
+            return;
+        }
+        s_meshLogged = false;
 #endif
         ESP_LOGI("celer.screen", "tela apagada ha %u min: deep sleep com sentinela ULP",
                  (unsigned)(s_deepSleepMs / 60000UL));

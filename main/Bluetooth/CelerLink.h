@@ -52,7 +52,10 @@ public:
     };
 
     // Inicializacao lazy do NimBLE (idempotente; ~300ms na 1a chamada).
-    static bool ensureStarted();
+    // latchFailure=false (malha CelerNet): uma falha de RAM NAO trava o
+    // init para sempre — quem chama de novo mais tarde (tick/timeout)
+    // tenta de novo; o padrao (apps, Phone Link) mantem o latch historico.
+    static bool ensureStarted(bool latchFailure = true);
 
     // Papel peripheral: advertising + servidor GATT. name nullptr mantem o
     // atual (default "Celer-XXXX", XXXX = fim da MAC BT). requirePairing

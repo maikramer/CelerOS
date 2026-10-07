@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -70,21 +71,23 @@ struct NodeEntry {
     uint32_t lastMs;
 };
 
-// Fila RX + remontador vivem na PSRAM (o dog opera com a interna em ~3 KB).
+// TUDO que e grande vive na PSRAM (fila RX, remontador, fila de TX/relay,
+// presenca e dedup): o .bss da malha e ~0 e o boot das placas apertadas
+// (watch: o BLE do Phone Link falhava por 881 B com os statics no .bss)
+// nem percebe a CelerNet antes dela ser ligada.
 struct NetHeap {
     uint8_t head, count;  // ring simples: head + count (tail derivado)
     uint8_t pad[2];
     CelerNet::Msg slots[CelerNet::RX_DEPTH];
     netframe::Reassembler reasm;
+    Pending pending[PENDING_DEPTH];
+    NodeEntry nodes[CelerNet::NODES_MAX];
+    netframe::DedupRing<32> dedup;
 };
 
 QueueHandle_t s_raw = nullptr;      // adv reports (host -> tick)
 SemaphoreHandle_t s_lock = nullptr; // recursive: tick/poll/start concorrem
 NetHeap* s_heap = nullptr;          // PSRAM (ou interna, se falhar)
-
-Pending s_pending[PENDING_DEPTH];
-NodeEntry s_nodes[CelerNet::NODES_MAX];
-netframe::DedupRing<32> s_dedup;
 
 bool s_active = false;
 bool s_relay = true;
@@ -117,9 +120,10 @@ constexpr uint32_t K_NODE_TTL_MS = 15000;   // no some apos 15 s sem BEAT
 constexpr uint32_t K_REASM_TTL_MS = 2000;   // fragmento perdido: slot vence
 constexpr uint32_t K_TOKEN_REFILL_PER_S = 8;
 constexpr uint32_t K_TOKEN_MAX = 16;
-// RAM interna de folga para os restos da malha (fila raw + estado): a fila
-// RX/remontador vai para a PSRAM, mas o controlador respira na interna.
-constexpr size_t K_NET_MIN_INTERNAL = 6 * 1024;
+// RAM interna de folga para os restos da malha: so a fila raw (~600 B)
+// e state pequeno ficam na interna (RX/remontador/presenca/dedup na PSRAM)
+// — o controlador e que respira na interna.
+constexpr size_t K_NET_MIN_INTERNAL = 4 * 1024;
 
 SemaphoreHandle_t lock() {
     // init thread-safe (C++11): a 1a chamada cria, as demais devolvem
@@ -130,9 +134,10 @@ SemaphoreHandle_t lock() {
 // ------------------------------------------------------------------ fila TX
 
 bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs) {
+    if (s_heap == nullptr) return false;
     for (int i = 0; i < PENDING_DEPTH; i++) {
-        if (!s_pending[i].used) {
-            Pending* p = &s_pending[i];
+        if (!s_heap->pending[i].used) {
+            Pending* p = &s_heap->pending[i];
             p->used = true;
             p->ours = ours;
             p->len = len;
@@ -206,25 +211,27 @@ void rxPush(uint16_t from, const char* fromName, const uint8_t* data, size_t len
 }
 
 const char* nodeName(uint16_t id) {
+    if (s_heap == nullptr) return "";
     for (int i = 0; i < CelerNet::NODES_MAX; i++) {
-        if (s_nodes[i].used && s_nodes[i].id == id) return s_nodes[i].name;
+        if (s_heap->nodes[i].used && s_heap->nodes[i].id == id) return s_heap->nodes[i].name;
     }
     return "";
 }
 
 void nodeTouch(uint16_t id, const char* name, int8_t rssi, uint8_t hops, uint32_t nowMs) {
+    if (s_heap == nullptr) return;
     NodeEntry* e = nullptr;
     for (int i = 0; i < CelerNet::NODES_MAX; i++) {
-        if (s_nodes[i].used && s_nodes[i].id == id) {
-            e = &s_nodes[i];
+        if (s_heap->nodes[i].used && s_heap->nodes[i].id == id) {
+            e = &s_heap->nodes[i];
             break;
         }
     }
     if (e == nullptr && name == nullptr) return;  // sem BEAT: nao inventa no
     if (e == nullptr) {
         for (int i = 0; i < CelerNet::NODES_MAX; i++) {
-            if (!s_nodes[i].used) {
-                e = &s_nodes[i];
+            if (!s_heap->nodes[i].used) {
+                e = &s_heap->nodes[i];
                 memset(e, 0, sizeof(*e));
                 e->id = id;
                 break;
@@ -246,7 +253,7 @@ void nodeTouch(uint16_t id, const char* name, int8_t rssi, uint8_t hops, uint32_
 void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
     if (f.src == s_node) return;  // eco do nosso proprio quadro
     const uint8_t idx = f.type == netframe::TYPE_FRAG && f.dlen >= 2 ? f.data[0] : 0;
-    if (s_dedup.seen(f.src, f.seq, idx)) return;
+    if (s_heap->dedup.seen(f.src, f.seq, idx)) return;
 
     switch (f.type) {
         case netframe::TYPE_BEAT: {
@@ -326,16 +333,17 @@ void maybeBurst(uint32_t nowMs) {
         if (!s_burstDone) return;
         s_advBusy = false;
         s_burstDone = false;
-        s_nextSlotMs = nowMs + 20;  // respiro entre pacotes
+        s_nextSlotMs = nowMs + 60;  // respiro entre pacotes
     }
     if (nowMs < s_nextSlotMs) return;
 
+    if (s_heap == nullptr) return;
     Pending* best = nullptr;
     for (int i = 0; i < PENDING_DEPTH; i++) {
-        if (!s_pending[i].used) continue;
-        if ((int32_t)(nowMs - s_pending[i].dueMs) >= 0 &&
-            (best == nullptr || (int32_t)(s_pending[i].dueMs - best->dueMs) < 0)) {
-            best = &s_pending[i];
+        if (!s_heap->pending[i].used) continue;
+        if ((int32_t)(nowMs - s_heap->pending[i].dueMs) >= 0 &&
+            (best == nullptr || (int32_t)(s_heap->pending[i].dueMs - best->dueMs) < 0)) {
+            best = &s_heap->pending[i];
         }
     }
     if (best == nullptr) {
@@ -348,6 +356,11 @@ void maybeBurst(uint32_t nowMs) {
     }
     if (s_tokens < 1) return;  // rajada de muitos pacotes: espera refill
 
+    // Scanner e burst NUNCA juntos: scan continuo + reconfiguracao de adv
+    // nao-conectavel correm contra o lld_init do controlador (IWDT no
+    // btController, coredump do 4848 na bancada 2026-10-06). O tick religa
+    // o scanner no ciclo seguinte ao fim da fila.
+    if (ble_gap_disc_active()) ble_gap_disc_cancel();
     if (ble_gap_adv_active()) {
         s_restoreAdv = true;
         ble_gap_adv_stop();
@@ -358,10 +371,13 @@ void maybeBurst(uint32_t nowMs) {
         memset(&p, 0, sizeof(p));
         p.conn_mode = BLE_GAP_CONN_MODE_NON;  // ADV_NONCONN: ninguem conecta
         p.disc_mode = BLE_GAP_DISC_MODE_GEN;
-        p.itvl_min = 0x20;  // 20 ms: o minimo do host (bate na vazao da malha)
-        p.itvl_max = 0x20;
-        // duracao = 3 eventos (~60 ms no ar) e o ADV_COMPLETE conduz a fila
-        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, 60, &p, meshGapCb, nullptr);
+        // 100 ms e o piso da ESPECIFICACAO para ADV_NONCONN (o host aceita
+        // 20 ms, o controlador nao: TX silenciosa e, na rajada, IWDT no
+        // btController — bancada 2026-10-06 no 4848). Um evento ja cobre os
+        // 3 canais de advertising; o ADV_COMPLETE (~150 ms) conduz a fila.
+        p.itvl_min = 160;  // 100 ms em unidades de 0,625 ms
+        p.itvl_max = 160;
+        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, 250, &p, meshGapCb, nullptr);
     }
     if (rc == 0) {
         best->used = false;
@@ -387,11 +403,24 @@ void heapInit() {
 }
 
 bool tryStart(const char* name, const char* net, bool relay, bool persist) {
-    if (!CelerLink::ensureStarted()) return false;  // gate de RAM interna la dentro
+    // O pedido (setting) entra ANTES dos gates: com a RAM interna apertada
+    // (app aberto numa placa sem BLE no ar) o start() do JS e ACEITO e o
+    // tick do servico sobe o no sozinho quando a interna voltar (10 s).
+    if (persist) CelerSettings::set("celernet", "1");
+    // sem latch: falha de RAM agora nao trava o BLE/Phone Link ate o reboot
+    if (!CelerLink::ensureStarted(false)) {  // gate de RAM interna (BLE off)
+        s_lastAutoTryMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        return false;
+    }
     const size_t freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     if (freeInt < K_NET_MIN_INTERNAL) {
-        ESP_LOGE(TAG, "RAM interna insuficiente para a malha (%u < %u)", (unsigned)freeInt,
-                 (unsigned)K_NET_MIN_INTERNAL);
+        static uint8_t s_ramFails = 0;
+        if (++s_ramFails >= 6) {  // tick tenta a cada 10 s: loga 1x por minuto
+            s_ramFails = 0;
+            ESP_LOGW(TAG, "malha aguarda RAM interna (%u < %u)", (unsigned)freeInt,
+                     (unsigned)K_NET_MIN_INTERNAL);
+        }
+        s_lastAutoTryMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         return false;
     }
 
@@ -407,7 +436,6 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
         return false;
     }
 
-    if (persist) CelerSettings::set("celernet", "1");
     if (name != nullptr && name[0] != '\0') {
         snprintf(s_name, sizeof(s_name), "%.*s", (int)CelerNet::MAX_NAME, name);
         CelerSettings::set("celernet_name", s_name);
@@ -430,12 +458,12 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_relay = relay;
     s_seq = (uint16_t)(esp_random() & 0xFFFF);
 
-    s_dedup.clear();
+    s_heap->dedup.clear();
     s_heap->head = 0;
     s_heap->count = 0;
     s_heap->reasm.reset();
-    for (int i = 0; i < PENDING_DEPTH; i++) s_pending[i].used = false;
-    for (int i = 0; i < CelerNet::NODES_MAX; i++) s_nodes[i].used = false;
+    for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
+    for (int i = 0; i < CelerNet::NODES_MAX; i++) s_heap->nodes[i].used = false;
     xQueueReset(s_raw);
     s_txDropped = s_rxDropped = s_relayed = 0;
     s_tokens = K_TOKEN_MAX;
@@ -468,7 +496,10 @@ void CelerNet::onAdvReport(const uint8_t* data, size_t len, int8_t rssi) {
 }
 
 bool CelerNet::start(const char* name, const char* net, bool relay) {
-    return tryStart(name, net, relay, true);
+    if (tryStart(name, net, relay, true)) return true;
+    // PEDIDO ACEITO mesmo com o radio adiado: o setting ja vale e o tick
+    // sobe o no assim que a RAM interna permitir (status().active confirma)
+    return enabledSetting();
 }
 
 bool CelerNet::stop() {
@@ -486,7 +517,9 @@ bool CelerNet::stop() {
         s_restoreAdv = false;
         CelerLink::refreshAdvertising();
     }
-    for (int i = 0; i < PENDING_DEPTH; i++) s_pending[i].used = false;
+    if (s_heap != nullptr) {
+        for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
+    }
     xSemaphoreGiveRecursive(lock());
     if (wasActive) ESP_LOGI(TAG, "malha desligada");
     return true;
@@ -526,19 +559,20 @@ bool CelerNet::poll(Msg* out) {
 
 int CelerNet::nodes(Node* out, int max) {
     const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    if (s_heap == nullptr) return 0;
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     int n = 0;
     for (int i = 0; i < NODES_MAX && n < max; i++) {
-        if (!s_nodes[i].used) continue;
-        if (nowMs - s_nodes[i].lastMs > K_NODE_TTL_MS) {
-            s_nodes[i].used = false;  // expirou (varredura piggyback)
+        if (!s_heap->nodes[i].used) continue;
+        if (nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) {
+            s_heap->nodes[i].used = false;  // expirou (varredura piggyback)
             continue;
         }
-        out[n].id = s_nodes[i].id;
-        snprintf(out[n].name, sizeof(out[n].name), "%s", s_nodes[i].name);
-        out[n].rssi = s_nodes[i].rssi;
-        out[n].hops = s_nodes[i].hops;
-        out[n].lastSeenMs = nowMs - s_nodes[i].lastMs;
+        out[n].id = s_heap->nodes[i].id;
+        snprintf(out[n].name, sizeof(out[n].name), "%s", s_heap->nodes[i].name);
+        out[n].rssi = s_heap->nodes[i].rssi;
+        out[n].hops = s_heap->nodes[i].hops;
+        out[n].lastSeenMs = nowMs - s_heap->nodes[i].lastMs;
         n++;
     }
     xSemaphoreGiveRecursive(lock());
@@ -563,15 +597,17 @@ void CelerNet::info(Info* out) {
     out->netId = s_netId;
     snprintf(out->name, sizeof(out->name), "%s", s_name);
     snprintf(out->net, sizeof(out->net), "%s", s_net);
-    for (int i = 0; i < PENDING_DEPTH; i++) {
-        if (s_pending[i].used && s_pending[i].ours) out->txQueued++;
+    if (s_heap != nullptr) {
+        for (int i = 0; i < PENDING_DEPTH; i++) {
+            if (s_heap->pending[i].used && s_heap->pending[i].ours) out->txQueued++;
+        }
+        for (int i = 0; i < NODES_MAX; i++) {
+            if (s_heap->nodes[i].used) out->heard++;
+        }
     }
     out->txDropped = s_txDropped;
     out->rxDropped = s_rxDropped;
     out->relayed = s_relayed;
-    for (int i = 0; i < NODES_MAX; i++) {
-        if (s_nodes[i].used) out->heard++;
-    }
     xSemaphoreGiveRecursive(lock());
 }
 
@@ -581,11 +617,37 @@ bool CelerNet::enabledSetting() {
 
 void CelerNet::tick() {
     if (!s_active) {
+        // Protecao de ciclo: boot apos crash/watchdog NAO auto-inicia a
+        // malha (o usuario liga pelo app quando quiser). Sem isso um no
+        // instavel derruba o device a cada boot+10 s (4848, bancada
+        // 2026-10-06: BT controller em IWDT com o churn da malha).
+        static bool s_bootChecked = false;
+        static bool s_skipAuto = false;
+        if (!s_bootChecked) {
+            s_bootChecked = true;
+            const esp_reset_reason_t r = esp_reset_reason();
+            s_skipAuto = r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT ||
+                         r == ESP_RST_WDT;
+            if (s_skipAuto && enabledSetting()) {
+                ESP_LOGW(TAG, "malha NAO auto-inicia: boot apos crash (protecao de ciclo)");
+            }
+        }
+        if (s_skipAuto) return;
         // Auto-start pelo setting: so DEPOIS do WiFi/Phone Link acomodarem
         // (o ensureStarted lacha o init em falha — nao pode disparar cedo
         // demais e matar o Phone Link do watch com ele).
         const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        if (enabledSetting() && nowMs > 45000 && nowMs - s_lastAutoTryMs > 60000) {
+        // Graca no boot (WiFi primeiro): ~60 s no watch (o BLE do Phone
+        // Link la depende dela), 10 s nas demais — o 4848 deep-sleepa antes
+        // dos 60 s de idle e a malha nunca subiria. Depois que o pedido
+        // existiu, o tick tenta a cada 10 s ate a RAM permitir.
+#if CONFIG_CELEROS_PHONE_LINK
+        constexpr uint32_t kBootGraceMs = 45000;
+#else
+        constexpr uint32_t kBootGraceMs = 10000;
+#endif
+        if (enabledSetting() && nowMs > kBootGraceMs &&
+            nowMs - s_lastAutoTryMs > (s_lastAutoTryMs == 0 ? 60000 : 10000)) {
             s_lastAutoTryMs = nowMs;
             tryStart(nullptr, nullptr, true, false);  // nao regrava o setting
         }

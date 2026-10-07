@@ -2227,8 +2227,10 @@ Liga o nó da malha. `opcoes`: `{name: "Celer-Dog"` (nome anunciado, até
 (nome da rede — só nós com o mesmo nome se ouvem) e `relay: true`
 (repete pacotes de outros; `false` = só escuta e anuncia presença, para
 economia). Persiste o estado: o nó volta sozinho no próximo boot.
-A primeira chamada pode subir o Bluetooth (~300 ms). Retorna `false`
-sem RAM suficiente para o rádio (o app segue vivo; tente de novo depois).
+A primeira chamada pode subir o Bluetooth (~300 ms). Com a RAM interna
+apertada (BLE ainda fora do ar e um app aberto) o pedido é **aceito
+mesmo assim** — o nó sobe sozinho em segundos, quando a RAM permitir
+(`status().active` confirma); `false` só sem memória para as filas.
 
 #### `CelerNet.stop()` → Boolean (API 26)
 Desliga o nó (e persiste o desligado).

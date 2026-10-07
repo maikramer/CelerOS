@@ -348,16 +348,24 @@ void init() {
 
 namespace {
 bool s_bleUp = false;
+uint32_t s_bleNextTryMs = 0;
 }
 
 static void bringUpBle() {
-    if (s_bleUp || !s_enabled || millis() < 8000) return;
-    s_bleUp = true;
-    if (CelerLink::ensureStarted()) {
+    if (s_bleUp || !s_enabled) return;
+    const uint32_t now = millis();
+    if (now < 8000 || now < s_bleNextTryMs) return;
+    // Sem latch: o gate de RAM interna e barato de reconferir a cada 10 s —
+    // quando o WiFi soltar a interna o BLE sobe. No boot apertado do watch
+    // (WiFi comecando) a tentativa unica perdia por <1 KB e o BLE morria
+    // pela sessao inteira (bancada 2026-10-06: 38,0 K livres x 38,9 K).
+    if (CelerLink::ensureStarted(false)) {
+        s_bleUp = true;
         CelerLink::refreshAdvertising();
         ESP_LOGI(TAG, "Phone Link no ar (\"%s\", Gadgetbridge: Bangle.js)", s_advName);
     } else {
-        ESP_LOGE(TAG, "Phone Link sem BLE (NimBLE nao subiu; RAM interna?)");
+        ESP_LOGW(TAG, "Phone Link sem BLE ainda (RAM interna); tenta de novo em 10 s");
+        s_bleNextTryMs = now + 10000;
     }
 }
 

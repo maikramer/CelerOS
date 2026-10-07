@@ -967,7 +967,7 @@ bool retryable(int rc) {
 
 // ------------------------------------------------------------------- API
 
-bool CelerLink::ensureStarted() {
+bool CelerLink::ensureStarted(bool latchFailure) {
     if (s_started) return true;
     if (s_initFail) return false;
 
@@ -977,7 +977,7 @@ bool CelerLink::ensureStarted() {
     s_sealedQueue = xQueueCreate(K_SEALED_DEPTH, sizeof(Msg));
     if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr) {
         ESP_LOGE(TAG, "sem memoria para as primitivas do link");
-        s_initFail = true;
+        if (latchFailure) s_initFail = true;
         return false;
     }
 
@@ -990,12 +990,12 @@ bool CelerLink::ensureStarted() {
     if (freeInt < K_BLE_MIN_INTERNAL || bigInt < K_BLE_MIN_BLOCK) {
         ESP_LOGE(TAG, "RAM interna insuficiente para o BLE (livre %u, maior bloco %u; precisa %u/%u)",
                  (unsigned)freeInt, (unsigned)bigInt, (unsigned)K_BLE_MIN_INTERNAL, (unsigned)K_BLE_MIN_BLOCK);
-        s_initFail = true;
+        if (latchFailure) s_initFail = true;
         return false;
     }
     if (nimble_port_init() != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init falhou");
-        s_initFail = true;
+        if (latchFailure) s_initFail = true;
         return false;
     }
     ble_hs_cfg.sync_cb = onSync;
@@ -1018,7 +1018,7 @@ bool CelerLink::ensureStarted() {
 #endif
     if (rc != 0) {
         ESP_LOGE(TAG, "registro GATT falhou (rc=%d)", rc);
-        s_initFail = true;
+        if (latchFailure) s_initFail = true;
         return false;
     }
     ble_svc_gap_init();
@@ -1035,7 +1035,7 @@ bool CelerLink::ensureStarted() {
     }
     if (!synced) {
         ESP_LOGE(TAG, "sync do host NimBLE nao chegou");
-        s_initFail = true;  // sem deinit: nao derrubar o radio no meio
+        if (latchFailure) s_initFail = true;  // sem deinit: nao derrubar o radio no meio
         return false;
     }
     ble_att_set_preferred_mtu(K_MTU_WANT);

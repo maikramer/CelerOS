@@ -1952,8 +1952,10 @@ to 18 characters; default `Celer-XXXX` from the end of the MAC),
 other) and `relay: true` (repeat others' packets; `false` = listen and
 announce presence only, for battery). State persists: the node comes
 back on the next boot by itself. The first call may bring Bluetooth up
-(~300 ms). Returns `false` without enough RAM for the radio (the app
-keeps running; try again later).
+(~300 ms). With internal RAM tight (BLE not up yet and an app open) the
+request is **accepted anyway** — the node comes up on its own within
+seconds, as soon as RAM allows (`status().active` confirms); `false`
+only without memory for the queues.
 
 #### `CelerNet.stop()` → Boolean (API 26)
 Turns the node off (and persists the off state).
