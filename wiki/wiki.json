@@ -1,228 +1,232 @@
 {
-  "repo_url": "https://github.com/maikramer/CelerOS",
-  "branch": "main",
-  "pages": [
-    {
-      "page": "Home",
-      "src": "wiki/pages/Home.md"
-    },
-    {
-      "page": "Supported-Boards",
-      "src": "wiki/pages/Supported-Boards.md"
-    },
-    {
-      "page": "Building-and-Flashing",
-      "src": "wiki/pages/Building-and-Flashing.md"
-    },
-    {
-      "page": "Troubleshooting",
-      "src": "wiki/pages/Troubleshooting.md"
-    },
-    {
-      "page": "Architecture",
-      "src": "wiki/pages/Architecture.md"
-    },
-    {
-      "page": "System-Apps",
-      "src": "wiki/pages/System-Apps.md"
-    },
-    {
-      "page": "Web-Interface",
-      "src": "wiki/pages/Web-Interface.md"
-    },
-    {
-      "page": "Tools",
-      "src": "wiki/pages/Tools.md"
-    },
-    {
-      "page": "celerctl-USB",
-      "src": "tools/README_USBTOOL.md"
-    },
-    {
-      "page": "OTA-Updates",
-      "src": "tools/README_OTA.md"
-    },
-    {
-      "page": "App-Development-Guide",
-      "src": "Documentation/App_Development_Guide.md"
-    },
-    {
-      "page": "JS-API",
-      "src": "Documentation/JS_API_Guide.md"
-    },
-    {
-      "page": "Contributing",
-      "src": "wiki/pages/Contributing.md"
-    },
-    {
-      "page": "Home-(Português)",
-      "src": "wiki/pages/Home.pt-BR.md"
-    },
-    {
-      "page": "Placas-Suportadas",
-      "src": "wiki/pages/Placas-Suportadas.md"
-    },
-    {
-      "page": "Compilando-e-Gravando",
-      "src": "wiki/pages/Compilando-e-Gravando.md"
-    },
-    {
-      "page": "Solução-de-Problemas",
-      "src": "wiki/pages/Solucao-de-Problemas.md"
-    },
-    {
-      "page": "Arquitetura",
-      "src": "wiki/pages/Arquitetura.md"
-    },
-    {
-      "page": "Apps-de-Sistema",
-      "src": "wiki/pages/Apps-de-Sistema.md"
-    },
-    {
-      "page": "Interface-Web",
-      "src": "wiki/pages/Interface-Web.md"
-    },
-    {
-      "page": "Ferramentas",
-      "src": "wiki/pages/Ferramentas.md"
-    },
-    {
-      "page": "celerctl-USB-(Português)",
-      "src": "tools/README_USBTOOL.pt-BR.md"
-    },
-    {
-      "page": "Atualizacao-OTA",
-      "src": "tools/README_OTA.pt-BR.md"
-    },
-    {
-      "page": "Guia-de-Apps",
-      "src": "Documentation/App_Development_Guide.pt-BR.md"
-    },
-    {
-      "page": "API-JS",
-      "src": "Documentation/JS_API_Guide.pt-BR.md"
-    },
-    {
-      "page": "Contribuindo",
-      "src": "wiki/pages/Contribuindo.md"
-    },
-    {
-      "page": "Robot-Dog",
-      "src": "wiki/pages/Robot-Dog.md"
-    },
-    {
-      "page": "Waveshare-Watch",
-      "src": "wiki/pages/Waveshare-Watch.md"
-    },
-    {
-      "page": "Robo-Cachorro",
-      "src": "wiki/pages/Robo-Cachorro.pt-BR.md"
-    },
-    {
-      "page": "Watch-Waveshare",
-      "src": "wiki/pages/Watch-Waveshare.pt-BR.md"
-    },
-    {
-      "page": "Watchface-Plugins",
-      "src": "wiki/pages/Watchface-Plugins.md"
-    },
-    {
-      "page": "Plugins-de-Watchface",
-      "src": "wiki/pages/Plugins-de-Watchface.pt-BR.md"
-    },
-    {
-      "page": "Barebone-Devkit",
-      "src": "wiki/pages/Barebone-Devkit.md"
-    },
-    {
-      "page": "Devkit-Barebone",
-      "src": "wiki/pages/Devkit-Barebone.pt-BR.md"
-    }
-  ],
-  "sidebar": [
-    {
-      "section": null,
-      "pages": [
-        "Home"
-      ]
-    },
-    {
-      "section": "Get started",
-      "pages": [
-        "Supported-Boards",
-        "Building-and-Flashing",
-        "Troubleshooting"
-      ]
-    },
-    {
-      "section": "Under the hood",
-      "pages": [
-        "Architecture",
-        "System-Apps",
-        "Web-Interface"
-      ]
-    },
-    {
-      "section": "Tools",
-      "pages": [
-        "Tools",
-        "celerctl-USB",
-        "OTA-Updates"
-      ]
-    },
-    {
-      "section": "Robotics",
-      "pages": [
-        "Robot-Dog"
-      ]
-    },
-    {
-      "section": "Wearables",
-      "pages": [
-        "Waveshare-Watch"
-      ]
-    },
-    {
-      "section": "Barebone",
-      "pages": [
-        "Barebone-Devkit"
-      ]
-    },
-    {
-      "section": "JavaScript apps",
-      "pages": [
-        "App-Development-Guide",
-        "JS-API",
-        "Watchface-Plugins"
-      ]
-    },
-    {
-      "section": "Contributing",
-      "pages": [
-        "Contributing"
-      ]
-    },
-    {
-      "section": "Português (BR)",
-      "pages": [
-        "Home-(Português)",
-        "Placas-Suportadas",
-        "Compilando-e-Gravando",
-        "Solução-de-Problemas",
-        "Arquitetura",
-        "Apps-de-Sistema",
-        "Interface-Web",
-        "Ferramentas",
-        "celerctl-USB-(Português)",
-        "Atualizacao-OTA",
-        "Guia-de-Apps",
-        "API-JS",
-        "Plugins-de-Watchface",
-        "Robo-Cachorro",
-        "Watch-Waveshare",
-        "Devkit-Barebone",
-        "Contribuindo"
-      ]
-    }
-  ]
+ "repo_url": "https://github.com/maikramer/CelerOS",
+ "branch": "main",
+ "pages": [
+  {
+   "page": "Home",
+   "src": "wiki/pages/Home.md"
+  },
+  {
+   "page": "Supported-Boards",
+   "src": "wiki/pages/Supported-Boards.md"
+  },
+  {
+   "page": "Building-and-Flashing",
+   "src": "wiki/pages/Building-and-Flashing.md"
+  },
+  {
+   "page": "Troubleshooting",
+   "src": "wiki/pages/Troubleshooting.md"
+  },
+  {
+   "page": "Architecture",
+   "src": "wiki/pages/Architecture.md"
+  },
+  {
+   "page": "System-Apps",
+   "src": "wiki/pages/System-Apps.md"
+  },
+  {
+   "page": "Pack-Mesh",
+   "src": "wiki/pages/Pack-Mesh.md"
+  },
+  {
+   "page": "Web-Interface",
+   "src": "wiki/pages/Web-Interface.md"
+  },
+  {
+   "page": "Tools",
+   "src": "wiki/pages/Tools.md"
+  },
+  {
+   "page": "celerctl-USB",
+   "src": "tools/README_USBTOOL.md"
+  },
+  {
+   "page": "OTA-Updates",
+   "src": "tools/README_OTA.md"
+  },
+  {
+   "page": "App-Development-Guide",
+   "src": "Documentation/App_Development_Guide.md"
+  },
+  {
+   "page": "JS-API",
+   "src": "Documentation/JS_API_Guide.md"
+  },
+  {
+   "page": "Contributing",
+   "src": "wiki/pages/Contributing.md"
+  },
+  {
+   "page": "Home-(Português)",
+   "src": "wiki/pages/Home.pt-BR.md"
+  },
+  {
+   "page": "Placas-Suportadas",
+   "src": "wiki/pages/Placas-Suportadas.md"
+  },
+  {
+   "page": "Compilando-e-Gravando",
+   "src": "wiki/pages/Compilando-e-Gravando.md"
+  },
+  {
+   "page": "Solução-de-Problemas",
+   "src": "wiki/pages/Solucao-de-Problemas.md"
+  },
+  {
+   "page": "Arquitetura",
+   "src": "wiki/pages/Arquitetura.md"
+  },
+  {
+   "page": "Apps-de-Sistema",
+   "src": "wiki/pages/Apps-de-Sistema.md"
+  },
+  {
+   "page": "Interface-Web",
+   "src": "wiki/pages/Interface-Web.md"
+  },
+  {
+   "page": "Ferramentas",
+   "src": "wiki/pages/Ferramentas.md"
+  },
+  {
+   "page": "celerctl-USB-(Português)",
+   "src": "tools/README_USBTOOL.pt-BR.md"
+  },
+  {
+   "page": "Atualizacao-OTA",
+   "src": "tools/README_OTA.pt-BR.md"
+  },
+  {
+   "page": "Guia-de-Apps",
+   "src": "Documentation/App_Development_Guide.pt-BR.md"
+  },
+  {
+   "page": "API-JS",
+   "src": "Documentation/JS_API_Guide.pt-BR.md"
+  },
+  {
+   "page": "Contribuindo",
+   "src": "wiki/pages/Contribuindo.md"
+  },
+  {
+   "page": "Robot-Dog",
+   "src": "wiki/pages/Robot-Dog.md"
+  },
+  {
+   "page": "Waveshare-Watch",
+   "src": "wiki/pages/Waveshare-Watch.md"
+  },
+  {
+   "page": "Robo-Cachorro",
+   "src": "wiki/pages/Robo-Cachorro.pt-BR.md"
+  },
+  {
+   "page": "Watch-Waveshare",
+   "src": "wiki/pages/Watch-Waveshare.pt-BR.md"
+  },
+  {
+   "page": "Watchface-Plugins",
+   "src": "wiki/pages/Watchface-Plugins.md"
+  },
+  {
+   "page": "Plugins-de-Watchface",
+   "src": "wiki/pages/Plugins-de-Watchface.pt-BR.md"
+  },
+  {
+   "page": "Barebone-Devkit",
+   "src": "wiki/pages/Barebone-Devkit.md"
+  },
+  {
+   "page": "Devkit-Barebone",
+   "src": "wiki/pages/Devkit-Barebone.pt-BR.md"
+  }
+ ],
+ "sidebar": [
+  {
+   "section": null,
+   "pages": [
+    "Home"
+   ]
+  },
+  {
+   "section": "Get started",
+   "pages": [
+    "Supported-Boards",
+    "Building-and-Flashing",
+    "Troubleshooting"
+   ]
+  },
+  {
+   "section": "Under the hood",
+   "pages": [
+    "Architecture",
+    "System-Apps",
+    "Web-Interface"
+   ]
+  },
+  {
+   "section": "Tools",
+   "pages": [
+    "Tools",
+    "celerctl-USB",
+    "OTA-Updates"
+   ]
+  },
+  {
+   "section": "Robotics",
+   "pages": [
+    "Robot-Dog"
+   ]
+  },
+  {
+   "section": "Wearables",
+   "pages": [
+    "Waveshare-Watch"
+   ]
+  },
+  {
+   "section": "Barebone",
+   "pages": [
+    "Barebone-Devkit"
+   ]
+  },
+  {
+   "section": "JavaScript apps",
+   "pages": [
+    "App-Development-Guide",
+    "JS-API",
+    "Watchface-Plugins"
+   ]
+  },
+  {
+   "section": "Contributing",
+   "pages": [
+    "Contributing"
+   ]
+  },
+  {
+   "section": "Português (BR)",
+   "pages": [
+    "Home-(Português)",
+    "Placas-Suportadas",
+    "Compilando-e-Gravando",
+    "Solução-de-Problemas",
+    "Arquitetura",
+    "Apps-de-Sistema",
+    "Interface-Web",
+    "Ferramentas",
+    "celerctl-USB-(Português)",
+    "Atualizacao-OTA",
+    "Guia-de-Apps",
+    "API-JS",
+    "Plugins-de-Watchface",
+    "Robo-Cachorro",
+    "Watch-Waveshare",
+    "Devkit-Barebone",
+    "Contribuindo"
+   ]
+  }
+ ]
 }

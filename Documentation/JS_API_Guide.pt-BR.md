@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 26
+### API Level: 27
 ### Nível de API: 13
 ---
 
@@ -2151,7 +2151,10 @@ clampado (aqui e de novo no motor — o app nunca é confiável): bpm 60..200,
 loops 1..8 com teto total de 120 s, 4 trilhas x 48 notas, midi 0..96
 (0 = pausa), duração 1..64 semicolcheias, volume 0..100.
 
-#### `System.playMusic(song)` (API 25)
+#### `System.playMusic(song, [opcoes])` (API 25; `opcoes` na 27)
+`opcoes.startMs` (API 27) começa a reprodução do meio da música (ms
+desde o início) — é assim que o handoff da matilha retoma no vizinho
+exatamente de onde a música parou.
 - **Parâmetros:** `song` (Object) — `{bpm: 60..200 (default 120), loops: 1..8 (default 4), tracks: [...]}`; cada trilha `{wave: "sq"|"sq25"|"tri"|"saw" (default "sq"), drum: Boolean (notas viram percussão GM), vol: 0..100 (default 80), notes: [[midi, semicolcheias], ...]}` — midi 0 é uma pausa que ainda avança o tempo, então as trilhas se alinham pela soma das durações.
 - **Retorna:** Boolean — `true` quando a música começou; `false` com o alto-falante ocupado, placa sem áudio I2S ou música sem notas.
 - **Descrição:** uma música por vez; um novo `playMusic` só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorme (como qualquer reprodução).
@@ -2204,8 +2207,8 @@ chega na outra ponta com `hops: 2`, tendo sido repetida pela do meio.
 
 O `CelerLink` (seção 15) segue sendo o canal par-a-par de alta vazão
 (240 bytes por pacote, pareamento, selos). A malha é para **cobertura**:
-telemetria, presença, comandos curtos e avisos — mensagens de até 240
-bytes, porém em fragmentos de ~18 bytes por salto de rádio (a vazão da
+telemetria, presença, comandos curtos e avisos — mensagens de até **434
+bytes**, em fragmentos de ~14 bytes por salto de rádio (a vazão da
 malha é de uns poucos pacotes por segundo por nó; não é para streaming).
 
 **Disponibilidade:** só em placas compiladas com Bluetooth
@@ -2223,7 +2226,7 @@ para telemetria e comandos de brinquedo, não para segredos.
 
 #### `CelerNet.start([opcoes])` → Boolean (API 26)
 Liga o nó da malha. `opcoes`: `{name: "Celer-Dog"` (nome anunciado, até
-18 caracteres; default `Celer-XXXX` do fim da MAC), `net: "celer"`
+15 caracteres; default `Celer-XXXX` do fim da MAC), `net: "celer"`
 (nome da rede — só nós com o mesmo nome se ouvem) e `relay: true`
 (repete pacotes de outros; `false` = só escuta e anuncia presença, para
 economia). Persiste o estado: o nó volta sozinho no próximo boot.
@@ -2242,19 +2245,32 @@ bytes (fora disso lança `RangeError`). `ttl` (1–8, default 4) é o
 alcance em saltos. Retorna `false` com a malha desligada ou a fila cheia
 — a saída é assíncrona (o rádio transmite nos próximos ~ms).
 
+#### `CelerNet.send(destino, mensagem, [opcoes])` → Boolean (API 27)
+**Unicast**: só o destino entrega a mensagem (o flood segue carregando
+pela área — os repetidores não a abrem para os outros). `destino` é o
+id do nó (`"9F2A"`) **ou o nome** (`"Celer-Dog"`, primeiro
+case-insensitive; a presença vem ordenada por sinal, nomes duplicados
+resolvem para o mais forte). Destino desconhecido lança `TypeError`.
+`opcoes`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` furam a fila
+da presença, e `copies` reenvia a mensagem com seq novo (redundância no
+lugar de ACK: **a entrega pode duplicar** — dedulique por um `id` no seu
+payload; os envelopes do OS já fazem).
+
 #### `CelerNet.poll()` → Object|null (API 26)
 Mensagem que chegou (FIFO de 8; cheia descarta a mais antiga):
-`{from: "9F2A", fromName: "Celer-Dog", msg: "...", hops: 2, rssi: -71}` —
-`from`/`fromName` são a **origem** (não o repetidor), `hops` quantos
-saltos a mensagem deu, `rssi` o sinal do último salto ouvido. `msg` é
-string (decodifique JSON se o remetente mandou objeto). `null` quando
-vazia. Drene no laço do app até voltar `null`.
+`{from: "9F2A", fromName: "Celer-Dog", msg: "...", unicast: false,
+hops: 2, rssi: -71}` — `from`/`fromName` são a **origem** (não o
+repetidor), `hops` quantos saltos a mensagem deu, `rssi` o sinal do
+último salto ouvido. `msg` é string (decodifique JSON se o remetente
+mandou objeto) e `unicast` (API 27) diz se a mensagem era endereçada a
+este nó. `null` quando vazia. Drene no laço do app até voltar `null`.
 
-#### `CelerNet.nodes()` → Array (API 26)
+#### `CelerNet.nodes()` → Array (API 26; `caps` na 27)
 Presença: nós da rede ouvidos nos últimos 15 s, sinal mais forte
-primeiro: `[{id: "9F2A", name: "Celer-Dog", rssi: -71, hops: 1,
-lastSeen: 2}]` (`lastSeen` em segundos). Cada nó anuncia presença a
-cada ~3 s.
+primeiro: `[{id: "9F2A", name: "Celer-Dog", caps: 9, rssi: -71,
+hops: 1, lastSeen: 2}]` (`lastSeen` em segundos). Cada nó anuncia
+presença a cada ~3 s; desde a API 27 o anúncio leva o **papel** do nó
+(`caps`, um bitmask — `Pack.members()` devolve decodificado).
 
 #### `CelerNet.status()` → Object (API 26)
 `{active, relay, node, name, net, txQueued, txDropped, rxDropped,
@@ -2280,4 +2296,74 @@ while ((m = CelerNet.poll()) !== null) {
 }
 var vizinhos = CelerNet.nodes();
 System.drawString(vizinhos.length + " nos ouvindo", 10, 30);
+```
+
+
+## 32. Nível de API 27 — A matilha (`Pack`): papéis, envelopes, música itinerante
+
+A **matilha** é a malha com significado: o mesmo rádio do CelerNet, lido
+pelo OS. Cada membro anuncia no beat de presença o seu **papel** — o que
+ele tem a oferecer: `speaker` (alto-falante), `mic`, `display` (tela),
+`motors` (patas), `leds`, `hub` (rede alcançável) — derivado da própria
+placa, sem configuração. E o OS fala seus próprios envelopes tipados
+pela malha (unicast, deduplicados por id de mensagem) — é por ali que
+viaja a primeira feature da matilha: **a festa itinerante** — o
+chiptune tocando no cachorro muda para o SmartDisplay (ou o relógio),
+retomando do mesmo milissegundo.
+
+O `Pack` existe onde o `CelerNet` existe (`CONFIG_CELEROS_BLUETOOTH`;
+detecte com `typeof Pack !== "undefined"`). É infraestrutura: o serviço
+roda com ou sem app aberto.
+
+#### `Pack.me()` → Object
+Quem somos na matilha: `{id: "9F2A", name: "Celer-Dog",
+caps: {speaker: true, mic: true, display: false, motors: true,
+leds: true, hub: false}, meshActive: true}` — `caps` decodificado do
+bitmask que o firmware deriva da placa (`hub` segue o estado da rede ao
+vivo).
+
+#### `Pack.members()` → Array
+A matilha ouvida nos últimos 15 s, mais forte primeiro — mesmo formato
+do `me()` mais `{rssi, hops, lastSeen}` por membro:
+`[{id, name, caps, rssi: -58, hops: 1, lastSeen: 2}]`.
+
+#### `Pack.send(destino, mensagem, [opcoes])` → Boolean
+**Envelope custom** para um membro (unicast, deduplicado pelo firmware
+— as duplicatas das cópias redundantes nunca chegam a você). `destino`
+é id ou nome (mesmas regras do `CelerNet.send`); `mensagem` é string ou
+objeto-como-JSON, 1–430 bytes (`RangeError` fora disso).
+`opcoes.urgent` fura a fila da presença. Quem recebe drena com
+`Pack.poll()`.
+
+#### `Pack.poll()` → Object|null
+Envelope custom que chegou: `{from: "9F2A", fromName: "Celer-Dog",
+data: "..."}` — `data` é string (decode o JSON que você mandou). `null`
+quando vazio. Mensagens de `CelerNet.broadcast` puro continuam chegando
+pelo `CelerNet.poll()` como sempre — os dois canais não se misturam.
+
+#### `Pack.handoffMusic([destino])` → Boolean
+**Passa a festa adiante**: serializa a sessão do `System.playMusic` em
+curso (música + posição) numa única mensagem da malha e o membro com
+alto-falante retoma do mesmo ponto. `destino` omitido = o mais forte
+com `caps.speaker`. `false` se nada está tocando aqui, a malha está
+desligada ou não há receptor por perto. No sucesso a música local para
+(e se o alto-falante do receptor estiver ocupado o envelope é largado —
+a música fica onde estava).
+
+### Exemplo — a festa itinerante
+
+```javascript
+// a festa no cachorro (Dog Face ou qualquer app):
+System.playMusic({bpm: 128, loops: 4, tracks: [
+    {wave: "sq",  vol: 80, notes: [[64,2],[67,2],[71,2],[74,2]]},
+    {drum: true,  vol: 90, notes: [[36,4],[42,2],[42,2]]}
+]});
+// ...se afastando do cachorro:
+Pack.handoffMusic();            // continua no SmartDisplay
+
+// qualquer membro, vigiando envelopes:
+var e;
+while ((e = Pack.poll()) !== null) {
+    System.notify(e.fromName, e.data);
+}
 ```

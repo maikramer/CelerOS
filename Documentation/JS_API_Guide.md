@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 26
+### API Level: 27
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1874,7 +1874,10 @@ clamped (here and again in the engine — the app is never trusted): bpm
 60..200, loops 1..8 with a 120 s total cap, 4 tracks × 48 notes, midi
 0..96 (0 = rest), duration 1..64 sixteenths, volume 0..100.
 
-#### `System.playMusic(song)` (API 25)
+#### `System.playMusic(song, [options])` (API 25; `options` in 27)
+`options.startMs` (API 27) starts playback from the middle of the song
+(ms since the beginning) — that is how the pack handoff resumes on the
+neighbor exactly where the music stopped.
 - **Parameters:** `song` (Object) — `{bpm: 60..200 (default 120), loops: 1..8 (default 4), tracks: [...]}`; each track `{wave: "sq"|"sq25"|"tri"|"saw" (default "sq"), drum: Boolean (notes become GM percussion), vol: 0..100 (default 80), notes: [[midi, sixteenths], ...]}` — midi 0 is a rest that still advances time, so tracks line up by the sum of their durations.
 - **Returns:** Boolean — `true` when the song started; `false` when the speaker is busy, the board has no I2S audio or the song has no notes.
 - **Description:** one song at a time; a new `playMusic` only starts after the previous one ends (or is stopped). While it plays the on-device wake word detector sleeps (same as any playback).
@@ -1928,7 +1931,7 @@ arrives at the other end with `hops: 2`, relayed by the middle one.
 `CelerLink` (section 15) remains the high-throughput point-to-point
 channel (240 bytes per packet, pairing, sealed messages). The mesh is for
 **coverage**: telemetry, presence, short commands and notices — messages
-up to 240 bytes, but carried in ~18-byte fragments per radio hop (the
+up to **434 bytes**, carried in ~14-byte fragments per radio hop (the
 mesh moves a few packets per second per node; it is not for streaming).
 
 **Availability:** only on boards built with Bluetooth
@@ -1947,7 +1950,7 @@ messages — use it for telemetry and toy commands, not secrets.
 
 #### `CelerNet.start([options])` → Boolean (API 26)
 Turns this node on. `options`: `{name: "Celer-Dog"` (announced name, up
-to 18 characters; default `Celer-XXXX` from the end of the MAC),
+to 15 characters; default `Celer-XXXX` from the end of the MAC),
 `net: "celer"` (network name — only nodes with the same name hear each
 other) and `relay: true` (repeat others' packets; `false` = listen and
 announce presence only, for battery). State persists: the node comes
@@ -1969,16 +1972,32 @@ delivery is asynchronous (the radio transmits over the next few ms).
 
 #### `CelerNet.poll()` → Object|null (API 26)
 A message that arrived (FIFO of 8; full drops the oldest):
-`{from: "9F2A", fromName: "Celer-Dog", msg: "...", hops: 2, rssi: -71}` —
-`from`/`fromName` are the **origin** (not the relayer), `hops` is how
-many hops the message took, `rssi` the last heard hop's signal. `msg` is
-a string (JSON.parse it if the sender used an object). `null` when
-empty. Drain it in the app loop until it returns `null`.
+`{from: "9F2A", fromName: "Celer-Dog", msg: "...", unicast: false,
+hops: 2, rssi: -71}` — `from`/`fromName` are the **origin** (not the
+relayer), `hops` is how many hops the message took, `rssi` the last heard
+hop's signal. `msg` is a string (JSON.parse it if the sender used an
+object), `unicast` (API 27) tells whether that message was addressed to
+this node. `null` when empty. Drain it in the app loop until it returns
+`null`.
 
-#### `CelerNet.nodes()` → Array (API 26)
+#### `CelerNet.send(to, message, [options])` → Boolean (API 27)
+**Unicast**: only the destination delivers the message (the flood still
+carries it across the area — relays do not open it for others). `to` is
+the destination id (`"9F2A"`) **or name** (`"Celer-Dog"`, first
+case-insensitive match; presence is sorted by signal, so duplicate names
+resolve to the strongest). Unknown destination throws a `TypeError`.
+`options`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` moves the
+handoff ahead of presence traffic, and `copies` re-sends the message with
+a new sequence number (redundancy in place of ACKs: **delivery may
+duplicate** — deduplicate by an `id` in your payload, the OS envelopes
+already do).
+
+#### `CelerNet.nodes()` → Array (API 26; `caps` in 27)
 Presence: network nodes heard in the last 15 s, strongest signal first:
-`[{id: "9F2A", name: "Celer-Dog", rssi: -71, hops: 1, lastSeen: 2}]`
-(`lastSeen` in seconds). Every node announces presence every ~3 s.
+`[{id: "9F2A", name: "Celer-Dog", caps: 9, rssi: -71, hops: 1,
+lastSeen: 2}]` (`lastSeen` in seconds). Every node announces presence
+every ~3 s; since API 27 the announcement carries the node's **role**
+(`caps`, a bitmask — use `Pack.members()` for it decoded).
 
 #### `CelerNet.status()` → Object (API 26)
 `{active, relay, node, name, net, txQueued, txDropped, rxDropped,
@@ -2004,4 +2023,74 @@ while ((m = CelerNet.poll()) !== null) {
 }
 var neighbors = CelerNet.nodes();
 System.drawString(neighbors.length + " nodes heard", 10, 30);
+```
+
+
+## 32. API Level 27 — The pack (`Pack`): roles, envelopes, roaming music
+
+The **pack** is the mesh with meaning: the same CelerNet radio, read
+through the OS. Each member announces its **role** in the presence beat
+— what it has to offer: `speaker`, `mic`, `display`, `motors`, `leds`,
+`hub` (network reachable) — derived from the board itself, no
+configuration. And the OS speaks its own typed envelopes over the mesh
+(unicast, deduplicated by message id), which is how the first pack
+feature travels: **the roaming party** — the chiptune playing on the dog
+moves to the SmartDisplay (or the watch), resuming from the same
+millisecond.
+
+`Pack` exists wherever `CelerNet` does (`CONFIG_CELEROS_BLUETOOTH`;
+detect with `typeof Pack !== "undefined"`). It is infrastructure: the
+service runs with or without an app open.
+
+#### `Pack.me()` → Object
+Who we are in the pack: `{id: "9F2A", name: "Celer-Dog",
+caps: {speaker: true, mic: true, display: false, motors: true,
+leds: true, hub: false}, meshActive: true}` — `caps` decoded from the
+bitmask the firmware derives from the board (`hub` follows the network
+state live).
+
+#### `Pack.members()` → Array
+The pack heard in the last 15 s, strongest first — same shape as
+`me()` plus `{rssi, hops, lastSeen}` per member:
+`[{id, name, caps, rssi: -58, hops: 1, lastSeen: 2}]`.
+
+#### `Pack.send(to, message, [options])` → Boolean
+A **custom envelope** to one member (unicast, deduplicated by the
+firmware — duplicates from the redundant copies never reach you). `to`
+is id or name (same rules as `CelerNet.send`); `message` is a string or
+object-as-JSON, 1–430 bytes (`RangeError` outside). `options.urgent`
+moves it ahead of presence traffic. The receiver drains it with
+`Pack.poll()`.
+
+#### `Pack.poll()` → Object|null
+A custom envelope that arrived: `{from: "9F2A", fromName: "Celer-Dog",
+data: "..."}` — `data` is a string (JSON.parse what you sent). `null`
+when empty. Messages sent with plain `CelerNet.broadcast` keep arriving
+via `CelerNet.poll()` as always — the two channels do not mix.
+
+#### `Pack.handoffMusic([to])` → Boolean
+**Passes the party along**: serializes the `System.playMusic` session in
+course (song + position) into one mesh message and the member with a
+speaker resumes it from the same point. `to` omitted = the strongest
+member with `caps.speaker`. `false` when nothing is playing here, the
+mesh is off, or no receiver is around. On success the local music stops
+(and if the receiver's speaker is busy the envelope is dropped — the
+music stays wherever it was).
+
+### Example — the roaming party
+
+```javascript
+// the dog's party (Dog Face or any app):
+System.playMusic({bpm: 128, loops: 4, tracks: [
+    {wave: "sq",  vol: 80, notes: [[64,2],[67,2],[71,2],[74,2]]},
+    {drum: true,  vol: 90, notes: [[36,4],[42,2],[42,2]]}
+]});
+// ...walking away from the dog:
+Pack.handoffMusic();            // continues on the SmartDisplay
+
+// any member, watching for envelopes:
+var e;
+while ((e = Pack.poll()) !== null) {
+    System.notify(e.fromName, e.data);
+}
 ```

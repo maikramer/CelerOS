@@ -4,10 +4,12 @@
 
 Os apps de sistema do CelerOS são **JavaScript** (ES5, Duktape) e moram na
 partição LittleFS, montada em `/local` — o firmware carrega só o core. Isso
-cortou ~330 KB da imagem da CYD e virou o padrão da casa: os 13 apps em
+cortou ~330 KB da imagem da CYD e virou o padrão da casa: os 14 apps em
 `data/apps/` são todos JS (App Store, Barebone, Chat IA, HTTP Demo, Help,
-Installer, Qwen, Settings, Snake, Terminal, Touch Test, Watchface, Web
-Server). Placas podem acrescentar os seus por cima (overlay): Dog Face no
+Installer, Matilha, Qwen, Settings, Snake, Terminal, Touch Test,
+Watchface, Web Server) — a Matilha (API 27) é o painel da matilha: liga a
+malha, mostra os membros com o papel de cada um, mensagens diretas e o
+handoff da música itinerante. Placas podem acrescentar os seus por cima (overlay): Dog Face no
 dog; Alarmes, Atividade, Celular, Clima, Musica e Timer no watch.
 
 ## Layout
