@@ -1,0 +1,13 @@
+{
+  "name": "PackTest",
+  "packageName": "test.packtest",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench da matilha: liga a malha e valida o handoff de musica (resultado em /local/packtest.txt). App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "topbar": false,
+  "changelog": "1.0.0 - bench da rodada 1 da matilha"
+}
