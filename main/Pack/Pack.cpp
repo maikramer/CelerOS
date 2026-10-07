@@ -94,18 +94,29 @@ bool msgHandler(const CelerNet::Msg& m) {
     }
     if (kind == KIND_MUSIC) {
         // [posMs u32][songLen u16][song]
-        if (m.len < ENV_HDR + 6) return true;
+        if (m.len < ENV_HDR + 6) {
+            ESP_LOGW(TAG, "hop: curto (%u B)", (unsigned)m.len);
+            return true;
+        }
         const uint32_t pos = ((uint32_t)m.data[4] << 24) | ((uint32_t)m.data[5] << 16) |
                              ((uint32_t)m.data[6] << 8) | m.data[7];
         const uint16_t songLen = (uint16_t)((m.data[8] << 8) | m.data[9]);
-        if (songLen == 0 || songLen > sizeof(s_musicSong)) return true;
-        if ((size_t)ENV_HDR + 4 + 2 + songLen != m.len) return true;
+        if (songLen == 0 || songLen > sizeof(s_musicSong)) {
+            ESP_LOGW(TAG, "hop: songLen %u invalido", (unsigned)songLen);
+            return true;
+        }
+        if ((size_t)ENV_HDR + 4 + 2 + songLen != m.len) {
+            ESP_LOGW(TAG, "hop: len %u != 10+%u", (unsigned)m.len, (unsigned)songLen);
+            return true;
+        }
         if (s_musicPend) return true;  // uma festa por vez
         s_musicPosMs = pos;
         s_musicSongLen = songLen;
         memcpy(s_musicSong, m.data + ENV_HDR + 6, songLen);
         snprintf(s_musicFrom, sizeof(s_musicFrom), "%s", m.fromName[0] ? m.fromName : "");
         s_musicPend = true;
+        ESP_LOGI(TAG, "hop rx: festa de \"%s\" pos=%u song=%u B pendente", s_musicFrom,
+                 (unsigned)pos, (unsigned)songLen);
         return true;
     }
     return true;  // kind desconhecido (futuro): consumido, nao e do JS
@@ -237,6 +248,11 @@ void tick() {
             } else {
                 ESP_LOGI(TAG, "festa de \"%s\" recusada (sem speaker ou ocupado)", s_musicFrom);
             }
+        } else {
+            // sem else isto morria em silencio (bancada: a song de 84 B
+            // remontava no 4848 e nada acontecia)
+            ESP_LOGW(TAG, "festa de \"%s\": song nao decoda (%u B)",
+                     s_musicFrom, (unsigned)s_musicSongLen);
         }
     }
 }

@@ -48,7 +48,7 @@ function packJson() {
     try { return { from: e.from, o: JSON.parse(e.data) }; } catch (err) { return null; }
 }
 
-if (role === "master" && Storage.get("suite8") === "ran") {
+if (role === "master" && Storage.get("suite11") === "ran") {
     role = "peer";  // relançado pelo idle-home: nao re-mede nada
 }
 
@@ -176,7 +176,7 @@ if (role === "master") {
     var st = CelerNet.status();
     N("fim: txDrop=" + st.txDropped + " rxDrop=" + st.rxDropped +
       " relayed=" + st.relayed + " ouvidos=" + st.heard);
-    Storage.set("suite8", "ran");
+    Storage.set("suite11", "ran");
     N("suite concluida - proximos lancamentos entram em modo peer");
     System.exitApp();
 }
