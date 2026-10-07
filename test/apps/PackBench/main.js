@@ -19,7 +19,7 @@ function N(s) { System.notify("bench", s); }
 
 function boardName() {
     var b = System.getInfo().board;
-    if (b.indexOf("zzpet") >= 0) return "Bench-dog";
+    if (b.indexOf("zzpet") >= 0 || b.indexOf("spotpear") >= 0) return "Bench-dog";
     if (b.indexOf("waveshare") >= 0) return "Bench-watch";
     if (b.indexOf("smartdisplay") >= 0) return "Bench-board";
     return "Bench-x";
@@ -34,19 +34,21 @@ if (typeof CelerNet === "undefined" || typeof Pack === "undefined") {
     System.exitApp();
 }
 var NAME = boardName();
-CelerNet.start({ name: NAME });
+// start idempotente: re-startar um no ATIVO reseta seqs/filas/dedup no
+// meio da malha (suspeito da degradacao dog<->watch) — so sobe se caiu
+if (!CelerNet.status().active) CelerNet.start({ name: NAME });
 System.keepAwake(120000);  // 2 min de tela acesa (onde ha estados de tela)
 var me = Pack.me();
-var role = (me.caps.motors || me.caps.mic) ? "master" : "peer";
+var role = me.caps.motors ? "master" : "peer";
 
-// Drena envelopes custom; devolve o JSON parsed (ou null)
+// Drena envelopes custom; devolve {from, o} ou null
 function packJson() {
     var e = Pack.poll();
     if (e === null) return null;
-    try { return JSON.parse(e.data); } catch (err) { return null; }
+    try { return { from: e.from, o: JSON.parse(e.data) }; } catch (err) { return null; }
 }
 
-if (role === "master" && Storage.get("suite") === "ran") {
+if (role === "master" && Storage.get("suite8") === "ran") {
     role = "peer";  // relançado pelo idle-home: nao re-mede nada
 }
 
@@ -87,15 +89,15 @@ if (role === "master") {
         var lost = 0;
         for (var p = 0; p < 5; p++) {
             var t0 = System.millis();
-            Pack.send(peer.id, { ping: p, from: NAME });
+            Pack.send(peer.id, { p: p, d: "b" });
             var rtt = -1;
-            while (System.millis() - t0 < 3500 && rtt < 0) {
+            while (System.millis() - t0 < 15000 && rtt < 0) {
                 System.delay(80);
                 var fg = UI.begin();
                 header("PackBench ping");
-                var o;
-                while (rtt < 0 && (o = packJson()) !== null) {
-                    if (o.ack === p && (o.de === peer.name || o.de === peer.id)) {
+                var pj2;
+                while (rtt < 0 && (pj2 = packJson()) !== null) {
+                    if (pj2.o.a === p) {
                         rtt = System.millis() - t0;
                     }
                 }
@@ -123,9 +125,9 @@ if (role === "master") {
         System.delay(100);
         var fb = UI.begin();
         header("PackBench bcast");
-        var ob;
-        while ((ob = packJson()) !== null) {
-            if (ob.back !== undefined) bAcks++;
+        var pj3;
+        while ((pj3 = packJson()) !== null) {
+            if (pj3.o.back !== undefined) bAcks++;
         }
         while (CelerNet.poll() !== null) {}  // drena ecos do broadcast
         UI.text("confirmacoes: " + bAcks, 10, 60);
@@ -144,6 +146,7 @@ if (role === "master") {
     for (var h = 0; h < members.length; h++) {
         var tgt = members[h];
         if (!tgt.caps.speaker) continue;
+        System.delay(600);  // beep da notify anterior segura o speaker ~300 ms
         if (!System.playMusic(song)) {
             N("handoff: alto-falante do mestre ocupado");
             break;
@@ -173,30 +176,42 @@ if (role === "master") {
     var st = CelerNet.status();
     N("fim: txDrop=" + st.txDropped + " rxDrop=" + st.rxDropped +
       " relayed=" + st.relayed + " ouvidos=" + st.heard);
-    Storage.set("suite", "ran");
+    Storage.set("suite8", "ran");
     N("suite concluida - proximos lancamentos entram em modo peer");
     System.exitApp();
 }
 
 // ---------------- peer: responde ACKs e reporta festas (atos de 24 s) ---
+// No quadro (sem homeApp = sem idle-home) o peer fica vivo a suíte toda:
+// 6 atos ~2,4 min; no watch/dog cada ato sai e o autostart relança.
+var ATOS = NAME === "Bench-board" ? 6 : 1;
 var counts = { ack: 0, festa: 0, bcast: 0 };
 var saved = Storage.get("counts");
 if (saved) { try { counts = JSON.parse(saved); } catch (e5) {} }
+for (var ato = 0; ato < ATOS; ato++) {
 var wasPlaying = System.musicPlaying();
 var festaPosReportada = false;
+var rx1 = true;
 var t0p = System.millis();
 while (System.millis() - t0p < 24000) {
     var fp = UI.begin();
     header("PackBench peer");
-    var o2;
-    while ((o2 = packJson()) !== null) {
-        if (o2.ping !== undefined) {
-            Pack.send(o2.from || "mestre", { ack: o2.ping, de: NAME });
+    var pj;
+    while ((pj = packJson()) !== null) {
+        var o2 = pj.o;
+        if (rx1) { rx1 = false; N("rx: " + ("" + o2).substring(0, 60)); }
+        if (o2.p !== undefined) {
+            Pack.send(pj.from, { a: o2.p });
             counts.ack++;
         }
     }
     var mb;
+    var cru1 = true;
     while ((mb = CelerNet.poll()) !== null) {
+        if (cru1) {
+            cru1 = false;
+            N("cru de " + (mb.fromName || mb.from) + ": " + ("" + mb.msg).substring(0, 40));
+        }
         try {
             var ob2 = JSON.parse(mb.msg);
             if (ob2 && ob2.bcast !== undefined && ob2.from) {
@@ -232,5 +247,6 @@ while (System.millis() - t0p < 24000) {
 Storage.set("counts", JSON.stringify(counts));
 N("peer " + NAME + ": acks=" + counts.ack + " festas=" + counts.festa +
   " bcasts=" + counts.bcast);
+}
 // autostart relança (watch/dog); no quadro o launcher segue com a malha viva
 System.exitApp();
