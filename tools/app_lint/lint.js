@@ -59,11 +59,12 @@ const ASSET_EXTS = ['.js', '.png', '.wav', '.qoa', '.json', '.bin'];
 const FILE_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'CelerNet', 'Storage', 'Sensors', 'Phone', 'UI'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'CelerNet', 'Pack', 'Storage', 'Sensors', 'Phone', 'UI'];
 // Objetos que so existem com o Kconfig da placa: uso sem typeof vira aviso
 const OPTIONAL_ROOTS = {
   CelerLink: 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar',
   CelerNet: 'CelerNet e opcional (so placas com Bluetooth): proteja com typeof CelerNet !== "undefined" antes de usar',
+  Pack: 'Pack e opcional (so placas com Bluetooth): proteja com typeof Pack !== "undefined" antes de usar',
   Phone: 'Phone e opcional (so placas com Phone Link, ex.: watch): proteja com typeof Phone !== "undefined" antes de usar',
 };
 

@@ -1,0 +1,13 @@
+{
+  "name": "PackBench",
+  "packageName": "test.packbench",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Suíte E2E da matilha: presença com caps, RTT de unicast com ACK, broadcast com confirmações e handoff de música com prova de seek. Relatório por System.notify (/local/notifications.txt). App de bancada, não instalar na fábrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "topbar": false,
+  "changelog": "1.0.0 - suíte E2E da rodada 1 da matilha (3 placas)"
+}
