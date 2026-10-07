@@ -1,7 +1,7 @@
 #ifndef CELEROS_BT_NET_FRAME_H
 #define CELEROS_BT_NET_FRAME_H
 
-// CelerNet: quadro da malha por flood de advertising (API 26).
+// CelerNet: quadro da malha por flood de advertising (API 26; v2 na 27).
 //
 // Cada no da malha anuncia pacotes ADV_NONCONN de 31 bytes e escuta o ar;
 // quem ouve um quadro novo repete com ttl-1 — a area e coberta por saltos,
@@ -11,19 +11,25 @@
 // advertising bearer do BLE Mesh e cru (magic 'C''N' no byte 0 decide o que
 // e nosso; scanners de fora ignoram payload desconhecido).
 //
-// Layout (13 bytes de cabecalho + dados, total <= 31):
-//   'C''N' | ver(1) | tipo(1) | netId(2) | src(2) | seq(2) | ttl(1) | hops(1) | dlen(1) | dados(dlen)
+// Layout v2 (15 bytes de cabecalho + dados, total <= 31):
+//   'C''N' | ver(1) | tipo(1) | netId(2) | src(2) | dst(2) | seq(2) | ttl(1)
+//         | hops(1) | dlen(1) | dados(dlen)
 //
-//   ver    = 1
-//   tipo   = BEAT (presenca, dados = nome) | DATA (mensagem inteira, <= 18 B)
-//          | FRAG (fragmento: [idx(1)][total(1)][chunk(<= 16 B)]; mensagem
-//            de ate 240 B = 15 fragmentos com o MESMO (src, seq))
+//   ver    = 2 (v1 nao tinha dst; a v2 nasceu antes do primeiro push da v1)
+//   tipo   = BEAT (presenca: [caps(1)][nome NUL]) | DATA (mensagem inteira,
+//          |   <= 16 B) | FRAG (fragmento: [idx(1)][total(1)][chunk(<= 14 B)];
+//          |   mensagem de ate 434 B = 31 fragmentos com o MESMO (src, seq)
 //   netId  = FNV-1a 16 bits do nome da rede: so entra na malha quem tem o
-//            mesmo ID (v1 aberta; criptografia fica para a v2)
+//            mesmo ID (v1 aberta; criptografia fica para uma v3)
 //   src    = 2 ultimos bytes da MAC BT (identidade do no, zero config)
+//   dst    = destino do UNICAST; 0xFFFF = broadcast (todos entregam). O
+//            repetidor NAO filtra por dst: o quadro segue o flood do mesmo
+//            jeito — so a ENTREGA e do destinatario.
 //   seq    = contador u16 por no; dedup por (src, seq, idx)
 //   ttl    = saltos restantes (repetidor decrementa); max 8
 //   hops   = saltos ja dados (repetidor incrementa; e o que o app mostra)
+//
+// caps do BEAT (byte 0 dos dados): o que o no oferece a matilha.
 //
 // Header-only puro, sem um tipo do ESP/NimBLE: compila no host e os testes
 // C++ (test/cpp) exercitam round-trip, dedup e remontagem.
@@ -35,25 +41,35 @@
 namespace netframe {
 
 constexpr uint8_t MAGIC[2] = {'C', 'N'};
-constexpr uint8_t VERSION = 1;
-constexpr size_t HDR = 13;             // cabecalho inteiro (ate dlen)
+constexpr uint8_t VERSION = 2;
+constexpr size_t HDR = 15;             // cabecalho inteiro (ate dlen)
 constexpr size_t ADV_MAX = 31;         // payload do ADV_NONCONN legado
-constexpr size_t DATA_MAX = ADV_MAX - HDR;  // 18 bytes de dados
-constexpr uint8_t TYPE_BEAT = 0;       // presenca: dados = nome (NUL incluso)
-constexpr uint8_t TYPE_DATA = 1;       // mensagem que cabe inteira (<= 18 B)
+constexpr size_t DATA_MAX = ADV_MAX - HDR;  // 16 bytes de dados
+constexpr uint16_t DST_BROADCAST = 0xFFFF;
+constexpr uint8_t TYPE_BEAT = 0;       // presenca: [caps(1)][nome NUL]
+constexpr uint8_t TYPE_DATA = 1;       // mensagem que cabe inteira (<= 16 B)
 constexpr uint8_t TYPE_FRAG = 2;       // fragmento de mensagem maior
 constexpr size_t FRAG_IDX = 1;         // posicao do idx nos dados do FRAG
-constexpr size_t FRAG_TOTAL = 1;       // posicao do total nos dados
-constexpr size_t CHUNK_MAX = DATA_MAX - FRAG_IDX - FRAG_TOTAL;  // 16
-constexpr uint8_t MAX_FRAGS = 15;      // 15 x 16 = 240 (teto da mensagem)
-constexpr size_t MSG_MAX = 240;        // mesmo teto do CelerLink.send
+constexpr size_t FRAG_TOTAL = 1;       // posicao do total
+constexpr size_t CHUNK_MAX = DATA_MAX - FRAG_IDX - FRAG_TOTAL;  // 14
+constexpr uint8_t MAX_FRAGS = 31;      // 31 x 14 = 434 (teto da mensagem)
+constexpr size_t MSG_MAX = 434;        // envelope de musica cabe inteiro
 constexpr uint8_t TTL_MAX = 8;
 constexpr uint8_t TTL_DEFAULT = 4;
+
+// caps do BEAT: papel do no na matilha (bitmask nos dados do BEAT).
+constexpr uint8_t CAPS_SPEAKER = 0x01;  // tem alto-falante (recebe musica)
+constexpr uint8_t CAPS_MIC = 0x02;      // tem microfone
+constexpr uint8_t CAPS_DISPLAY = 0x04;  // tem tela (matilha mostra nele)
+constexpr uint8_t CAPS_MOTORS = 0x08;   // se move (patas/motores)
+constexpr uint8_t CAPS_LEDS = 0x10;     // matriz/fitas de LED
+constexpr uint8_t CAPS_HUB = 0x20;      // rede configurada (alcaca o hub)
 
 struct Frame {
     uint8_t type = TYPE_DATA;
     uint16_t netId = 0;
     uint16_t src = 0;
+    uint16_t dst = DST_BROADCAST;
     uint16_t seq = 0;
     uint8_t ttl = TTL_DEFAULT;
     uint8_t hops = 0;
@@ -84,11 +100,13 @@ inline size_t encode(const Frame& f, uint8_t* out, size_t cap) {
     out[5] = (uint8_t)f.netId;
     out[6] = (uint8_t)(f.src >> 8);
     out[7] = (uint8_t)f.src;
-    out[8] = (uint8_t)(f.seq >> 8);
-    out[9] = (uint8_t)f.seq;
-    out[10] = f.ttl;
-    out[11] = f.hops;
-    out[12] = f.dlen;
+    out[8] = (uint8_t)(f.dst >> 8);
+    out[9] = (uint8_t)f.dst;
+    out[10] = (uint8_t)(f.seq >> 8);
+    out[11] = (uint8_t)f.seq;
+    out[12] = f.ttl;
+    out[13] = f.hops;
+    out[14] = f.dlen;
     memcpy(out + HDR, f.data, f.dlen);
     return len;
 }
@@ -98,14 +116,15 @@ inline size_t encode(const Frame& f, uint8_t* out, size_t cap) {
 inline bool decode(const uint8_t* buf, size_t len, Frame* out) {
     if (len < HDR || len > ADV_MAX) return false;
     if (buf[0] != MAGIC[0] || buf[1] != MAGIC[1] || buf[2] != VERSION) return false;
-    uint8_t dlen = buf[12];
+    uint8_t dlen = buf[14];
     if ((size_t)dlen + HDR != len) return false;
     out->type = buf[3];
     out->netId = (uint16_t)((buf[4] << 8) | buf[5]);
     out->src = (uint16_t)((buf[6] << 8) | buf[7]);
-    out->seq = (uint16_t)((buf[8] << 8) | buf[9]);
-    out->ttl = buf[10];
-    out->hops = buf[11];
+    out->dst = (uint16_t)((buf[8] << 8) | buf[9]);
+    out->seq = (uint16_t)((buf[10] << 8) | buf[11]);
+    out->ttl = buf[12];
+    out->hops = buf[13];
     out->dlen = dlen;
     out->data = buf + HDR;
     if (out->ttl == 0 || out->ttl > TTL_MAX) return false;
@@ -199,7 +218,7 @@ public:
         if ((size_t)(idx * CHUNK_MAX + chunkLen) > MSG_MAX) return false;
         if (idx + 1 < total && chunkLen != CHUNK_MAX) return false;  // so o ultimo pode ser curto
         memcpy(s->buf + idx * CHUNK_MAX, chunk, chunkLen);
-        s->gotMask |= (uint16_t)(1u << idx);
+        s->gotMask |= (uint32_t)(1u << idx);
         if ((size_t)(idx * CHUNK_MAX + chunkLen) > s->len) s->len = (uint16_t)(idx * CHUNK_MAX + chunkLen);
         if (s->gotMask != totalMask(s->total)) return false;
         size_t n = s->len < cap ? s->len : cap;
@@ -219,15 +238,15 @@ private:
         uint16_t src = 0, seq = 0;
         bool active = false;
         uint8_t total = 0;
-        uint16_t gotMask = 0;  // bit i = fragmento i em maos (ate 15)
+        uint32_t gotMask = 0;  // bit i = fragmento i em maos (ate 31)
         uint16_t len = 0;
         uint32_t lastMs = 0;
         uint8_t buf[MSG_MAX] = {};
     };
     Slot m_s[SLOTS];
 
-    static uint16_t totalMask(uint8_t total) {
-        return (uint16_t)((1u << total) - 1);  // total <= 15
+    static uint32_t totalMask(uint8_t total) {
+        return (uint32_t)((1u << total) - 1);  // total <= 31
     }
 };
 

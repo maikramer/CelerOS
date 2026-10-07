@@ -585,20 +585,21 @@ static void testMusicEngine() {
 }
 
 // CelerNet (NetFrame.h): quadro da malha por flood de advertising —
-// round-trip, fragmentacao/remontagem e dedup, tudo no host.
+// round-trip (com dst do unicast), fragmentacao/remontagem e dedup, no host.
 static void testNetFrame() {
     using namespace netframe;
 
-    // round-trip DATA com o payload maximo (18 B)
+    // round-trip DATA com o payload maximo (16 B) e dst do unicast
     uint8_t buf[ADV_MAX];
     Frame f;
     f.type = TYPE_DATA;
     f.netId = 0xBEEF;
     f.src = 0x1234;
+    f.dst = 0xA1B2;
     f.seq = 0x5678;
     f.ttl = 4;
     f.hops = 2;
-    const uint8_t payload[DATA_MAX] = "0123456789ABCDEFG";  // 17 + NUL = 18
+    const uint8_t payload[DATA_MAX] = "0123456789ABCDE";  // 15 + NUL = 16
     f.dlen = DATA_MAX;
     f.data = payload;
     size_t n = encode(f, buf, sizeof(buf));
@@ -606,8 +607,23 @@ static void testNetFrame() {
     Frame g;
     CHECK(decode(buf, n, &g));
     CHECK(g.type == TYPE_DATA && g.netId == 0xBEEF && g.src == 0x1234 && g.seq == 0x5678);
+    CHECK(g.dst == 0xA1B2);
     CHECK(g.ttl == 4 && g.hops == 2 && g.dlen == DATA_MAX);
     CHECK(memcmp(g.data, payload, DATA_MAX) == 0);
+    CHECK(g.dst != DST_BROADCAST);
+
+    // default do Frame e broadcast: vizinho nao filtrado entrega
+    Frame bc;
+    CHECK(bc.dst == DST_BROADCAST);
+    bc.type = TYPE_DATA;
+    bc.netId = 0xBEEF;
+    bc.src = 0x1234;
+    bc.seq = 1;
+    bc.dlen = 2;
+    const uint8_t two[2] = {0xAA, 0xBB};
+    bc.data = two;
+    n = encode(bc, buf, sizeof(buf));
+    CHECK(decode(buf, n, &g) && g.dst == DST_BROADCAST);
 
     // rejeicoes: dados grandes demais, ttl fora da faixa, lixo no ar
     Frame bad = f;
@@ -617,17 +633,23 @@ static void testNetFrame() {
     bad = f; bad.ttl = TTL_MAX + 1; CHECK(encode(bad, buf, sizeof(buf)) == 0);
     CHECK(!decode(buf, n - 1, &g));                 // tamanho colidindo
     buf[0] = 'X';            CHECK(!decode(buf, n, &g));  // magic errado
-    buf[0] = 'C'; buf[2] = 2; CHECK(!decode(buf, n, &g));  // versao errada
+    buf[0] = 'C'; buf[2] = 1; CHECK(!decode(buf, n, &g));  // versao errada (v1)
 
-    // BEAT com nome
+    // BEAT v2: [caps(1)][nome] — o papel do no viaja na presenca
     f.type = TYPE_BEAT;
+    f.dst = DST_BROADCAST;
     const char* nome = "Celer-Dog";
-    f.dlen = (uint8_t)strlen(nome);
-    f.data = (const uint8_t*)nome;
+    uint8_t beat[DATA_MAX];
+    beat[0] = CAPS_SPEAKER | CAPS_MOTORS | CAPS_LEDS;
+    size_t nomeLen = strlen(nome);
+    memcpy(beat + 1, nome, nomeLen);
+    f.dlen = (uint8_t)(1 + nomeLen);
+    f.data = beat;
     n = encode(f, buf, sizeof(buf));
-    CHECK(n == HDR + strlen(nome));
+    CHECK(n == HDR + 1 + nomeLen);
     CHECK(decode(buf, n, &g) && g.type == TYPE_BEAT);
-    CHECK(memcmp(g.data, nome, strlen(nome)) == 0);
+    CHECK(g.data[0] == (CAPS_SPEAKER | CAPS_MOTORS | CAPS_LEDS));
+    CHECK(memcmp(g.data + 1, nome, nomeLen) == 0);
 
     // fnv16: deterministico e distingue nomes de rede
     CHECK(fnv16("celer") == fnv16("celer"));
@@ -644,17 +666,18 @@ static void testNetFrame() {
     dd.clear();
     CHECK(!dd.seen(1, 100, 0));   // clear: tudo novo de novo
 
-    // remontagem: mensagem de 240 B = 15 fragmentos de 16 B, fora de ordem
+    // remontagem: mensagem de 434 B = 31 fragmentos de 14 B, fora de ordem
     uint8_t msg[MSG_MAX];
     for (size_t i = 0; i < MSG_MAX; i++) msg[i] = (uint8_t)(i * 7);
     Reassembler ra;
     uint8_t out[MSG_MAX];
     size_t outLen = 0;
-    const uint8_t total = (MSG_MAX + CHUNK_MAX - 1) / CHUNK_MAX;  // 15
+    const uint8_t total = (MSG_MAX + CHUNK_MAX - 1) / CHUNK_MAX;  // 31
+    CHECK(total == MAX_FRAGS);
     bool done = false;
     for (int pass = 0; pass < 2 && !done; pass++) {
         for (int k = 0; k < total && !done; k++) {
-            int idx = (k * 7) % total;  // ordem embaralhada (7 e coprimo de 15)
+            int idx = (k * 7) % total;  // ordem embaralhada (7 e coprimo de 31)
             size_t off = (size_t)idx * CHUNK_MAX;
             uint8_t len = idx + 1 == total ? (uint8_t)(MSG_MAX - off) : CHUNK_MAX;
             done = ra.feed(0xA1B2, 42, (uint8_t)idx, total, msg + off, len,
@@ -677,6 +700,10 @@ static void testNetFrame() {
     // chunk curto no MEIO (nao-ultimo) e recusado: buraco nao cola
     ra.reset();
     CHECK(!ra.feed(3, 8, 0, 2, msg, CHUNK_MAX - 1, 0, out, sizeof(out), &outLen));
+
+    // total acima do teto e recusado (31 e o maximo de fragmentos)
+    ra.reset();
+    CHECK(!ra.feed(3, 8, 30, 32, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen));
 
     // slot vence: fragmento perdido libera para a proxima mensagem
     ra.reset();

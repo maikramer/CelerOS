@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -52,20 +53,24 @@ struct RawReport {
 };
 constexpr int RAW_DEPTH = 16;
 
-// Quadro esperando o radio: nosso (broadcast/beat) ou repeticao de outro.
+// Quadro esperando o radio: nosso (broadcast/beat/unicast) ou repeticao de
+// outro. prio 1 (handoff) fura a fila dos normais no maybeBurst.
 struct Pending {
     bool used;
     bool ours;          // conta no txQueued
+    uint8_t prio;       // 0 normal, 1 urgente (handoff)
     uint8_t len;
     uint32_t dueMs;     // jitter da repeticao (nosso = ja valido)
     uint8_t frame[netframe::ADV_MAX];
 };
-constexpr int PENDING_DEPTH = 16;
+// Uma mensagem cheia (31 frags) + retransmissoes de vizinhos caber juntas.
+constexpr int PENDING_DEPTH = 40;
 
 struct NodeEntry {
     bool used;
     uint16_t id;
     char name[CelerNet::MAX_NAME + 1];
+    uint8_t caps;
     int8_t rssi;
     uint8_t hops;
     uint32_t lastMs;
@@ -101,6 +106,13 @@ uint32_t s_txDropped = 0;
 uint32_t s_rxDropped = 0;
 uint32_t s_relayed = 0;
 
+// Papel do no na matilha (CAPS_* do NetFrame.h) e assinaturas do kernel
+// (servico Pack): presenca e mensagens sem passar pelo JS.
+uint8_t s_caps = 0;
+CelerNet::MemberEvent s_memberCb = nullptr;
+CelerNet::MsgHandler s_msgHandler = nullptr;
+uint32_t s_lastSweepMs = 0;  // varredura de expiracao (eventos de saida)
+
 // Burst de TX (radio do advertising emprestado).
 bool s_advBusy = false;       // adv da malha no ar (ate o ADV_COMPLETE)
 volatile bool s_burstDone = false;
@@ -133,13 +145,14 @@ SemaphoreHandle_t lock() {
 
 // ------------------------------------------------------------------ fila TX
 
-bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs) {
+bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, uint8_t prio = 0) {
     if (s_heap == nullptr) return false;
     for (int i = 0; i < PENDING_DEPTH; i++) {
         if (!s_heap->pending[i].used) {
             Pending* p = &s_heap->pending[i];
             p->used = true;
             p->ours = ours;
+            p->prio = prio;
             p->len = len;
             p->dueMs = dueMs;
             memcpy(p->frame, frame, len);
@@ -150,13 +163,15 @@ bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs) {
 }
 
 // Mensagem -> quadros (DATA unico ou FRAGs) na fila; seq unico por mensagem.
-bool enqueueMessage(const uint8_t* data, size_t len, uint8_t ttl, bool ours) {
+bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, bool ours,
+                    uint8_t prio) {
     if (len == 0 || len > CelerNet::MAX_MSG || ttl == 0) return false;
     const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     uint8_t frame[netframe::ADV_MAX];
     netframe::Frame f;
     f.netId = s_netId;
     f.src = s_node;
+    f.dst = dst;
     f.seq = ++s_seq;
     f.ttl = ttl;
     if (len <= netframe::DATA_MAX) {
@@ -164,7 +179,7 @@ bool enqueueMessage(const uint8_t* data, size_t len, uint8_t ttl, bool ours) {
         f.dlen = (uint8_t)len;
         f.data = data;
         size_t n = netframe::encode(f, frame, sizeof(frame));
-        if (n == 0 || !pendingPush(frame, (uint8_t)n, ours, now)) return false;
+        if (n == 0 || !pendingPush(frame, (uint8_t)n, ours, now, prio)) return false;
         return true;
     }
     const uint8_t total = (uint8_t)((len + netframe::CHUNK_MAX - 1) / netframe::CHUNK_MAX);
@@ -181,16 +196,30 @@ bool enqueueMessage(const uint8_t* data, size_t len, uint8_t ttl, bool ours) {
         memcpy(chunk + 2, (const uint8_t*)data + off, n);
         f.data = chunk;
         size_t fl = netframe::encode(f, frame, sizeof(frame));
-        if (fl == 0 || !pendingPush(frame, (uint8_t)fl, ours, now)) return false;
+        if (fl == 0 || !pendingPush(frame, (uint8_t)fl, ours, now, prio)) return false;
     }
     return true;
 }
 
 // --------------------------------------------------------------------- RX
 
-void rxPush(uint16_t from, const char* fromName, const uint8_t* data, size_t len,
+void rxPush(uint16_t from, const char* fromName, uint16_t dst, const uint8_t* data, size_t len,
             uint8_t hops, int8_t rssi) {
     if (s_heap == nullptr || len > CelerNet::MAX_MSG) return;
+    // Assinatura do kernel primeiro (o servico Pack): consumir aqui tira a
+    // mensagem da fila do JS (envelopes tipados sao do OS).
+    if (s_msgHandler != nullptr) {
+        CelerNet::Msg m;
+        memset(&m, 0, sizeof(m));
+        m.from = from;
+        if (fromName != nullptr) snprintf(m.fromName, sizeof(m.fromName), "%s", fromName);
+        m.dst = dst;
+        m.hops = hops;
+        m.rssi = rssi;
+        m.len = (uint16_t)len;
+        memcpy(m.data, data, len);
+        if (s_msgHandler(m)) return;  // consumida
+    }
     if (s_heap->count >= CelerNet::RX_DEPTH) {
         // Descarta a MAIS ANTIGA (comando novo vale mais que o velho)
         s_heap->head = (uint8_t)((s_heap->head + 1) % CelerNet::RX_DEPTH);
@@ -203,6 +232,7 @@ void rxPush(uint16_t from, const char* fromName, const uint8_t* data, size_t len
     if (fromName != nullptr && fromName[0] != '\0') {
         snprintf(m->fromName, sizeof(m->fromName), "%s", fromName);
     }
+    m->dst = dst;
     m->hops = hops;
     m->rssi = rssi;
     m->len = (uint16_t)len;
@@ -218,7 +248,8 @@ const char* nodeName(uint16_t id) {
     return "";
 }
 
-void nodeTouch(uint16_t id, const char* name, int8_t rssi, uint8_t hops, uint32_t nowMs) {
+void nodeTouch(uint16_t id, const char* name, uint8_t caps, int8_t rssi, uint8_t hops,
+               uint32_t nowMs) {
     if (s_heap == nullptr) return;
     NodeEntry* e = nullptr;
     for (int i = 0; i < CelerNet::NODES_MAX; i++) {
@@ -228,6 +259,7 @@ void nodeTouch(uint16_t id, const char* name, int8_t rssi, uint8_t hops, uint32_
         }
     }
     if (e == nullptr && name == nullptr) return;  // sem BEAT: nao inventa no
+    bool joined = false;
     if (e == nullptr) {
         for (int i = 0; i < CelerNet::NODES_MAX; i++) {
             if (!s_heap->nodes[i].used) {
@@ -241,42 +273,59 @@ void nodeTouch(uint16_t id, const char* name, int8_t rssi, uint8_t hops, uint32_
         char idS[8];
         snprintf(idS, sizeof(idS), "%04X", id);
         ESP_LOGI(TAG, "no ouvido: %04X \"%s\" (rssi %d)", id, name != nullptr ? name : "", rssi);
+        joined = true;
     }
     if (name != nullptr && name[0] != '\0') snprintf(e->name, sizeof(e->name), "%s", name);
     e->used = true;
+    e->caps = caps;
     e->rssi = rssi;
     e->hops = hops;
     e->lastMs = nowMs;
+    if (joined && s_memberCb != nullptr) s_memberCb(id, e->name, caps, true);
 }
 
 // Quadro decodificado da nossa rede: entrega, presenca e (talvez) repeticao.
 void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
     if (f.src == s_node) return;  // eco do nosso proprio quadro
+    // Unicast: so o DESTINATARIO entrega (presenca inclusa); o repetidor
+    // segue flooding do mesmo jeito — o filtro nao corta o relay abaixo.
+    const bool mine = f.dst == netframe::DST_BROADCAST || f.dst == s_node;
     const uint8_t idx = f.type == netframe::TYPE_FRAG && f.dlen >= 2 ? f.data[0] : 0;
     if (s_heap->dedup.seen(f.src, f.seq, idx)) return;
 
     switch (f.type) {
         case netframe::TYPE_BEAT: {
+            // v2: [caps(1)][nome NUL]
+            uint8_t caps = 0;
+            const uint8_t* nm = f.data;
+            size_t n = f.dlen;
+            if (f.dlen >= 1) {
+                caps = f.data[0];
+                nm = f.data + 1;
+                n = f.dlen - 1;
+            }
             char name[CelerNet::MAX_NAME + 1];
-            size_t n = f.dlen < CelerNet::MAX_NAME ? f.dlen : CelerNet::MAX_NAME;
-            memcpy(name, f.data, n);
+            if (n > CelerNet::MAX_NAME) n = CelerNet::MAX_NAME;
+            memcpy(name, nm, n);
             name[n] = '\0';
-            nodeTouch(f.src, name, rssi, f.hops, nowMs);
+            nodeTouch(f.src, name, caps, rssi, f.hops, nowMs);
             break;
         }
         case netframe::TYPE_DATA:
-            nodeTouch(f.src, nullptr, rssi, f.hops, nowMs);
-            rxPush(f.src, nodeName(f.src), f.data, f.dlen, f.hops, rssi);
+            if (!mine) break;
+            nodeTouch(f.src, nullptr, 0, rssi, f.hops, nowMs);
+            rxPush(f.src, nodeName(f.src), f.dst, f.data, f.dlen, f.hops, rssi);
             break;
         case netframe::TYPE_FRAG: {
             if (f.dlen < 2) return;
-            nodeTouch(f.src, nullptr, rssi, f.hops, nowMs);
+            if (!mine) break;
+            nodeTouch(f.src, nullptr, 0, rssi, f.hops, nowMs);
             uint8_t msg[CelerNet::MAX_MSG];
             size_t len = 0;
             if (s_heap != nullptr &&
                 s_heap->reasm.feed(f.src, f.seq, f.data[0], f.data[1], f.data + 2,
                                    (uint8_t)(f.dlen - 2), nowMs, msg, sizeof(msg), &len)) {
-                rxPush(f.src, nodeName(f.src), msg, len, f.hops, rssi);
+                rxPush(f.src, nodeName(f.src), f.dst, msg, len, f.hops, rssi);
             }
             break;
         }
@@ -338,12 +387,14 @@ void maybeBurst(uint32_t nowMs) {
     if (nowMs < s_nextSlotMs) return;
 
     if (s_heap == nullptr) return;
+    // Devidos: urgente (handoff) primeiro, depois o mais antigo (FIFO ~due).
     Pending* best = nullptr;
     for (int i = 0; i < PENDING_DEPTH; i++) {
-        if (!s_heap->pending[i].used) continue;
-        if ((int32_t)(nowMs - s_heap->pending[i].dueMs) >= 0 &&
-            (best == nullptr || (int32_t)(s_heap->pending[i].dueMs - best->dueMs) < 0)) {
-            best = &s_heap->pending[i];
+        Pending* p = &s_heap->pending[i];
+        if (!p->used || (int32_t)(nowMs - p->dueMs) < 0) continue;
+        if (best == nullptr || p->prio > best->prio ||
+            (p->prio == best->prio && (int32_t)(p->dueMs - best->dueMs) < 0)) {
+            best = p;
         }
     }
     if (best == nullptr) {
@@ -529,16 +580,90 @@ bool CelerNet::active() {
     return s_active;
 }
 
+// Destino do unicast: id "A1B2" (4 hex) ou NOME do no ouvido (primeiro
+// match, case-insensitive; a tabela e ordenada por RSSI, entao nomes
+// duplicados pegam o vizinho mais forte).
+bool CelerNet::resolveDest(const char* to, uint16_t* out) {
+    if (to == nullptr) return false;
+    bool hex = strlen(to) == 4;
+    uint16_t id = 0;
+    for (int i = 0; hex && i < 4; i++) {
+        char c = to[i];
+        uint8_t v;
+        if (c >= '0' && c <= '9') v = (uint8_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') v = (uint8_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') v = (uint8_t)(c - 'A' + 10);
+        else hex = false;
+        if (hex) id = (uint16_t)((id << 4) | v);
+    }
+    if (hex) {
+        *out = id;
+        return true;
+    }
+    if (s_heap == nullptr) return false;
+    xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
+    NodeEntry* e = nullptr;
+    for (int i = 0; i < NODES_MAX && e == nullptr; i++) {
+        if (s_heap->nodes[i].used && s_heap->nodes[i].name[0] != '\0' &&
+            strcasecmp(s_heap->nodes[i].name, to) == 0) {
+            e = &s_heap->nodes[i];
+        }
+    }
+    // copia sob lock (o chamador usa depois)
+    if (e != nullptr) *out = e->id;
+    xSemaphoreGiveRecursive(lock());
+    return e != nullptr;
+}
+
+void CelerNet::onMemberEvent(MemberEvent cb) {
+    s_memberCb = cb;
+}
+
+void CelerNet::subscribe(MsgHandler h) {
+    s_msgHandler = h;
+}
+
+void CelerNet::setCaps(uint8_t caps) {
+    s_caps = caps;  // viaja no proximo BEAT (3 s)
+}
+
+uint8_t CelerNet::ourCaps() {
+    return s_caps;
+}
+
 bool CelerNet::broadcast(const void* data, size_t len, uint8_t ttl) {
     if (!s_active || data == nullptr) return false;
     if (ttl == 0) ttl = TTL_DEFAULT;
     if (ttl > netframe::TTL_MAX) ttl = netframe::TTL_MAX;
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
-    bool ok = enqueueMessage((const uint8_t*)data, len, ttl, true);
+    bool ok = enqueueMessage(netframe::DST_BROADCAST, (const uint8_t*)data, len, ttl, true, 0);
     xSemaphoreGiveRecursive(lock());
     if (!ok) {
         s_txDropped++;
         ESP_LOGW(TAG, "broadcast recusado (%u bytes; fila cheia?)", (unsigned)len);
+    }
+    return ok;
+}
+
+bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, bool urgent,
+                      uint8_t copies) {
+    if (!s_active || data == nullptr || dst == 0 || dst == s_node) return false;
+    if (ttl == 0) ttl = TTL_DEFAULT;
+    if (ttl > netframe::TTL_MAX) ttl = netframe::TTL_MAX;
+    if (copies < 1) copies = 1;
+    if (copies > 3) copies = 3;
+    xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
+    bool ok = true;
+    for (uint8_t c = 0; c < copies && ok; c++) {
+        // Cada copia leva seq NOVO: o dedup do vizinho nao pode come-la (a
+        // redundancia e a "retransmissao" do unicast sem ACK — a entrega
+        // pode duplicar; o consumidor resolve idempotencia por msgId).
+        ok = enqueueMessage(dst, (const uint8_t*)data, len, ttl, true, urgent ? 1 : 0);
+    }
+    xSemaphoreGiveRecursive(lock());
+    if (!ok) {
+        s_txDropped++;
+        ESP_LOGW(TAG, "unicast %04X recusado (%u bytes; fila cheia?)", dst, (unsigned)len);
     }
     return ok;
 }
@@ -570,6 +695,7 @@ int CelerNet::nodes(Node* out, int max) {
         }
         out[n].id = s_heap->nodes[i].id;
         snprintf(out[n].name, sizeof(out[n].name), "%s", s_heap->nodes[i].name);
+        out[n].caps = s_heap->nodes[i].caps;
         out[n].rssi = s_heap->nodes[i].rssi;
         out[n].hops = s_heap->nodes[i].hops;
         out[n].lastSeenMs = nowMs - s_heap->nodes[i].lastMs;
@@ -668,20 +794,42 @@ void CelerNet::tick() {
         s_tokens = s_tokens + add > K_TOKEN_MAX ? K_TOKEN_MAX : s_tokens + add;
     }
 
-    // Presenca: BEAT proprio na fila (sequindo as fichas do bucket).
+    // Presenca: BEAT proprio na fila (sequindo as fichas do bucket). v2:
+    // [caps][nome] — o papel do no na matilha viaja junto.
     if (nowMs - s_lastBeatMs >= K_BEAT_MS) {
         s_lastBeatMs = nowMs;
+        uint8_t beat[netframe::DATA_MAX];
+        beat[0] = s_caps;
+        size_t nameLen = strlen(s_name);
+        if (nameLen > netframe::DATA_MAX - 1) nameLen = netframe::DATA_MAX - 1;
+        memcpy(beat + 1, s_name, nameLen);
         uint8_t frame[netframe::ADV_MAX];
         netframe::Frame f;
         f.type = netframe::TYPE_BEAT;
         f.netId = s_netId;
         f.src = s_node;
         f.seq = ++s_seq;
-        f.dlen = (uint8_t)strlen(s_name);
-        f.data = (const uint8_t*)s_name;
+        f.dlen = (uint8_t)(1 + nameLen);
+        f.data = beat;
         size_t n = netframe::encode(f, frame, sizeof(frame));
         if (n == 0 || !pendingPush(frame, (uint8_t)n, true, nowMs)) {
             // fila cheia: o proximo BEAT (3 s) tenta de novo
+        }
+    }
+
+    // Varredura de expiracao (~1x/s): no que passou 15 s sem BEAT sai da
+    // tabela — e o evento de SAIDA (o de entrada sai do nodeTouch) e para
+    // o servico Pack, que nao precisa varrer por conta propria.
+    if (nowMs - s_lastSweepMs >= 1000) {
+        s_lastSweepMs = nowMs;
+        for (int i = 0; i < CelerNet::NODES_MAX; i++) {
+            if (s_heap->nodes[i].used && nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) {
+                s_heap->nodes[i].used = false;
+                if (s_memberCb != nullptr) {
+                    s_memberCb(s_heap->nodes[i].id, s_heap->nodes[i].name,
+                               s_heap->nodes[i].caps, false);
+                }
+            }
         }
     }
 
