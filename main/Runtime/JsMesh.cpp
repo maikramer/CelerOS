@@ -87,9 +87,12 @@ duk_ret_t JSBindings::js_meshBroadcast(duk_context *ctx) {
 duk_ret_t JSBindings::js_meshSend(duk_context *ctx) {
     const char* to = duk_require_string(ctx, 0);
     uint16_t dst = 0;
+    // destino fora da tabela de presenca = false (sem throw): a presenca
+    // oscila por natureza, o app decide o que fazer (mesmo contrato do
+    // broadcast com a malha desligada e do stub do harness)
     if (!CelerNet::resolveDest(to, &dst)) {
-        duk_error(ctx, DUK_ERR_TYPE_ERROR, "destino nao ouvido (use CelerNet.nodes())");
-        return 0;
+        duk_push_false(ctx);
+        return 1;
     }
     // Mesma regra do broadcast: string crua, objeto vira JSON.
     uint8_t buf[CelerNet::MAX_MSG];

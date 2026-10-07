@@ -1985,7 +1985,8 @@ this node. `null` when empty. Drain it in the app loop until it returns
 carries it across the area — relays do not open it for others). `to` is
 the destination id (`"9F2A"`) **or name** (`"Celer-Dog"`, first
 case-insensitive match; presence is sorted by signal, so duplicate names
-resolve to the strongest). Unknown destination throws a `TypeError`.
+resolve to the strongest). A destination not in the presence table
+returns `false` — presence naturally comes and goes; the app decides.
 `options`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` moves the
 handoff ahead of presence traffic, and `copies` re-sends the message with
 a new sequence number (redundancy in place of ACKs: **delivery may
@@ -2057,10 +2058,10 @@ The pack heard in the last 15 s, strongest first — same shape as
 #### `Pack.send(to, message, [options])` → Boolean
 A **custom envelope** to one member (unicast, deduplicated by the
 firmware — duplicates from the redundant copies never reach you). `to`
-is id or name (same rules as `CelerNet.send`); `message` is a string or
-object-as-JSON, 1–430 bytes (`RangeError` outside). `options.urgent`
-moves it ahead of presence traffic. The receiver drains it with
-`Pack.poll()`.
+is id or name (same rules as `CelerNet.send` — a vanished destination
+returns `false`); `message` is a string or object-as-JSON, 1–430 bytes
+(`RangeError` outside). `options.urgent` moves it ahead of presence
+traffic. The receiver drains it with `Pack.poll()`.
 
 #### `Pack.poll()` → Object|null
 A custom envelope that arrived: `{from: "9F2A", fromName: "Celer-Dog",

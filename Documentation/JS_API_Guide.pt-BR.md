@@ -2250,7 +2250,8 @@ alcance em saltos. Retorna `false` com a malha desligada ou a fila cheia
 pela área — os repetidores não a abrem para os outros). `destino` é o
 id do nó (`"9F2A"`) **ou o nome** (`"Celer-Dog"`, primeiro
 case-insensitive; a presença vem ordenada por sinal, nomes duplicados
-resolvem para o mais forte). Destino desconhecido lança `TypeError`.
+resolvem para o mais forte). Destino fora da tabela de presença devolve
+`false` — presença vai e vem por natureza; o app decide.
 `opcoes`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` furam a fila
 da presença, e `copies` reenvia a mensagem com seq novo (redundância no
 lugar de ACK: **a entrega pode duplicar** — dedulique por um `id` no seu
@@ -2330,8 +2331,9 @@ do `me()` mais `{rssi, hops, lastSeen}` por membro:
 #### `Pack.send(destino, mensagem, [opcoes])` → Boolean
 **Envelope custom** para um membro (unicast, deduplicado pelo firmware
 — as duplicatas das cópias redundantes nunca chegam a você). `destino`
-é id ou nome (mesmas regras do `CelerNet.send`); `mensagem` é string ou
-objeto-como-JSON, 1–430 bytes (`RangeError` fora disso).
+é id ou nome (mesmas regras do `CelerNet.send` — destino sumido devolve
+`false`); `mensagem` é string ou objeto-como-JSON, 1–430 bytes
+(`RangeError` fora disso).
 `opcoes.urgent` fura a fila da presença. Quem recebe drena com
 `Pack.poll()`.
 

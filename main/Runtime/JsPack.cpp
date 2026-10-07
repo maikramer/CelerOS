@@ -83,9 +83,13 @@ duk_ret_t JSBindings::js_packMembers(duk_context *ctx) {
 duk_ret_t JSBindings::js_packSend(duk_context *ctx) {
     const char* to = duk_require_string(ctx, 0);
     uint16_t dst = 0;
+    // Destino sumido devolve FALSE (nao throw): a presenca na malha oscila
+    // por natureza e um app de radio movel nao pode morrer porque o vizinho
+    // saiu da tabela no instante do send — mesmo contrato do stub do
+    // harness e do CelerNet.broadcast com a malha desligada.
     if (!CelerNet::resolveDest(to, &dst)) {
-        duk_error(ctx, DUK_ERR_TYPE_ERROR, "destino nao ouvido (use Pack.members())");
-        return 0;
+        duk_push_false(ctx);
+        return 1;
     }
     uint8_t buf[Pack::MAX_PAYLOAD];
     size_t len;
@@ -148,9 +152,10 @@ duk_ret_t JSBindings::js_packHandoffMusic(duk_context *ctx) {
     uint16_t to = 0;
     if (!duk_is_null_or_undefined(ctx, 0)) {
         const char* dest = duk_require_string(ctx, 0);
+        // destino sumido = false (sem throw), como o resto da API de rede
         if (!CelerNet::resolveDest(dest, &to)) {
-            duk_error(ctx, DUK_ERR_TYPE_ERROR, "destino nao ouvido (use Pack.members())");
-            return 0;
+            duk_push_false(ctx);
+            return 1;
         }
     }
     present();  // o envio drena a fila da malha: da chance ao tick
