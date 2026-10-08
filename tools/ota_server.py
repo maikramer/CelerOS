@@ -24,7 +24,6 @@ import argparse
 import json
 import os
 import re
-import re
 import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -72,6 +71,8 @@ class Handler(BaseHTTPRequestHandler):
     bin_path: str = ""
     version: str = "0.0.0"
     api_level: int = 0
+    drop_at: list = []      # offsets onde a conexao cai (1x cada) — teste de retomada
+    no_range: bool = False  # ignora Range (servidor "burro": devolve 200 inteiro)
 
     def do_GET(self):  # noqa: N802
         path = urlparse(self.path).path
@@ -100,14 +101,38 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.send_error(404, "firmware.bin not found (build first)")
                 return
-            self.send_response(200)
+            # Range "bytes=N-" (a OTA do firmware retoma de onde a conexao caiu)
+            start = 0
+            m = re.match(r"bytes=(\d+)-$", self.headers.get("Range", "") or "")
+            if m and not self.no_range and int(m.group(1)) < size:
+                start = int(m.group(1))
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+            else:
+                self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Length", str(size - start))
+            self.send_header("Accept-Ranges", "none" if self.no_range else "bytes")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
+            if self.command == "HEAD":
+                return
+            print(f"[ota] firmware: de {start} ({'206' if start else '200'})")
             with open(self.bin_path, "rb") as f:
-                while chunk := f.read(64 * 1024):
+                f.seek(start)
+                pos = start
+                while chunk := f.read(16 * 1024):
+                    cut = next((d for d in self.drop_at if pos <= d < pos + len(chunk)), None)
+                    if cut is not None:
+                        self.drop_at.remove(cut)
+                        self.wfile.write(chunk[:cut - pos])
+                        self.wfile.flush()
+                        print(f"[ota] derrubando a conexao no byte {cut} (teste de retomada)")
+                        self.connection.shutdown(2)
+                        self.close_connection = True
+                        return
                     self.wfile.write(chunk)
+                    pos += len(chunk)
         else:
             self.send_error(404)
 
@@ -124,6 +149,10 @@ def main():
     ap.add_argument("--bin", help="caminho direto do CelerOS.bin (sobrepoe --board)")
     ap.add_argument("--port", type=int, default=10234)
     ap.add_argument("--version", help="versao a publicar (default: project(VERSION) do CMakeLists.txt)")
+    ap.add_argument("--drop-at", type=int, action="append", default=[],
+                    help="derruba a conexao do firmware.bin neste byte (1x; repita a opcao) — testa a retomada")
+    ap.add_argument("--no-range", action="store_true",
+                    help="ignora Range e responde 200 inteiro (servidor sem retomada)")
     args = ap.parse_args()
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -136,6 +165,8 @@ def main():
     Handler.bin_path = bin_path
     Handler.version = version
     Handler.api_level = read_api_level(repo_root)
+    Handler.drop_at = list(args.drop_at)
+    Handler.no_range = args.no_range
     print(f"[ota] api level: {Handler.api_level}")
 
     ip = lan_ip()

@@ -159,6 +159,56 @@ class FakeDevice:
                 return None, None, False
         return cmd, data[off:off + ln], True
 
+    # ---- OTA (espelho do HostLink.cpp): injecao das quedas vistas na bancada
+    def op_13(self, p):  # OTA_BEGIN
+        self.ota = bytearray()
+        self.ota_seq = 0
+        self.ota_crc = 0
+        self.ota_open = True
+        self.ota_ops = getattr(self, "ota_ops", []) + ["BEGIN"]
+        self.reply(KL["OTA_BEGIN"], b"app1")
+
+    def op_14(self, p):  # OTA_CHUNK [seq][dados]
+        (seq,) = struct.unpack("<H", p[:2])
+        if seq in getattr(self, "ota_noise_at", []):
+            # bytes perdidos na UART: o parser ressincroniza em lixo e responde
+            # a rejeicao com um cmd inventado; o chunk nao vale
+            self.ota_noise_at.remove(seq)
+            self.reply(0xA6, b"payload grande demais", 1)
+            return
+        if seq != self.ota_seq:
+            self.reply(KL["OTA_CHUNK"], struct.pack("<HI", self.ota_seq, len(self.ota)))
+            return
+        self.ota += p[2:]
+        self.ota_crc = zlib.crc32(bytes(p[2:]), self.ota_crc) & 0xFFFFFFFF
+        self.ota_seq += 1
+        self.reply(KL["OTA_CHUNK"], struct.pack("<HI", self.ota_seq, len(self.ota)))
+
+    def op_15(self, p):  # OTA_END [crc][tamanho]
+        self.ota_ops = getattr(self, "ota_ops", []) + ["END"]
+        crc, size = struct.unpack("<II", p[:8])
+        if not getattr(self, "ota_open", False):
+            if getattr(self, "end_idempotent", True) and getattr(self, "ota_done", None) == (crc, size):
+                self.reply(KL["OTA_END"], struct.pack("<I", size))   # reenvio confirmado
+            else:
+                self.reply(KL["OTA_END"], b"OTA nao iniciada", 1)
+            return
+        if (crc, size) != (self.ota_crc, len(self.ota)):
+            self.ota_open = False
+            self.reply(KL["OTA_END"], b"crc/tamanho divergem no fim da OTA", 1)
+            return
+        self.ota_open = False
+        self.ota_done = (crc, size)
+        if getattr(self, "end_reply_lost", 0) > 0:
+            self.end_reply_lost -= 1   # aplicou e marcou o boot; a resposta se perdeu
+            return
+        self.reply(KL["OTA_END"], struct.pack("<I", size))
+
+    def op_16(self, p):  # OTA_ABORT
+        self.ota_ops = getattr(self, "ota_ops", []) + ["ABORT"]
+        self.ota_open = False
+        self.reply(KL["OTA_ABORT"])
+
     # ---- handlers
     def op_01(self, p):  # HELLO
         v2 = p == b"CELERCTL2"
@@ -423,6 +473,55 @@ class TestProto2(unittest.TestCase):
         link.delete("/local/apps", recursive=True)
         self.assertNotIn("/local/apps", dev.dirs)
         self.assertEqual([k for k in dev.files if k.startswith("/local/apps/")], [])
+
+
+class TestOta(unittest.TestCase):
+    """Quedas da OTA vistas na bancada (2026-10-07/08) contra o FakeDevice."""
+
+    def _ota(self, dev_setup=None, size=20000):
+        link, dev = make_link()
+        link.hello()
+        link.ota_end_timeout = 0.3
+        if dev_setup:
+            dev_setup(dev)
+        img = bytes((i * 7) % 251 for i in range(size))
+        path = tmpfile(img)
+        try:
+            out = link.ota_write(path, progress=False)
+        finally:
+            os.unlink(path)
+        return out, dev, img
+
+    def test_ota_completa(self):
+        (part, written), dev, img = self._ota()
+        self.assertEqual((part, written), ("app1", len(img)))
+        self.assertEqual(bytes(dev.ota), img)
+
+    def test_ruido_do_parser_reenvia_e_nao_aborta(self):
+        def setup(dev):
+            dev.ota_noise_at = [2]   # a 2a janela ve o frame de lixo (cmd 0xa6)
+        (part, written), dev, img = self._ota(setup)
+        self.assertEqual(bytes(dev.ota), img)              # imagem intacta
+        self.assertNotIn("ABORT", dev.ota_ops)
+
+    def test_resposta_do_end_perdida_e_confirmada_no_reenvio(self):
+        def setup(dev):
+            dev.end_reply_lost = 1
+        (part, written), dev, img = self._ota(setup)
+        self.assertEqual(written, len(img))
+        self.assertEqual(dev.ota_ops.count("END"), 2)      # reenviou o END
+        self.assertNotIn("ABORT", dev.ota_ops)
+
+    def test_end_perdido_em_firmware_antigo_nao_aborta(self):
+        def setup(dev):
+            dev.end_reply_lost = 1
+            dev.end_idempotent = False
+        with self.assertRaises(C.OtaEndUnknown):
+            self._ota(setup)
+
+    def test_stable_port_resolve_by_id(self):
+        self.assertEqual(C.stable_port("192.168.0.9"), "192.168.0.9")
+        self.assertEqual(C.stable_port("/dev/nao-existe-xyz"), "/dev/nao-existe-xyz")
 
 
 class TestDebugProxy(unittest.TestCase):

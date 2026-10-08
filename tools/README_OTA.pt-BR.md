@@ -12,10 +12,15 @@ ESP-IDF:
 
 As tabelas de partição (`partitions_16MB.csv` SmartDisplay e
 `partitions_4MB.csv` CYD) já têm slots `ota_0`/`ota_1` + `otadata`. O flash é
-feito pelo componente `WifiOta` (`esp_https_ota`): gravado no slot inativo e só
-ativado depois de validado (checksum no `esp_https_ota_finish`) — se algo
-falhar no meio, o sistema atual continua no ar. Credenciais WiFi não se perdem
-com update: vivem no NVS (NetworkCredentialStore).
+feito pelo `OtaManager::performUpdate`: a imagem vai para o slot inativo e só é
+ativada depois que o `esp_ota_end` valida a imagem inteira — se algo falhar no
+meio, o sistema atual continua no ar. Desde a 1.8 o download é **retomável**:
+uma conexão que cai é reaberta com `Range: bytes=N-` e continua do byte N
+(servidor que ignora Range responde 200 e o aparelho pula os N bytes que já
+tem); até 6 falhas seguidas, com espera crescente. A OTA pelo canal também
+pega o `OtaGuard` e não colide mais com um `celerctl ota push` ou upload web no
+mesmo slot. Credenciais WiFi não se perdem com update: vivem no NVS
+(NetworkCredentialStore).
 
 ## Esquema do update.json (v2)
 
@@ -66,6 +71,11 @@ idf.py -B build-cyd build
 python3 tools/ota_server.py --board smartdisplay
 ```
 
+Para testar a retomada, `--drop-at BYTES` (repetível) derruba a conexão do
+firmware uma vez naquele byte e `--no-range` faz o servidor ignorar `Range`
+(200 desde o byte 0). O app de bancada `test/apps/OtaBench` roda a OTA sem
+tela a partir da URL em `/local/otabench_url.txt`.
+
 O servidor imprime a URL para gravar em **`/local/ota_url.txt`** no
 dispositivo (pelo web file manager ou cartão SD). Enquanto esse arquivo
 existir, ele substitui o canal oficial do hub — apague-o para voltar ao
@@ -86,6 +96,17 @@ na partição OTA inativa e reinicia:
 ```bash
 python3 tools/celerctl.py -b 921600 ota push build/CelerOS.bin
 ```
+
+Depois do reboot o `celerctl ota push` confere que a placa subiu no slot
+gravado (`app_part` no `celerctl info`) e espera a imagem ser confirmada (30 s
+de boot são, `app_state` `pending` → `valid`); rollback do bootloader vira
+erro. Desde a 1.8 ele também: abre a porta serial em modo exclusivo (um
+segundo `celerctl`/monitor na mesma porta falha na hora em vez de corromper o
+stream), reenvia a janela quando o parser do aparelho ressincroniza em ruído
+da linha (sem abortar em `payload grande demais`) e reenvia o `OTA_END` quando
+a resposta se perde (o aparelho confirma de novo um END já aplicado). Um
+`HELLO` pela USB não rouba mais a sessão de uma OTA em curso pela WiFi
+(`OTA em curso em outro canal`).
 
 Detalhes em [README_USBTOOL.md](README_USBTOOL.md).
 

@@ -16,7 +16,7 @@ main/
 ├── Runtime/          # JS API surface: JSBindings.cpp core + Js*.cpp modules (own AGENTS.md)
 ├── FileSystem/       # static FileSystem:: LittleFS(/local) + SD(/sd), atomic writes, MD5
 ├── WebManager/       # WiFi boot/reconnect (+async toggle), httpd file manager + /update OTA upload (gzip pages), captive portal host
-├── OTA/              # OtaManager: update.json v2 check + direct esp_https_ota flash (the only OTA path)
+├── OTA/              # OtaManager: update.json v2 check + resumable HTTP(S) download (Range) straight into the OTA slot; OtaGuard = one writer at a time
 ├── USBDevice/        # CelerShell, HostLink (celerctl protocol), SerialLink (UART/USJ), USBDevice (dual CDC), LogSink
 ├── Hardware/         # BoardIO (IO + battery + tone + LEDC map), Buttons, PowerPolicy (DFS/light sleep, idle WiFi)
 ├── Utils/            # CelerSettings (NVS), AlarmCalc (pure, host-tested), GbProto (Bangle.js protocol, pure, host-tested), AppGrants/AppPerms

@@ -1,7 +1,12 @@
 #include "OtaManager.h"
 #include <string>
 #include <cstdio>
-#include "esp_https_ota.h"
+#include "esp_http_client.h"
+#include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "OtaGuard.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "HttpClient.h"
@@ -172,9 +177,15 @@ static void setOtaError(const char* stage, esp_err_t err) {
     ESP_LOGE("celer.ota", "%s", msg);
 }
 
-// Flash direto pelo esp_https_ota (bloqueante). HTTPS valida o servidor
-// contra o bundle de CAs; falha em qualquer etapa aborta e deixa o slot
-// atual intacto (a imagem so e ativada apos o checksum no finish).
+// Download RETOMAVEL direto na particao OTA (bloqueante). Era um unico
+// esp_https_ota sem retentativa: ~2,5 MB pelo WiFi — que divide o radio com
+// o BLE (malha, Phone Link) — e qualquer soluco no meio jogava fora o que ja
+// tinha baixado. Agora uma conexao que cai e reaberta com "Range: bytes=N-"
+// e o download continua do byte N (servidor que ignora Range devolve 200:
+// pulamos os N bytes ja gravados). Ate 6 falhas SEGUIDAS sem progresso, com
+// espera crescente. HTTPS valida o servidor contra o bundle de CAs; o
+// esp_ota_end confere a imagem inteira (checksum/SHA/chip) antes de marcar
+// o boot — falha em qualquer etapa deixa o slot atual intacto.
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
 
@@ -183,40 +194,119 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
         ESP_LOGE("celer.ota", "%s (url: %s)", HTTP_BLOCKED_MSG, firmwareUrl.c_str());
         return false;
     }
-
-    esp_http_client_config_t http = {};
-    http.url = firmwareUrl.c_str();
-    if (kstr::startsWith(firmwareUrl, "https://")) http.crt_bundle_attach = esp_crt_bundle_attach;
-    esp_https_ota_config_t cfg = {};
-    cfg.http_config = &http;
-
-    esp_https_ota_handle_t handle = nullptr;
-    esp_err_t err = esp_https_ota_begin(&cfg, &handle);
+    if (!OtaGuard::acquire()) {  // celerctl/upload web gravando o slot agora
+        lastError = "OTA failed: outra gravacao OTA em curso (celerctl/web?)";
+        ESP_LOGE("celer.ota", "%s", lastError.c_str());
+        return false;
+    }
+    const esp_partition_t* part = esp_ota_get_next_update_partition(nullptr);
+    esp_ota_handle_t ota = 0;
+    esp_err_t err = part == nullptr ? ESP_ERR_NOT_FOUND : esp_ota_begin(part, OTA_SIZE_UNKNOWN, &ota);
     if (err != ESP_OK) {
+        OtaGuard::release();
         setOtaError("begin", err);
         return false;
     }
 
-    int lastPct = -1;
-    while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
-        int total = esp_https_ota_get_image_size(handle);
-        if (total > 0 && onProgress != nullptr) {
-            int pct = (int)((int64_t)esp_https_ota_get_image_len_read(handle) * 100 / total);
-            if (pct != lastPct) {
-                lastPct = pct;
-                onProgress(pct);
+    constexpr size_t kBuf = 8192;
+    char* buf = (char*)heap_caps_malloc(kBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == nullptr) buf = (char*)malloc(kBuf);
+    if (buf == nullptr) {
+        esp_ota_abort(ota);
+        OtaGuard::release();
+        setOtaError("buffer", ESP_ERR_NO_MEM);
+        return false;
+    }
+
+    constexpr int kMaxFails = 6;
+    size_t written = 0;
+    int64_t total = -1;
+    int fails = 0, lastPct = -1;
+    bool done = false, fatal = false;  // fatal: flash/imagem — repetir nao ajuda
+    err = ESP_FAIL;
+    while (!done && !fatal && fails < kMaxFails) {
+        if (fails > 0) {
+            ESP_LOGW("celer.ota", "retomando do byte %u (falha %d/%d)", (unsigned)written, fails, kMaxFails);
+            vTaskDelay(pdMS_TO_TICKS(1000 * fails));
+        }
+        esp_http_client_config_t http = {};
+        http.url = firmwareUrl.c_str();
+        http.timeout_ms = 15000;
+        http.buffer_size = 4096;
+        if (kstr::startsWith(firmwareUrl, "https://")) http.crt_bundle_attach = esp_crt_bundle_attach;
+        esp_http_client_handle_t cli = esp_http_client_init(&http);
+        if (cli == nullptr) { fails++; err = ESP_ERR_NO_MEM; continue; }
+        char range[40];
+        if (written > 0) {
+            snprintf(range, sizeof(range), "bytes=%u-", (unsigned)written);
+            esp_http_client_set_header(cli, "Range", range);
+        }
+        err = esp_http_client_open(cli, 0);
+        int64_t len = err == ESP_OK ? esp_http_client_fetch_headers(cli) : -1;
+        const int status = err == ESP_OK ? esp_http_client_get_status_code(cli) : 0;
+        size_t skip = 0;  // 200 apos Range: o servidor mandou do inicio
+        if (err != ESP_OK || (status != 200 && status != 206)) {
+            if (err == ESP_OK) err = ESP_ERR_INVALID_RESPONSE;
+            esp_http_client_cleanup(cli);
+            fails++;
+            continue;
+        }
+        if (status == 200) {
+            skip = written;
+            if (len > 0) total = len;
+        } else if (total < 0 && len > 0) {
+            total = (int64_t)written + len;
+        }
+        bool progressed = false;
+        for (;;) {
+            int n = esp_http_client_read(cli, buf, kBuf);
+            if (n < 0) { err = ESP_FAIL; break; }  // conexao caiu: retoma
+            if (n == 0) {
+                // fim do corpo: completo se bateu o tamanho (ou se o
+                // servidor nao informou e a conexao fechou limpa)
+                if (esp_http_client_is_complete_data_received(cli) &&
+                    (total < 0 || (int64_t)written >= total)) done = true;
+                else err = ESP_FAIL;
+                break;
+            }
+            const char* data = buf;
+            if (skip > 0) {  // pula o que ja esta gravado (servidor sem Range)
+                size_t k = (size_t)n < skip ? (size_t)n : skip;
+                skip -= k;
+                data += k;
+                n -= (int)k;
+                if (n == 0) continue;
+            }
+            err = esp_ota_write(ota, data, (size_t)n);
+            if (err != ESP_OK) { fatal = true; break; }
+            written += (size_t)n;
+            progressed = true;
+            if (total > 0 && onProgress != nullptr) {
+                int pct = (int)((int64_t)written * 100 / total);
+                if (pct != lastPct) {
+                    lastPct = pct;
+                    onProgress(pct);
+                }
             }
         }
+        esp_http_client_cleanup(cli);
+        // falhas SEGUIDAS sem progresso: conexao que andou e caiu zera a conta
+        if (!done && !fatal) fails = progressed ? 1 : fails + 1;
     }
-    if (err != ESP_OK) {
-        esp_https_ota_abort(handle);
+    free(buf);
+    if (!done) {
+        esp_ota_abort(ota);
+        OtaGuard::release();
         setOtaError("download", err);
         return false;
     }
-    err = esp_https_ota_finish(handle);
+    err = esp_ota_end(ota);  // valida a imagem inteira
+    if (err == ESP_OK) err = esp_ota_set_boot_partition(part);
+    OtaGuard::release();
     if (err != ESP_OK) {
         setOtaError("finish", err);
         return false;
     }
+    ESP_LOGI("celer.ota", "OTA ok: %u bytes em %s", (unsigned)written, part->label);
     return true;
 }

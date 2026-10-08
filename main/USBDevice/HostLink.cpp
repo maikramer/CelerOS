@@ -44,6 +44,7 @@ namespace {
 // serializado por mutex (handlers usam estado global de escrita/OTA); o
 // contexto abaixo vale apenas dentro de um dispatch.
 HostLink* volatile s_active = nullptr;
+int64_t s_lastFrameUs = 0;  // ultimo frame da sessao ativa (guarda da OTA)
 SemaphoreHandle_t s_dispatchMutex = nullptr;
 HostLink* s_ctxLink = nullptr;  // instancia em dispatch (formato v1/v2, janela)
 HostLink::WriteFn s_ctxWriter = nullptr;
@@ -288,11 +289,24 @@ void handleInfo() {
 #else
     const char* bridge = "";
 #endif
+    // particao rodando x marcada para o proximo boot: o celerctl confirma
+    // depois do reboot que a OTA COMUTOU (e detecta rollback do bootloader)
+    const esp_partition_t* runPart = esp_ota_get_running_partition();
+    const esp_partition_t* bootPart = esp_ota_get_boot_partition();
+    // estado da imagem rodando: "pending" = slot novo ainda sem os 30 s de
+    // boot sao (confirmPendingOta); um crash agora volta ao slot antigo
+    esp_ota_img_states_t imgState = ESP_OTA_IMG_UNDEFINED;
+    const char* appState = "valid";
+    if (runPart != nullptr && esp_ota_get_state_partition(runPart, &imgState) == ESP_OK &&
+        imgState == ESP_OTA_IMG_PENDING_VERIFY) {
+        appState = "pending";
+    }
     snprintf(json, sizeof(json),
              "{\"version\":\"%s\",\"board\":\"%s\",\"api\":%d,\"proto\":%d,"
              "\"uptime_s\":%llu,\"heap_free\":%u,\"heap_min\":%u,"
              "\"largest_block\":%u,\"psram_free\":%u,\"psram_total\":%u,"
              "\"ip\":\"%s\",\"sd\":%s,"
+             "\"app_part\":\"%s\",\"boot_part\":\"%s\",\"app_state\":\"%s\","
              "\"web_user\":\"admin\",\"web_pass\":\"%s\","
              "\"fs\":{\"/local\":{\"total\":%llu,\"used\":%llu},\"/sd\":{\"total\":%llu,\"used\":%llu}},%s}",
              CELEROS_VERSION, boardId(), CELEROS_API_LEVEL,
@@ -303,6 +317,7 @@ void handleInfo() {
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
              hasIp ? ip : "", hasSd ? "true" : "false",
+             runPart != nullptr ? runPart->label : "", bootPart != nullptr ? bootPart->label : "", appState,
              WebAuth::password(),
              lt, lu, st, su, bridge);
     respond(KL_INFO, 0, json, (uint16_t)strlen(json));
@@ -711,6 +726,12 @@ const esp_partition_t* s_otaPart = nullptr;
 uint32_t s_otaWritten = 0;
 uint16_t s_otaSeq = 0;
 uint32_t s_otaCrc = 0;
+// Ultima OTA fechada com sucesso (crc/tamanho do host): um OTA_END repetido
+// porque a resposta se perdeu no caminho (cabo/USB-JTAG) confirma de novo
+// em vez de responder "OTA nao iniciada" — o host achava que falhou com o
+// boot ja marcado e abortava/reportava erro (bancada 2026-10-07)
+bool s_otaDone = false;
+uint32_t s_otaDoneCrc = 0, s_otaDoneSize = 0;
 
 void handleOtaBegin() {
     if (s_ota != 0) {
@@ -737,6 +758,7 @@ void handleOtaBegin() {
     s_otaWritten = 0;
     s_otaSeq = 0;
     s_otaCrc = 0;
+    s_otaDone = false;
     respond(KL_OTA_BEGIN, 0, s_otaPart->label, (uint16_t)strlen(s_otaPart->label));
 }
 
@@ -781,6 +803,14 @@ void handleOtaChunk(const uint8_t* payload, uint16_t len) {
 
 void handleOtaEnd(const uint8_t* payload, uint16_t len) {
     if (s_ota == 0) {
+        uint32_t c = 0, z = 0;
+        if (s_otaDone && len >= 8 && takeU32(payload, len, c) && takeU32(payload, len, z) &&
+            c == s_otaDoneCrc && z == s_otaDoneSize) {
+            uint8_t again[4];
+            le32(again, s_otaDoneSize);
+            respond(KL_OTA_END, 0, again, sizeof(again));  // reenvio do END ja aplicado
+            return;
+        }
         respondError(KL_OTA_END, "OTA nao iniciada");
         return;
     }
@@ -811,6 +841,9 @@ void handleOtaEnd(const uint8_t* payload, uint16_t len) {
         respondError(KL_OTA_END, "falha ao marcar boot partition");
         return;
     }
+    s_otaDone = true;
+    s_otaDoneCrc = s_otaCrc;
+    s_otaDoneSize = s_otaWritten;
     uint8_t rec[4];
     le32(rec, s_otaWritten);
     respond(KL_OTA_END, 0, rec, sizeof(rec));  // reboot fica por conta do host
@@ -997,7 +1030,21 @@ void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
             if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
             return;
         }
-        s_active = this;  // ultimo HELLO ganha a sessao
+        // ultimo HELLO ganha a sessao — menos no meio de uma OTA viva em
+        // outro canal: o "celerctl info" de um terminal (ou um monitor) pela
+        // USB roubava a sessao da OTA por WiFi e ela morria em "sessao ativa
+        // em outro canal" (bancada 2026-10-07). Canal parado ha > 5 s libera
+        // (cabo puxado no meio: o proximo OTA_BEGIN aborta a gravacao velha).
+        if (s_active != nullptr && s_active != this && s_ota != 0 &&
+            esp_timer_get_time() - s_lastFrameUs < 5000000) {
+            sendShortError(cmd, "OTA em curso em outro canal");
+            s_ctxWriter = nullptr;
+            s_ctxBaud = nullptr;
+            s_ctxLink = nullptr;
+            if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
+            return;
+        }
+        s_active = this;
     } else if (s_active != this) {
         // frames de outro canal (ex. UART0 de uma board USB-nativa): a
         // resposta de erro vai pelo canal de origem, sem tocar a sessao
@@ -1008,6 +1055,7 @@ void HostLink::process(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
         return;
     }
+    s_lastFrameUs = esp_timer_get_time();
     dispatch(cmd, payload, len);
     s_ctxWriter = nullptr;
     s_ctxBaud = nullptr;

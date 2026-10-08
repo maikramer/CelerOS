@@ -1,0 +1,13 @@
+{
+  "name": "OtaBench",
+  "packageName": "test.otabench",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bancada: OTA pelo servidor local (tools/ota_server.py) lendo a URL de /local/otabench_url.txt; registra progresso e resultado em /local/otabench_out.txt. Testa a retomada por Range. App de bancada, não instalar na fábrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 22,
+  "permissions": ["fs", "system"],
+  "topbar": false,
+  "changelog": "1.0.0 - primeira versao"
+}

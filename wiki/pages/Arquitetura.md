@@ -23,7 +23,7 @@ cada tipo de mudança.
 |   Display      Layout 240x320 virtual -> fisico, tema, icones|
 |   FileSystem   LittleFS (/local) + SD (/sd), escrita atomica |
 |   WebManager   httpd + file manager + upload OTA + portal    |
-|   OTA          OtaManager: update.json v2 + esp_https_ota    |
+|   OTA          OtaManager: update.json v2 + download Range   |
 |   USBDevice    CelerShell, HostLink (celerctl), SerialLink  |
 |   Bluetooth    CelerLink: BLE entre aparelhos (Celer Link) |
 |   Boards/<b>/  HAL por placa (pinos, display, traits)        |

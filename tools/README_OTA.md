@@ -14,10 +14,15 @@ ESP-IDF:
 
 The partition tables (`partitions_16MB.csv` SmartDisplay and
 `partitions_4MB.csv` CYD) already have `ota_0`/`ota_1` slots + `otadata`.
-Flashing is done by the `WifiOta` component (`esp_https_ota`): written to the
-inactive slot and only activated after validation (checksum in
-`esp_https_ota_finish`) — if anything fails midway, the running system stays
-up. Wi-Fi credentials survive updates: they live in NVS
+Flashing is done by `OtaManager::performUpdate`: the image is written to the
+inactive slot and only activated after `esp_ota_end` validates the whole
+image — if anything fails midway, the running system stays up. Since 1.8 the
+download is **resumable**: a connection that drops is reopened with
+`Range: bytes=N-` and continues from byte N (a server that ignores Range
+answers 200 and the device skips the N bytes it already has); up to 6
+consecutive failures with growing back-off. The channel OTA also takes the
+`OtaGuard`, so it can no longer collide with a `celerctl ota push` or a web
+upload on the same slot. Wi-Fi credentials survive updates: they live in NVS
 (NetworkCredentialStore).
 
 ## update.json scheme (v2)
@@ -77,6 +82,11 @@ idf.py -B build-cyd build
 python3 tools/ota_server.py --board smartdisplay
 ```
 
+To test the resume, `--drop-at BYTES` (repeatable) cuts the firmware
+connection once at that offset and `--no-range` makes the server ignore
+`Range` (200 from byte 0). The bench app `test/apps/OtaBench` runs the OTA
+headless from a URL in `/local/otabench_url.txt`.
+
 The server prints the URL to write into **`/local/ota_url.txt`** on the
 device (via the web file manager or SD card). While that file exists it
 overrides the official hub channel — delete it to go back to normal.
@@ -97,6 +107,17 @@ into the inactive OTA partition and reboots:
 ```bash
 python3 tools/celerctl.py -b 921600 ota push build/CelerOS.bin
 ```
+
+After the reboot `celerctl ota push` checks that the board came up on the
+written slot (`app_part` in `celerctl info`) and waits for the image to be
+confirmed (30 s of healthy boot, `app_state` `pending` → `valid`); a bootloader
+rollback is reported as an error. Since 1.8 it also: opens the serial port
+exclusively (a second `celerctl`/monitor on the same port fails fast instead
+of corrupting the stream), re-sends the window when the device's frame parser
+resyncs on line noise (no more abort on `payload grande demais`), and
+re-sends `OTA_END` when its answer is lost (the device confirms an
+already-applied END again). A USB `HELLO` no longer steals the session of an
+OTA running over Wi-Fi (`OTA em curso em outro canal`).
 
 Details in [README_USBTOOL.md](README_USBTOOL.md).
 

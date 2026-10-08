@@ -84,6 +84,10 @@ class CelerError(Exception):
     pass
 
 
+class OtaEndUnknown(CelerError):
+    """OTA_END sem confirmacao: o boot pode ou nao estar marcado."""
+
+
 def load_opcodes():
     """Extrai os opcodes KL_* do header do firmware (fonte unica)."""
     header = Path(__file__).resolve().parent.parent / "main" / "USBDevice" / "HostLink.h"
@@ -305,7 +309,7 @@ class HostLink:
         if is_net_addr(port):
             self.ser = NetTransport(port, timeout=timeout, token=token, prompt=prompt)
         else:
-            self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
+            self.ser = open_serial(port, baud, timeout)
         self.timeout = timeout
         self.push_queue = []  # frames nao-solicitados (logs) que chegaram no meio de um xfer
         # teto de espera por comando EXEC (saida grande = mais continuacoes)
@@ -522,6 +526,7 @@ class HostLink:
         applied = 0
         last_ack = time.monotonic()
         tries = 0
+        noise = 0
 
         def frame_for(seq, start):
             f.seek(start)
@@ -546,8 +551,11 @@ class HostLink:
                 cmd_r, payload_r = self._read_frame(timeout=timeout)
             except CelerError:
                 cmd_r = None
-            if cmd_r == chunk_cmd and payload_r and payload_r[0] == 1:
+            if cmd_r == chunk_cmd and payload_r and payload_r[0] == 1 and \
+                    b"payload grande demais" not in payload_r:
                 raise CelerError(payload_r[1:].decode("utf-8", "replace") or "erro no chunk")
+            if cmd_r == chunk_cmd and payload_r and payload_r[0] == 1:
+                cmd_r = 0xFF  # rejeicao do parser com o cmd de lixo = o nosso: ruido
             if cmd_r == chunk_cmd and payload_r and payload_r[0] == 0 and \
                     self.proto == 2 and len(payload_r) >= 7:
                 ack_seq, ack_total = struct.unpack("<HI", payload_r[1:7])
@@ -567,12 +575,26 @@ class HostLink:
                 self.push_queue.append((cmd_r, payload_r))
                 last_ack = time.monotonic()
             elif cmd_r is not None:
-                raise CelerError(f"frame inesperado durante {label}: "
-                                 f"cmd=0x{cmd_r:02x} payload={payload_r[:24].hex() if payload_r else '-'}")
-            elif time.monotonic() - last_ack > 1.5:
-                # sem ACK: reenvia a janela nao confirmada (max 3 rodadas)
+                # Frame de outro comando no meio da rajada = o parser do device
+                # ressincronizou em lixo (bytes perdidos na UART: ele "le" um
+                # tamanho absurdo e responde 'payload grande demais' com um cmd
+                # inventado — bancada 2026-10-08, cmd=0xa6 a 37%). Os chunks
+                # daquele trecho nao valeram: reenvia a janela ja, sem abortar.
+                noise += 1
+                if noise > 50:
+                    raise CelerError(f"frame inesperado durante {label} (canal ruidoso demais): "
+                                     f"cmd=0x{cmd_r:02x} payload={payload_r[:24].hex() if payload_r else '-'}")
+                time.sleep(0.05)
+                self.ser.reset_input_buffer()
+                for seq, (start, n) in list(pendings.items()):
+                    self.ser.write(frame_for(seq, start))
+                last_ack = time.monotonic()
+            elif time.monotonic() - last_ack > min(1.5 * (tries + 1), 6.0):
+                # sem ACK: reenvia a janela nao confirmada, com espera crescente
+                # (o device pode estar apagando setores da flash: 64 KB levam
+                # centenas de ms) — 8 rodadas antes de desistir
                 tries += 1
-                if tries > 3:
+                if tries > 8:
                     raise CelerError(f"sem ACK do device em {label} (reenvios esgotados)")
                 for seq, (start, n) in list(pendings.items()):
                     self.ser.write(frame_for(seq, start))
@@ -704,7 +726,7 @@ class HostLink:
         port, timeout = self.ser.port, self.ser.timeout
         self.ser.close()
         time.sleep(0.15)  # firmware troca o baud apos o ACK
-        self.ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
+        self.ser = open_serial(port, baud, timeout)
         self.hello()  # re-sincroniza a sessao no novo baud
 
     # ------------------------------------------------------------- logcat/ota
@@ -733,7 +755,9 @@ class HostLink:
                 applied, crc = self._pump_chunks(f, total, KL["OTA_CHUNK"], 30.0,
                                                  f"ota {os.path.basename(local_path)} -> {part}")
                 end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
-                _, payload = self.xfer(KL["OTA_END"], end_payload, timeout=30.0)
+                payload = self._ota_end(end_payload)
+        except OtaEndUnknown:
+            raise  # o END pode ter sido aplicado: NAO aborta (marcaria nada, mas confunde)
         except (CelerError, serial.SerialException):
             # cancela a escrita da particao: um begin futuro tambem aborta,
             # mas o estado nao fica pendurado ate lah
@@ -746,6 +770,30 @@ class HostLink:
             print()
         (written,) = struct.unpack("<I", payload[1:5])
         return part, written
+
+    def _ota_end(self, end_payload):
+        """OTA_END com reenvio. O device valida a imagem (SHA de ~2,5 MB) e
+        marca o boot; se a RESPOSTA se perde (USB-JTAG, cabo), o reenvio cai
+        no END idempotente do firmware novo, que confirma de novo. Firmware
+        antigo responde 'OTA nao iniciada' ao reenvio: ai o resultado e
+        desconhecido (o boot provavelmente JA esta marcado) — OtaEndUnknown,
+        sem ABORT."""
+        for attempt in range(3):
+            try:
+                _, payload = self.xfer(KL["OTA_END"], end_payload,
+                                       timeout=getattr(self, "ota_end_timeout", 30.0))
+                return payload
+            except CelerError as e:
+                msg = str(e)
+                if "timeout" in msg:
+                    continue
+                if attempt > 0 and "nao iniciada" in msg:
+                    raise OtaEndUnknown("resposta do OTA_END se perdeu e o firmware nao "
+                                        "confirma o reenvio: o boot provavelmente ja esta "
+                                        "marcado — reinicie e confira com 'celerctl info'")
+                raise
+        raise OtaEndUnknown("OTA_END sem resposta apos 3 tentativas: o boot pode ja estar "
+                            "marcado — reinicie e confira com 'celerctl info' (app_part)")
 
     def screenshot(self):
         # pede RLE (firmware antigo ignora o byte e manda cru, sem o 5o byte
@@ -805,6 +853,20 @@ class HostLink:
 
 
 # ------------------------------------------------------------------ utilidades
+
+def open_serial(port, baud, timeout):
+    """Abre a porta em modo EXCLUSIVO (flock): dois celerctl na mesma porta
+    (um terminal com logcat + uma OTA, um monitor em loop) intercalavam bytes
+    e a OTA morria em 'device reports readiness to read but returned no data'
+    no meio da gravacao. Agora o segundo falha logo, com mensagem clara."""
+    try:
+        return serial.Serial(port, baud, timeout=timeout, write_timeout=timeout, exclusive=True)
+    except serial.SerialException as e:
+        if "lock" in str(e).lower() or "busy" in str(e).lower() or "Resource temporarily" in str(e):
+            raise CelerError(f"{port} em uso por outro processo (outro celerctl/monitor?) — "
+                             "feche-o antes; uma OTA com dois donos na porta corrompe o stream")
+        raise
+
 
 def show_progress(label, current, total):
     width = 24
@@ -904,15 +966,30 @@ def find_net_devices(timeout=1.5):
     return sorted(found.items())
 
 
+# Recusas que explicam a falha melhor que "nao responde": o device disse por
+# que (OTA viva em outro canal) ou a porta tem outro dono no PC
+_REASONS = ("OTA em curso", "em uso por outro processo", "sessao ativa em outro canal")
+
+
 def open_link(args):
+    reason = []
+
     def try_open(port):
         """Abre e faz hello; cai para o baud alto se a sessao anterior
         (<8s) ainda estiver viva no device (TCP nao tem baud: 1 tentativa)."""
-        link = HostLink(port, timeout=3.0, token=getattr(args, "token", None))
+        try:
+            link = HostLink(port, timeout=3.0, token=getattr(args, "token", None))
+        except CelerError as e:
+            reason.append(str(e))
+            return None
         try:
             link.hello()
             return link
-        except (CelerError, serial.SerialException, OSError):
+        except (CelerError, serial.SerialException, OSError) as e:
+            if any(r in str(e) for r in _REASONS):
+                reason.append(str(e))
+                link.close()
+                return None
             link.close()
         if is_net_addr(port):
             return None
@@ -929,7 +1006,7 @@ def open_link(args):
         port = resolve_port(args.port)
         link = try_open(port)
         if link is None:
-            die(f"{args.port} nao responde ao protocolo HostLink")
+            die(reason[0] if reason else f"{args.port} nao responde ao protocolo HostLink")
     else:
         devices = find_devices()
         if devices:
@@ -1382,6 +1459,8 @@ def cmd_ota(args):
         die("uso: celerctl ota push FIRMWARE.bin")
     if not os.path.isfile(args.file):
         die(f"{args.file} nao existe")
+    if getattr(args, "port", None):
+        args.port = stable_port(args.port)  # antes do reboot: ttyACMn renumera
     link = open_link(args)
     try:
         part, written = link.ota_write(args.file)
@@ -1391,6 +1470,67 @@ def cmd_ota(args):
             print("reiniciando para o novo firmware...")
     finally:
         link.close()
+    if not args.no_reboot:
+        verify_ota_boot(args, part)
+
+
+def stable_port(port):
+    """/dev/ttyACMn renumera no reboot (USB nativo do watch): devolve o link
+    estavel de /dev/serial/by-id que aponta para a porta, se houver."""
+    if not port or is_net_addr(port) or not port.startswith("/dev/"):
+        return port
+    byid = Path("/dev/serial/by-id")
+    try:
+        real = os.path.realpath(port)
+        for link in sorted(byid.iterdir()):
+            if os.path.realpath(link) == real:
+                return str(link)
+    except OSError:
+        pass
+    return port
+
+
+def verify_ota_boot(args, part, wait_s=60):
+    """Confere que o device SUBIU na particao gravada (info.app_part). Sem
+    isso 'OTA ok' podia esconder um rollback do bootloader (imagem que nao
+    sobe volta ao slot antigo) ou um reboot que nao aconteceu. Firmware sem
+    app_part no info: so avisa que nao da para conferir."""
+    deadline = time.monotonic() + wait_s
+    time.sleep(3)
+    last = None
+    said = False
+    while time.monotonic() < deadline:
+        try:
+            link = open_link(args)
+            try:
+                info = link.info()
+            finally:
+                link.close()
+        except (CelerError, serial.SerialException, OSError) as e:
+            last = e
+            time.sleep(2)
+            continue
+        running = info.get("app_part")
+        if running is None:
+            print("aviso: firmware sem app_part no info — nao da para conferir a troca")
+            return
+        if running == part and info.get("app_state") == "pending":
+            # slot novo ainda sem os 30 s de boot sao: um crash agora faz o
+            # bootloader voltar ao antigo — espera a confirmacao do firmware
+            if not said:
+                print(f"subiu em '{running}'; aguardando a confirmacao (30 s de boot sao)...")
+                said = True
+            deadline = max(deadline, time.monotonic() + 15)
+            time.sleep(5)
+            continue
+        if running == part:
+            print(f"conferido: rodando em '{running}' (uptime {info.get('uptime_s')} s"
+                  f"{', imagem confirmada' if info.get('app_state') == 'valid' else ''})")
+            return
+        die(f"o device subiu em '{running}', nao em '{part}': rollback do bootloader "
+            f"(imagem nao bootou) ou reboot que nao aconteceu — veja 'celerctl coredump'")
+    print(f"aviso: device nao respondeu em {wait_s} s depois do reboot ({last}) — "
+          "confira com 'celerctl info' (app_part)")
 
 
 
