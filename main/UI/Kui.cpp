@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cmath>
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -799,7 +800,7 @@ bool Dialog::onTouch(const TouchEvent& ev, Rect myRect) {
 
 namespace {
 constexpr size_t INJ_CAP = 64;
-TouchInjector::Sample s_injQ[INJ_CAP];
+EXT_RAM_BSS_ATTR TouchInjector::Sample s_injQ[INJ_CAP];  // PSRAM quando existe
 size_t s_injHead = 0, s_injCount = 0;
 portMUX_TYPE s_injMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t s_injLastMs = 0;        // quando a ultima amostra virou estado

@@ -971,25 +971,28 @@ bool CelerLink::ensureStarted(bool latchFailure) {
     if (s_started) return true;
     if (s_initFail) return false;
 
-    s_syncSem = xSemaphoreCreateBinary();
-    s_evt = xEventGroupCreate();
-    s_rxQueue = xQueueCreate(RX_DEPTH, sizeof(Msg));
-    s_sealedQueue = xQueueCreate(K_SEALED_DEPTH, sizeof(Msg));
-    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr) {
-        ESP_LOGE(TAG, "sem memoria para as primitivas do link");
-        if (latchFailure) s_initFail = true;
-        return false;
-    }
-
     // O NimBLE nao devolve erro quando falta RAM interna no init do host: o
     // os_mempool_init do ble_hs_init cai num SYSINIT_PANIC_ASSERT e o
     // aparelho REINICIA (Celer Remote derrubava o 4848 no primeiro scan).
-    // Recusar antes, com erro legivel, e o app segue sem link
+    // Recusar antes, com erro legivel, e o app segue sem link. O gate vem
+    // ANTES das primitivas: a malha e o Phone Link re-tentam a cada 10 s, e
+    // cada recusa depois de criá-las vazava ~2,5 KB de RAM interna — a
+    // espiral que derrubava o relogio (interna minima 1,6 KB na bancada)
     const size_t freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t bigInt = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     if (freeInt < K_BLE_MIN_INTERNAL || bigInt < K_BLE_MIN_BLOCK) {
         ESP_LOGE(TAG, "RAM interna insuficiente para o BLE (livre %u, maior bloco %u; precisa %u/%u)",
                  (unsigned)freeInt, (unsigned)bigInt, (unsigned)K_BLE_MIN_INTERNAL, (unsigned)K_BLE_MIN_BLOCK);
+        if (latchFailure) s_initFail = true;
+        return false;
+    }
+    // criadas uma vez so (re-tentativas reaproveitam)
+    if (s_syncSem == nullptr) s_syncSem = xSemaphoreCreateBinary();
+    if (s_evt == nullptr) s_evt = xEventGroupCreate();
+    if (s_rxQueue == nullptr) s_rxQueue = xQueueCreate(RX_DEPTH, sizeof(Msg));
+    if (s_sealedQueue == nullptr) s_sealedQueue = xQueueCreate(K_SEALED_DEPTH, sizeof(Msg));
+    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr) {
+        ESP_LOGE(TAG, "sem memoria para as primitivas do link");
         if (latchFailure) s_initFail = true;
         return false;
     }
@@ -1017,8 +1020,10 @@ bool CelerLink::ensureStarted(bool latchFailure) {
     ble_store_config_init();
 #endif
     if (rc != 0) {
+        // depois do nimble_port_init nao ha volta: re-tentar faria um 2o init
+        // do host (crash/task duplicada) — trava sempre
         ESP_LOGE(TAG, "registro GATT falhou (rc=%d)", rc);
-        if (latchFailure) s_initFail = true;
+        s_initFail = true;
         return false;
     }
     ble_svc_gap_init();
@@ -1035,7 +1040,7 @@ bool CelerLink::ensureStarted(bool latchFailure) {
     }
     if (!synced) {
         ESP_LOGE(TAG, "sync do host NimBLE nao chegou");
-        if (latchFailure) s_initFail = true;  // sem deinit: nao derrubar o radio no meio
+        s_initFail = true;  // host ja subiu: sem deinit e sem 2o init
         return false;
     }
     ble_att_set_preferred_mtu(K_MTU_WANT);

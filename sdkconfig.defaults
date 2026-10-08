@@ -7,8 +7,12 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 # pratica (nada capturava). Economiza .eh_frame + runtime de unwinding.
 # CONFIG_COMPILER_CXX_EXCEPTIONS is not set
 
-# A task main roda a UI + heap Duktape
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# A task main roda a UI + o interpretador Duktape (o heap JS e malloc, nao
+# pilha). Pilha SEMPRE interna, entao cada KB sai do heap interno. Pico
+# medido: ~7,2 KB no watch (-O2, launcher + mostrador) e ~8,5 KB na CYD
+# (-Os, compilando o App Store). 24 KB = ~2,5x o pico; os 32 KB de antes
+# eram o maior item da RAM interna das S3. CYD/devkit usam 20 KB.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=24576
 
 # TLS valida certificados: HttpClient e o OTA anexam esp_crt_bundle_attach
 # (bundle completo na SmartDisplay, CMN na CYD). INSECURE/SKIP_CERT_VERIFY
@@ -16,9 +20,13 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 
 CONFIG_FREERTOS_HZ=1000
 
-# Handlers de evento (WifiConnection/NetworkManager) rodam na task sys_evt;
-# a stack padrao (4KB) transborda com os handlers encadeados -> stack overflow
-CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
+# Handlers de evento (WifiConnection/NetworkManager) rodam na task sys_evt.
+# Ja transbordou 4 KB com os handlers encadeados de uma versao antiga; hoje
+# o pico medido (celerctl ps) e ~2,2 KB no watch e ~1,1 KB na CYD, e todas
+# as placas rodavam 4 KB por override — virou o padrao comum.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+# esp_timer: pico medido ~0,55 KB (watch) / ~0,4 KB (CYD) de 3,5 KB
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
 
 # vTaskList (comando ps do shell celerctl/console) + CPU% por task (top).
 # Clock = esp_timer (1 MHz, imune a DFS do watch, sem interrupcao nova) e

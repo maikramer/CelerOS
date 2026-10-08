@@ -49,3 +49,15 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 
 # Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump
 CONFIG_CELEROS_LOG_RING=8192
+# RAM interna: mesma receita medida no watch e no cao (S3 com PSRAM).
+# RX estatico e DMA interno: 8 buffers (16 x 1,6 KB antes) e janela BA igual;
+# o TX estatico ja vai para a PSRAM (TRY_ALLOCATE_WIFI_LWIP).
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_RX_BA_WIN=8
+# Codigo do WiFi fora da IRAM: no S3 a IRAM sai da mesma DIRAM do heap
+# interno (~20 KB de volta; vazao de pico um pouco menor).
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# .bss marcado com EXT_RAM_BSS_ATTR (HostLink, ring de logs, buffers da
+# musica, slots da UI JS) vai para a PSRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y

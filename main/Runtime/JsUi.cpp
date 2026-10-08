@@ -28,6 +28,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "esp_attr.h"
+
 namespace {
 
 // ------------------------------------------------------------- toque ----
@@ -58,7 +60,7 @@ struct Slot {
     int16_t bx = 0, by = 0, bw = 0, bh = 0;  // bbox fisico do ultimo texto
 };
 constexpr int kSlots = 48;
-Slot s_slots[kSlots];
+EXT_RAM_BSS_ATTR Slot s_slots[kSlots];  // ~1,9 KB: PSRAM quando existe
 
 uint32_t s_frameNo = 0;
 bool s_full = true;         // proximo begin redesenha tudo

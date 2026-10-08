@@ -1,5 +1,6 @@
 #include "WebManager.h"
 #include "../USBDevice/LogSink.h"
+#include <new>
 #include <string>
 #include <cstring>
 #include <cstdio>
@@ -486,8 +487,15 @@ static esp_err_t handler_list(httpd_req_t* req) {
         return ESP_OK;
     }
 
-    FileEntry entries[64];
-    int count = FileSystem::listDirectory(dirPath.c_str(), entries, 64);
+    // No heap, nao na pilha do httpd (64 x FileEntry ~3 KB era o pico dela);
+    // nothrow: sem excecoes, um new que falha abortaria o aparelho
+    constexpr int kMax = 64;
+    FileEntry* entries = new (std::nothrow) FileEntry[kMax];
+    if (entries == nullptr) {
+        sendText(req, 500, "sem memoria");
+        return ESP_OK;
+    }
+    int count = FileSystem::listDirectory(dirPath.c_str(), entries, kMax);
 
     JsonDocument doc;
     JsonArray array = doc.to<JsonArray>();
@@ -497,6 +505,7 @@ static esp_err_t handler_list(httpd_req_t* req) {
         item["type"] = entries[i].isDir ? "dir" : "file";
         item["size"] = entries[i].isDir ? 0 : FileSystem::getFileSize(entries[i].path.c_str());
     }
+    delete[] entries;
 
     std::string response;
     serializeJson(doc, response);
@@ -944,7 +953,11 @@ void WebManager::startWebServerIfNeeded() {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.stack_size = 16384;       // parser multipart + JSON na pilha do httpd
+    // Pilha interna (os handlers gravam flash: LittleFS e OTA). Pico medido
+    // no watch com list + upload + download + tela: ~6,3 KB, ~3 KB dele o
+    // FileEntry[64] do list, que foi para o heap. 10 KB = ~2x o pico; os
+    // 16 KB de antes custavam 6 KB a mais de RAM interna em toda placa.
+    config.stack_size = 10240;
     config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 

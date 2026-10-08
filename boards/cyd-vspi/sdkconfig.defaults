@@ -32,3 +32,22 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # dedicado conflitaria com o display. Sem SD até o mount suportar bus
 # compartilhado — e o FAT/SDSPI saem do binário (bônus de tamanho).
 # CONFIG_CELEROS_SD_CARD is not set
+
+# RAM interna: a mesma receita da cyd (sem PSRAM; ver os comentarios e as
+# medidas em boards/cyd/sdkconfig.defaults). Sem ela esta variante rodava
+# com os padroes do comum/IDF: pilha main 32 KB, 10 RX estaticos do WiFi,
+# AMPDU, WiFi na IRAM e dual-core sem a IRAM livre como heap.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y
+CONFIG_FREERTOS_UNICORE=y
+CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
+CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+# CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set

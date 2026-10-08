@@ -109,8 +109,10 @@ HostLink* s_link = nullptr;
 // Tamanho via Kconfig (CONFIG_CELEROS_LOG_RING): boards sem PSRAM (CYD,
 // devkit) pagam cada KB de DRAM e mantem o minimo; boards com PSRAM sobem
 // nos sdkconfig.defaults da placa (historico completo do boot no --dump).
+// Com SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY o ring (8 KB nas S3) vai para a
+// PSRAM: o hook de log nunca roda com a cache desligada; sem PSRAM e no-op.
 constexpr size_t K_LOG_RING = CONFIG_CELEROS_LOG_RING;
-char s_logRing[K_LOG_RING];
+EXT_RAM_BSS_ATTR char s_logRing[K_LOG_RING];
 volatile size_t s_logHead = 0;  // posicao de escrita
 volatile size_t s_logTail = 0;  // posicao de leitura
 SemaphoreHandle_t s_logMutex = nullptr;

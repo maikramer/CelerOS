@@ -9,6 +9,7 @@
 #include "MusicSynth.h"
 
 #include <Arduino.h>
+#include <esp_attr.h>
 #include <freertos/idf_additions.h>  // xTaskCreateWithCaps
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -22,11 +23,13 @@ namespace {
 
 // Bloco de mistura: 256 quadros mono -> estereo INTERCALADO (amp mono) em
 // buffers estaticos — sem malloc no caminho quente (std::string/new que
-// nao cresce ABORTA o aparelho nas placas sem PSRAM).
+// nao cresce ABORTA o aparelho nas placas sem PSRAM). Nas placas com PSRAM
+// os ~3,9 KB moram la (EXT_RAM_BSS_ATTR): o I2S copia o bloco para o DMA,
+// e a stack da task ja e PSRAM — nada aqui exige RAM interna.
 constexpr uint32_t kFrames = 256;
-int16_t s_mono[kFrames];
-int16_t s_frames[kFrames * 2];          // [L0,R0,L1,R1,...]
-MusicEngine::Compiled s_compiled;       // .bss ~2,6 KB
+EXT_RAM_BSS_ATTR int16_t s_mono[kFrames];
+EXT_RAM_BSS_ATTR int16_t s_frames[kFrames * 2];     // [L0,R0,L1,R1,...]
+EXT_RAM_BSS_ATTR MusicEngine::Compiled s_compiled;  // .bss ~2,6 KB
 MusicEngine::Renderer s_renderer;
 MusicEngine::Song s_song;
 volatile bool s_quit = false;
