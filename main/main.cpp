@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
 #include "esp_sleep.h"
 #include "esp_ota_ops.h"
@@ -76,6 +77,15 @@ static void bootSplash(const char* status) {
     tft.fillRoundRect(UI::sx(20), UI::sy(200), UI::sx(200), UI::sy(10), UI::sy(5), THEME_CARD);
 }
 
+// RAM interna livre por etapa do boot: o relogio vive com poucos KB depois
+// do BLE e cada subsistema novo que come interna sem avisar derruba a malha
+// e a TinyUSB (bancada 2026-10-08). Uma linha por etapa no logcat.
+static void ramStage(const char* stage) {
+    celer_log_printf("ram@%s: interna %u (maior %u)\n", stage,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 static void celerSetup() {
     Serial.begin(115200);
     // NimBLE em INFO dispara "GATT procedure initiated" a cada notify (o
@@ -88,6 +98,7 @@ static void celerSetup() {
         celer_log_printf("PSRAM: %u bytes (free %u)\n", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
     }
 
+    ramStage("inicio");
     // Init TFT (HAL da placa)
     Board::init();
     ScreenCapture::init();  // esta task e a dona do display (capturas passam por ela)
@@ -97,6 +108,7 @@ static void celerSetup() {
              (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
 
 
+    ramStage("display");
     bootSplash(i18n::TR("Iniciando...", "Starting..."));
 
     // Initialize File Systems (LittleFS & SD)
@@ -107,6 +119,7 @@ static void celerSetup() {
         delay(1000);
     }
 
+    ramStage("fs");
 #if !CONFIG_CELEROS_USB_NATIVE
     // Console/shell + canal celerctl na UART do console (CH340 no PC). Com
     // USB nativo (watch) o celerctl vai pelo CDC e a UART0 nao tem conector:
@@ -115,11 +128,13 @@ static void celerSetup() {
 #else
     SerialLink::initLogOnly();  // logcat continua recebendo os ESP_LOG*
 #endif
+    ramStage("serial");
 #if CONFIG_CELEROS_USB_NATIVE
     // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
     USBDevice::init();
 #endif
 
+    ramStage("fs+usb");
     // Brilho do backlight (depois do FS: le /local/brightness.txt)
     Backlight::init(&tft);
 
@@ -134,6 +149,7 @@ static void celerSetup() {
     TimeManager::init();
     Alarms::init();  // alarmes/timer/soneca do NVS (API 15)
     
+    ramStage("hw+tempo");
     celer_log_printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
@@ -142,6 +158,7 @@ static void celerSetup() {
     celer_log_println("CelerKernel initialized successfully.");
     celer_log_printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
+    ramStage("kernel");
     // Init UI Components
     LauncherUI::init(&tft);
     TouchCalibrator::init(&tft);
@@ -160,7 +177,9 @@ static void celerSetup() {
     // Sem rede, o launcher mostra o banner "WiFi offline". Sobe DEPOIS do
     // scan de apps: sem PSRAM, o prewarm dos icones (decode PNG, ~44KB
     // transitorios) precisa do heap cheio.
+    ramStage("apps");
     WebManager::startAsync();
+    ramStage("wifi");
 
     // Celer Debug Bridge (celerctl por TCP/WiFi): assina o evento de rede e
     // sobe o listener quando o WiFi conectar (task nasce lazy no 1o tick).
@@ -184,6 +203,7 @@ static void celerSetup() {
 #if CONFIG_CELEROS_PHONE_LINK
     PhoneLink::init();    // Gadgetbridge (Bangle.js) no ar se "phone_on"
 #endif
+    ramStage("phone");
     kui::Navigator::push(&s_launcher);
     currentState = STATE_LAUNCHER;
 

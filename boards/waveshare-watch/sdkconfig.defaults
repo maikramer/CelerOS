@@ -9,10 +9,16 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# malloc ate 1 KB fica na interna; acima vai para a PSRAM (quem precisa de
+# DMA/interna pede por caps). Com 4096 os caches/buffers de 1-4 KB de
+# TinyUSB, LittleFS e cia ficavam todos na interna: bancada 2026-10-08, com
+# WiFi + Phone Link + malha, sobravam 7 K depois do BLE e um push/pull de
+# 1 MB pelo USB levava a interna a 648 B; com 1024: 10 K e minimo 3,9 K.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 # Stack de task na PSRAM (worker do AI no JS): sem isso o xTaskCreateWithCaps
 # nao poe stack la e o boot apertado do watch nao acha bloco de 24 KB interno
-CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL=y
+# (nome do IDF 6: o antigo SPIRAM_ALLOW_STACK_EXTERNAL nao existe mais)
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
