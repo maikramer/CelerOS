@@ -8,6 +8,7 @@
 #include "Kernel/DeviceStats.h"
 #include "NetworkManager.h"
 #include "DebugBridge.h"
+#include "WebManager/WebManager.h"
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
@@ -89,6 +90,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  exit            encerra o app em execucao\n"
         "  wifi            lista as redes WiFi salvas\n"
         "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
+        "  wifi off|on     desliga (persistente) / religa o WiFi\n"
 #if CONFIG_CELEROS_PHONE_LINK
         "  gb <linha>      injeta linha do Gadgetbridge (teste do protocolo)\n"
 #endif
@@ -606,6 +608,19 @@ int cmdWifi(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
             return 0;
         }
         for (auto& n : nets) print(ctx, "%s (prioridade %d)\r\n", n.ssid, n.priority);
+        return 0;
+    }
+    // wifi off|on: o mesmo liga/desliga persistente do painel do relogio —
+    // bancada de coexistencia BLE x WiFi (o off derruba a ponte WiFi do
+    // celerctl; o USB segue). "on" desfaz.
+    if (argc == 2 && strcmp(argv[1], "off") == 0) {
+        WebManager::disablePersist();
+        print(ctx, "WiFi desligado (persistente; 'wifi on' religa)\r\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "on") == 0) {
+        WebManager::enableAsync();
+        print(ctx, "WiFi religando em segundo plano\r\n");
         return 0;
     }
     std::string ssid = argv[1];

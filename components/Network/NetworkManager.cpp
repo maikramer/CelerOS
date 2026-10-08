@@ -2,6 +2,7 @@
 #include "WifiConnection.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include <algorithm>
 
 NetworkManager::NetworkManager()
@@ -489,6 +490,9 @@ bool NetworkManager::isBackgroundTaskRunning() const {
     return _backgroundTaskRunning;
 }
 
+// Roaming so procura outro AP abaixo deste sinal (dBm)
+static constexpr int8_t K_ROAM_SCAN_RSSI = -70;
+
 void NetworkManager::backgroundTaskFunc(void* param) {
     NetworkManager* self = static_cast<NetworkManager*>(param);
     
@@ -512,9 +516,16 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         // CelerOS: so com MAIS DE UMA rede salva — com uma so nao ha para onde
         // migrar, e o scan conectado derruba pacotes de requisicoes em curso
         // (HTTP chunked falhando, medido) e aloca resultados a cada 30s.
+        // E so com o sinal FRACO: com o AP atual bom nao ha melhora possivel
+        // que valha um scan — e cada scan conectado toma o radio por ~9 s
+        // com o Bluetooth ligado (o coex da prioridade ao WiFi): a malha
+        // CelerNet e o Celer Link ficavam surdos 9 s a cada 39 (bancada
+        // 2026-10-07, relogio com 2 redes salvas).
         if (self->isConnected() && self->_config.enableRoaming &&
             timeSinceLastScan >= self->_config.backgroundScanInterval) {
-            if (NetworkCredentialStore::instance().getKnownNetworks().size() > 1) {
+            wifi_ap_record_t cur;
+            const bool weak = esp_wifi_sta_get_ap_info(&cur) != ESP_OK || cur.rssi < K_ROAM_SCAN_RSSI;
+            if (weak && NetworkCredentialStore::instance().getKnownNetworks().size() > 1) {
                 self->performBackgroundScan();
             } else {
                 self->_lastScanTime = now;  // reavalia no proximo intervalo
@@ -675,7 +686,12 @@ void NetworkManager::onWifiStateChanged(WifiConnection* conn, WiFiConnectionStat
             }
             break;
         case WiFiConnectionState::Scanning:
-            setState(NetworkState::Scanning);
+            // CelerOS: scan com a STA associada (roaming, Ajustes) nao e queda
+            // de rede — virar Scanning e voltar a Connected disparava o
+            // "conectou" de novo em cada scan: NTP de novo, servidor web
+            // re-checado e a ponte do celerctl derrubando a sessao TCP
+            // (OTA por WiFi caia no meio; bancada 2026-10-07)
+            if (!_wifiConnection->isConnected()) setState(NetworkState::Scanning);
             break;
         case WiFiConnectionState::Connecting:
             setState(NetworkState::Connecting);
