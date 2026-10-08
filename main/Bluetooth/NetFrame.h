@@ -53,6 +53,13 @@ constexpr size_t FRAG_IDX = 1;         // posicao do idx nos dados do FRAG
 constexpr size_t FRAG_TOTAL = 1;       // posicao do total
 constexpr size_t CHUNK_MAX = DATA_MAX - FRAG_IDX - FRAG_TOTAL;  // 14
 constexpr uint8_t MAX_FRAGS = 31;      // 31 x 14 = 434 (teto da mensagem)
+// Byte idx do FRAG: bits 0-4 = indice (0..30), bits 5-6 = numero da COPIA
+// (unicast com copies). As copias de uma mensagem dividem o MESMO seq: o
+// dedup ve (src, seq, idx-com-copia) distintos — repetidores levam todas —
+// e o remontador junta fragmentos de qualquer copia. Firmware sem isso
+// descarta as copias >= 1 (idx >= total) e segue com a copia 0.
+constexpr uint8_t FRAG_IDX_MASK = 0x1F;
+constexpr uint8_t FRAG_COPY_SHIFT = 5;
 constexpr size_t MSG_MAX = 434;        // envelope de musica cabe inteiro
 constexpr uint8_t TTL_MAX = 8;
 constexpr uint8_t TTL_DEFAULT = 4;
@@ -185,10 +192,15 @@ public:
         }
     }
 
-    bool feed(uint16_t src, uint16_t seq, uint8_t idx, uint8_t total,
+    bool feed(uint16_t src, uint16_t seq, uint8_t idxByte, uint8_t total,
               const uint8_t* chunk, uint8_t chunkLen, uint32_t nowMs,
               uint8_t* outMsg, size_t cap, size_t* outLen) {
+        const uint8_t idx = idxByte & FRAG_IDX_MASK;  // copia nao importa aqui
         if (total == 0 || total > MAX_FRAGS || idx >= total || chunkLen > CHUNK_MAX) return false;
+        // ja entregue (a outra copia terminou antes): nao remonta de novo
+        for (int i = 0; i < DONE; i++) {
+            if (m_done[i].used && m_done[i].src == src && m_done[i].seq == seq) return false;
+        }
         Slot* s = nullptr;
         for (int i = 0; i < SLOTS; i++) {
             if (m_s[i].active && m_s[i].src == src && m_s[i].seq == seq) {
@@ -225,11 +237,14 @@ public:
         memcpy(outMsg, s->buf, n);
         *outLen = s->len;
         s->active = false;
+        m_done[m_donePos] = Done{src, seq, true};
+        m_donePos = (uint8_t)((m_donePos + 1) % DONE);
         return true;
     }
 
     void reset() {
         for (int i = 0; i < SLOTS; i++) m_s[i].active = false;
+        for (int i = 0; i < DONE; i++) m_done[i].used = false;
     }
 
 private:
@@ -244,6 +259,14 @@ private:
         uint8_t buf[MSG_MAX] = {};
     };
     Slot m_s[SLOTS];
+    // mensagens remontadas ha pouco: os frags da copia seguinte nao abrem slot
+    static constexpr int DONE = 8;
+    struct Done {
+        uint16_t src = 0, seq = 0;
+        bool used = false;
+    };
+    Done m_done[DONE];
+    uint8_t m_donePos = 0;
 
     static uint32_t totalMask(uint8_t total) {
         return (uint32_t)((1u << total) - 1);  // total <= 31

@@ -2240,7 +2240,7 @@ Desliga o nó (e persiste o desligado).
 
 #### `CelerNet.broadcast(mensagem, [ttl])` → Boolean (API 26)
 Manda a mensagem para **toda** a rede. Mesma regra de payload do
-`CelerLink.send`: string crua ou objeto serializado como JSON, 1–240
+`CelerLink.send`: string crua ou objeto serializado como JSON, 1–434
 bytes (fora disso lança `RangeError`). `ttl` (1–8, default 4) é o
 alcance em saltos. Retorna `false` com a malha desligada ou a fila cheia
 — a saída é assíncrona (o rádio transmite nos próximos ~ms).
@@ -2253,9 +2253,36 @@ case-insensitive; a presença vem ordenada por sinal, nomes duplicados
 resolvem para o mais forte). Destino fora da tabela de presença devolve
 `false` — presença vai e vem por natureza; o app decide.
 `opcoes`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` furam a fila
-da presença, e `copies` reenvia a mensagem com seq novo (redundância no
-lugar de ACK: **a entrega pode duplicar** — dedulique por um `id` no seu
-payload; os envelopes do OS já fazem).
+da presença, e `copies` (1–3) reenvia a mensagem ~1,5 s depois
+(redundância no lugar de ACK). Mensagem de **um quadro** (até 16 B):
+cada cópia é independente e **a entrega pode duplicar** — dedulique por
+um `id` no seu payload (os envelopes do OS já fazem). Mensagem
+**fragmentada** (> 16 B): as cópias dividem a identidade e o destino junta
+fragmentos de qualquer uma — entrega uma vez só, e o fragmento perdido
+numa cópia vem da outra.
+
+**Desenhando um protocolo de malha (o que o firmware faz por baixo):**
+
+- **16 bytes cabem num pacote de rádio.** Acima disso a mensagem vai em
+  fragmentos de 14 bytes (100 B = 8 pacotes) e se perde se *qualquer*
+  fragmento se perder em qualquer salto. Os apps do hub Sonar, Batata
+  Quente, Sentinela e Coral cabem cada mensagem num pacote: prefixo de 1
+  letra do app + 1 letra de operação + campos curtos (`"bp123.4.150"`).
+- **Nunca comece mensagem crua com `P`** quando ela tem 4+ bytes: é o
+  magic dos envelopes do OS (`Pack`) e o serviço Pack a engole —
+  `"Ping 1"` nunca chega ao `CelerNet.poll()` do outro lado (`"ping 1"`
+  chega). Use prefixo minúsculo.
+- **A fila de TX tem 96 pacotes** (as suas mensagens + o que o nó
+  repete) e cada pacote segura o rádio por ~185 ms (~5 pacotes/s). Um
+  `send` de 434 B com as 2 cópias padrão ocupa 62 pacotes — uns 11 s de
+  ar; a mensagem só entra na fila inteira (todas as cópias) ou nada
+  (`false`). Mensagem grande, só de vez em quando.
+- **Não há ACK no rádio.** Se precisa de confirmação, faça a resposta
+  ser o ACK (o `s?`/`s!` do Sonar, o `bp`/`bk` com reenvio da Batata
+  Quente) e deduplique as retentativas por um número de sequência.
+- **Só o app aberto recebe.** O `CelerNet.poll()` é do app em primeiro
+  plano (repetir é trabalho do OS e não precisa de app): protocolos entre
+  apps funcionam com o app aberto nas duas pontas.
 
 #### `CelerNet.poll()` → Object|null (API 26)
 Mensagem que chegou (FIFO de 8; cheia descarta a mais antiga):
@@ -2269,7 +2296,10 @@ este nó. `null` quando vazia. Drene no laço do app até voltar `null`.
 #### `CelerNet.nodes()` → Array (API 26; `caps` na 27)
 Presença: nós da rede ouvidos nos últimos 15 s, sinal mais forte
 primeiro: `[{id: "9F2A", name: "Celer-Dog", caps: 9, rssi: -71,
-hops: 1, lastSeen: 2}]` (`lastSeen` em segundos). Cada nó anuncia
+hops: 1, lastSeen: 2}]` (`lastSeen` em segundos; `hops` conta saltos
+dados — vizinho direto = 1; até o firmware 1.7.0 vinha 0 — e, com o
+caminho direto fresco, um anúncio repetido por outro nó não o troca).
+Cada nó anuncia
 presença a cada ~3 s; desde a API 27 o anúncio leva o **papel** do nó
 (`caps`, um bitmask — `Pack.members()` devolve decodificado).
 

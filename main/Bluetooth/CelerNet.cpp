@@ -63,8 +63,11 @@ struct Pending {
     uint32_t dueMs;     // jitter da repeticao (nosso = ja valido)
     uint8_t frame[netframe::ADV_MAX];
 };
-// Uma mensagem cheia (31 frags) + retransmissoes de vizinhos caber juntas.
-constexpr int PENDING_DEPTH = 40;
+// Uma mensagem cheia com as 2 copias do unicast (62 quadros) + repeticoes de
+// vizinhos. Com 40, os relays pendentes nunca deixavam 31 vagas livres: na
+// bancada 2026-10-07 TODO broadcast de 434 B foi recusado (10/10) e o handoff
+// de musica (~413 B) caia no mesmo buraco. Vive na PSRAM (~3,6 KB).
+constexpr int PENDING_DEPTH = 96;
 
 struct NodeEntry {
     bool used;
@@ -87,7 +90,10 @@ struct NetHeap {
     netframe::Reassembler reasm;
     Pending pending[PENDING_DEPTH];
     NodeEntry nodes[CelerNet::NODES_MAX];
-    netframe::DedupRing<32> dedup;
+    // 128: uma mensagem cheia (31 frags) x 2 copias + BEATs e repeticoes de
+    // vizinhos. Com 32 o anel transbordava NO MEIO da propria mensagem e os
+    // frags ja vistos voltavam como novos (re-relay e re-remontagem).
+    netframe::DedupRing<128> dedup;
 };
 
 QueueHandle_t s_raw = nullptr;      // adv reports (host -> tick)
@@ -105,6 +111,54 @@ char s_net[16] = "celer";
 uint32_t s_txDropped = 0;
 uint32_t s_rxDropped = 0;
 uint32_t s_relayed = 0;
+uint32_t s_relaySuppressed = 0;  // repeticoes canceladas (outro ja repetiu)
+// Telemetria de RX (bench): separa "nao chegou no ar" de "chegou e se perdeu
+// no caminho" — reports com o magic aceitos na fila crua, descartados por
+// fila cheia, e quadros da NOSSA rede que o tick processou (inclui dups)
+uint32_t s_rxRaw = 0;         // escrito so pela task do host
+uint32_t s_rxRawDropped = 0;
+uint32_t s_rxFrames = 0;
+
+// Ajuste de bancada (A/B sem recompilar): /local/celernet_tune.txt lido no
+// start, "adv=<ms> defer=<0|1> suppress=<0|1>". Sem o arquivo = padroes.
+uint32_t s_advMs = 160;      // duracao do adv de cada quadro (ms)
+bool s_fragDefer = true;     // relay de FRAG espera a rajada silenciar
+bool s_suppress = true;      // cancela relay ja feito por vizinho
+
+void loadTune() {
+    FILE* f = fopen("/local/celernet_tune.txt", "r");
+    if (f == nullptr) return;
+    char line[96] = {0};
+    if (fgets(line, sizeof(line), f) != nullptr) {
+        const char* p;
+        if ((p = strstr(line, "adv=")) != nullptr) {
+            int v = atoi(p + 4);
+            if (v >= 20 && v <= 400) s_advMs = (uint32_t)v;
+        }
+        if ((p = strstr(line, "defer=")) != nullptr) s_fragDefer = p[6] == '1';
+        if ((p = strstr(line, "suppress=")) != nullptr) s_suppress = p[9] == '1';
+    }
+    fclose(f);
+    ESP_LOGW("celer.net", "tune de bancada: adv=%u defer=%d suppress=%d", (unsigned)s_advMs,
+             (int)s_fragDefer, (int)s_suppress);
+}
+
+// Adia as repeticoes pendentes dos FRAGs de (src, seq): enquanto a rajada
+// daquela mensagem ainda chega, repetir um frag liga o NOSSO adv (scanner
+// desligado ~185 ms) bem em cima do frag seguinte. O jitter fixo (0,7-1,6 s)
+// nao bastava: 8 frags levam ~1,5 s no ar e 31 levam ~5,7 s — na bancada
+// 100 B chegava 3-4 vezes em 10. Cada frag novo empurra o relay da rajada
+// para depois do silencio.
+void deferFragRelays(uint16_t src, uint16_t seq, uint32_t dueMs) {
+    if (s_heap == nullptr) return;
+    for (int i = 0; i < PENDING_DEPTH; i++) {
+        Pending* p = &s_heap->pending[i];
+        if (!p->used || p->ours || (int32_t)(p->dueMs - dueMs) >= 0) continue;
+        netframe::Frame f;
+        if (!netframe::decode(p->frame, p->len, &f)) continue;
+        if (f.type == netframe::TYPE_FRAG && f.src == src && f.seq == seq) p->dueMs = dueMs;
+    }
+}
 // Telemetria de TX (bench): bursts que SAIram no ar vs tentativas — a
 // diferenca entre "enqueue ok" e "adv_start ok" e invisivel sem isso.
 uint32_t s_txStarted = 0;   // adv_start devolveu 0 (quadro foi pro ar)
@@ -171,17 +225,63 @@ bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, u
     return false;
 }
 
+int pendingFree() {
+    if (s_heap == nullptr) return 0;
+    int n = 0;
+    for (int i = 0; i < PENDING_DEPTH; i++) if (!s_heap->pending[i].used) n++;
+    return n;
+}
+
+size_t framesFor(size_t len) {
+    return len <= netframe::DATA_MAX ? 1 : (len + netframe::CHUNK_MAX - 1) / netframe::CHUNK_MAX;
+}
+
+// Supressao de repeticao: ouvimos o MESMO quadro repetido por outro no do
+// nosso nivel antes da nossa vez — a nossa copia so gastaria ar (e nos
+// deixaria surdos ~185 ms). Numa area densa (todos se ouvem) cada quadro era
+// repetido por TODOS: na bancada de 3 placas cada no transmitia ~1 quadro/s
+// so de presenca. BEAT (estado mole, o proximo sai em 3 s) suprime sempre;
+// DATA/FRAG so quando o repetidor ouvido esta FORTE (perto de nos: quem nos
+// ouve, provavelmente ouviu ele) — o fraco pode estar cobrindo outro lado.
+constexpr int8_t K_SUPPRESS_RSSI = -60;
+
+void cancelRelay(uint16_t src, uint16_t seq, uint8_t idx, uint8_t type, uint8_t hopsHeard,
+                 int8_t rssi) {
+    if (s_heap == nullptr) return;
+    if (type != netframe::TYPE_BEAT && rssi < K_SUPPRESS_RSSI) return;
+    for (int i = 0; i < PENDING_DEPTH; i++) {
+        Pending* p = &s_heap->pending[i];
+        if (!p->used || p->ours) continue;
+        netframe::Frame f;
+        if (!netframe::decode(p->frame, p->len, &f)) continue;
+        if (f.type != type || f.src != src || f.seq != seq) continue;
+        if (f.type == netframe::TYPE_FRAG && (f.dlen < 1 || f.data[0] != idx)) continue;
+        // a nossa repeticao levaria hops = h; uma copia ja ouvida com hops
+        // >= h e de um repetidor do mesmo nivel (a 2a emissao do ORIGINAL
+        // chega com hops menor e nao conta)
+        if (hopsHeard >= f.hops) {
+            p->used = false;
+            s_relaySuppressed++;
+        }
+    }
+}
+
 // Mensagem -> quadros (DATA unico ou FRAGs) na fila; seq unico por mensagem.
+// seq: 0 = novo; senao o seq das copias anteriores (FRAG), com copy no idx.
 bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, bool ours,
-                    uint8_t prio, uint32_t dueDelayMs = 0) {
+                    uint8_t prio, uint32_t dueDelayMs = 0, uint16_t seq = 0, uint8_t copy = 0) {
     if (len == 0 || len > CelerNet::MAX_MSG || ttl == 0) return false;
+    // tudo ou nada: frags pela metade na fila so gastam ar (o destino nunca
+    // remonta) e o app recebia false com a mensagem meio enviada
+    if ((int)framesFor(len) > pendingFree()) return false;
     const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     uint8_t frame[netframe::ADV_MAX];
     netframe::Frame f;
     f.netId = s_netId;
     f.src = s_node;
     f.dst = dst;
-    f.seq = ++s_seq;
+    f.seq = seq != 0 ? seq : ++s_seq;
+    if (f.seq == 0) f.seq = ++s_seq;  // 0 reservado para "novo"
     f.ttl = ttl;
     if (len <= netframe::DATA_MAX) {
         f.type = netframe::TYPE_DATA;
@@ -194,15 +294,20 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
     const uint8_t total = (uint8_t)((len + netframe::CHUNK_MAX - 1) / netframe::CHUNK_MAX);
     if (total > netframe::MAX_FRAGS) return false;
     f.type = netframe::TYPE_FRAG;
-    f.dlen = netframe::DATA_MAX;  // idx + total + chunk
     uint8_t chunk[netframe::DATA_MAX];
     for (uint8_t i = 0; i < total; i++) {
         size_t off = (size_t)i * netframe::CHUNK_MAX;
         size_t n = len - off;
         if (n > netframe::CHUNK_MAX) n = netframe::CHUNK_MAX;
-        chunk[0] = i;
+        chunk[0] = (uint8_t)(i | ((copy & 3) << netframe::FRAG_COPY_SHIFT));
         chunk[1] = total;
         memcpy(chunk + 2, (const uint8_t*)data + off, n);
+        // dlen REAL (idx + total + n): o ultimo frag e curto. Com dlen fixo
+        // em 16 o ultimo levava o resto do frag ANTERIOR (o chunk e
+        // reaproveitado) e o destino remontava a mensagem arredondada para
+        // multiplo de 14 B com lixo no fim — JSON.parse falhava e o envelope
+        // de musica do handoff chegava corrompido (o "handler calado")
+        f.dlen = (uint8_t)(2 + n);
         f.data = chunk;
         size_t fl = netframe::encode(f, frame, sizeof(frame));
         if (fl == 0 || !pendingPush(frame, (uint8_t)fl, ours, now + dueDelayMs, prio)) return false;
@@ -286,9 +391,18 @@ void nodeTouch(uint16_t id, const char* name, uint8_t caps, int8_t rssi, uint8_t
     }
     if (name != nullptr && name[0] != '\0') snprintf(e->name, sizeof(e->name), "%s", name);
     e->used = true;
-    e->caps = caps;
-    e->rssi = rssi;
-    e->hops = hops;
+    // caps so vem do BEAT (name != nullptr): DATA/FRAG chegavam com caps 0 e
+    // apagavam o papel do no ate o proximo BEAT — o handoffMusic logo apos
+    // uma mensagem do vizinho nao achava alto-falante
+    if (name != nullptr) e->caps = caps;
+    // Caminho mais curto fresco vence: o BEAT REPETIDO por outro no (hops
+    // maior, rssi do repetidor) chegava quando o direto se perdia e a
+    // presenca oscilava 1<->2 saltos com o sinal do vizinho errado
+    const bool fresh = !joined && nowMs - e->lastMs < 2 * K_BEAT_MS;
+    if (!fresh || hops <= e->hops) {
+        e->rssi = rssi;
+        e->hops = hops;
+    }
     e->lastMs = nowMs;
     if (joined && s_memberCb != nullptr) s_memberCb(id, e->name, caps, true);
 }
@@ -300,7 +414,14 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
     // segue flooding do mesmo jeito — o filtro nao corta o relay abaixo.
     const bool mine = f.dst == netframe::DST_BROADCAST || f.dst == s_node;
     const uint8_t idx = f.type == netframe::TYPE_FRAG && f.dlen >= 2 ? f.data[0] : 0;
-    if (s_heap->dedup.seen(f.src, f.seq, idx)) return;
+    // saltos DADOS ate aqui: o quadro original sai com hops 0 e cada
+    // repetidor soma 1 — o vizinho direto e 1 salto (a doc e os apps contam
+    // assim; o firmware entregava 0 e o exemplo "hops: 2" virava 1)
+    const uint8_t hops = (uint8_t)(f.hops + 1);
+    if (s_heap->dedup.seen(f.src, f.seq, idx)) {
+        if (s_relay && s_suppress) cancelRelay(f.src, f.seq, idx, f.type, f.hops, rssi);
+        return;
+    }
 
     switch (f.type) {
         case netframe::TYPE_BEAT: {
@@ -317,31 +438,34 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
             if (n > CelerNet::MAX_NAME) n = CelerNet::MAX_NAME;
             memcpy(name, nm, n);
             name[n] = '\0';
-            nodeTouch(f.src, name, caps, rssi, f.hops, nowMs);
+            nodeTouch(f.src, name, caps, rssi, hops, nowMs);
             break;
         }
         case netframe::TYPE_DATA:
             if (!mine) break;
-            nodeTouch(f.src, nullptr, 0, rssi, f.hops, nowMs);
-            rxPush(f.src, nodeName(f.src), f.dst, f.data, f.dlen, f.hops, rssi);
+            nodeTouch(f.src, nullptr, 0, rssi, hops, nowMs);
+            rxPush(f.src, nodeName(f.src), f.dst, f.data, f.dlen, hops, rssi);
             break;
         case netframe::TYPE_FRAG: {
             if (f.dlen < 2) return;
             if (!mine) break;
-            nodeTouch(f.src, nullptr, 0, rssi, f.hops, nowMs);
+            nodeTouch(f.src, nullptr, 0, rssi, hops, nowMs);
             uint8_t msg[CelerNet::MAX_MSG];
             size_t len = 0;
-            // Bench: cada frag QUE CHEGA ao remontador vira log — separou
-            // "perdeu no ar" de "chegou e nao remontou" na bancada.
-            ESP_LOGI(TAG, "frag rx %04X seq=%u %u/%u (%u B)",
+            // Debug (LOGD): um log por frag no tick custava caro — ~5 ms de
+            // UART por linha no quadro e, no cao (USB-JTAG), escrita que
+            // BLOQUEIA quando ninguem le o console: o tick parava, a fila
+            // crua enchia e os frags seguintes sumiam (bancada 2026-10-07).
+            // Os contadores rxCru/rxQuadros da linha do BEAT ficam no lugar.
+            ESP_LOGD(TAG, "frag rx %04X seq=%u %u/%u (%u B)",
                      f.src, (unsigned)f.seq, f.data[0] + 1, f.data[1],
                      (unsigned)(f.dlen - 2));
             if (s_heap != nullptr &&
                 s_heap->reasm.feed(f.src, f.seq, f.data[0], f.data[1], f.data + 2,
                                    (uint8_t)(f.dlen - 2), nowMs, msg, sizeof(msg), &len)) {
-                ESP_LOGI(TAG, "frag remontou %04X seq=%u (%u B)", f.src,
+                ESP_LOGD(TAG, "frag remontou %04X seq=%u (%u B)", f.src,
                          (unsigned)f.seq, (unsigned)len);
-                rxPush(f.src, nodeName(f.src), f.dst, msg, len, f.hops, rssi);
+                rxPush(f.src, nodeName(f.src), f.dst, msg, len, hops, rssi);
             }
             break;
         }
@@ -363,7 +487,17 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
         size_t n = netframe::encode(r, frame, sizeof(frame));
         if (n > 0) {
             uint32_t jitter = 40 + (uint32_t)f.ttl * 40 + (esp_random() % 200);
-            if (f.type == netframe::TYPE_FRAG) jitter += 700 + (esp_random() % 900);
+            if (f.type == netframe::TYPE_FRAG) {
+                // depois do ULTIMO frag ouvido da rajada (este), com folga de
+                // ~2 quadros no ar; os relays ja pendentes da mesma mensagem
+                // andam junto (saem em ordem, depois do silencio)
+                if (s_fragDefer) {
+                    jitter += 400 + (esp_random() % 300);
+                    deferFragRelays(f.src, f.seq, nowMs + jitter);
+                } else {
+                    jitter += 700 + (esp_random() % 900);  // comportamento antigo
+                }
+            }
             if (pendingPush(frame, (uint8_t)n, false, nowMs + jitter)) s_relayed++;
         }
     }
@@ -411,7 +545,11 @@ void maybeBurst(uint32_t nowMs) {
             if (nowMs - s_advStartMs < 1000) return;
             s_txFail++;
             if (ble_gap_adv_active()) ble_gap_adv_stop();
-            s_restoreAdv = false;  // o stop acima ja resolveu o radio
+            // o adv no ar podia ser o do Link/Phone Link (re-armado pelo
+            // refreshAdvertising durante a disputa): o stop acima o derrubou,
+            // entao a devolucao no fim da fila e OBRIGATORIA — zerar aqui
+            // deixava o Gadgetbridge sem reconectar ate outro advRestart
+            s_restoreAdv = true;
         }
         s_advBusy = false;
         s_burstDone = false;
@@ -448,6 +586,12 @@ void maybeBurst(uint32_t nowMs) {
         s_txNoToken++;
         return;
     }
+    // App escaneando/conectando pelo Celer Link: segura o TX. O cancel do
+    // scanner logo abaixo derrubava o scan DO APP (o NimBLE nao entrega
+    // DISC_COMPLETE no cancel): o CelerLink.scan() voltava so com o 1o
+    // segundo de cache — na bancada 2026-10-07, 3 scans seguidos vazios com
+    // o periferico a 30 cm. Os quadros esperam na fila (scan dura ~3 s).
+    if (CelerLink::appBusy()) return;
 
     // Scanner e burst NUNCA juntos: scan continuo + reconfiguracao de adv
     // nao-conectavel correm contra o lld_init do controlador (IWDT no
@@ -471,7 +615,7 @@ void maybeBurst(uint32_t nowMs) {
         // (1 evento + folga) — 250 ms deixava o ciclo em ~1 burst/s.
         p.itvl_min = 160;  // 100 ms em unidades de 0,625 ms
         p.itvl_max = 160;
-        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, 160, &p, meshGapCb, nullptr);
+        rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, (int32_t)s_advMs, &p, meshGapCb, nullptr);
     }
     if (rc == 0) {
         best->used = false;
@@ -553,6 +697,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_node = (uint16_t)((mac[4] << 8) | mac[5]);
     if (s_name[0] == '\0') snprintf(s_name, sizeof(s_name), "Celer-%04X", s_node);
     s_relay = relay;
+    loadTune();
     s_seq = (uint16_t)(esp_random() & 0xFFFF);
 
     s_heap->dedup.clear();
@@ -564,6 +709,9 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     xQueueReset(s_raw);
     s_txDropped = s_rxDropped = s_relayed = 0;
     s_txStarted = s_txFail = s_txNoToken = 0;
+    s_relaySuppressed = 0;
+    s_rxRaw = s_rxRawDropped = 0;
+    s_rxFrames = 0;
     s_tokens = K_TOKEN_MAX;
     s_lastRefillMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     s_lastBeatMs = 0;  // BEAT imediato: presenca aparece logo nos vizinhos
@@ -599,6 +747,9 @@ void CelerNet::onAdvReport(const uint8_t* data, size_t len, int8_t rssi) {
     memcpy(r.data, data, len);
     if (xQueueSend(s_raw, &r, 0) != pdTRUE) {
         // cheio: relays vizinhos reenviam, perder um report nao e tragico
+        s_rxRawDropped++;
+    } else {
+        s_rxRaw++;
     }
 }
 
@@ -614,15 +765,22 @@ bool CelerNet::stop() {
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     bool wasActive = s_active;
     s_active = false;
-    if (s_advBusy && ble_gap_adv_active()) {
-        ble_gap_adv_stop();
-        s_advBusy = false;
-        s_burstDone = false;
-    }
-    if (ble_gap_disc_active()) ble_gap_disc_cancel();  // o nosso scanner
-    if (s_restoreAdv) {
-        s_restoreAdv = false;
-        CelerLink::refreshAdvertising();
+    // Radio so com o no NO AR: antes do auto-start (carencia do boot) ou com a
+    // RAM adiando o start, o NimBLE pode nem estar inicializado — o
+    // ble_gap_disc_active() abaixo dava LoadProhibited e reiniciava a placa
+    // (bancada 2026-10-07: CelerNet.stop() no inicio de um app, 40 s apos o boot)
+    if (wasActive) {
+        if (s_advBusy && ble_gap_adv_active()) {
+            ble_gap_adv_stop();
+            s_advBusy = false;
+            s_burstDone = false;
+        }
+        // o nosso scanner (o do app no Celer Link fica)
+        if (!CelerLink::appBusy() && ble_gap_disc_active()) ble_gap_disc_cancel();
+        if (s_restoreAdv) {
+            s_restoreAdv = false;
+            CelerLink::refreshAdvertising();
+        }
     }
     if (s_heap != nullptr) {
         for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
@@ -709,7 +867,11 @@ bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, b
     if (copies < 1) copies = 1;
     if (copies > 3) copies = 3;
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
-    bool ok = true;
+    // todas as copias cabem ou nenhuma sai: a 1a copia na fila com false para
+    // o app fazia o handoff de musica tocar nos DOIS aparelhos (o Pack so
+    // para a musica local quando o envio da true)
+    bool ok = (int)(framesFor(len) * copies) <= pendingFree();
+    uint16_t msgSeq = 0;
     for (uint8_t c = 0; c < copies && ok; c++) {
         // Cada copia leva seq NOVO: o dedup do vizinho nao pode come-la (a
         // redundancia e a "retransmissao" do unicast sem ACK — a entrega
@@ -718,8 +880,14 @@ bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, b
         // MESMA janela de colisao — o receptor relaya no meio da rajada
         // (relay = burst = scanner desligado ~300 ms) e perde o frag que
         // esta chegando; copias no mesmo instante nao sao redundancia.
+        // Mensagem fragmentada: as copias DIVIDEM o seq (copia no idx) e o
+        // destino junta fragmentos de qualquer uma — antes cada copia tinha
+        // que chegar INTEIRA (8 frags a ~75% cada: ~10% por copia; bancada
+        // 2026-10-07). Quadro unico segue com seq novo por copia.
+        const bool frag = len > netframe::DATA_MAX;
         ok = enqueueMessage(dst, (const uint8_t*)data, len, ttl, true, urgent ? 1 : 0,
-                            (uint32_t)c * 1500);
+                            (uint32_t)c * 1500, frag ? msgSeq : 0, frag ? c : 0);
+        if (ok && c == 0 && frag) msgSeq = s_seq;
     }
     xSemaphoreGiveRecursive(lock());
     if (!ok) {
@@ -750,10 +918,10 @@ int CelerNet::nodes(Node* out, int max) {
     int n = 0;
     for (int i = 0; i < NODES_MAX && n < max; i++) {
         if (!s_heap->nodes[i].used) continue;
-        if (nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) {
-            s_heap->nodes[i].used = false;  // expirou (varredura piggyback)
-            continue;
-        }
+        // vencido: fica de fora, mas QUEM libera e o sweep do tick (que dispara
+        // o evento de saida) — liberar aqui engolia o "saiu" do Pack e a volta
+        // do no virava um segundo "entrou"
+        if (nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) continue;
         out[n].id = s_heap->nodes[i].id;
         snprintf(out[n].name, sizeof(out[n].name), "%s", s_heap->nodes[i].name);
         out[n].caps = s_heap->nodes[i].caps;
@@ -895,9 +1063,12 @@ void CelerNet::tick() {
         for (int i = 0; i < PENDING_DEPTH; i++) {
             if (s_heap->pending[i].used) queued++;
         }
-        ESP_LOGI(TAG, "beat seq=%u: noAr=%u fail=%u noTok=%u fila=%u relay=%u",
+        ESP_LOGI(TAG, "beat seq=%u: noAr=%u fail=%u noTok=%u fila=%u relay=%u suprimidos=%u "
+                 "rxCru=%u rxCruPerdido=%u rxQuadros=%u",
                  (unsigned)f.seq, (unsigned)s_txStarted, (unsigned)s_txFail,
-                 (unsigned)s_txNoToken, (unsigned)queued, (unsigned)s_relayed);
+                 (unsigned)s_txNoToken, (unsigned)queued, (unsigned)s_relayed,
+                 (unsigned)s_relaySuppressed, (unsigned)s_rxRaw, (unsigned)s_rxRawDropped,
+                 (unsigned)s_rxFrames);
     }
 
     // Varredura de expiracao (~1x/s): no que passou 15 s sem BEAT sai da
@@ -922,6 +1093,7 @@ void CelerNet::tick() {
         netframe::Frame f;
         if (!netframe::decode(r.data, r.len, &f)) continue;
         if (f.netId != s_netId) continue;  // outra rede por perto
+        s_rxFrames++;
         handleFrame(f, r.rssi, nowMs);
     }
 

@@ -31,6 +31,12 @@
 // pacotes vai em claro no ar — criptografia com chave compartilhada fica
 // para uma v3. Identidade do no: 2 ultimos bytes da MAC BT (zero config).
 //
+// Bancada (A/B sem recompilar): /local/celernet_tune.txt, lido em cada
+// start(), uma linha "adv=<ms 20..400> defer=<0|1> suppress=<0|1>" — duracao
+// do adv de cada quadro, relay de FRAG esperando a rajada silenciar e
+// supressao de relay ja feito por vizinho. Sem o arquivo valem os padroes.
+// O app test/apps/MeshLab mede as variantes (RTT, entrega por tamanho).
+//
 // Concorrencia: os callbacks rodam na task do host NimBLE (so enfileiram
 // adv reports); todo o resto (dedup, relay, presenca, bursts) roda no
 // tick sob mutex — o tick e chamado pelos DOIS pumps (celerLoop e

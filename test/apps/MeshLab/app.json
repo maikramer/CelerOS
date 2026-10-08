@@ -1,0 +1,13 @@
+{
+  "name": "MeshLab",
+  "packageName": "test.meshlab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bateria de bancada da CelerNet e do Celer Link: presença, RTT por par, entrega por tamanho (fragmentação), unicast com 1 e 2 cópias, rajada contra a fila de TX e Celer Link com a malha ligada. Resultados em /local/meshlab_out.txt. App de bancada, não instalar na fábrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": ["fs", "net", "system"],
+  "topbar": false,
+  "changelog": "1.0.0 - primeira bateria (3 placas)"
+}

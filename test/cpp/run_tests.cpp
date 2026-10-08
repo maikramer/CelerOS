@@ -752,6 +752,40 @@ static void testNetFrame() {
     dd.clear();
     CHECK(!dd.seen(1, 100, 0));   // clear: tudo novo de novo
 
+    // dedup do tamanho do CelerNet: uma mensagem cheia (31 frags) x 2 copias
+    // + 30 BEATs de vizinhos; o frag 0 repetido DEPOIS da rajada (2o evento
+    // do adv, relay atrasado) ainda tem que ser reconhecido. Com 32 entradas
+    // (o tamanho antigo) o anel transbordava no meio da propria mensagem.
+    DedupRing<128> big;
+    DedupRing<32> old;
+    for (uint16_t c = 0; c < 2; c++) {
+        for (uint8_t i = 0; i < 31; i++) {
+            big.seen(5, (uint16_t)(200 + c), i);
+            old.seen(5, (uint16_t)(200 + c), i);
+        }
+    }
+    for (uint16_t k = 0; k < 30; k++) { big.seen(9, k, 0); old.seen(9, k, 0); }
+    CHECK(big.seen(5, 200, 0));    // 128: ainda lembra o 1o frag
+    CHECK(!old.seen(5, 200, 0));   // 32: esqueceu (o bug da bancada)
+
+    // copias de unicast dividem o seq: o frag que faltou na copia 0 vem da
+    // copia 1 (copia nos bits 5-6 do idx) e a remontagem sai UMA vez so
+    {
+        Reassembler rc;
+        uint8_t m3[3 * CHUNK_MAX];
+        for (size_t i = 0; i < sizeof(m3); i++) m3[i] = (uint8_t)(i + 1);
+        uint8_t o3[MSG_MAX];
+        size_t l3 = 0;
+        const uint8_t c1 = (uint8_t)(1 << FRAG_COPY_SHIFT);
+        CHECK(!rc.feed(7, 50, 0, 3, m3, CHUNK_MAX, 0, o3, sizeof(o3), &l3));            // copia 0: frag 0
+        CHECK(!rc.feed(7, 50, 2, 3, m3 + 28, CHUNK_MAX, 10, o3, sizeof(o3), &l3));      // copia 0: frag 2 (1 perdido)
+        CHECK(!rc.feed(7, 50, (uint8_t)(0 | c1), 3, m3, CHUNK_MAX, 20, o3, sizeof(o3), &l3));  // copia 1: frag 0 repetido
+        CHECK(rc.feed(7, 50, (uint8_t)(1 | c1), 3, m3 + 14, CHUNK_MAX, 30, o3, sizeof(o3), &l3)); // copia 1 completa
+        CHECK(l3 == sizeof(m3) && memcmp(o3, m3, sizeof(m3)) == 0);
+        CHECK(!rc.feed(7, 50, (uint8_t)(2 | c1), 3, m3 + 28, CHUNK_MAX, 40, o3, sizeof(o3), &l3)); // sem 2a entrega
+        CHECK(!rc.feed(7, 50, (uint8_t)(0 | c1), 3, m3, CHUNK_MAX, 50, o3, sizeof(o3), &l3));      // nem slot novo
+    }
+
     // remontagem: mensagem de 434 B = 31 fragmentos de 14 B, fora de ordem
     uint8_t msg[MSG_MAX];
     for (size_t i = 0; i < MSG_MAX; i++) msg[i] = (uint8_t)(i * 7);

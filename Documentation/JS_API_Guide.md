@@ -1965,7 +1965,7 @@ Turns the node off (and persists the off state).
 
 #### `CelerNet.broadcast(message, [ttl])` → Boolean (API 26)
 Sends the message to the **whole** network. Same payload rule as
-`CelerLink.send`: raw string or object serialized as JSON, 1–240 bytes
+`CelerLink.send`: raw string or object serialized as JSON, 1–434 bytes
 (outside that a `RangeError` is thrown). `ttl` (1–8, default 4) is the
 reach in hops. Returns `false` with the mesh off or the queue full —
 delivery is asynchronous (the radio transmits over the next few ms).
@@ -1988,15 +1988,44 @@ case-insensitive match; presence is sorted by signal, so duplicate names
 resolve to the strongest). A destination not in the presence table
 returns `false` — presence naturally comes and goes; the app decides.
 `options`: `{ttl: 4, urgent: false, copies: 2}` — `urgent` moves the
-handoff ahead of presence traffic, and `copies` re-sends the message with
-a new sequence number (redundancy in place of ACKs: **delivery may
-duplicate** — deduplicate by an `id` in your payload, the OS envelopes
-already do).
+handoff ahead of presence traffic, and `copies` (1–3) re-sends the
+message ~1.5 s later (redundancy in place of ACKs). A **single-packet**
+message (up to 16 B): every copy is independent and **delivery may
+duplicate** — deduplicate by an `id` in your payload (the OS envelopes
+already do). A **fragmented** message (> 16 B): the copies share one
+identity and the destination merges fragments from any of them — it is
+delivered once, and a fragment lost in one copy comes from the other.
+
+**Designing a mesh protocol (what the firmware does under the hood):**
+
+- **16 bytes fit in one radio packet.** Above that the message goes in
+  14-byte fragments (a 100 B message = 8 packets) and is lost if *any*
+  fragment is lost on any hop. The hub apps Sonar, Batata Quente,
+  Sentinela and Coral fit every message in one packet: a 1-letter app
+  prefix + a 1-letter opcode + short fields (`"bp123.4.150"`).
+- **Never start a raw message with `P`** when it is 4+ bytes: that is the
+  magic of the OS envelopes (`Pack`), and the Pack service swallows it —
+  `"Ping 1"` never reaches `CelerNet.poll()` on the other side
+  (`"ping 1"` does). Use a lowercase prefix.
+- **The TX queue holds 96 packets** (your messages + what the node
+  relays) and each packet holds the radio for ~185 ms (~5 packets/s). A
+  434 B `send` with the default 2 copies takes 62 packets — about 11 s of
+  air; a message only enters the queue whole (all copies) or not at all
+  (`false`). Keep big messages rare.
+- **No ACK in the radio.** If you need confirmation, make the reply the
+  ACK (the Sonar's `s?`/`s!`, the Batata Quente's `bp`/`bk` with resend)
+  and deduplicate retries by a sequence number.
+- **Only an open app receives.** `CelerNet.poll()` belongs to the app in
+  the foreground (relaying is the OS's job and needs no app): protocols
+  between apps work while the app is open on both ends.
 
 #### `CelerNet.nodes()` → Array (API 26; `caps` in 27)
 Presence: network nodes heard in the last 15 s, strongest signal first:
 `[{id: "9F2A", name: "Celer-Dog", caps: 9, rssi: -71, hops: 1,
-lastSeen: 2}]` (`lastSeen` in seconds). Every node announces presence
+lastSeen: 2}]` (`lastSeen` in seconds; `hops` counts hops taken — a
+direct neighbour is 1; firmware up to 1.7.0 reported 0 — and while the
+direct path is fresh a beat relayed by another node does not replace it).
+Every node announces presence
 every ~3 s; since API 27 the announcement carries the node's **role**
 (`caps`, a bitmask — use `Pack.members()` for it decoded).
 

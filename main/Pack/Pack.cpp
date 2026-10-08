@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_random.h"
 
 #include "../Bluetooth/CelerNet.h"
 #include "../Bluetooth/NetFrame.h"
@@ -136,6 +137,10 @@ uint16_t pickSpeaker() {
 void init() {
     if (s_inited) return;
     s_inited = true;
+    // msgId aleatorio no boot: comecando em 0, as primeiras mensagens depois
+    // de um reboot repetiam ids que o dedup do vizinho ainda lembrava e eram
+    // descartadas como copias (custom ou o proprio handoff de musica)
+    s_msgSeq = (uint16_t)(esp_random() & 0xFFFF);
     const BoardProfile& bp = Board::profile();
     uint8_t caps = 0;
     if (bp.speakerPin >= 0 || bp.i2s.dout >= 0) caps |= netframe::CAPS_SPEAKER;
