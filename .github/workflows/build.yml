@@ -43,6 +43,8 @@ jobs:
         run: |
           pip install pyserial
           python3 test/test_celerctl.py
+      - name: matilha tests (netframe da malha + no CelerNet + bond do link)
+        run: python3 test/test_matilha.py
 
   firmware:
     name: firmware (${{ matrix.board }})

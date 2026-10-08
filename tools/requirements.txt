@@ -1,5 +1,5 @@
 # Dependencias das ferramentas Python do CelerOS (tools/)
 # celerctl requer pyserial; make_icons.py requer Pillow
 pyserial>=3.5
-# dogtune (bancada de marcha do cao) requer bleak
+# dogtune (bancada do cao) e matilha (link CelerLink) requerem bleak
 bleak>=0.21
