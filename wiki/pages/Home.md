@@ -27,16 +27,17 @@ development.
 
 ## What's new
 
-Highlights of the October 2026 rounds (firmware 1.6–1.7, JS API level 24):
+Highlights of the October 2026 rounds (firmware 1.8, JS API level 27):
 
-* **The dog talks (API 24)** — `AI.speak()` turns text into voice straight on the speaker: the OpenRouter TTS (Gemini voices, 30 natural voices with Portuguese out of the box) plays **live** as it downloads — nothing goes through RAM. Ask the robot dog anything and it answers out loud, in the language you spoke ([JS API](/maikramer/CelerOS/wiki/JS-API), [robot dog](/maikramer/CelerOS/wiki/Robot-Dog)).
-* **The AI writes the choreography** — the dog's `dog_script` tool: the LLM writes its own ES5 JavaScript and runs it on the dog in a choreography sandbox (face, legs, LEDs and sound together; clamps, deadline and touch-to-abort). The hop gait walks at 660 ms/cycle, an asymmetric hop steers, and a spin drops it on its belly — all live-tunable from the Celer Remote's AFINAR panel over BLE, no cable ([robot dog](/maikramer/CelerOS/wiki/Robot-Dog)).
-* **QOA audio** — a ~60-line fixed-point decoder (phoboslab's QOA, MIT) replaces the MP3 stack: real AI-rendered barks ride as 5x-smaller `.qoa` files, and app packages can ship `.qoa` sound assets.
-* **celerctl over Wi-Fi — the Celer Debug Bridge** — shell, push/pull, logcat, the JS debugger, screencap and OTA over TCP, no cable; `devices` discovers bridges, `pair` once, `provision` sets a board up in one command ([tools](/maikramer/CelerOS/wiki/Tools), [celerctl](/maikramer/CelerOS/wiki/celerctl-USB)).
-* **Profiling & persistent logs** — `celerctl top` (per-task CPU, heap, stack watermarks, app fps) and Linux-style `/local/log/kern.log` + `apps.log` with rotation: `dmesg`/`appslog` in the Terminal, `celerctl cat` from the host — they survive reboots.
-* **Robustness round** — long blocking bindings renew the exec-timeout window (no RangeError after a slow TLS call), UI sounds moved off the UI thread, the captive portal's DNS survived malformed packets, and failure paths around big buffers no longer leak or abort.
+* **The pack ("matilha")** — devices discover each other and form a **multi-hop Bluetooth mesh** (CelerNet, API 26–27): every node relays by itself, presence carries each device's role, messages travel direct or broadcast up to 434 B across up to 8 hops, and the **Pack** hands the **playing chiptune to the neighbour with a speaker** — from the exact same beat ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).
+* **Six apps that live on the mesh** (App Store): **Sonar** (radar by rings of hops, real RTT ping/loss, census), **Batata Quente** (hot potato by unicast), **Mural** (message board that reaches devices that were **off**, via Trickle), **Sentinela** (IMU/mic watchdog with two-way alarm), **Coral** (4-voice choir with synchronised entry) and **Pong Duplo** (mirrored pong over the Celer Link) ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).
+* **Bench-hardened radio (3 boards)** — fragmented unicast now actually arrives (copies patch each other's lost fragments), relays step out of the burst's way and self-cancel, the radio arbitrates mesh × Celer Link × app scans, and Wi-Fi roaming only scans when the signal is weak (a connected scan deafened Bluetooth ~9 s every 39 s).
+* **RAM to live with the pack** — measured stacks, `.bss` off to PSRAM on the S3 boards, CelerLink retry leak fixed: the watch holds mesh + phone link + Wi-Fi without starving internal RAM.
+* **meshsim in CI** — the mesh apps run **for real on N simulated nodes** in the host suite: lockstep virtual clock, an air that models TTL/hops, fragments with per-link loss, the 96-packet all-or-nothing TX queue, Pack envelopes and Celer Link pairing.
 
-Firmware 1.6 in the same October: the **UI toolkit** (`UI.*`, API 22), **multi-file apps** with `require()` (API 23) and multi-file App Store installs, **voice 2.0** (the LLM choreographs the dog), **Celer Link sealed** with AES-GCM frames (API 21) and the Celer Remote rewritten on the toolkit.
+Firmware 1.7, earlier in October: the **talking dog** — `AI.speak()` TTS played live (API 24), the LLM writing its own choreography (`dog_script`), the hop gait with the belly spin, AI barks in QOA, **celerctl over Wi-Fi** (Debug Bridge + `provision`), `celerctl top` profiling, persistent `/local/log` logs and a robustness round through the runtime.
+
+Firmware 1.6: the **UI toolkit** (`UI.*`, API 22), **multi-file apps** with `require()` (API 23), **voice 2.0** and **Celer Link sealed** with AES-GCM frames (API 21).
 
 Earlier in the 1.5 cycle: on-device AI (`AI.chat`, API 18–20), voice and the **wake word "Hi Celer"** on-device (API 19–20), the JavaScript debugger over USB, watch deep sleep with a ULP-RISC-V sentinel, **Phone Link** over Gadgetbridge (`Phone.*`, API 15), **watchface plugins** (API 16), runtime APIs 12–17, the barebone devkit board, the **CelerOS Flasher** and the **App SDK**.
 

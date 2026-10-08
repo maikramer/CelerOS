@@ -26,16 +26,17 @@ desenvolvimento.
 
 ## Novidades
 
-Destaques das rodadas de outubro de 2026 (firmware 1.6–1.7, API JS nível 24):
+Destaques das rodadas de outubro de 2026 (firmware 1.8, API JS nível 27):
 
-* **O cão fala (API 24)** — `AI.speak()` transforma texto em voz direto no alto-falante: o TTS da OpenRouter (vozes Gemini, ~30 vozes naturais com português de fábrica) toca **ao vivo** enquanto descarrega — nada passa pela RAM. Pergunte qualquer coisa ao cão robô e ele responde em voz alta, no idioma em que você falou ([API JS](/maikramer/CelerOS/wiki/API-JS), [robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro)).
-* **A IA escreve a coreografia** — tool `dog_script` do cão: a LLM escreve JavaScript ES5 ela mesma e roda no cão numa sandbox de coreografia (cara, pernas, LEDs e som juntos; clamps, prazo e toque aborta). A marcha hop anda a 660 ms/ciclo, o hop assimétrico guina e o giro derruba o cão de barriga — tudo afinável ao vivo pelo painel AFINAR do Celer Remote por BLE, sem cabo ([robô cachorro](/maikramer/CelerOS/wiki/Robo-Cachorro)).
-* **Áudio QOA** — um decoder ponto-fixo de ~60 linhas (QOA do phoboslab, MIT) substitui a pilha MP3: latidos reais renderizados por IA viajam como arquivos `.qoa` 5x menores, e os pacotes de app podem levar assets de som `.qoa`.
-* **celerctl por Wi-Fi — a Celer Debug Bridge** — shell, push/pull, logcat, debugger JS, screencap e OTA por TCP, sem cabo; o `devices` descobre os bridges, pareie uma vez com `pair`, e o `provision` deixa uma placa pronta num comando ([ferramentas](/maikramer/CelerOS/wiki/Ferramentas), [celerctl](/maikramer/CelerOS/wiki/celerctl-USB-(Português))).
-* **Profiling e logs persistentes** — `celerctl top` (CPU por task, heap, watermark de stack, fps do app) e `/local/log/kern.log` + `apps.log` no estilo Linux com rotação: `dmesg`/`appslog` no Terminal, `celerctl cat` no host — sobrevivem a reboot.
-* **Rodada de robustez** — binds bloqueantes longos renovam a janela do exec-timeout (nada de RangeError depois de um TLS lento), os sons da UI saíram da thread da UI, o DNS do captive portal sobrevive a pacotes malformados e os caminhos de falha com buffers grandes não vazam nem abortam.
+* **A matilha** — os CelerOS se descobrem e formam uma **malha Bluetooth multi-salto** (CelerNet, API 26–27): cada nó repete sozinho, a presença leva o papel de cada aparelho, mensagens diretas ou em broadcast até 434 B por até 8 saltos, e o **Pack** passa a **música em curso para o vizinho com alto-falante** — do mesmo ponto da música ([página da malha](/maikramer/CelerOS/wiki/Pack-Mesh)).
+* **Seis apps que vivem na malha** (App Store): **Sonar** (radar em anéis de saltos, ping real de RTT/perda, censo), **Batata Quente** (batata quente por unicast), **Mural** (recadinho que alcança quem estava **desligado**, via Trickle), **Sentinela** (vigia por IMU/mic com alarme em duas vias), **Coral** (coro de 4 vozes com entrada sincronizada) e **Pong Duplo** (pong espelhado pelo Celer Link) ([página da malha](/maikramer/CelerOS/wiki/Pack-Mesh)).
+* **Rádio blindado na bancada (3 placas)** — o unicast fragmentado agora chega (as cópias remendam os fragmentos perdidas umas das outras), os relays saem da frente da rajada e se cancelam, o rádio arbitra malha × Celer Link × scans do app, e o roaming do Wi-Fi só escaneia com o sinal fraco (um scan conectado deixava o Bluetooth surdo ~9 s a cada 39 s).
+* **RAM para viver na matilha** — stacks pelo pico medido, `.bss` na PSRAM nas placas S3 e o vazamento do CelerLink consertado: o relógio segura malha + phone link + Wi-Fi sem colapso de RAM interna.
+* **meshsim no CI** — os apps da malha rodam **de verdade em N nós simulados** na suíte do host: relógio virtual em lockstep, ar que modela TTL/saltos, fragmentos com perda por enlace, fila TX de 96 quadros tudo-ou-nada, envelopes do Pack e pareamento do Celer Link.
 
-O firmware 1.6, no mesmo outubro: o **toolkit UI** (`UI.*`, API 22), **apps multi-arquivo** com `require()` (API 23) e instalação multi-arquivo na App Store, **voz 2.0** (a LLM coreografa o cão), **Celer Link selado** com quadros AES-GCM (API 21) e o Celer Remote reescrito no toolkit.
+O firmware 1.7, antes em outubro: o **cão que fala** — `AI.speak()` TTS ao vivo (API 24), a LLM escrevendo a própria coreografia (`dog_script`), a marcha hop com o giro de barriga, latidos IA em QOA, o **celerctl por Wi-Fi** (Debug Bridge + `provision`), o profiling do `top` e os logs persistentes em `/local/log`.
+
+O firmware 1.6: o **toolkit UI** (`UI.*`, API 22), **apps multi-arquivo** com `require()` (API 23), a **voz 2.0** e o **Celer Link selado** com quadros AES-GCM (API 21).
 
 Antes disso, no ciclo da 1.5: IA no aparelho (`AI.chat`, API 18–20), voz e a **wake word "Hi Celer"** no chip (API 19–20), o debugger JavaScript por USB, o deep sleep do watch com sentinela ULP-RISC-V, o **Phone Link** pelo Gadgetbridge (`Phone.*`, API 15), **plugins de watchface** (API 16), APIs de runtime 12–17, a placa devkit barebone, o **CelerOS Flasher** e o **SDK de apps**.
 

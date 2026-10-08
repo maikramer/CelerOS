@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-05
-**Commit:** v1.7.0
+**Updated:** 2026-10-07
+**Commit:** v1.8.0
 **Branch:** main
 
 ## OVERVIEW
@@ -29,7 +29,7 @@ CelerOS/
 | Task | Location | Notes |
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
-| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 24) |
+| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 27) |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
 | Boards, adding a board, per-board data image | `boards/AGENTS.md` | 6 boards |
