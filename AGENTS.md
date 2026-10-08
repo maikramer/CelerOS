@@ -124,6 +124,6 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
 - CI: `build.yml` (tests above + firmware for all 6 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
-- `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.
+- `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `python3 tools/sdkconfig_check.py` lists every bench build dir whose sdkconfig drifted from its board's defaults (in 2026-10 the watch and dog bench builds still ran a 32 KB main stack the defaults had cut to 24 KB). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. The web UI `/update` also accepts uploads.
 - `test/README`, `include/`, `lib/` are stale PlatformIO leftovers.

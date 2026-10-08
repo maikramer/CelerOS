@@ -16,6 +16,7 @@ Host utilities: device control over serial (`celerctl`), the JS app linter (`app
 | `make_icons.py` | `icons.json` prompts -> `icons_src/*.png` (512px, local FLUX via text2d) -> `data/icons/*.png` 64px RGB565-dithered | `--regen` forces art regeneration; also writes `docs/assets/icons_preview.png` |
 | `make_splash.py` | PNG -> `main/Assets/SplashLogo.h` (64-color PNG composed over THEME_BG, drawn with `drawPng`) | default source is `Documentation/assets/celeros_logo.png`; `--colors N` |
 | `size_report.py` | image size vs OTA slot per board, top libraries, deltas | `--baseline f.json`, `--save-baseline f.json`, `--min-free-kb 64` (exit 1 when a slot is tighter); run in the IDF env after building `build/` + `build-cyd/` |
+| `sdkconfig_check.py` | drift of each `build*/sdkconfig` against `sdkconfig.defaults` + `boards/<b>/sdkconfig.defaults` (IDF never applies a changed default to an existing sdkconfig); keys the IDF no longer knows are warnings | `python3 tools/sdkconfig_check.py [build-dog ...]` (exit 1 on drift; fix by deleting the build's sdkconfig) |
 
 ## CONVENTIONS
 - The generators are manual steps, not part of `idf.py build`. Commit their outputs (`data/icons/`, `SplashLogo.h`).
