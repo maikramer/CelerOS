@@ -17,7 +17,7 @@ CelerOS/
 ├── hub_apps/        # App Store apps, same layout as data/apps (covered by data/AGENTS.md)
 ├── boards/<b>/      # per-board sdkconfig.defaults (+ data/ overlay & data-exclude.txt on the watch)
 ├── tools/           # celerctl, app_lint, sdk, flash_data.sh, ota_server, celerhub, generators
-├── test/            # js_harness + app_lint fixtures + sdk tests + host C++ + celerctl sim (own AGENTS.md)
+├── test/            # js_harness + meshsim (multi-node mesh) + app_lint fixtures + sdk tests + host C++ + celerctl sim (own AGENTS.md)
 ├── wiki/            # GitHub wiki sources, published by CI (own AGENTS.md)
 ├── updates/         # OTA channel dirs: esp32/, smartdisplay_4848S040/, spotpear_zzpet/, waveshare_amoled206/
 ├── Documentation/   # JS_API_Guide + App_Development_Guide (EN + .pt-BR)
@@ -67,7 +67,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Selective staging only**: `git add <explicit paths>`, never `-A`/`-u`/`.`. When one file carries two features, split it by hunks (`git apply --cached` with a crafted patch is the reliable non-interactive way) — see 317c7d3 or the API 15 commits (ed70e10/4a04292).
 - **Commit style**: Portuguese without accents, subject `Area: assunto` + a detailed body (what, why, bench evidence). One story per commit; its tests, stubs and lint updates ride along. No AI attribution footers.
 - **Push discipline**: fast-forward only, never `--force` (history was filter-repo'd once; old hashes must never come back). On rejection, fetch and rebase your own unpushed commits.
-- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
+- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Release notes are in English** (audience: first-time flashers; the repo's public artifacts — README, wiki EN pages — are English). The annotated tag body becomes the notes' preamble, so write tag bodies in English too; the flash instructions template lives inside `release.yml` and must teach the Flasher workflow (download flasher + board zip, extract together, board -> port -> erase on first flash).
 - **Bench**: hardware validation is manual (CI has no device). Ports: `/dev/ttyUSB0` SmartDisplay, `/dev/ttyUSB1` CYD, `/dev/ttyACM0` dog or watch (flash id disambiguates: 16MB vs 32MB). The watch takes firmware over `celerctl ota push` (retry on timeout); esptool is for first load only.
@@ -111,6 +111,7 @@ node test/js_harness/run.js
 node test/app_lint/run.js
 node test/sdk/run.js
 node test/debug/run.js
+node test/meshsim/run.js                 # E2E da malha: apps reais em N nos simulados
 node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
 node tools/sdk/celer.js check            # drift; `celer.js types` regenerates celer.d.ts
 g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests

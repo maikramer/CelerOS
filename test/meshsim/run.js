@@ -1,0 +1,486 @@
+#!/usr/bin/env node
+// Suite E2E da malha no host: cenarios com VARIOS nos rodando os apps reais
+// (hub_apps/data/apps) sobre o simulador (sim.js). Cada cenario monta a
+// topologia (quem ouve quem, rssi, perda), roteiriza toques/prompts por no
+// e confere o que cada tela desenhou, o que tocou e o que trafegou no ar.
+// Uso: node test/meshsim/run.js [filtro]
+'use strict';
+var path = require('path');
+var sim = require('./sim.js');
+
+var failures = 0, total = 0;
+function check(name, cond, extra) {
+    total++;
+    if (cond) console.log('  PASS  ' + name);
+    else {
+        failures++;
+        console.log('  FAIL  ' + name + (extra ? '  [' + extra + ']' : ''));
+    }
+}
+function has(res, node, needle) {
+    var l = res.nodes[node].log;
+    for (var i = 0; i < l.length; i++) if (l[i].indexOf(needle) >= 0) return true;
+    return false;
+}
+function count(res, node, re) {
+    var l = res.nodes[node].log, n = 0;
+    for (var i = 0; i < l.length; i++) if (re.test(l[i])) n++;
+    return n;
+}
+function last(res, node, re) {
+    var l = res.nodes[node].log;
+    for (var i = l.length - 1; i >= 0; i--) if (re.test(l[i])) return l[i];
+    return null;
+}
+function noErr(res) {
+    for (var k in res.nodes) {
+        check(k + ' roda sem erro', !res.nodes[k].err, res.nodes[k].err);
+    }
+}
+function dump(res, node) {
+    if (process.env.DEBUG_LOG) console.log('---- ' + node + ' ----\n' + res.nodes[node].log.join('\n'));
+}
+function airTx(res, from, re) {
+    return res.air.filter(function(a) { return a.kind === 'tx' && a.from === from && re.test(a.data); });
+}
+
+var scenarios = [];
+function scenario(name, fn) { scenarios.push({ name: name, fn: fn }); }
+
+// ---------------------------------------------------------------------------
+// Sonar: ping atravessando 2 saltos, censo e perda real num enlace ruim
+scenario('Sonar: ping por 2 saltos e censo', function() {
+    var app = 'hub_apps/Sonar/main.js';
+    return sim.runMesh({
+        durationMs: 40000, seed: 11,
+        nodes: [
+            { name: 'Celer-A', id: 'AAAA', app: app, caps: 0x05, wire: function(env, sim) {
+                sim.at(5000, function(e) { e.__harness.tap(120, 63); });     // aba Ping
+                sim.at(6000, function(e) { e.__harness.tap(120, 137); });    // 2a linha: Celer-C
+                sim.at(7000, function(e) { e.__harness.tap(120, 299); });    // Pingar 10x
+            } },
+            { name: 'Celer-B', id: 'BBBB', app: app, caps: 0x09, wire: function(env, sim) {
+                sim.at(5000, function(e) { e.__harness.tap(193, 63); });     // aba Censo
+                sim.at(6000, function(e) { e.__harness.tap(120, 102); });    // Chamar todos
+            } },
+            { name: 'Celer-C', id: 'CCCC', app: app, caps: 0x01 }
+        ],
+        links: [['Celer-A', 'Celer-B', -45], ['Celer-B', 'Celer-C', -70]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Celer-A');
+        check('radar desenha os nos ouvidos', has(res, 'Celer-C', '2 nós · anel = saltos'));
+        check('A pingou C 10x pelo B', airTx(res, 'Celer-A', /^s\?\d+$/).length === 10);
+        check('C respondeu cada ping', airTx(res, 'Celer-C', /^s!\d+$/).length === 10);
+        check('A mostra 10/10 sem perda', has(res, 'Celer-A', 'Celer-C: 10/10 · perda 0%'),
+              last(res, 'Celer-A', /Celer-C: /));
+        var rtt = last(res, 'Celer-A', /^RTT \d+/);
+        var m = rtt && rtt.match(/RTT (\d+) \/ (\d+) \/ (\d+) ms/);
+        check('RTT de 2 saltos ida e volta plausivel (300..3000 ms)',
+              m && +m[1] >= 300 && +m[3] <= 3000 && +m[1] <= +m[2] && +m[2] <= +m[3], rtt);
+        check('censo pediu todos (broadcast s*)', airTx(res, 'Celer-B', /^s\*\d+$/).length === 1);
+        check('censo: A e C responderam com bateria/uptime',
+              has(res, 'Celer-B', 'Celer-A') && count(res, 'Celer-B', /salto.* · \d+ ms · \d+ min/) >= 2);
+        check('respostas do censo em unicast de 1 quadro',
+              airTx(res, 'Celer-C', /^s=\d+\|-?\d+\|\d+$/).every(function(a) { return a.frames === 1 && a.dst === 'BBBB'; }));
+    });
+});
+
+scenario('Sonar: enlace ruim mostra perda (sem copias mascarando)', function() {
+    var app = 'hub_apps/Sonar/main.js';
+    return sim.runMesh({
+        durationMs: 34000, seed: 5,
+        nodes: [
+            { name: 'Celer-A', id: 'AAAA', app: app, wire: function(env, sim) {
+                sim.at(5000, function(e) { e.__harness.tap(120, 63); });
+                sim.at(6000, function(e) { e.__harness.tap(120, 103); });    // 1a linha: Celer-B
+                sim.at(7000, function(e) { e.__harness.tap(120, 299); });
+            } },
+            { name: 'Celer-B', id: 'BBBB', app: app }
+        ],
+        links: [['Celer-A', 'Celer-B', -88, 0.35]]
+    }).then(function(res) {
+        noErr(res);
+        var l = last(res, 'Celer-A', /Celer-B: \d+\/10/);
+        var m = l && l.match(/: (\d+)\/10 · perda (\d+)%/);
+        check('perda medida > 0 e coerente', m && +m[2] > 0 && +m[1] < 10 &&
+              Math.abs((10 - +m[1]) * 10 - +m[2]) <= 1, l);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Batata Quente: roda de 3 em linha (A-B-C), batata passando por 2 saltos
+function batataWire(startAt) {
+    return 'function(env, sim) {' +
+        (startAt ? 'sim.at(' + startAt + ', function(e) { e.__harness.tap(120, 284); });' : '') +
+        'for (var t = 9000; t < 60000; t += 1300) (function(t) {' +
+        '  sim.at(t + (sim.id.charCodeAt(0) % 7) * 90, function(e) { e.__harness.tap(120, 278); });' +
+        '})(t); }';
+}
+scenario('Batata Quente: roda de 3, passes multi-salto e estouro unico', function() {
+    var app = 'hub_apps/Batata Quente/main.js';
+    return sim.runMesh({
+        durationMs: 46000, seed: 21,
+        nodes: [
+            { name: 'Ana', id: 'A001', app: app, wire: batataWire(8000) },
+            { name: 'Bia', id: 'B002', app: app, wire: batataWire(0) },
+            { name: 'Caio', id: 'C003', app: app, wire: batataWire(0) }
+        ],
+        links: [['Ana', 'Bia', -50], ['Bia', 'Caio', -62]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Ana');
+        check('Ana comecou a rodada (bs)', airTx(res, 'Ana', /^bs\d+,\d+$/).length >= 1);
+        var passes = res.air.filter(function(a) { return a.kind === 'tx' && /^bp/.test(a.data); });
+        check('a batata passou de mao em mao (>= 3 passes)', passes.length >= 3, passes.length);
+        check('todo passe e unicast com 2 copias', passes.every(function(a) { return a.dst && a.copies === 2; }));
+        check('passes cruzaram 2 saltos (Ana <-> Caio)', res.air.some(function(a) {
+            return a.kind === 'rx' && /^bp/.test(a.data) && a.hops === 2;
+        }));
+        var acks = res.air.filter(function(a) { return a.kind === 'tx' && /^bk/.test(a.data); });
+        check('cada passe pego foi confirmado (bk)', acks.length >= passes.length - 1);
+        var booms = res.air.filter(function(a) { return a.kind === 'tx' && /^bx/.test(a.data); });
+        check('estourou ao menos uma vez', booms.length >= 1);
+        // por rodada, um unico perdedor
+        var byRound = {};
+        booms.forEach(function(b) { (byRound[b.data] = byRound[b.data] || {})[b.from] = true; });
+        check('um unico estouro por rodada', Object.keys(byRound).every(function(r) {
+            return Object.keys(byRound[r]).length === 1;
+        }), JSON.stringify(byRound));
+        var loser = booms[0].from;
+        check('o perdedor ve BUM', has(res, loser, 'BUM! Você queimou'));
+        ['Ana', 'Bia', 'Caio'].forEach(function(n) {
+            if (n !== loser) check(n + ' ve quem queimou', has(res, n, loser + ' queimou!'));
+        });
+    });
+});
+
+scenario('Batata Quente: passe perdido e reenviado ate alguem pegar', function() {
+    var app = 'hub_apps/Batata Quente/main.js';
+    return sim.runMesh({
+        durationMs: 62000, seed: 8,
+        nodes: [
+            { name: 'Ana', id: 'A001', app: app, wire: batataWire(8000) },
+            { name: 'Bia', id: 'B002', app: app, wire: batataWire(0) }
+        ],
+        links: [['Ana', 'Bia', -85, 0.45]]
+    }).then(function(res) {
+        noErr(res);
+        var passes = res.air.filter(function(a) { return a.kind === 'tx' && /^bp/.test(a.data); });
+        var keys = {};
+        passes.forEach(function(p) { var k = p.data.split('.').slice(0, 2).join('.'); keys[k] = (keys[k] || 0) + 1; });
+        check('algum passe foi reenviado (mesmo numero, nova tentativa)',
+              Object.keys(keys).some(function(k) { return keys[k] > 1; }), JSON.stringify(keys));
+        check('o jogo seguiu ate estourar', res.air.some(function(a) { return a.kind === 'tx' && /^bx/.test(a.data); }));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Mural: Caio esta fora do ar quando Ana e Bia escrevem; ao voltar, a fofoca
+// (Trickle) entrega os recados por store-and-forward, e o recado dele volta
+scenario('Mural: recados alcancam quem estava fora do ar', function() {
+    var app = 'hub_apps/Mural/main.js';
+    function writer(at, txt) {
+        return 'function(env, sim) { sim.prompts([' + JSON.stringify(txt) + ']);' +
+               'sim.at(' + at + ', function(e) { e.__harness.tap(120, 292); }); }';
+    }
+    return sim.runMesh({
+        durationMs: 95000, seed: 4,
+        nodes: [
+            { name: 'Ana', id: 'A001', app: app, wire: writer(6000, 'cafe pronto na cozinha') },
+            { name: 'Bia', id: 'B002', app: app, wire: writer(9000, 'reuniao as 15h') },
+            { name: 'Caio', id: 'C003', app: app, wire: writer(60000, 'cheguei! alguem viu a chave?') }
+        ],
+        links: [['Ana', 'Bia', -50], ['Bia', 'Caio', -60]],
+        events: [{ at: 1000, offline: 'Caio' }, { at: 25000, online: 'Caio' }]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Caio');
+        var caioPosts = JSON.parse(res.nodes.Caio.storage.posts || '[]');
+        var txts = caioPosts.map(function(p) { return p[2]; });
+        check('Caio recebeu os 2 recados que perdeu', txts.indexOf('cafe pronto na cozinha') >= 0 &&
+              txts.indexOf('reuniao as 15h') >= 0, JSON.stringify(txts));
+        check('a entrega a Caio veio por refofoca (ttl 1, depois de voltar)', res.air.some(function(a) {
+            return a.kind === 'rx' && a.to === 'Caio' && /^m\+.*cafe/.test(a.data) && a.t > 25000;
+        }));
+        var anaPosts = JSON.parse(res.nodes.Ana.storage.posts || '[]').map(function(p) { return p[2]; });
+        check('o recado de Caio chegou a Ana (2 saltos)', anaPosts.indexOf('cheguei! alguem viu a chave?') >= 0,
+              JSON.stringify(anaPosts));
+        check('os tres murais convergiram (3 recados cada)', ['Ana', 'Bia', 'Caio'].every(function(n) {
+            return JSON.parse(res.nodes[n].storage.posts || '[]').length === 3;
+        }));
+        check('Ana mostra "em dia" com o vizinho no fim', last(res, 'Ana', /recados · /) === '3 recados · em dia com 1 vizinho',
+              last(res, 'Ana', /recados · /));
+        var digests = res.air.filter(function(a) { return a.kind === 'tx' && /^m#/.test(a.data); }).length;
+        check('Trickle economiza: resumos espaçados (< 1 por no a cada 3 s)', digests < 3 * 95 / 3, digests);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Sentinela: vigia (relogio na porta) -> repetidor que nem tem o app aberto
+// (Sonar) -> central; movimento dispara, desarme por PIN volta pela malha
+function vigiaWire(shakeAt) {
+    return 'function(env, sim) { sim.prompts(["4321"]);' +
+           'sim.at(5000, function(e) { e.__harness.tap(198, 68); });' +
+           (shakeAt ? 'sim.at(' + shakeAt + ', function(e) { e.Sensors.accel = function() { return {x: 0.6, y: -0.3, z: 0.7}; }; });' : '') +
+           '}';
+}
+scenario('Sentinela: movimento na vigia toca na central a 2 saltos e PIN desarma', function() {
+    return sim.runMesh({
+        durationMs: 40000, seed: 31,
+        nodes: [
+            { name: 'Porta', id: 'D00A', app: 'hub_apps/Sentinela/main.js', board: 'waveshare-amoled206',
+              wire: vigiaWire(15000) },
+            { name: 'Corredor', id: 'D00B', app: 'hub_apps/Sonar/main.js' },
+            { name: 'Sala', id: 'D00C', app: 'hub_apps/Sentinela/main.js', wire: function(env, sim) {
+                sim.prompts(['4321']);
+                sim.at(24000, function(e) { e.__harness.tap(120, 272); });   // Desarmar tudo (PIN)
+            } }
+        ],
+        links: [['Porta', 'Corredor', -55], ['Corredor', 'Sala', -66]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Sala');
+        check('vigia armou com PIN (hash guardado, nao o PIN)', res.nodes.Porta.storage.pin &&
+              res.nodes.Porta.storage.pin !== '4321' && /^[0-9a-f]{4}$/.test(res.nodes.Porta.storage.pin));
+        check('sinal de vigia armada atravessa (a^1)', airTx(res, 'Porta', /^a\^1/).length >= 3);
+        check('Sala lista a vigia armada', has(res, 'Sala', 'armada · sinal há'));
+        var al = airTx(res, 'Porta', /^a!\d+\.m$/);
+        check('movimento disparou alarme em 2 vias (ttl 8)', al.length === 2 && al[0].data === al[1].data);
+        check('o Corredor repetiu sem ter o app (relay do OS)', res.nodes.Corredor.relayed > 0);
+        check('Sala tocou com a zona certa', has(res, 'Sala', 'ALARME') &&
+              has(res, 'Sala', '[notify] Sentinela|Porta: movimento'));
+        check('a segunda via nao tocou de novo (dedup)', count(res, 'Sala', /\[notify\] Sentinela/) === 1);
+        check('desarme por PIN atravessou e desarmou a vigia', res.nodes.Porta.storage.armed === '0' &&
+              has(res, 'Porta', 'Desarmada por Sala'));
+        check('o PIN nao trafegou em claro', !res.air.some(function(a) { return /4321/.test(a.data || ''); }));
+    });
+});
+
+scenario('Sentinela: vigia armada que some do ar dispara a central', function() {
+    return sim.runMesh({
+        durationMs: 45000, seed: 9,
+        nodes: [
+            { name: 'Porta', id: 'D00A', app: 'hub_apps/Sentinela/main.js', wire: vigiaWire(0) },
+            { name: 'Sala', id: 'D00C', app: 'hub_apps/Sentinela/main.js' }
+        ],
+        links: [['Porta', 'Sala', -60]],
+        events: [{ at: 20000, offline: 'Porta' }]
+    }).then(function(res) {
+        noErr(res);
+        check('Sala acusou a vigia sumida', has(res, 'Sala', '[notify] Sentinela|Porta: vigia sumiu'));
+        var t = res.air.filter(function(a) { return a.kind === 'tx' && a.from === 'Sala' && /^a!\d+\.vD00A$/.test(a.data); });
+        check('o sumico foi avisado a malha uma vez (2 vias)', t.length === 2, t.length);
+        check('acusou so depois do prazo (>= 16 s sem sinal)', t.length && t[0].t >= 20000 + 11000, t.length && t[0].t);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Coral: 3 musicos em linha; as 4 vozes divididas sem sobra nem repeticao e
+// as entradas alinhadas apesar dos 2 saltos ate a ponta
+scenario('Coral: vozes divididas e entrada sincronizada por 2 saltos', function() {
+    var app = 'hub_apps/Coral/main.js';
+    return sim.runMesh({
+        durationMs: 30000, seed: 17,
+        nodes: [
+            { name: 'Sala', id: 'C001', app: app, caps: 0x05, wire: function(env, sim) {
+                sim.at(9000, function(e) { e.__harness.tap(120, 296); });   // Reger Ciranda
+            } },
+            { name: 'Cozinha', id: 'C002', app: app, caps: 0x01 },
+            { name: 'Quarto', id: 'C003', app: app, caps: 0x09 }
+        ],
+        links: [['Sala', 'Cozinha', -52], ['Cozinha', 'Quarto', -64]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Quarto');
+        var parts = ['Sala', 'Cozinha', 'Quarto'].map(function(n) {
+            var ms = res.nodes[n].music;
+            var song = ms.songs.length ? JSON.parse(ms.songs[ms.songs.length - 1]) : null;
+            return { n: n, song: song, at: ms.startAt };
+        });
+        check('os 3 tocaram', parts.every(function(p) { return p.song && p.song.tracks.length >= 1; }),
+              JSON.stringify(parts.map(function(p) { return p.song ? p.song.tracks.length : 0; })));
+        var all = [];
+        parts.forEach(function(p) { if (p.song) p.song.tracks.forEach(function(t) { all.push(JSON.stringify(t.notes.slice(0, 3)) + t.wave + t.drum); }); });
+        var uniq = all.filter(function(x, i) { return all.indexOf(x) === i; });
+        check('4 vozes no total, nenhuma repetida', all.length === 4 && uniq.length === 4, all.length + '/' + uniq.length);
+        var ats = parts.map(function(p) { return p.at; });
+        var spread = Math.max.apply(null, ats) - Math.min.apply(null, ats);
+        check('entradas alinhadas (espalhamento <= 350 ms)', spread <= 350, 'spread ' + spread + ' ' + ats);
+        check('Quarto ouviu a entrada por 2 saltos', res.air.some(function(a) {
+            return a.kind === 'rx' && a.to === 'Quarto' && /^cg/.test(a.data) && a.hops === 2;
+        }));
+        check('Quarto mostra a sua parte', has(res, 'Quarto', 'Tocando: '));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Pong Duplo (CelerLink): pareamento por codigo (um erro antes do certo), a
+// bola cruzando as duas telas e a partida terminando com placar coerente
+scenario('Pong Duplo: pareamento por codigo e partida atravessando as telas', function() {
+    var app = 'hub_apps/Pong Duplo/main.js';
+    return sim.runMesh({
+        durationMs: 240000, seed: 13,
+        nodes: [
+            { name: 'Mesa', id: 'E001', app: app, wire: function(env, sim) {
+                sim.at(2000, function(e) { e.__harness.tap(198, 242); });   // piloto automatico
+                sim.at(4000, function(e) { e.__harness.tap(120, 132); });   // Hospedar
+            } },
+            { name: 'Sofa', id: 'E002', app: app, wire: function(env, sim) {
+                sim.prompts(['000000', function() { return sim.peerCode(); }]);
+                sim.at(2000, function(e) { e.__harness.tap(198, 242); });
+                sim.at(5000, function(e) { e.__harness.tap(120, 184); });   // Entrar
+                sim.at(9000, function(e) { e.__harness.tap(120, 74); });    // 1o da lista
+            } }
+        ],
+        links: [['Mesa', 'Sofa', -48]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Sofa');
+        check('anfitriao mostrou um codigo de 6 digitos', count(res, 'Mesa', /^\d{6}$/) >= 1);
+        check('convidado digitou o codigo (2 tentativas)', count(res, 'Sofa', /^\[prompt\] Código na tela do outro/) === 2);
+        check('o codigo errado foi recusado', has(res, 'Sofa', 'Código errado'));
+        var balls = res.air.filter(function(a) { return a.kind === 'ltx' && /"t":"b"/.test(a.data); });
+        check('a bola cruzou nos dois sentidos', balls.some(function(b) { return b.from === 'Mesa'; }) &&
+              balls.some(function(b) { return b.from === 'Sofa'; }), balls.length);
+        var won = has(res, 'Mesa', 'Você venceu!') ? 'Mesa' : has(res, 'Sofa', 'Você venceu!') ? 'Sofa' : null;
+        check('alguem venceu a partida', won !== null);
+        var lost = won === 'Mesa' ? 'Sofa' : 'Mesa';
+        check('o outro perdeu (placares espelhados)', won && has(res, lost, 'Você perdeu'));
+        var points = res.air.filter(function(a) { return a.kind === 'ltx' && /"t":"p"/.test(a.data); });
+        check('5 pontos para o vencedor', points.filter(function(p) { return p.from === lost; }).length === 5);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Matilha (app de sistema): a festa itinerante entre o cachorro e o quadro,
+// mensagem direta (Pack.send) e para todos (CelerNet.broadcast)
+scenario('Matilha: festa passa do cachorro ao quadro e mensagens chegam', function() {
+    var app = 'data/apps/Matilha/main.js';
+    return sim.runMesh({
+        durationMs: 30000, seed: 2,
+        nodes: [
+            { name: 'Celer-Dog', id: 'D06A', app: app, caps: 0x1B, wire: function(env, sim) {
+                sim.at(3000, function(e) {
+                    e.System.playMusic({ bpm: 128, loops: 8, tracks: [
+                        { wave: 'sq', vol: 80, notes: [[64, 2], [67, 2], [71, 2], [74, 2]] },
+                        { drum: true, vol: 90, notes: [[36, 4], [42, 2], [42, 2]] }] });
+                });
+                sim.at(8000, function(e) { e.__harness.tap(120, 247); });   // Passar a musica
+                sim.prompts(['bora brincar?']);
+                sim.at(14000, function(e) { e.__harness.tap(120, 285); });  // Mensagem para todos
+            } },
+            { name: 'Celer-AB3E', id: 'AB3E', app: app, caps: 0x05, wire: function(env, sim) {
+                sim.prompts(['au?']);
+                sim.at(12000, function(e) { e.__harness.tap(120, 144); });  // 1o membro: mensagem direta
+            } }
+        ],
+        links: [['Celer-Dog', 'Celer-AB3E', -28]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Celer-Dog');
+        var ho = res.air.filter(function(a) { return a.kind === 'tx' && a.pack === 1; });
+        check('handoff saiu como envelope de musica urgente', ho.length === 1 && ho[0].dst === 'AB3E');
+        check('a festa chegou ao quadro do mesmo ponto', /\[pack\] festa chegou de Celer-Dog @\d+ms/.test(
+              (last(res, 'Celer-AB3E', /festa chegou/) || '')), last(res, 'Celer-AB3E', /festa/));
+        var pos = +((last(res, 'Celer-AB3E', /festa chegou/) || '@0ms').match(/@(\d+)ms/)[1]);
+        check('retomou de ~5 s de musica (o seek viajou)', pos >= 4500 && pos <= 5600, pos);
+        check('o cachorro parou de tocar', res.nodes['Celer-Dog'].music.playing === false);
+        check('mensagem direta (Pack.send) chegou ao cachorro', has(res, 'Celer-Dog', 'Celer-AB3E (direta): au?'));
+        check('a direta (fragmentada, 2 copias) foi entregue uma vez so', res.air.filter(function(a) {
+            return a.kind === 'rx' && a.to === 'Celer-Dog' && a.data === '{"de":"Celer-AB3E","texto":"au?"}';
+        }).length === 1 && count(res, 'Celer-Dog', /\(direta\): au\?/) >= 1);
+        check('mensagem para todos chegou ao quadro', has(res, 'Celer-AB3E', 'Celer-Dog: bora brincar?'));
+    });
+});
+
+// Contrato do firmware que pega desavisados: mensagem CRUA comecando com
+// 'P' (>= 4 B) e engolida pelo servico Pack — nunca chega ao CelerNet.poll
+scenario('CelerNet: mensagem crua com "P" no inicio some (magic do envelope)', function() {
+    var src = 'test/meshsim/fixtures/eco.js';
+    return sim.runMesh({
+        durationMs: 12000, seed: 1,
+        nodes: [
+            { name: 'A', id: 'AAAA', app: src, wire: function(env, sim) {
+                sim.at(5000, function(e) {
+                    e.CelerNet.broadcast('Ping 1');
+                    e.CelerNet.broadcast('ping 2');
+                    e.CelerNet.broadcast('Pi');
+                });
+            } },
+            { name: 'B', id: 'BBBB', app: src }
+        ],
+        links: [['A', 'B', -50]]
+    }).then(function(res) {
+        noErr(res);
+        check('"ping 2" (minusculo) chega', has(res, 'B', 'rx ping 2 de A'));
+        check('"Pi" (3 B, curta demais p/ envelope) chega', has(res, 'B', 'rx Pi de A'));
+        check('"Ping 1" foi engolida pelo Pack', !has(res, 'B', 'Ping 1') && res.nodes.B.stats.swallowed === 1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Transporte: TTL corta o alcance, no so-escuta (relay:false) nao repete,
+// presenca expira 15 s depois de perder o caminho e volta, fila de TX cheia
+scenario('CelerNet: TTL, so-escuta, presenca que vai e volta, fila cheia', function() {
+    var src = 'test/meshsim/fixtures/eco.js';
+    var line = ['N1', 'N2', 'N3', 'N4', 'N5'];
+    var nodes = line.map(function(n, i) {
+        return { name: n, id: 'F00' + (i + 1), app: src };
+    });
+    nodes[0].wire = function(env, sim) {
+        sim.at(6000, function(e) { e.CelerNet.broadcast('alcance ttl2', 2); });
+        sim.at(9000, function(e) { e.CelerNet.broadcast('alcance ttl4', 4); });
+        sim.at(12000, function(e) {
+            var big = new Array(435).join('x');      // 434 B = 31 quadros
+            sim.note('grande x2 ' + e.CelerNet.send('N2', big, { copies: 2 }));
+            sim.note('grande x2 de novo ' + e.CelerNet.send('N2', big, { copies: 2 }));
+            sim.note('fila ' + e.CelerNet.status().txQueued);
+        });
+        sim.at(14000, function(e) { sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name + '/' + n.hops; }).join(',')); });
+        sim.at(33000, function(e) { sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name + '/' + n.hops; }).join(',')); });
+        sim.at(52000, function(e) { sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name + '/' + n.hops; }).join(',')); });
+    };
+    nodes[3].wire = function(env, sim) {
+        // N4 so escuta: recebe, mas nao leva adiante
+        sim.at(1500, function(e) { e.CelerNet.start({ name: 'N4', relay: false }); });
+    };
+    return sim.runMesh({
+        durationMs: 56000, seed: 6,
+        nodes: nodes,
+        links: [['N1', 'N2', -50], ['N2', 'N3', -55], ['N3', 'N4', -60], ['N4', 'N5', -65]],
+        events: [{ at: 15000, offline: 'N3' }, { at: 40000, online: 'N3' }]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'N1');
+        check('ttl 2 chega a 2 saltos', has(res, 'N3', 'rx alcance ttl2 de N1 h2'));
+        check('ttl 2 nao passa do 2o salto', !has(res, 'N4', 'alcance ttl2'));
+        check('ttl 4 chega ao so-escuta (N4, 3 saltos)', has(res, 'N4', 'rx alcance ttl4 de N1 h3'));
+        check('so-escuta nao repete: N5 fica sem', !has(res, 'N5', 'alcance ttl4'));
+        check('presenca enxerga ate o so-escuta, nao alem dele', has(res, 'N1', '[sim] nos N2/1,N3/2,N4/3'),
+              last(res, 'N1', /\[sim\] nos/));
+        check('434 B x2 copias = 62 quadros cabe na fila de 96', has(res, 'N1', '[sim] grande x2 true'));
+        check('a 2a logo em seguida nao cabe e e recusada inteira', has(res, 'N1', '[sim] grande x2 de novo false'));
+        var l = res.nodes.N1.log.filter(function(x) { return /\[sim\] nos /.test(x); });
+        check('15 s apos N3 cair, N3 e quem dependia dele somem', l[1] === '[sim] nos N2/1', l[1]);
+        check('N3 voltou e a presenca se refez', l[2] === '[sim] nos N2/1,N3/2,N4/3', l[2]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+var filter = process.argv[2] || '';
+(function next(i) {
+    if (i >= scenarios.length) {
+        console.log(failures ? '\nFALHOU: ' + failures + ' de ' + total + ' verificacoes'
+                             : '\nOK: ' + total + ' verificacoes da malha passaram');
+        process.exit(failures ? 1 : 0);
+    }
+    var s = scenarios[i];
+    if (filter && s.name.indexOf(filter) < 0) return next(i + 1);
+    console.log(s.name + ':');
+    Promise.resolve().then(s.fn).then(function() { next(i + 1); }, function(e) {
+        failures++;
+        console.log('  FAIL  cenario lancou: ' + (e && e.stack || e));
+        next(i + 1);
+    });
+})(0);

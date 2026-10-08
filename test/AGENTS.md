@@ -1,7 +1,7 @@
 # test/ - host test suites (what CI runs before any firmware build)
 
 ## OVERVIEW
-Eight suites, all host-side (Node/Python/g++), no hardware needed. They are the gate for every push: `.github/workflows/build.yml` runs them in the `JS harness + C++ host tests` job and a red job blocks the firmware matrix. `test/README` is a stale PlatformIO leftover — this file replaces it.
+Nine suites, all host-side (Node/Python/g++), no hardware needed. They are the gate for every push: `.github/workflows/build.yml` runs them in the `JS harness + C++ host tests` job and a red job blocks the firmware matrix. `test/README` is a stale PlatformIO leftover — this file replaces it.
 
 ## SUITES
 | Suite | Runs | Command |
@@ -9,6 +9,7 @@ Eight suites, all host-side (Node/Python/g++), no hardware needed. They are the 
 | `js_harness/` | The REAL app JS (data/apps, hub_apps, boards/*/data/apps) against a stubbed device API: System/Net/FS/Storage/Sensors/Phone + harness channel. Smoke + behavior checks per app (App Store update flows, Dog Face gaits, Celer Remote, API 12 timers/Storage, API 15 watch apps...) | `node test/js_harness/run.js` |
 | `app_lint/` | Linter fixtures: syntax, unknown API members, arities (min inferred from C++ bodies), permissions/gates, globals, manifest self-test (>=100 fns parsed, every C++ body found) | `node test/app_lint/run.js` |
 | `sdk/` | The app-dev SDK: scaffold manifest, types coverage, renderer, emulator | `node test/sdk/run.js` |
+| `meshsim/` | Mesh E2E: the REAL apps on N simulated nodes at once (one `worker_thread` per node over `makeEnv`, lockstep virtual clock via `Atomics.wait` + `receiveMessageOnPort`). `sim.js` models the CelerNet v2 air: flood with TTL/hops and per-node dedup, `ceil(len/14)` fragments with per-link loss, TX queue (96 packets all-or-nothing, 8/s, copies 1.5 s apart), presence (3 s beat, 4 hops, expires 15 s after the path dies), Pack envelopes (msgId dedup, music handoff, raw `P...` swallowed) and Celer Link (adv/scan/connect, 6-digit pairing with bonds, send/poll, sealed). Scenarios (`run.js`) script taps/prompts per node with `sim.at(ms, fn)` / `sim.prompts([...])` (`sim.peerCode()` = the user reading the other screen) and assert on each node's drawn log, Storage, music state and the air trace | `node test/meshsim/run.js [filtro]` |
 | `debug/` | App debugger: dmsg codec/stream (`tools/debug/dmsg.js`) and the REPL client (`dbg.js`) scripted against a FAKE Duktape target over TCP (vm-backed Eval, breakpoints, conditional/temp, uncaught-error pause, `r` restart + side-channel sync, Detaching) | `node test/debug/run.js` |
 | `test_celerctl.py` | celerctl (HostLink client) against a FakeDevice — proto 2 framing, window/retry, no hardware | `python3 test/test_celerctl.py` (needs pyserial) |
 | `test_matilha.py` | `tools/matilha`: netframe golden vectors CROSSED with the C++ encoder (`main/Bluetooth/NetFrame.h`), the mesh engine (presence/dedup/reassembly/copies/token bucket/relay) with fake radio+clock, CLI `--dry` and the Celer Link pairing/bond v2 against a FakeLink | `python3 test/test_matilha.py` (stdlib only) |
@@ -20,6 +21,7 @@ Eight suites, all host-side (Node/Python/g++), no hardware needed. They are the 
 
 ## CONVENTIONS
 - Adding a JS API call: update `JSBindings` (source of truth), the pt-BR guide heading (`#### System.foo(a, b) (API N)`), the js_harness stub, and regen types — otherwise the drift check or the fixtures fail. The app_lint manifest has no file: it is rebuilt from firmware sources on every run, so never try to hand-edit it.
+- Mesh apps (CelerNet/Pack/Celer Link between devices): single-node smoke in `js_harness/run.js` (`env.__exposeMesh = true` makes `runApp` pass `CelerNet`/`Pack`; without it apps see a board without BT) AND a multi-node scenario in `meshsim/run.js`. The sim mirrors firmware contracts: when the firmware changes a limit (queue depths, fragment size, Pack magic), change `meshsim/node.js`/`sim.js` in the same commit.
 - New app (anywhere under data/apps, hub_apps, boards/*/data/apps): give it harness coverage in `js_harness/run.js` — the repo lint (`node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`) runs automatically over it in CI.
 - Arity fixtures (`fixtures/aridade.js`): `min` comes from require-style calls in the C++ body — `duk_require_*` AND helpers shaped `requireXxx(ctx, i)` (requirePin, requireKey). If you rename such a helper, the manifest regresses silently: run the fixture suite.
 - Tests are deterministic and fast (<1 min total). If something only reproduces on hardware, it belongs on the bench, not here — but encode the pure logic (parsers, calculators, framing) in `cpp/` instead.
