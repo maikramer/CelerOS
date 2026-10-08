@@ -30,6 +30,32 @@ Only boards built with Bluetooth join the pack (SmartDisplay, robot dog,
 Waveshare watch). The network is open (v1): the filter is the network name
 (`celer` by default) — use it for telemetry and toy commands, not secrets.
 
+## Apps that live on the mesh (App Store)
+
+Open the same app on two or more Bluetooth boards — the relays in between
+need no app at all (repeating is the OS's job).
+
+| App | What it does with the mesh |
+|-----|----------------------------|
+| **Sonar** | Radar of the neighbourhood in rings of hops, real ping (RTT and loss, one packet, no copies masking it) and a census of who has the Sonar open (hops, battery, uptime). The tool for placing boards around the house. |
+| **Batata Quente** | Hot potato between devices: the potato flies hand to hand by unicast (any number of hops), the fuse is secret and the beeps speed up. The "I've got it" broadcast is the ACK; a lost pass is resent and comes back after 3 tries. |
+| **Mural** | House message board that reaches devices that were **off** when you wrote: each board keeps the posts and syncs with its neighbours using the Trickle algorithm (RFC 6206) — quiet when everyone agrees, fast when someone comes back. |
+| **Sentinela** | Alarm made of your boards: a watch on the door (motion), the dog (noise) or any panic button rings every open Sentinela with the zone name, up to 8 hops away. Anti-tamper: an armed guard that **vanishes** from the air also rings. PIN to disarm. |
+| **Coral** | Orchestra of devices: the conductor splits a song into voices (melody, harmony, bass, drums) across the boards with a speaker and they all come in together, discounting the per-hop latency. |
+| **Pong Duplo** | (Celer Link, not the mesh) Pong across two screens side by side: the ball leaves the top of one and enters the other. Pairing by 6-digit code. |
+
+Protocol design tips (16-byte packets, the `P` prefix the Pack swallows,
+the TX queue) are in the JS API guide, section 31.
+
+## Testing mesh apps without hardware
+
+`node test/meshsim/run.js` runs the **real** app code on several simulated
+nodes at once (one worker per node, a shared virtual clock): flooding with
+TTL/hops and dedup, per-link signal and loss, the TX queue, presence that
+expires and returns, Pack envelopes and the music handoff, and Celer Link
+pairing. Scenarios script taps and prompts per node and check what each
+screen drew and what crossed the air — see `test/meshsim/run.js`.
+
 ## Trying it on the bench
 
 ```

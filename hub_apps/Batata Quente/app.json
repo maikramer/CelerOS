@@ -1,0 +1,12 @@
+{
+  "name": "Batata Quente",
+  "packageName": "celeros.batataquente",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Batata quente de verdade entre aparelhos: a batata voa pela malha CelerNet de mão em mão (quantos saltos precisar), o pavio é secreto e os bipes aceleram. Quem estiver segurando quando estourar queima. Abra em 2 ou mais aparelhos com Bluetooth.",
+  "type": "Game",
+  "category": "Arcade",
+  "api": 27,
+  "permissions": [],
+  "changelog": "1.0.0 - primeira versao: roda por presenca do app (bh), passe por unicast com o pavio restante (bp), confirmacao por broadcast que serve de ACK (bk), reenvio em 3,5 s e batata que volta apos 3 tentativas, placar de queimadas"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "Sonar",
+  "packageName": "celeros.sonar",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "O instrumento da malha CelerNet: radar dos vizinhos em anéis de saltos, ping com RTT e perda reais para qualquer nó e censo de quem está com o Sonar aberto (saltos, RTT, bateria, tempo ligado). Aberto, ele também responde aos outros.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "changelog": "1.0.0 - primeira versao: radar por saltos/sinal, ping de 1 quadro (s?/s!) com min/med/max e perda, censo (s*/s=) com bateria e uptime"
+}

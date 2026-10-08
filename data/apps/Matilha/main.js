@@ -4,7 +4,7 @@
 // viaja — a música chiptune em curso continua no vizinho com alto-falante,
 // do mesmo ponto. Em placa sem Bluetooth mostra um aviso e sai.
 
-var hasMesh = typeof CelerNet !== "undefined";
+var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
 var rx = [];               // log do que chega (mais novo primeiro)
 var members = [];
 var membersAt = -10000;

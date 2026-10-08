@@ -1,0 +1,12 @@
+{
+  "name": "Mural",
+  "packageName": "celeros.mural",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Mural de recados da casa pela malha CelerNet: o recado chega a todo aparelho com o Mural aberto — até nos que estavam desligados ou longe na hora, porque cada mural guarda os recados e sincroniza com os vizinhos (algoritmo Trickle: silêncio quando todos concordam, rapidez quando alguém volta atrasado).",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "changelog": "1.0.0 - primeira versao: recados persistidos (24), resumo m# de vizinho direto com intervalo Trickle 4..32 s, refofoca m+ com supressao e indicador de sincronia"
+}

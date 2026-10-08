@@ -525,7 +525,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
   // Estado coletado durante o walk
   const implicitGlobals = new Set();  // atribuidos sem var
   const typeofTargets = new Set();    // alvos de typeof (feature-detect)
-  const permUses = new Map();         // perm -> {node, what}
+  const permUses = new Map();         // perm -> [{node, what}]
   const apiFnUses = [];               // {qualified, entry, node}
   const bareGlobalUses = [];          // globais nuas do firmware chamadas (require, ...)
   const optionalUse = {};             // raiz opcional -> node do primeiro uso
@@ -542,6 +542,11 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
   }
   // globais implicitos do modulo (wrapper do require)
   for (const g of moduleGlobals || []) globalWhitelist.add(g);
+
+  function addPermUse(perm, node, what) {
+    if (!permUses.has(perm)) permUses.set(perm, []);
+    permUses.get(perm).push({ node, what });
+  }
 
   // Valida a cadeia contra o manifest. `report` emite o erro de existencia;
   // `record` coleta uso de permissao/nivel (uma vez por cadeia mais externa).
@@ -567,7 +572,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
       const full = objPath + '.' + name;
       if (record) {
         const perm = entry.perm || obj.perm;
-        if (perm) permUses.set(perm, { node: propNode || node, what: full });
+        if (perm) addPermUse(perm, propNode || node, full);
         if (entry.nargs !== undefined) apiFnUses.push({ qualified: full, entry, node: propNode || node });
       }
       return entry.nargs !== undefined ? { entry, qualified: full } : { const: entry };
@@ -575,7 +580,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
     // Cadeia inteira de objetos (ex.: System.gpio sozinho)
     if (record) {
       const obj = manifest.objects[objPath];
-      if (obj && obj.perm) permUses.set(obj.perm, { node: propNode || node, what: objPath });
+      if (obj && obj.perm) addPermUse(obj.perm, propNode || node, objPath);
     }
     return { objectPath: objPath };
   }
@@ -647,6 +652,13 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
         const chain = memberChain(node);
         if (!chain || NAMESPACE_ROOTS.indexOf(chain.root) < 0) break;
         if (scopeHas(scopeAt, chain.root) || implicitGlobals.has(chain.root)) break; // shadow local
+        if (parent && parent.type === 'UnaryExpression' && parent.operator === 'typeof') {
+          // feature-detect de um membro (typeof System.led === "function"):
+          // o app trata a ausencia, entao a permissao dele vira opcional
+          typeofTargets.add(chain.root + '.' + chain.parts.join('.'));
+          checkMemberExistence(chain, node, node.property, true, false);
+          break;
+        }
         if (OPTIONAL_ROOTS[chain.root] && !optionalUse[chain.root]) optionalUse[chain.root] = node;
         checkMemberExistence(chain, node, node.property, true, true);
         break;
@@ -736,7 +748,10 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
   if (appInfo) {
     const perms = Array.isArray(appInfo.permissions) ? appInfo.permissions : null;
     if (perms) {
-      for (const [perm, u] of permUses) {
+      for (const [perm, uses] of permUses) {
+        // so os usos sem feature-detect (typeof do mesmo membro) exigem a permissao
+        const u = uses.find((x) => !typeofTargets.has(x.what));
+        if (!u) continue;
         for (const p of perm.split('+')) {
           if (perms.indexOf(p) < 0 && !reported.has('perm:' + p)) {
             reported.add('perm:' + p);

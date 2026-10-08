@@ -69,6 +69,12 @@ const CASES = [
     appInfo: { api: 2, permissions: ['fs'] },
     expect: { 'aviso:perm': 2, 'aviso:nivel': 1, 'aviso:feature': 1 },
   },
+  {
+    name: 'permissao opcional por feature-detect (typeof do membro)',
+    file: 'perm_typeof.js',
+    appInfo: { api: 22, permissions: [] },
+    expect: { 'aviso:perm': 1 },  // so o factoryReset; o led tem typeof
+  },
 ];
 
 console.log('== Testes do app_lint (fixtures) ==');

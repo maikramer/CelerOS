@@ -1,7 +1,7 @@
 # data/ - LittleFS image: pre-installed JS apps + icons
 
 ## OVERVIEW
-This is the source tree for the `littlefs` partition (mounted at `/local`). It holds the system apps (Settings, App Store, Installer, Terminal, Help, Web Server, Snake, plus the demos HTTP Demo and Touch Test) and 64x64 launcher icons. It is a distinct domain (score ~11): ES5 JavaScript run by Duktape, not C++. `hub_apps/` (2048, Breakout, Cronometro, Celer Remote) follows the same layout but is published to the hub rather than flashed.
+This is the source tree for the `littlefs` partition (mounted at `/local`). It holds the system apps (Settings, App Store, Installer, Terminal, Help, Web Server, Snake, plus the demos HTTP Demo and Touch Test) and 64x64 launcher icons. It is a distinct domain (score ~11): ES5 JavaScript run by Duktape, not C++. `hub_apps/` (2048, Breakout, Cronometro, Celer Remote; the mesh apps Sonar, Batata Quente, Mural, Sentinela, Coral and the Celer Link game Pong Duplo) follows the same layout but is published to the hub rather than flashed.
 
 ## STRUCTURE
 ```
@@ -17,7 +17,8 @@ data/
 | Hub catalog, install/update/self-update | `apps/App Store/main.js` (1218 LOC); hub `https://os.celer.tec.br` |
 | Sideload from SD | `apps/Installer/main.js` |
 | JS API reference | `Documentation/JS_API_Guide.md`; binding source `main/Runtime/JSBindings.cpp` |
-| Regression tests | `test/js_harness/run.js` covers Terminal, Snake, App Store, and hub_apps 2048/Breakout/Cronometro |
+| Regression tests | `test/js_harness/run.js` covers Terminal, Snake, App Store, and hub_apps 2048/Breakout/Cronometro; `test/meshsim/run.js` covers the multi-device apps (Matilha + the mesh hub apps) |
+| Mesh app protocol rules | JS_API_Guide section 31 "Designing a mesh protocol": 1 packet = 16 B, never a raw message starting with `P` (the Pack swallows it), 96-packet TX queue (all-or-nothing), reply-as-ACK |
 
 ## app.json RULES
 - Required: `name`, `packageName` (unique install key, `celeros.<x>` for system apps; the first hub publisher owns it), `version` (semver; the hub rejects a republish of the same version unless `--force` is given), `api` (the minimum `CELEROS_API_LEVEL`).

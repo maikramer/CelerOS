@@ -1,0 +1,12 @@
+{
+  "name": "Sentinela",
+  "packageName": "celeros.sentinela",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Alarme da casa feito dos seus aparelhos CelerOS pela malha CelerNet: arme um como vigia (dispara com movimento, barulho ou pânico) e todo aparelho com a Sentinela aberta toca o alarme com o nome da zona. Antissabotagem: vigia armada que some do ar também dispara. Desarmar pede o PIN.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "changelog": "1.0.0 - primeira versao: vigia por IMU (Sensors.accel) e microfone (micLevel), botao de panico, sinal de vigia a cada 5 s (a^), alarme com ttl 8 em duas vias (a!), vigia sumida apos 16 s, desarme por PIN (a-)"
+}

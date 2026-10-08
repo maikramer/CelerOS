@@ -931,13 +931,17 @@ function runApp(relPath, wire) {
         if (mf && mf.packageName) env.__pkg = mf.packageName;
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
+    // CelerNet/Pack (API 26/27) so existem com env.__exposeMesh: os apps
+    // antigos seguem vendo typeof CelerNet === "undefined" (placa sem BT)
+    var mesh = !!env.__exposeMesh;
     try {
         var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                               'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
+                              'CelerNet', 'Pack',
                               (env.__prelude || '') + '\n' + src);
         fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
-           makeRequire(appDir));
+           makeRequire(appDir), mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined);
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
@@ -1532,6 +1536,66 @@ function runInline(src, env) {
     // sem musica nao ha handoff (contrato do firmware)
     check('handoff sem musica = false',
           env.System.musicStop() === true && env.Pack.handoffMusic() === false);
+})();
+
+// --- Apps da malha (hub_apps: Sonar, Batata Quente, Mural, Sentinela, Coral)
+// No unico: sem Bluetooth avisam e nao quebram; malha desligada oferece
+// "Ligar a malha"; ligada, rodam e falam o proprio protocolo. O E2E com
+// varios nos (pings, passes, fofoca, alarmes, vozes) mora em test/meshsim.
+(function() {
+    console.log('Apps da malha (no unico):');
+    function stopAt(env, ms) {
+        var d = env.System.delay;
+        env.System.delay = function(x) { d(x); if (env.System.millis() > ms) throw { harnessStop: true }; };
+    }
+    var apps = [
+        { dir: 'hub_apps/Sonar', proto: /^s\*\d+$/, act: [120, 102], pre: [[193, 63]] },
+        { dir: 'hub_apps/Batata Quente', proto: /^bh[lg]$/ },
+        { dir: 'hub_apps/Mural', proto: /^m#\d+\.[0-9a-f]+$/ },
+        { dir: 'hub_apps/Sentinela', proto: /^a!\d+\.p$/, act: [63, 290] },
+        { dir: 'hub_apps/Coral', proto: /^ch[01]$/ }
+    ];
+    apps.forEach(function(a) {
+        var name = a.dir.split('/')[1];
+        var r0 = runApp(a.dir + '/main.js', function(env) { stopAt(env, 3000); });
+        check(name + ': sem Bluetooth roda e avisa', r0.err === null &&
+              /não tem\s+Bluetooth/.test(r0.log.join(' ')), r0.err || '');
+        var r1 = runApp(a.dir + '/main.js', function(env) {
+            env.__exposeMesh = true;
+            stopAt(env, 3000);
+            env.__harness.tap(120, a.dir.indexOf('Sonar') >= 0 ? 194 : 186);
+        });
+        check(name + ': malha desligada -> botao liga', r1.err === null && r1.log.join('\n').indexOf('[mesh] on') >= 0,
+              r1.err || '');
+        var r2 = runApp(a.dir + '/main.js', function(env) {
+            env.__exposeMesh = true;
+            env.CelerNet.start({});
+            env.__harness.pushMeshNodes([{ id: 'BEEF', name: 'Celer-Dog', caps: 9, rssi: -60, hops: 1, lastSeen: 1 }]);
+            var t = 0;
+            (a.pre || []).forEach(function(p) { env.__harness.tap(p[0], p[1]); t++; });
+            stopAt(env, 12000);
+            if (a.act) {
+                var at = 0, d = env.System.delay;
+                env.System.delay = function(x) {
+                    d(x);
+                    if (!at && env.System.millis() > 6000) { at = 1; env.__harness.tap(a.act[0], a.act[1]); }
+                };
+                stopAt(env, 12000);
+            }
+        });
+        var tx = r2.log.filter(function(l) { return /^\[mesh\] tx/.test(l); })
+                       .map(function(l) { return l.replace(/^\[mesh\] tx( ttl\d)? /, ''); });
+        check(name + ': malha ligada roda e fala o protocolo', r2.err === null && tx.some(function(m) { return a.proto.test(m); }),
+              (r2.err || '') + ' ' + tx.slice(0, 4).join(' | '));
+        check(name + ': nada cru comeca com "P" (o Pack engoliria)', tx.every(function(m) { return m.charAt(0) !== 'P'; }));
+    });
+    // Pong Duplo (Celer Link): menu -> hospedar liga o advertising com pareamento
+    var rp = runApp('hub_apps/Pong Duplo/main.js', function(env) {
+        stopAt(env, 4000);
+        env.__harness.tap(120, 132);
+    });
+    check('Pong Duplo: hospedar anuncia com pareamento', rp.err === null &&
+          rp.log.join('\n').indexOf('[link] adv Celer-TEST +pairing') >= 0, rp.err || '');
 })();
 
 // --- Dog Face (robo: cara + gaits + protocolo do Celer Remote) ---------------

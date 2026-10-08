@@ -1,0 +1,12 @@
+{
+  "name": "Coral",
+  "packageName": "celeros.coral",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Orquestra de aparelhos pela malha CelerNet: quem rege divide a música em vozes (melodia, harmonia, baixo, bateria) entre os CelerOS com alto-falante e todos entram juntos, descontando a latência dos saltos. Cada aparelho toca só a sua parte — a música inteira só existe na sala.",
+  "type": "App",
+  "category": "Utility",
+  "api": 27,
+  "permissions": [],
+  "changelog": "1.0.0 - primeira versao: 2 arranjos de 4 vozes, presenca de musicos (ch), partes por unicast (ca), entrada sincronizada com contagem e compensacao por salto (cg), parar para todos (cx)"
+}
