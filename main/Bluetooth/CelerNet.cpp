@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
+#include "esp_timer.h"
+#include "esp_coexist.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -112,20 +114,52 @@ uint32_t s_txDropped = 0;
 uint32_t s_rxDropped = 0;
 uint32_t s_relayed = 0;
 uint32_t s_relaySuppressed = 0;  // repeticoes canceladas (outro ja repetiu)
+// Pendencias em uso na fila de TX: a fila mora na PSRAM e o tick (~60x/s)
+// a varria INTEIRA duas vezes so para saber se estava vazia — com falha de
+// cache a cada linha, o relogio gastava ~15 ms a cada 3 s nisso (bancada
+// 2026-10-08). Com o contador a fila vazia custa um if.
+int s_pendingUsed = 0;
 // Telemetria de RX (bench): separa "nao chegou no ar" de "chegou e se perdeu
 // no caminho" — reports com o magic aceitos na fila crua, descartados por
 // fila cheia, e quadros da NOSSA rede que o tick processou (inclui dups)
 uint32_t s_rxRaw = 0;         // escrito so pela task do host
 uint32_t s_rxRawDropped = 0;
 uint32_t s_rxFrames = 0;
+// Custo do tick (bench): por janela de BEAT (3 s), zerado a cada log
+uint32_t s_tickCalls = 0;
+uint64_t s_tickUs = 0;
+uint32_t s_tickMaxUs = 0;
+uint32_t s_telemBeats = 0;        // BEATs desde a ultima linha de telemetria
+uint32_t s_telemFail = 0, s_telemRawDrop = 0;  // valores na ultima linha
 
 // Ajuste de bancada (A/B sem recompilar): /local/celernet_tune.txt lido no
 // start, "adv=<ms> defer=<0|1> suppress=<0|1>". Sem o arquivo = padroes.
 uint32_t s_advMs = 160;      // duracao do adv de cada quadro (ms)
 bool s_fragDefer = true;     // relay de FRAG espera a rajada silenciar
 bool s_suppress = true;      // cancela relay ja feito por vizinho
+// Coexistencia WiFi x BLE: bits de "malha BLE" do agendador do coex (os do
+// ESP-BLE-MESH). 0 = nada (WiFi leva o radio quando quer), 1 = STANDBY (a
+// malha ganha janelas de scan periodicas), 2 = TRAFFIC (mais radio para o
+// BLE enquanto a malha esta ligada).
+uint8_t s_coexMode = 1;
+uint32_t s_coexBits = 0;
+
+void coexApply(bool on) {
+    const uint32_t want = !on ? 0
+        : s_coexMode == 2 ? ESP_COEX_BLE_ST_MESH_TRAFFIC
+        : s_coexMode == 1 ? ESP_COEX_BLE_ST_MESH_STANDBY : 0;
+    if (want == s_coexBits) return;
+    if (s_coexBits) esp_coex_status_bit_clear(ESP_COEX_ST_TYPE_BLE, s_coexBits);
+    if (want) esp_coex_status_bit_set(ESP_COEX_ST_TYPE_BLE, want);
+    s_coexBits = want;
+}
 
 void loadTune() {
+    // padroes a cada start: apagar o arquivo desfaz o ajuste sem reboot
+    s_advMs = 160;
+    s_fragDefer = true;
+    s_suppress = true;
+    s_coexMode = 1;
     FILE* f = fopen("/local/celernet_tune.txt", "r");
     if (f == nullptr) return;
     char line[96] = {0};
@@ -137,10 +171,11 @@ void loadTune() {
         }
         if ((p = strstr(line, "defer=")) != nullptr) s_fragDefer = p[6] == '1';
         if ((p = strstr(line, "suppress=")) != nullptr) s_suppress = p[9] == '1';
+        if ((p = strstr(line, "coex=")) != nullptr && p[5] >= '0' && p[5] <= '2') s_coexMode = (uint8_t)(p[5] - '0');
     }
     fclose(f);
-    ESP_LOGW("celer.net", "tune de bancada: adv=%u defer=%d suppress=%d", (unsigned)s_advMs,
-             (int)s_fragDefer, (int)s_suppress);
+    ESP_LOGW("celer.net", "tune de bancada: adv=%u defer=%d suppress=%d coex=%d", (unsigned)s_advMs,
+             (int)s_fragDefer, (int)s_suppress, (int)s_coexMode);
 }
 
 // Adia as repeticoes pendentes dos FRAGs de (src, seq): enquanto a rajada
@@ -150,7 +185,7 @@ void loadTune() {
 // 100 B chegava 3-4 vezes em 10. Cada frag novo empurra o relay da rajada
 // para depois do silencio.
 void deferFragRelays(uint16_t src, uint16_t seq, uint32_t dueMs) {
-    if (s_heap == nullptr) return;
+    if (s_heap == nullptr || s_pendingUsed == 0) return;
     for (int i = 0; i < PENDING_DEPTH; i++) {
         Pending* p = &s_heap->pending[i];
         if (!p->used || p->ours || (int32_t)(p->dueMs - dueMs) >= 0) continue;
@@ -214,6 +249,7 @@ bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, u
         if (!s_heap->pending[i].used) {
             Pending* p = &s_heap->pending[i];
             p->used = true;
+            s_pendingUsed++;
             p->ours = ours;
             p->prio = prio;
             p->len = len;
@@ -227,9 +263,7 @@ bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, u
 
 int pendingFree() {
     if (s_heap == nullptr) return 0;
-    int n = 0;
-    for (int i = 0; i < PENDING_DEPTH; i++) if (!s_heap->pending[i].used) n++;
-    return n;
+    return PENDING_DEPTH - s_pendingUsed;
 }
 
 size_t framesFor(size_t len) {
@@ -247,7 +281,7 @@ constexpr int8_t K_SUPPRESS_RSSI = -60;
 
 void cancelRelay(uint16_t src, uint16_t seq, uint8_t idx, uint8_t type, uint8_t hopsHeard,
                  int8_t rssi) {
-    if (s_heap == nullptr) return;
+    if (s_heap == nullptr || s_pendingUsed == 0) return;
     if (type != netframe::TYPE_BEAT && rssi < K_SUPPRESS_RSSI) return;
     for (int i = 0; i < PENDING_DEPTH; i++) {
         Pending* p = &s_heap->pending[i];
@@ -261,6 +295,7 @@ void cancelRelay(uint16_t src, uint16_t seq, uint8_t idx, uint8_t type, uint8_t 
         // chega com hops menor e nao conta)
         if (hopsHeard >= f.hops) {
             p->used = false;
+            s_pendingUsed--;
             s_relaySuppressed++;
         }
     }
@@ -505,6 +540,11 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
 
 // ------------------------------------------------------------------ radio
 
+// cache do estado do scanner (ver scanStart); o callback do host escreve
+volatile bool s_scanOn = false;
+uint32_t s_scanCheckMs = 0;
+bool s_appWasBusy = false;
+
 int meshGapCb(ble_gap_event* event, void* arg) {
     (void)arg;
     switch (event->type) {
@@ -514,6 +554,9 @@ int meshGapCb(ble_gap_event* event, void* arg) {
         case BLE_GAP_EVENT_ADV_COMPLETE:
             s_burstDone = true;
             return 0;
+        case BLE_GAP_EVENT_DISC_COMPLETE:
+            s_scanOn = false;  // o host encerrou o nosso scan (reset etc.)
+            return 0;
         default:
             return 0;
     }
@@ -521,15 +564,40 @@ int meshGapCb(ble_gap_event* event, void* arg) {
 
 // Scanner continuo (passivo) da malha. O CelerLink::scan do app cancela e
 // reassume o radio; o tick religa o nosso quando o app solta.
+//
+// Estado do scanner em CACHE: o tick roda ~60x/s nos dois pumps e cada
+// ble_gap_disc_active() toma o lock do host NimBLE — no relogio (DFS com
+// clock baixo) a verificacao custava ~90 us por chamada, duas por tick
+// (bancada 2026-10-08: 26 ms a cada 3 s so verificando). Confirma com o
+// host a cada 250 ms, ou na hora quando o app acaba de soltar o radio (o
+// scan/connect do Celer Link cancela o nosso sem avisar).
+
 void scanStart() {
-    if (ble_gap_disc_active() || CelerLink::appBusy()) return;
+    if (CelerLink::appBusy()) {
+        s_appWasBusy = true;
+        return;
+    }
+    const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    if (s_scanOn && !s_appWasBusy && now - s_scanCheckMs < 250) return;
+    s_appWasBusy = false;
+    s_scanCheckMs = now;
+    if (ble_gap_disc_active()) {
+        s_scanOn = true;
+        return;
+    }
     struct ble_gap_disc_params p;
     memset(&p, 0, sizeof(p));
     p.passive = 1;   // nao pede scan response: quadro cru chega inteiro
     p.itvl = 16;     // 10 ms / 10 ms = janela continua (coex arbitra o WiFi)
     p.window = 16;
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p, meshGapCb, nullptr);
-    if (rc != 0 && rc != BLE_HS_EALREADY) ESP_LOGW(TAG, "scanner: ble_gap_disc rc=%d", rc);
+    s_scanOn = rc == 0 || rc == BLE_HS_EALREADY;
+    if (!s_scanOn) ESP_LOGW(TAG, "scanner: ble_gap_disc rc=%d", rc);
+}
+
+void scanStop() {
+    if (ble_gap_disc_active()) ble_gap_disc_cancel();
+    s_scanOn = false;
 }
 
 // Empurra o proximo quadro devido no advertising (tomado por 60 ms).
@@ -560,7 +628,7 @@ void maybeBurst(uint32_t nowMs) {
     if (s_heap == nullptr) return;
     // Devidos: urgente (handoff) primeiro, depois o mais antigo (FIFO ~due).
     Pending* best = nullptr;
-    for (int i = 0; i < PENDING_DEPTH; i++) {
+    for (int i = 0; i < PENDING_DEPTH && s_pendingUsed > 0; i++) {
         Pending* p = &s_heap->pending[i];
         if (!p->used || (int32_t)(nowMs - p->dueMs) < 0) continue;
         if (best == nullptr || p->prio > best->prio ||
@@ -597,7 +665,7 @@ void maybeBurst(uint32_t nowMs) {
     // nao-conectavel correm contra o lld_init do controlador (IWDT no
     // btController, coredump do 4848 na bancada 2026-10-06). O tick religa
     // o scanner no ciclo seguinte ao fim da fila.
-    if (ble_gap_disc_active()) ble_gap_disc_cancel();
+    scanStop();
     if (ble_gap_adv_active()) {
         s_restoreAdv = true;
         ble_gap_adv_stop();
@@ -619,6 +687,7 @@ void maybeBurst(uint32_t nowMs) {
     }
     if (rc == 0) {
         best->used = false;
+        s_pendingUsed--;
         s_tokens--;
         s_advBusy = true;
         s_advStartMs = nowMs;
@@ -705,6 +774,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_heap->count = 0;
     s_heap->reasm.reset();
     for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
+        s_pendingUsed = 0;
     for (int i = 0; i < CelerNet::NODES_MAX; i++) s_heap->nodes[i].used = false;
     xQueueReset(s_raw);
     s_txDropped = s_rxDropped = s_relayed = 0;
@@ -725,6 +795,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_nextSlotMs = 0;
     s_advStartMs = 0;
     s_active = true;
+    coexApply(true);
     xSemaphoreGiveRecursive(lock());
 
     scanStart();
@@ -776,7 +847,7 @@ bool CelerNet::stop() {
             s_burstDone = false;
         }
         // o nosso scanner (o do app no Celer Link fica)
-        if (!CelerLink::appBusy() && ble_gap_disc_active()) ble_gap_disc_cancel();
+        if (!CelerLink::appBusy()) scanStop();
         if (s_restoreAdv) {
             s_restoreAdv = false;
             CelerLink::refreshAdvertising();
@@ -784,8 +855,10 @@ bool CelerNet::stop() {
     }
     if (s_heap != nullptr) {
         for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
+        s_pendingUsed = 0;
     }
     xSemaphoreGiveRecursive(lock());
+    if (wasActive) coexApply(false);
     if (wasActive) ESP_LOGI(TAG, "malha desligada");
     return true;
 }
@@ -1012,6 +1085,15 @@ void CelerNet::tick() {
         return;
     }
 
+    const int64_t t0 = esp_timer_get_time();
+    tickBody();
+    const uint32_t dt = (uint32_t)(esp_timer_get_time() - t0);
+    s_tickCalls++;
+    s_tickUs += dt;
+    if (dt > s_tickMaxUs) s_tickMaxUs = dt;
+}
+
+void CelerNet::tickBody() {
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
@@ -1022,11 +1104,7 @@ void CelerNet::tick() {
     if (s_heap == nullptr || s_advBusy) {
         scanStart();
     } else {
-        bool filaVazia = true;
-        for (int i = 0; i < PENDING_DEPTH && filaVazia; i++) {
-            if (s_heap->pending[i].used) filaVazia = false;
-        }
-        if (filaVazia) scanStart();
+        if (s_pendingUsed == 0) scanStart();
     }
 
     // Fichas do token bucket (limita o roubo do advertising conectavel).
@@ -1057,18 +1135,27 @@ void CelerNet::tick() {
         if (n == 0 || !pendingPush(frame, (uint8_t)n, true, nowMs)) {
             // fila cheia: o proximo BEAT (3 s) tenta de novo
         }
-        // Telemetria de TX (1 log/3 s, caber no ring): o que importa e a
-        // diferenca entre fila devida e quadro NO AR.
-        uint16_t queued = 0;
-        for (int i = 0; i < PENDING_DEPTH; i++) {
-            if (s_heap->pending[i].used) queued++;
+        // Telemetria (bench): 1 linha a cada 10 BEATs (30 s) com os
+        // contadores da janela inteira, ou NA HORA quando aparece falha de TX
+        // ou descarte na fila crua. Era 1 linha a cada 3 s: ~9 ms de log por
+        // janela no relogio e o kern.log persistente (8 KB nas placas sem SD)
+        // so com isso — expulsava os logs uteis em minutos.
+        const bool anomalia = s_txFail != s_telemFail || s_rxRawDropped != s_telemRawDrop;
+        if (++s_telemBeats >= 10 || anomalia) {
+            ESP_LOGI(TAG, "telemetria %us: noAr=%u fail=%u noTok=%u fila=%d relay=%u suprimidos=%u "
+                     "rxCru=%u rxCruPerdido=%u rxQuadros=%u tick=%u/%uus max=%uus",
+                     (unsigned)(s_telemBeats * K_BEAT_MS / 1000), (unsigned)s_txStarted,
+                     (unsigned)s_txFail, (unsigned)s_txNoToken, s_pendingUsed, (unsigned)s_relayed,
+                     (unsigned)s_relaySuppressed, (unsigned)s_rxRaw, (unsigned)s_rxRawDropped,
+                     (unsigned)s_rxFrames, (unsigned)s_tickCalls, (unsigned)s_tickUs,
+                     (unsigned)s_tickMaxUs);
+            s_telemBeats = 0;
+            s_telemFail = s_txFail;
+            s_telemRawDrop = s_rxRawDropped;
+            s_tickCalls = 0;
+            s_tickUs = 0;
+            s_tickMaxUs = 0;
         }
-        ESP_LOGI(TAG, "beat seq=%u: noAr=%u fail=%u noTok=%u fila=%u relay=%u suprimidos=%u "
-                 "rxCru=%u rxCruPerdido=%u rxQuadros=%u",
-                 (unsigned)f.seq, (unsigned)s_txStarted, (unsigned)s_txFail,
-                 (unsigned)s_txNoToken, (unsigned)queued, (unsigned)s_relayed,
-                 (unsigned)s_relaySuppressed, (unsigned)s_rxRaw, (unsigned)s_rxRawDropped,
-                 (unsigned)s_rxFrames);
     }
 
     // Varredura de expiracao (~1x/s): no que passou 15 s sem BEAT sai da

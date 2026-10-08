@@ -175,6 +175,7 @@ idf_component_register(
         espcoredump
         nvs_flash
         esp_wifi
+        esp_coex  # CelerNet: bits de malha no agendador WiFi x BLE (sempre no build pelo WiFi)
         bblanchon__arduinojson
         lwip
         esp_netif

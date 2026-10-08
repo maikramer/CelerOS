@@ -32,9 +32,12 @@
 // para uma v3. Identidade do no: 2 ultimos bytes da MAC BT (zero config).
 //
 // Bancada (A/B sem recompilar): /local/celernet_tune.txt, lido em cada
-// start(), uma linha "adv=<ms 20..400> defer=<0|1> suppress=<0|1>" — duracao
-// do adv de cada quadro, relay de FRAG esperando a rajada silenciar e
-// supressao de relay ja feito por vizinho. Sem o arquivo valem os padroes.
+// start(), uma linha "adv=<ms 20..400> defer=<0|1> suppress=<0|1> coex=<0|1|2>"
+// — duracao do adv de cada quadro, relay de FRAG esperando a rajada
+// silenciar, supressao de relay ja feito por vizinho e bits de malha BLE no
+// agendador WiFi x BLE (0 nada, 1 standby = padrao, 2 traffic; na bancada de
+// 2026-10-08 as tres variantes ficaram dentro do ruido). Sem o arquivo
+// valem os padroes.
 // O app test/apps/MeshLab mede as variantes (RTT, entrega por tamanho).
 //
 // Concorrencia: os callbacks rodam na task do host NimBLE (so enfileiram
@@ -134,6 +137,7 @@ public:
 
     // Servico ALWAYS (Services.cpp): scanner, bursts, dedup, presenca.
     static void tick();
+    static void tickBody();  // o tick ativo (tick() mede o custo dele)
 
     // Adv report cru da task do host (CelerLink::onGapEvent e o scanner da
     // malha): barato — testa o magic e enfileira; quase tudo volta no 1o if.

@@ -75,6 +75,7 @@ function summary(tag) {
 }
 
 var linkEcho = false;
+var linkPeerName = "";
 var pj = { ok: 0, bad: 0, tail: "" };   // envelopes Pack: JSON intacto?
 var wasPlaying = false;
 var lastQ = "";
@@ -251,6 +252,35 @@ function tPack() {
     wait(12000);
     endRound();
 }
+// pings INTERCALADOS entre os pares, contagem por nome (o conectado pelo
+// Link marcado): a mesma medida sem e com o Link aberto
+function meshPings(tag) {
+    label = tag;
+    rtts = []; pings = {};
+    var ps = peersNow();
+    var sentTo = {};
+    for (var k = 0; k < 10; k++) {
+        for (var p = 0; p < ps.length; p++) {
+            var key = "9" + p + k;
+            if (CelerNet.send(ps[p].id, "l?" + key, { copies: 1, urgent: true })) {
+                pings[key] = System.millis();
+                sentTo[ps[p].name] = (sentTo[ps[p].name] || 0) + 1;
+            }
+            wait(400);
+        }
+    }
+    wait(5000);
+    var got = {};
+    for (var r = 0; r < rtts.length; r++) {
+        var who = ps[parseInt(rtts[r].k.charAt(1), 10)].name;
+        got[who] = (got[who] || 0) + 1;
+    }
+    var parts = [];
+    for (var nm in sentTo) if (sentTo.hasOwnProperty(nm)) {
+        parts.push(nm + (nm === linkPeerName ? "(LINK)" : "") + "=" + (got[nm] || 0) + "/" + sentTo[nm]);
+    }
+    L(tag + ": " + parts.join(" ") + " " + st());
+}
 function tLink() {
     if (typeof CelerLink === "undefined") { L("link: sem CelerLink"); return; }
     label = "link: scan";
@@ -263,6 +293,12 @@ function tLink() {
     }
     if (!found) { L("link: periferico nao achado"); return; }
     var t0 = System.millis();
+    // nome do mesmo aparelho na malha (o periferico anuncia MeshLab-<id da malha>)
+    var meshId = found.name.substring(8);
+    var nl = CelerNet.nodes();
+    for (var q = 0; q < nl.length; q++) if (nl[q].id === meshId) linkPeerName = nl[q].name;
+    meshPings("malha sem link");
+    t0 = System.millis();
     var ok = CelerLink.connect(found.id, 8000);
     L("link connect " + ok + " em " + (System.millis() - t0) + " ms " + JSON.stringify(CelerLink.status()));
     if (!ok) return;
@@ -286,19 +322,7 @@ function tLink() {
         L("link eco " + szs[s] + "B ok=" + r.length + "/20 lost=" + lost + " min=" + r[0] + " med=" + r[r.length >> 1] +
           " max=" + r[r.length - 1] + " " + JSON.stringify(CelerLink.status()));
     }
-    // malha durante o link: um ping para cada nó
-    label = "malha com link aberto";
-    rtts = []; pings = {};
-    var ps = peersNow();
-    for (var p = 0; p < ps.length; p++) {
-        for (var k = 0; k < 5; k++) {
-            var key = "9" + p + k;
-            if (CelerNet.send(ps[p].id, "l?" + key, { copies: 1, urgent: true })) pings[key] = System.millis();
-            wait(800);
-        }
-    }
-    wait(5000);
-    L("malha com link: rtt " + JSON.stringify(rtts) + " " + st());
+    meshPings("malha com link");
     CelerLink.disconnect();
     wait(3000);
     // o periferico volta a anunciar depois da queda? (achado do code-review)
