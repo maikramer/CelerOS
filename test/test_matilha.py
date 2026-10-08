@@ -315,6 +315,57 @@ class TestEntrega(unittest.TestCase):
         self.assertIsNone(node.poll_msg())
 
 
+class TestProtocolo18(unittest.TestCase):
+    """Alinhamento com o firmware 1.8: copias de mensagem fragmentada dividem
+    o seq (copia nos bits 5-6 do idx), entrega unica, fila tudo-ou-nada e
+    hops contando saltos (vizinho direto = 1)."""
+
+    def test_remontador_junta_copias_e_entrega_uma_vez(self):
+        r = N.Reassembler()
+        msg = bytes(range(40))                       # 3 frags
+        c1 = 1 << N.FRAG_COPY_SHIFT
+        self.assertIsNone(r.feed(7, 50, 0, 3, msg[0:14], 0))          # copia 0
+        self.assertIsNone(r.feed(7, 50, 2, 3, msg[28:], 10))          # (frag 1 perdido)
+        self.assertEqual(r.feed(7, 50, 1 | c1, 3, msg[14:28], 20), msg)  # copia 1 completa
+        self.assertIsNone(r.feed(7, 50, 2 | c1, 3, msg[28:], 30))     # sem 2a entrega
+
+    def test_send_fragmentado_copias_com_mesmo_seq(self):
+        node, radio, clk = make_node()
+        self.assertTrue(node.send(0x4848, b"x" * 40, copies=2))
+        flushar(node, clk)
+        frags = [N.decode(x) for x in radio.sent if N.decode(x).type == N.TYPE_FRAG]
+        self.assertEqual(len(frags), 6)
+        self.assertEqual(len({f.seq for f in frags}), 1)
+        copias = sorted({f.data[0] >> N.FRAG_COPY_SHIFT for f in frags})
+        self.assertEqual(copias, [0, 1])
+        self.assertEqual(len(frags[-1].data), 2 + 40 - 28)          # ultimo frag curto
+
+    def test_send_quadro_unico_copias_com_seq_novo(self):
+        node, radio, clk = make_node()
+        self.assertTrue(node.send(0x4848, b"oi", copies=2))
+        flushar(node, clk)
+        dados = [N.decode(x) for x in radio.sent if N.decode(x).type == N.TYPE_DATA]
+        self.assertEqual(len({f.seq for f in dados}), 2)
+
+    def test_fila_tudo_ou_nada(self):
+        node, _, _ = make_node()
+        self.assertTrue(node.send(0x4848, b"x" * 434, copies=2))     # 62 de 96
+        antes = len(node.pending)
+        self.assertFalse(node.send(0x4848, b"y" * 434, copies=2))    # nao cabe
+        self.assertEqual(len(node.pending), antes)                  # nada pela metade
+
+    def test_hops_vizinho_direto_e_um(self):
+        node, _, _ = make_node()
+        node.on_adv_report(data_raw(0x4848, b"oi", hops=0), -50)
+        self.assertEqual(node.poll_msg()["hops"], 1)
+
+    def test_beat_repetido_nao_troca_caminho_direto(self):
+        node, _, clk = make_node()
+        node.on_adv_report(beat_raw(0x4848, "Dog", seq=1, hops=0), -40)
+        node.on_adv_report(beat_raw(0x4848, "Dog", seq=2, hops=1), -70)   # via repetidor
+        self.assertEqual((node.nodes_tbl[0x4848]["hops"], node.nodes_tbl[0x4848]["rssi"]), (1, -40))
+
+
 class TestTx(unittest.TestCase):
     def test_beat_sem_nul_na_wire(self):
         node, radio, clk = make_node(caps=0x25)

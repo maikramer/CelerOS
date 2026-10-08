@@ -66,7 +66,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from netframe import (ADV_MAX, CAPS_HUB, CAPS_NAMES, CHUNK_MAX, DATA_MAX,
+from netframe import (ADV_MAX, CAPS_HUB, CAPS_NAMES, CHUNK_MAX, DATA_MAX, FRAG_COPY_SHIFT,
                       DST_BROADCAST, DedupRing, Frame, MSG_MAX, Reassembler,
                       TTL_DEFAULT, TTL_MAX, TYPE_BEAT, TYPE_DATA, TYPE_FRAG,
                       caps_str, decode, encode, fnv16)
@@ -148,7 +148,7 @@ class MeshNode:
     K_TOKEN_MAX = 16
     K_SLOT_MS = 25
     K_COPY_GAP_MS = 1500
-    PENDING_DEPTH = 40
+    PENDING_DEPTH = 96   # como o firmware: cabe 434 B x 2 copias + relays
     RX_DEPTH = 8
     NODES_MAX = 16
 
@@ -212,13 +212,20 @@ class MeshNode:
         else:
             self._push_pending(enc, now, 0)
 
-    def enqueue_message(self, dst, data, ttl=0, urgent=False, due_delay_ms=0):
-        """Mensagem -> quadros (DATA unico ou FRAGs); seq unico por mensagem."""
+    def _frames_for(self, n):
+        return 1 if n <= DATA_MAX else (n + CHUNK_MAX - 1) // CHUNK_MAX
+
+    def enqueue_message(self, dst, data, ttl=0, urgent=False, due_delay_ms=0, seq=None, copy=0):
+        """Mensagem -> quadros (DATA unico ou FRAGs). seq None = novo; senao o
+        seq da copia anterior (FRAG com a copia no idx). Tudo ou nada."""
         if not data or len(data) > MSG_MAX or ttl == 0:
             return False
+        if self._frames_for(len(data)) > self.PENDING_DEPTH - len(self.pending):
+            return False
         now = self._now_ms()
-        self.seq = (self.seq + 1) & 0xFFFF
-        seq = self.seq
+        if seq is None:
+            self.seq = (self.seq + 1) & 0xFFFF
+            seq = self.seq
         prio = 1 if urgent else 0
         if len(data) <= DATA_MAX:
             enc = encode(Frame(TYPE_DATA, self.net_id, self.node, dst, seq,
@@ -230,7 +237,7 @@ class MeshNode:
         for i in range(total):
             chunk = data[i * CHUNK_MAX:(i + 1) * CHUNK_MAX]
             enc = encode(Frame(TYPE_FRAG, self.net_id, self.node, dst, seq, ttl, 0,
-                               bytes([i, total]) + chunk))
+                               bytes([i | ((copy & 3) << FRAG_COPY_SHIFT), total]) + chunk))
             if enc is None or not self._push_pending(enc, now + due_delay_ms, prio):
                 return False
         return True
@@ -245,18 +252,25 @@ class MeshNode:
         return ok
 
     def send(self, dst, data, ttl=0, urgent=False, copies=1):
-        """Unicast: copias com seq NOVO (o dedup do vizinho nao pode come-las)
-        e espacadas ~1,5 s - consecutivas morriam na mesma janela de colisao."""
+        """Unicast com copias espacadas ~1,5 s. Quadro unico: seq NOVO por copia
+        (a entrega pode duplicar). Fragmentada: as copias DIVIDEM o seq (copia
+        no idx) e o destino junta frags de qualquer uma - entrega uma vez.
+        Todas as copias cabem na fila ou nenhuma sai (como o firmware)."""
         if not data or dst == 0 or dst == self.node:
             return False
         ttl = ttl or TTL_DEFAULT
         copies = max(1, min(3, copies))
-        ok = True
-        for c in range(copies):
+        frag = len(data) > DATA_MAX
+        ok = self._frames_for(len(data)) * copies <= self.PENDING_DEPTH - len(self.pending)
+        msg_seq = None
+        for c in range(copies if ok else 0):
             if not self.enqueue_message(dst, data, min(ttl, TTL_MAX), urgent,
-                                        c * self.K_COPY_GAP_MS):
+                                        c * self.K_COPY_GAP_MS,
+                                        msg_seq if frag else None, c if frag else 0):
                 ok = False
                 break
+            if c == 0 and frag:
+                msg_seq = self.seq
         if not ok:
             self.counters["txDropped"] += 1
         return ok
@@ -305,21 +319,22 @@ class MeshNode:
         if self.dedup.seen(f.src, f.seq, idx):
             return
         self.counters["frames"] += 1
+        hops = f.hops + 1   # saltos dados: vizinho direto = 1 (como o firmware)
 
         if f.type == TYPE_BEAT:
             caps = f.data[0] if f.data else 0
             name = f.data[1:].split(b"\0", 1)[0].decode("latin-1", "replace") \
                 if len(f.data) > 1 else ""
-            self._node_touch(f.src, name, caps, rssi, f.hops, now)
+            self._node_touch(f.src, name, caps, rssi, hops, now)
         elif f.type == TYPE_DATA and mine:
-            self._node_touch(f.src, "", None, rssi, f.hops, now)
-            self._deliver(f, f.data, rssi)
+            self._node_touch(f.src, "", None, rssi, hops, now)
+            self._deliver(f, f.data, rssi, hops)
         elif f.type == TYPE_FRAG and mine and len(f.data) >= 2:
-            self._node_touch(f.src, "", None, rssi, f.hops, now)
+            self._node_touch(f.src, "", None, rssi, hops, now)
             msg = self.reasm.feed(f.src, f.seq, f.data[0], f.data[1],
                                   f.data[2:], now)
             if msg is not None:
-                self._deliver(f, msg, rssi)
+                self._deliver(f, msg, rssi, hops)
 
         # repeticao (flood): ttl-1/hops+1, jitter escalando com o ttl restante;
         # FRAG ganha jitter LARGO - repetir frag cedo faz o repetidor transmitir
@@ -349,8 +364,10 @@ class MeshNode:
             e["name"] = name
         if caps is not None:
             e["caps"] = caps   # caps so do BEAT (DATA nao zera o papel do no)
-        e["rssi"] = rssi
-        e["hops"] = hops
+        # caminho mais curto fresco vence (BEAT repetido nao troca o direto)
+        if now - e["last_ms"] >= 2 * self.K_BEAT_MS or hops <= e["hops"]:
+            e["rssi"] = rssi
+            e["hops"] = hops
         e["last_ms"] = now
 
     def _node_view(self, nid, e, now):
@@ -365,7 +382,7 @@ class MeshNode:
             if self.on_member:
                 self.on_member("leave", self._node_view(nid, e, now))
 
-    def _deliver(self, f, payload, rssi):
+    def _deliver(self, f, payload, rssi, hops):
         try:
             text = payload.decode("utf-8")
         except UnicodeDecodeError:
@@ -373,7 +390,7 @@ class MeshNode:
         entry = {"from": f.src,
                  "from_name": self.nodes_tbl.get(f.src, {}).get("name", ""),
                  "dst": f.dst, "unicast": f.dst != DST_BROADCAST,
-                 "hops": f.hops, "rssi": rssi, "data": payload, "text": text}
+                 "hops": hops, "rssi": rssi, "data": payload, "text": text}
         if len(self.rx) >= self.RX_DEPTH:
             self.rx.popleft()   # comando novo vale mais que o velho
             self.counters["rxDropped"] += 1

@@ -36,6 +36,10 @@ TYPE_DATA = 1               # mensagem que cabe inteira (<= 16 B)
 TYPE_FRAG = 2               # fragmento de mensagem maior
 CHUNK_MAX = DATA_MAX - 2    # 14 (idx + total + chunk)
 MAX_FRAGS = 31              # 31 x 14 = 434 (teto da mensagem)
+# byte idx do FRAG: bits 0-4 = indice, bits 5-6 = numero da COPIA do unicast
+# (as copias dividem o seq; o dedup as distingue, o remontador as junta)
+FRAG_IDX_MASK = 0x1F
+FRAG_COPY_SHIFT = 5
 MSG_MAX = 434
 TTL_MAX = 8
 TTL_DEFAULT = 4
@@ -137,7 +141,7 @@ class DedupRing:
     """Chave de dedup (src, seq, idx): DATA/BEAT usam idx 0, FRAG usa o
     proprio idx. Ring de N entradas (potencia de 2): visto de novo = True."""
 
-    def __init__(self, n=32):
+    def __init__(self, n=128):   # cabe 31 frags x 2 copias + BEATs (NetFrame.h)
         self.n = n
         self.e = []       # [(src, seq, idx)]
         self.pos = 0
@@ -166,16 +170,22 @@ class Reassembler:
     proximo)."""
 
     SLOTS = 4
+    DONE = 8
 
     def __init__(self):
         self.slots = {}    # (src, seq) -> dict(total, got_mask, chunks, last_ms)
+        self.done = []     # (src, seq) remontados ha pouco: a outra copia nao entrega de novo
 
     def prune(self, now_ms, timeout_ms):
         for k in [k for k, s in self.slots.items() if now_ms - s["last_ms"] > timeout_ms]:
             del self.slots[k]
 
     def feed(self, src, seq, idx, total, chunk, now_ms):
-        """Alimenta um fragmento; bytes = mensagem completa remontada."""
+        """Alimenta um fragmento; bytes = mensagem completa remontada. idx e o
+        byte cru do quadro (a copia nos bits 5-6 nao importa aqui)."""
+        idx &= FRAG_IDX_MASK
+        if (src, seq) in self.done:
+            return None
         if total == 0 or total > MAX_FRAGS or idx >= total or len(chunk) > CHUNK_MAX:
             return None
         s = self.slots.get((src, seq))
@@ -197,7 +207,11 @@ class Reassembler:
             return None
         out = b"".join(s["chunks"][i] for i in range(total))
         del self.slots[(src, seq)]
+        self.done.append((src, seq))
+        if len(self.done) > self.DONE:
+            self.done.pop(0)
         return out
 
     def reset(self):
         self.slots = {}
+        self.done = []
