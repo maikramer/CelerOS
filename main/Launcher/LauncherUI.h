@@ -20,6 +20,7 @@ public:
     // via throwAppExit — mesma saida limpa do X da topbar.
     static void requestAppExit();
     static bool consumeAppExitRequest();
+    static bool appRunning();  // um app JS esta em execucao agora
     static int findEntry(const std::string& pathOrName);  // -1 se nao achar
     static void scanLocalApps();
     // Abre sozinho apos o boot o app cujo pacote/caminho esta em

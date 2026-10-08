@@ -56,14 +56,19 @@ namespace {
 portMUX_TYPE s_appExitMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_appExitPending = false;   // protegido por s_appExitMux
 volatile uint32_t s_appExitAt = 0;        // tick do pedido (expira sozinho)
+volatile bool s_appExitForApp = false;    // pedido feito COM app em execucao
+volatile bool s_appRunning = false;       // entre a entrada e a saida do runFile
 }  // namespace
 
 void LauncherUI::requestAppExit() {
     portENTER_CRITICAL(&s_appExitMux);
     s_appExitPending = true;
     s_appExitAt = xTaskGetTickCount();
+    s_appExitForApp = s_appRunning;
     portEXIT_CRITICAL(&s_appExitMux);
 }
+
+bool LauncherUI::appRunning() { return s_appRunning; }
 
 bool LauncherUI::consumeAppExitRequest() {
     bool out = false;
@@ -71,8 +76,11 @@ bool LauncherUI::consumeAppExitRequest() {
     if (s_appExitPending) {
         s_appExitPending = false;
         // Pedido sem app em execucao nao pode sobreviver e matar o PROXIMO
-        // app na primeira chamada de delay/getTouch: expira em 2s.
-        out = (xTaskGetTickCount() - s_appExitAt) < pdMS_TO_TICKS(2000);
+        // app na primeira chamada de delay/getTouch: expira em 2s. Com app
+        // rodando vale ate ele ceder — um app preso 9 s numa chamada de IA
+        // (Dog Face ouvindo voz) deixava o "celerctl shell exit" vencer
+        // antes do yield e o "run" seguinte esperava para sempre.
+        out = s_appExitForApp || (xTaskGetTickCount() - s_appExitAt) < pdMS_TO_TICKS(2000);
     }
     portEXIT_CRITICAL(&s_appExitMux);
     return out;
@@ -448,8 +456,16 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
 
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia
+    s_appRunning = true;
     CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed,
                          appPkg.c_str(), perms);
+    s_appRunning = false;
+    // pedido de saida que o app nao chegou a consumir (saiu sozinho) morre
+    // aqui: nao pode derrubar o proximo app
+    portENTER_CRITICAL(&s_appExitMux);
+    s_appExitPending = false;
+    s_appExitForApp = false;
+    portEXIT_CRITICAL(&s_appExitMux);
     // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
     // coberto na hora pelo launcher — removido)
 }

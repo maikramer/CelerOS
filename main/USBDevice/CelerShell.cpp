@@ -502,7 +502,23 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     Backlight::noteActivity();
     LauncherUI::requestRescan();  // app recem-instalado entra na lista
     LauncherUI::requestLaunch(target);
-    print(ctx, "abrindo %s (volta ao launcher quando o app atual sair)\r\n", target.c_str());
+    // E fecha o app atual: em placa com tela inicial (cao/relogio) o "exit"
+    // seguido de "run" perdia a corrida — o launcher reabria a casa entre os
+    // dois e o run ficava esperando ela sair para sempre. O pedido de launch
+    // ja esta pendente, entao a saida cai nele (e nao na casa). So com app
+    // aberto: no launcher ocioso o app pedido abre em < 2 s e uma saida
+    // pedida "por garantia" o fecharia logo ao nascer.
+    if (LauncherUI::appRunning()) LauncherUI::requestAppExit();
+    print(ctx, "abrindo %s\r\n", target.c_str());
+    // Sem consentimento o launcher abre o dialogo "Permitir?" na tela — num
+    // relogio de tela apagada (ou no cao, sem toque) ninguem responde e o
+    // idle-home volta para a casa: o run "sumia" sem aviso (bancada 2026-10-08)
+    const int idx = LauncherUI::findEntry(target);
+    const uint32_t missing = idx >= 0 ? LauncherUI::appEntryMissingPerms(idx) : 0;
+    if (missing != 0) {
+        print(ctx, "aviso: falta consentimento (%s) — vai pedir na tela; sem toque: grant %s\r\n",
+              AppGrants::describe(missing).c_str(), target.c_str());
+    }
     return 0;
 }
 
@@ -510,8 +526,9 @@ int cmdExit(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     (void) argc; (void) argv;
     // Pede o encerramento do app em execucao: os pontos de espera do runtime
     // (delay/getTouch/keypadPoll) transformam o pedido na mesma saida limpa do
-    // X da topbar. Sem app rodando o pedido fica pendente ate o proximo app —
-    // inofensivo (dev loop usa exit+run em sequencia).
+    // X da topbar. Com app rodando o pedido vale ate ele ceder (mesmo preso
+    // segundos numa chamada nativa); sem app, expira em 2 s e nao derruba o
+    // proximo (dev loop usa exit+run em sequencia).
     LauncherUI::requestAppExit();
     print(ctx, "encerrando app atual (se houver)\r\n");
     return 0;
