@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 29
+### API Level: 30
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2205,7 +2205,7 @@ store installs them into a public cache at `/local/modules/<name>/<version>/`
 — a single copy per version on the device, shared across apps. `require()`
 resolves the fallback.
 
-#### `"deps"` in app.json (API 30)
+#### The `"deps"` dependency field (API 30)
 
 ```json
 "deps": { "celeros.engine": "^1.0.0", "celeros.physics": "^1.0.0" }

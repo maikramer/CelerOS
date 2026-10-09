@@ -2,10 +2,12 @@
 """Ferramenta de publicacao no CelerOS Hub (os.celer.tec.br).
 
 Subcomandos:
-  publish  <pasta> [pasta...]  valida e publica pacotes (app.json+main.js[+icon.png])
-  list                         lista o catalogo do hub e compara com o repo
-  delete   <packageName>      remove um app do hub
-  whoami                       confere o token/escopo
+  publish      <pasta> [pasta...]      valida e publica pacotes (app.json+main.js[+icon.png])
+  publish-dep  <arquivo.js>            publica dependencia JS no repo do hub
+                                       (nome = arquivo; versao lida do modulo)
+  list                               lista o catalogo do hub e compara com o repo
+  delete       <packageName>           remove um app do hub
+  whoami                              confere o token/escopo
 
 Autenticacao: CELER_HUB_TOKEN no ambiente (veja CelerOS-Server/env/env.sh).
 Hub: --hub ou CELER_HUB (padrao https://os.celer.tec.br).
@@ -13,6 +15,7 @@ Hub: --hub ou CELER_HUB (padrao https://os.celer.tec.br).
 Exemplos:
   source ../CelerOS-Server/env/env.sh
   python3 tools/celerhub.py publish data/apps/Terminal hub_apps/2048
+  python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
   python3 tools/celerhub.py list
   python3 tools/celerhub.py delete celeros.minhaapp --yes
 """
@@ -63,10 +66,46 @@ MAX_EXTRA_FILES = 16
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# Dependencias compartilhadas (mesmas regras do servidor): nome com ponto
+# tipo celeros.engine, range "^x.y.z" (major) ou versao exata.
+DEP_NAME_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9-]+)+$")
+DEP_RANGE_RE = re.compile(r"^\^?\d+\.\d+\.\d+$")
+MAX_APP_DEPS = 8
 
 
 def vtuple(v):
     return tuple(int(p) for p in v.split("."))
+
+
+def range_satisfies(rng, version):
+    """'^x.y.z' = mesma major, >= base; sem '^' = exata."""
+    if not DEP_RANGE_RE.match(rng) or not VER_RE.match(version):
+        return False
+    if not rng.startswith("^"):
+        return rng == version
+    b, v = vtuple(rng[1:]), vtuple(version)
+    return v[0] == b[0] and v >= b
+
+
+def resolve_dep_ranges(app_deps, hub_deps):
+    """nome -> versao resolvida (maior satisfazendo TODOS os ranges que
+    chegam ao nome, diretos ou transitivos). die() se algo nao resolve."""
+    wanted, seen, queue = {}, set(), list(app_deps.items())
+    while queue:
+        name, rng = queue.pop(0)
+        if (name, rng) in seen:
+            continue
+        seen.add((name, rng))
+        wanted.setdefault(name, []).append(rng)
+        versions = hub_deps.get(name) or {}
+        ok = [v for v in versions
+              if all(range_satisfies(r, v) for r in wanted[name])]
+        if not ok:
+            die(f"dep '{name}' sem versao que satisfaca {' / '.join(wanted[name])} no hub")
+        for d, r in (versions[max(ok, key=vtuple)].get("deps") or {}).items():
+            queue.append((str(d), str(r)))
+    return {n: max((v for v in hub_deps.get(n, {}) if all(range_satisfies(r, v) for r in rs)),
+                   key=vtuple) for n, rs in wanted.items()}
 
 
 def die(msg, code=1):
@@ -220,6 +259,28 @@ def validate(folder: Path):
             assets_total += size_n
     if assets_total > MAX_ASSETS_TOTAL:
         die(f"{folder}: assets somam {assets_total}B (max {MAX_ASSETS_TOTAL}B)")
+
+    # Dependencias compartilhadas (API 30): formato local; existencia no hub
+    # e a soma das deps no teto sao checadas no cmd_publish com o indice
+    # real (o servidor refaz a validacao no upload).
+    deps = meta.get("deps")
+    if deps is not None:
+        if not isinstance(deps, dict) or not deps:
+            die(f"{folder}: deps deve ser objeto {{nome: \"^x.y.z\"}} nao-vazio")
+        if api < 30:
+            die(f"{folder}: deps exige api >= 30 no app.json (o require so "
+                f"resolve dependencia na API 30)")
+        if len(deps) > MAX_APP_DEPS:
+            die(f"{folder}: deps com {len(deps)} entradas (max {MAX_APP_DEPS})")
+        for d, r in deps.items():
+            if not DEP_NAME_RE.match(str(d)):
+                die(f"{folder}: dep com nome invalido: {d} (use prefixo.nome)")
+            if not DEP_RANGE_RE.match(str(r)):
+                die(f"{folder}: dep {d}: versao deve ser \"^1.0.0\" ou \"1.0.0\"")
+            if f"{d}.js" in extras:
+                avisos.append(f"deps declara {d} mas {d}.js esta na pasta: "
+                              f"a copia local vence no require (vendoring desnecessario)")
+
     if js_sum > MAX_MAIN_JS_PSRAM:
         die(f"{folder}: soma dos .js ({js_sum}B) acima do teto absoluto "
             f"({MAX_MAIN_JS_PSRAM}B)")
@@ -244,6 +305,7 @@ def cmd_publish(args):
     tok = "" if args.dry else token_or_die(args)  # dry roda offline
     # versao publicada no hub: base do anti-downgrade local (o hub reforca)
     hub_ver = {}
+    hub_deps = None
     if not args.dry:
         _, data = http("GET", f"{hub_url(args)}/store/all.json")
         hub_ver = {pkg: a.get("version", "0.0.0")
@@ -252,6 +314,33 @@ def cmd_publish(args):
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
         meta, avisos, js_sum, extras = validate(folder)
+        deps = meta.get("deps") or {}
+        # deps: resolve contra o indice do hub (existencia + teto com a soma
+        # das deps — o mesmo calculo que o servidor faz no upload)
+        if deps:
+            if args.dry:
+                for a in [f"deps {d} {r}: existencia no hub nao checada (dry)"
+                          for d, r in deps.items()]:
+                    avisos.append(a)
+            else:
+                if hub_deps is None:
+                    _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+                    hub_deps = idx.get("deps", {})
+                resolved = resolve_dep_ranges(deps, hub_deps)
+                for dname, dver in resolved.items():
+                    dmeta = hub_deps[dname][dver]
+                    js_sum += int(dmeta.get("size") or 0)
+                    dmin = int(dmeta.get("minApi") or 1)
+                    if int(meta.get("api") or 1) < dmin:
+                        die(f"{folder}: dep {dname}@{dver} exige api >= {dmin} "
+                            f"(app declara {meta.get('api')})")
+        requires = meta.get("requires") or []
+        if js_sum > MAX_MAIN_JS_PSRAM:
+            die(f"{folder}: soma dos .js + deps ({js_sum}B) acima do teto "
+                f"absoluto ({MAX_MAIN_JS_PSRAM}B)")
+        if js_sum > MAX_MAIN_JS and "psram" not in requires:
+            die(f"{folder}: soma dos .js + deps ({js_sum}B): acima de "
+                f"{MAX_MAIN_JS}B exige \"psram\" em requires no app.json")
         for a in avisos:
             print(f"aviso: {folder.name}: {a}")
         hv = hub_ver.get(meta["packageName"])
@@ -260,8 +349,9 @@ def cmd_publish(args):
                 f"suba a version ou use --force")
         if args.dry:
             nextra = f" + {len(extras)} extra(s)" if extras else ""
+            ndeps = f" + {len(deps)} dep(s)" if deps else ""
             print(f"[dry] {meta['packageName']} v{meta['version']} "
-                  f"({js_sum}B de .js{nextra}) ok")
+                  f"({js_sum}B de .js{ndeps}{nextra}) ok")
             continue
 
         with tempfile.TemporaryDirectory() as td:
@@ -293,6 +383,65 @@ def cmd_publish(args):
               f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}..., "
               f"{out.get('store', {}).get('apps')} apps no catalogo)")
     sys.exit(rc)
+
+
+# ------------------------------------------------------------- publish-dep -
+def cmd_publish_dep(args):
+    """Publica um modulo JS como dependencia compartilhada do hub.
+
+    Nome = nome do arquivo sem .js (tools/sdk/engine/celeros.engine.js ->
+    dep "celeros.engine"); versao lida do `version: 'x.y.z'` do modulo;
+    --min-api e o CELEROS_API_LEVEL minimo do device que roda a dep.
+    Transitivas: --dep nome=range (repetivel)."""
+    tok = token_or_die(args)
+    src = Path(args.file).expanduser().resolve()
+    if not src.is_file():
+        die(f"{src}: arquivo nao encontrado")
+    name = args.name or src.stem
+    if not DEP_NAME_RE.match(name):
+        die(f"nome de dep invalido: {name} (use prefixo.nome, ex: celeros.engine)")
+    text = src.read_text(encoding="utf-8")
+    m = re.search(r"version:\s*'([^']+)'", text)
+    version = args.version or (m.group(1) if m else "")
+    if not VER_RE.match(version or ""):
+        die(f"versao invalida: {version!r} (declare no modulo "
+            f"version: 'x.y.z' ou use --version)")
+    sub = {}
+    for pair in args.dep or []:
+        if "=" not in pair:
+            die(f"--dep deve ser nome=range (veio {pair!r})")
+        d, r = pair.split("=", 1)
+        if not DEP_NAME_RE.match(d) or not DEP_RANGE_RE.match(r):
+            die(f"--dep invalida: {pair}")
+        sub[d] = r
+
+    with tempfile.TemporaryDirectory() as td:
+        zpath = Path(td) / "dep.zip"
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("dep.json", json.dumps({
+                "name": name, "version": version,
+                "minApi": args.min_api, "deps": sub,
+            }))
+            zf.write(src, f"{name}.js")
+            blob = zpath.read_bytes()
+
+    boundary = "----celeroshub7d1f2c"
+    part = (
+        f"--{boundary}\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"dep.zip\"\r\n"
+        "Content-Type: application/zip\r\n\r\n"
+    ).encode()
+    force_part = (
+        f"--{boundary}\r\n"
+        "Content-Disposition: form-data; name=\"force\"\r\n\r\n"
+        f"{'1' if args.force else '0'}\r\n"
+    ).encode()
+    _, out = http("POST", f"{hub_url(args)}/admin/deps", token=tok,
+                  data=part + blob + force_part + f"--{boundary}--\r\n".encode(),
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    print(f"ok: dep {out.get('dep')} v{out.get('version')} publicada "
+          f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}...)")
+    print(f"    {out.get('url')}")
 
 
 # -------------------------------------------------------------------- list -
@@ -378,6 +527,17 @@ def main():
     p.add_argument("--force", action="store_true",
                    help="republica mesmo com version <= a do hub")
     p.set_defaults(fn=cmd_publish)
+
+    p = sub.add_parser("publish-dep", help="publica dependencia JS no repo do hub")
+    p.add_argument("file", help="arquivo <nome>.js da dep (ex: tools/sdk/engine/celeros.engine.js)")
+    p.add_argument("--name", default=None, help="nome da dep (default: arquivo sem .js)")
+    p.add_argument("--version", default=None, help="versao semver (default: lida do modulo)")
+    p.add_argument("--min-api", type=int, default=1, dest="min_api",
+                   help="CELEROS_API_LEVEL minimo do device (default: 1)")
+    p.add_argument("--dep", action="append", metavar="NOME=RANGE",
+                   help="dep transitiva (repetivel)")
+    p.add_argument("--force", action="store_true", help="republica a versao")
+    p.set_defaults(fn=cmd_publish_dep)
 
     p = sub.add_parser("list", help="lista o catalogo e compara com o repo")
     p.set_defaults(fn=cmd_list)

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 29
+### Nível de API: 30
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2479,7 +2479,7 @@ a loja as instala num cache público em `/local/modules/<nome>/<versão>/` —
 uma única cópia por versão no dispositivo, compartilhada pelos apps. O
 `require()` resolve o fallback.
 
-#### `"deps"` no app.json (API 30)
+#### O campo de dependências `"deps"` (API 30)
 
 ```json
 "deps": { "celeros.engine": "^1.0.0", "celeros.physics": "^1.0.0" }

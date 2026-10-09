@@ -842,6 +842,40 @@ function lintAppJson(dir, manifest) {
       if (VALID_REQUIRES.indexOf(rq) < 0) d('erro', 'appjson', 'requisito desconhecido: "' + rq + '" (validos: ' + VALID_REQUIRES.join(', ') + ')');
     }
   }
+  // Dependencias compartilhadas (API 30): {nome: "^x.y.z"} — nome com ponto
+  // e a identidade em todo lugar (require, arquivo, pasta do cache
+  // /local/modules); range de major ou versao exata. A existencia no hub e
+  // a soma das deps no teto sao do celerhub/servidor (tem o indice real).
+  if (app.deps !== undefined) {
+    const depNames = typeof app.deps === 'object' && app.deps !== null && !Array.isArray(app.deps)
+      ? Object.keys(app.deps) : null;
+    if (!depNames) {
+      d('erro', 'appjson', 'deps deve ser objeto {nome: "^1.0.0"}');
+    } else if (!depNames.length) {
+      d('erro', 'appjson', 'deps vazio: remova o campo');
+    } else {
+      if (depNames.length > 8) d('erro', 'appjson', depNames.length + ' deps (max 8)');
+      for (const dn of depNames) {
+        if (!/^[a-z0-9]+(\.[a-z0-9-]+)+$/.test(dn)) {
+          d('erro', 'appjson', 'dep com nome invalido: "' + dn + '" (use prefixo.nome, ex: celeros.engine)');
+          continue;
+        }
+        if (!/^\^?\d+\.\d+\.\d+$/.test(String(app.deps[dn]))) {
+          d('erro', 'appjson', 'dep ' + dn + ': versao deve ser "^1.0.0" ou "1.0.0"');
+          continue;
+        }
+        // o fallback do require so existe na API 30: device mais velho
+        // instala o app e o require da dep falha em runtime
+        if (typeof app.api === 'number' && app.api < 30)
+          d('erro', 'appjson', 'deps exige api >= 30 no app.json (o require so resolve dep na API 30)');
+        // arquivo com o mesmo nome na pasta vence a dep (precedencia local)
+        try {
+          if (fs.statSync(path.join(dir, dn + '.js')).isFile())
+            d('aviso', 'appjson', dn + '.js na pasta + dep declarada: a copia local vence o require (vendoring desnecessario)');
+        } catch (e) { /* sem copia local: o normal com deps */ }
+      }
+    }
+  }
 
   const entry = typeof app.main === 'string' && app.main ? app.main : 'main.js';
   // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de

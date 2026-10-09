@@ -909,6 +909,36 @@ function makeEnv() {
 // globais de verdade do Duktape e o modulo os ve; no host, o new Function
 // nao herda o escopo do runApp, entao injetamos a mesma lista dele aqui.
 // dir=null => "sem pasta de app", como um .js avulso no device.
+// Fallback de deps (API 30): modulo fora da pasta do app vem do cache do
+// hub em /local/modules quando o app.json declara a dep — no host, da
+// arvore canonica do SDK (tools/sdk/engine), com aviso se a versao local
+// nao satisfaz o range.
+function satisfiesRange(range, version) {
+    var RE = /^(\^?)(\d+)\.(\d+)\.(\d+)$/;
+    var r = RE.exec(String(range)), v = RE.exec(String(version));
+    if (!r || !v) return false;
+    if (!r[1]) return String(range) === String(version);
+    // grupos 2..4 = major.minor.patch (o 1 e o "^" opcional)
+    var V = [+v[2], +v[3], +v[4]], B = [+r[2], +r[3], +r[4]];
+    return V[0] === B[0] && (V[1] > B[1] || (V[1] === B[1] && V[2] >= B[2]));
+}
+
+function resolveSharedDep(appDir, name, env) {
+    var mf;
+    try { mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8')); }
+    catch (e) { return null; }
+    var range = mf && mf.deps && mf.deps[name];
+    if (!range) return null;
+    var local = path.join(ROOT, 'tools', 'sdk', 'engine', name + '.js');
+    if (!fs.existsSync(local)) return null;
+    var m = fs.readFileSync(local, 'utf8').match(/version:\s*'([^']+)'/);
+    if (m && !satisfiesRange(range, m[1]) && env && env.__harness && env.__harness.log) {
+        env.__harness.log.push('[harness] aviso: dep ' + name + ' local v' + m[1] +
+                               ' nao satisfaz "' + range + '" do app.json');
+    }
+    return local;
+}
+
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                     'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
                     'UI', 'require', 'CelerNet', 'Pack'];
@@ -927,11 +957,18 @@ function makeRequire(appDir, env) {
         if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
         var base = String(name).length > 3 && String(name).slice(-3) === '.js'
             ? String(name).slice(0, -3) : String(name);
-        if (!/^[A-Za-z0-9_-]{1,63}$/.test(base)) throw new Error('require: nome de modulo invalido (use [A-Za-z0-9_-])');
+        if (!/^[A-Za-z0-9_.-]{1,63}$/.test(base) || !/[A-Za-z0-9]/.test(base))
+            throw new Error('require: nome de modulo invalido (use [A-Za-z0-9_.-])');
         if (Object.prototype.hasOwnProperty.call(cache, base)) return cache[base];
         var mod = { exports: {} };
         cache[base] = mod.exports;   // parcial: ciclo pega o que ja foi exportado
-        var src = fs.readFileSync(path.join(appDir, base + '.js'), 'utf8');
+        var srcPath = path.join(appDir, base + '.js');
+        if (!fs.existsSync(srcPath)) {
+            var shared = resolveSharedDep(appDir, base, env);
+            if (!shared) throw new Error('require: modulo nao encontrado: ' + base + '.js');
+            srcPath = shared;
+        }
+        var src = fs.readFileSync(srcPath, 'utf8');
         var fn = Function.apply(null, ['module', 'exports'].concat(GLOBAL_NAMES).concat([src]));
         fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
         cache[base] = mod.exports;
@@ -3572,6 +3609,26 @@ function holdFrames(x, y, n) {
     var threw = false;
     try { makeRequire(null)('x'); } catch (e) { threw = /sem pasta de app/.test(String(e)); }
     check('require sem pasta de app erro claro', threw);
+
+    // deps compartilhadas (API 30): range ^major/exata + require fora da
+    // pasta resolve da arvore canonica do SDK (no device: /local/modules)
+    check('satisfiesRange: ^1.0.0 pega 1.9.9, nao 2.0.0 nem 0.9.0',
+          satisfiesRange('^1.0.0', '1.9.9') && !satisfiesRange('^1.0.0', '2.0.0') &&
+          !satisfiesRange('^1.0.0', '0.9.0'));
+    check('satisfiesRange: exata so a exata',
+          satisfiesRange('1.0.0', '1.0.0') && !satisfiesRange('1.0.0', '1.0.1'));
+    var osMod = require('os');
+    var tmpDep = fs.mkdtempSync(path.join(osMod.tmpdir(), 'celer-dep-'));
+    fs.writeFileSync(path.join(tmpDep, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.engine': '^1.0.0' } }));
+    var envDep = makeEnv();
+    var eng = makeRequire(tmpDep, envDep)('celeros.engine');
+    check('require resolve dep da arvore do SDK (app.json declara)',
+          eng && typeof eng.version === 'string', eng && eng.version);
+    var threwDep = false;
+    try { makeRequire(tmpDep, envDep)('celeros.fantasma'); }
+    catch (e) { threwDep = /modulo nao encontrado/.test(String(e)); }
+    check('dep nao declarada e sem arquivo local: erro claro', threwDep);
 })();
 
 // resumo

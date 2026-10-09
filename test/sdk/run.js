@@ -717,26 +717,36 @@ function check(name, ok, detail) {
              { cwd: ROOT });
 
     var want = ['app.json', 'main.js', 'icon.png', 'jsconfig.json', 'celer.d.ts',
-                'README.md', 'engine.js', 'physics.js', 'engine.d.ts'];
+                'README.md', 'celeros.engine.d.ts'];
     var missing = want.filter(function (f) { return !fs.existsSync(path.join(appDir, f)); });
-    check('scaffold de jogo cria app + engine + physics + tipos',
+    check('scaffold de jogo cria app + tipos da engine (dev-only)',
           missing.length === 0, 'faltam: ' + missing.join(', '));
+    check('engine/physics NAO sao copiadas (deps do hub, API 30)',
+          !fs.existsSync(path.join(appDir, 'celeros.engine.js')) &&
+          !fs.existsSync(path.join(appDir, 'celeros.physics.js')) &&
+          !fs.existsSync(path.join(appDir, 'engine.js')));
 
     var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json')));
     check('app.json do jogo: type Game, psram, sem topbar',
           mf.type === 'Game' && mf.category === 'Jogos' &&
           Array.isArray(mf.requires) && mf.requires.indexOf('psram') >= 0 &&
           mf.topbar === false);
+    check('app.json declara deps celeros.engine/physics',
+          mf.deps && /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.engine']) &&
+          /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.physics']),
+          JSON.stringify(mf.deps));
 
     var result = runLint([appDir], {});
-    check('jogo scaffoldado passa limpo no lint (engine+physics sao ES5 ok)',
+    check('jogo scaffoldado passa limpo no lint',
           result.totals.errors === 0,
           result.apps[0].diagnostics.map(function (d) { return d.message; }).join('; '));
 
+    // soma dos .js como o install ve: main.js do pacote + as deps da arvore
+    // do SDK (o que a loja baixaria para /local/modules)
     var size = fs.statSync(path.join(appDir, 'main.js')).size +
-               fs.statSync(path.join(appDir, 'engine.js')).size +
-               fs.statSync(path.join(appDir, 'physics.js')).size;
-    check('soma dos .js cabe no teto psram (128 KB)', size < 128 * 1024,
+               fs.statSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'celeros.engine.js')).size +
+               fs.statSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'celeros.physics.js')).size;
+    check('soma dos .js (pacote + deps) cabe no teto psram (128 KB)', size < 128 * 1024,
           (size / 1024).toFixed(1) + ' KB');
 
     var r = runAppFolder(appDir, { render: true, stopAtMs: 2000 });

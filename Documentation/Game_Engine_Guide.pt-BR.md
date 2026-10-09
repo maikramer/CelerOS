@@ -2,10 +2,10 @@
 
 [English](Game_Engine_Guide.md) | **Português (BR)**
 
-Uma game engine 2D completa para apps CelerOS, entregue como dois módulos JS que você vendoriza na pasta do app — sem mudança de firmware, sem permissão extra:
+Uma game engine 2D completa para apps CelerOS, entregue como dois módulos JS — desde a API 30, **dependências compartilhadas do hub** (`"deps"` no `app.json`): a loja as instala no cache público `/local/modules` e o `require()` resolve de lá, uma única cópia por versão no aparelho (o pacote do jogo emagrece ~53 KB). Sem permissão extra; vendorizar uma cópia na pasta do app continua funcionando (e vence):
 
-- **`engine.js`** — game loop com cenas, reconhecimento de gestos de toque, desenho com câmera, sprites, partículas, tweens/timers, áudio chiptune com relógio de batida e saves no NVS.
-- **`physics.js`** (opcional) — física 2D arcade: círculos/AABB, gravidade, restituição, atrito, sub-passos anti-túnel, tilemaps e corda/pano por Verlet. Matemática pura, zero dependências.
+- **`celeros.engine`** — game loop com cenas, reconhecimento de gestos de toque, desenho com câmera, sprites, partículas, tweens/timers, áudio chiptune com relógio de batida e saves no NVS.
+- **`celeros.physics`** (opcional) — física 2D arcade: círculos/AABB, gravidade, restituição, atrito, sub-passos anti-túnel, tilemaps e corda/pano por Verlet. Matemática pura, zero dependências.
 
 Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
@@ -13,22 +13,30 @@ Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execu�
 
 | | |
 |---|---|
-| API do firmware | 23+ (recursos novos — primitivas smooth, `playMusic`, canvas nativo — são auto-detectados) |
+| API do firmware | 23+ para módulos; **30+** para as deps compartilhadas (recursos novos — primitivas smooth, `playMusic`, canvas nativo — são auto-detectados) |
 | Placas-alvo | As ESP32-S3 com PSRAM: SmartDisplay, watch Waveshare, cão SpotPear |
-| Orçamento de tamanho | `engine.js` ≈ 33 KB + `physics.js` ≈ 16 KB. Declare `"requires": ["psram"]` no `app.json` para subir o teto de JS de 48 KB para 128 KB (a loja passa a bloquear install em placa sem PSRAM — que é o que você quer num jogo com engine) |
+| Orçamento de tamanho | `celeros.engine` ≈ 35 KB + `celeros.physics` ≈ 17 KB — somam no teto do app MESMO como deps (a engine compila no heap de cada jogo): declare `"requires": ["psram"]` no `app.json` para subir o teto de JS de 48 KB para 128 KB (a loja passa a bloquear install em placa sem PSRAM — que é o que você quer num jogo com engine) |
 | Sabor do app | `"topbar": false` para jogos em tela cheia (como o Supernova) é recomendado; o botão de saída mora no menu de título do seu jogo (`System.exitApp()`) |
-| CYD (sem PSRAM) | Jogos com engine não cabem no teto de 48 KB. Ou vendorize só o `engine.js` (≈ 33 KB, sobram ~15 KB para o seu código) ou escreva jogos de canvas puro |
+| CYD (sem PSRAM) | Jogos com engine não cabem no teto de 48 KB — nem como deps (a soma continua contando). Ou vendorize só a engine (≈ 35 KB, sobram ~13 KB para o seu código) ou escreva jogos de canvas puro |
 
 ## 2. Começando
 
 ```bash
-# scaffold de jogo pronto pra rodar (app.json + jogo Quica de exemplo + engine):
+# scaffold de jogo pronto pra rodar (app.json com deps + jogo Quica de
+# exemplo; a engine NAO e copiada — vem do hub no install):
 node tools/sdk/celer.js new MeuJogo --game
 
-# adiciona/atualiza a engine numa pasta de app EXISTENTE:
-node tools/sdk/celer.js engine caminho/MeuApp
+# deps do app.json x versões no hub (e o que existe na arvore local):
+node tools/sdk/celer.js deps MeuJogo
+node tools/sdk/celer.js deps set celeros.engine ^1.0.0 MeuJogo
 
-# itere (lint a cada save; emulador renderiza PNG; device faz live reload):
+# publique as deps da engine no repositorio do hub (publica a arvore
+# canonica tools/sdk/engine/; precisa do token com escopo deps):
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 23
+
+# itere (lint a cada save; emulador renderiza PNG; device faz live reload —
+# no PC o require resolve as deps da arvore tools/sdk/engine):
 node tools/sdk/celer.js lint MeuJogo
 node tools/sdk/celer.js emu MeuJogo
 python3 tools/celerctl.py dev MeuJogo
@@ -40,8 +48,8 @@ O `new --game` scaffolds o **Quica**, um joguinho completo de manter-a-bola-no-a
 
 ```js
 // main.js
-var E = require("engine");
-var P = require("physics");
+var E = require("celeros.engine");
+var P = require("celeros.physics");
 
 E.init({ dir: "Bolas", fps: 30, save: "bolas." });
 var W = E.W, H = E.H;
@@ -263,12 +271,12 @@ if (E.save.best("recorde", pontos)) { /* novo recorde! */ }
 
 `E.m`: `clamp, lerp, map, rand(a,b), randInt, pick, dist, dist2, ang, approach, wrap, sign` + easings. `E.rng(seed)` devolve uma função PRNG determinística — seede a geração do nível e seus testes ficam reprodutíveis.
 
-## 15. Física (`physics.js`, opcional)
+## 15. Física (`celeros.physics`, opcional)
 
-`require("physics")` — matemática pura, nenhuma chamada a `System`, então testa unitariamente em qualquer lugar. Coordenadas: y cresce para **baixo** (tela); o `x, y` do corpo é o **centro**; corpo circular tem `r`, caixa `w/h`.
+`require("celeros.physics")` — matemática pura, nenhuma chamada a `System`, então testa unitariamente em qualquer lugar. Coordenadas: y cresce para **baixo** (tela); o `x, y` do corpo é o **centro**; corpo circular tem `r`, caixa `w/h`.
 
 ```js
-var P = require("physics");
+var P = require("celeros.physics");
 var w = P.world({ gravity: { x: 0, y: 900 },
                   bounds: { x: 0, y: 0, w: 240, h: 320 },
                   walls: "contain" });          // contain | wrap | none
@@ -369,7 +377,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- Engine+física+jogo passam de 48 KB → mantenha `"requires": ["psram"]`. Tamanhos atuais: `engine.js` ≈ 33 KB, `physics.js` ≈ 16 KB.
+- Engine+física+jogo passam de 48 KB (as deps somam no teto do app!) → mantenha `"requires": ["psram"]`. Tamanhos atuais: `celeros.engine` ≈ 35 KB, `celeros.physics` ≈ 17 KB.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC.
 - `fillScreen` + redesenho total a 30 fps dá conta nas placas S3; para poucos objetos em movimento prefira apagar-só-o-velho (erase da posição antiga, desenha a nova).
 - `world.step` é O(n²) no número de corpos no pior caso, mas um **sweep-and-prune** (corpos ordenados por x a cada sub-passo, corte cedo pela distância em x) o mantém quase linear em cenas espalhadas — shooters com ~40 corpos rodam folgados.

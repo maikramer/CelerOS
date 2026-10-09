@@ -51,6 +51,7 @@ Dependencias: pyserial (pip install -r tools/requirements.txt)
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -59,9 +60,11 @@ import select
 import socket
 import struct
 import sys
+import tempfile
 import time
 import zlib
 from pathlib import Path
+from urllib import request as _urlreq
 
 try:
     import serial
@@ -2222,6 +2225,42 @@ def _dev_screenshot(link, shots_dir, settle_timeout=5.0):
         print(f"== tela: falhou ({e})")
 
 
+def _install_shared_deps(link, deps, hub):
+    """Deps compartilhadas (API 30): resolve os ranges contra o indice do
+    hub (mesma semantica do celerhub.py), baixa cada modulo no PC e empurra
+    para /local/modules/<nome>/<versao>/ — o cache publico do require.
+    Push integral (~53KB de engine a ~110KB/s pela CDC): checar existencia
+    via stat por dep nao paga o tempo que economiza. Devolve {nome: versao}
+    resolvido (o chamador grava o deps.json na pasta do app)."""
+    import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
+    status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+    index = (idx or {}).get("deps", {})
+    if not index:
+        die(f"deps: indice do hub indisponivel ({hub}/store/deps.json)")
+    resolved = celerhub.resolve_dep_ranges(deps, index)
+    for name, ver in resolved.items():
+        dmeta = index[name][ver]
+        print(f"dep {name} {ver}: baixando do hub...")
+        req = _urlreq.Request(dmeta["url"],
+                              headers={"User-Agent": "celerosctl/1.0"})
+        with _urlreq.urlopen(req, timeout=30) as resp:
+            blob = resp.read()
+        if dmeta.get("md5") and hashlib.md5(blob).hexdigest() != dmeta["md5"]:
+            die(f"dep {name} {ver}: md5 divergente do indice do hub")
+        mod_dir = f"/local/modules/{name}/{ver}"
+        for d in (f"/local/modules", f"/local/modules/{name}", mod_dir):
+            try:
+                link.simple("MKDIR", d.encode() + b"\0")
+            except CelerError:
+                pass  # ja existe
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / f"{name}.js"
+            tmp.write_bytes(blob)
+            link.write_file(str(tmp), f"{mod_dir}/{name}.js")
+        print(f"dep {name} {ver}: no cache do device ({len(blob)} B)")
+    return resolved
+
+
 def cmd_apps(args):
     link = open_link(args)
     try:
@@ -2273,11 +2312,42 @@ def cmd_apps(args):
             # "doFlash undefined" com o fx.js da 1.0 sobrando na pasta)
             remote = _remote_tree(link, dest)
             local = {f.relative_to(src).as_posix() for f in files}
-            stale = sorted(r for r in remote if r not in local)
-            for rel in stale:
-                link.delete(f"{dest}/{rel}", recursive=remote[rel])
+            stale = []
+            for r, e_dir in remote.items():
+                if e_dir:
+                    # dir remoto so e obsoleto se NENHUM arquivo local vive
+                    # sob ele (a pasta assets/ nunca esta no conjunto de
+                    # arquivos — so os pngs de dentro)
+                    if not any(l.startswith(r + "/") for l in local):
+                        stale.append(r)
+                elif r not in local:
+                    stale.append(r)
+            falhas = []
+            for rel in sorted(stale):
+                try:
+                    link.delete(f"{dest}/{rel}", recursive=remote[rel])
+                except CelerError as e:
+                    # best-effort: o device responde status 1 ate para
+                    # caminho ja inexistente — nao aborta o install por
+                    # limpeza; a proxima install re-tenta
+                    falhas.append(rel)
             if stale:
-                print(f"poda: {len(stale)} arquivo(s) obsoleto(s) ({', '.join(stale)})")
+                nota = f"; {len(falhas)} falharam (re-tenta na proxima)" if falhas else ""
+                print(f"poda: {len(stale)} obsoleto(s) removido(s){nota}")
+            # deps compartilhadas (API 30) DEPOIS da poda: deps.json e do
+            # installer (versao resolvida), nao do pacote — a poda nao o ve
+            # e o require do device le ele p/ cair em /local/modules
+            try:
+                meta = json.loads((src / "app.json").read_text(encoding="utf-8"))
+            except ValueError:
+                meta = {}
+            if meta.get("deps"):
+                hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+                resolved = _install_shared_deps(link, meta["deps"], hub)
+                with tempfile.TemporaryDirectory() as td:
+                    dj = Path(td) / "deps.json"
+                    dj.write_text(json.dumps(resolved), encoding="utf-8")
+                    link.write_file(str(dj), f"{dest}/deps.json")
             link.exec("rescan")
             print(f"instalado: {dest} ({len(files)} arquivos)")
             if args.run:

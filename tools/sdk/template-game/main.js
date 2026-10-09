@@ -3,11 +3,13 @@
 // 1 ponto, bolas novas entram a cada poucos segundos e 3 perdidas encerram.
 //
 // E um tour pela engine: cenas (titulo/jogo/fim), input (tap/drag), fisica
-// (physics.js: gravidade, bounce, bordas), particulas, audio e recorde no
-// NVS. Use como base do seu jogo — sprites PNG entram por E.spr.load().
+// (celeros.physics: gravidade, bounce, bordas), particulas, audio e recorde
+// no NVS. Use como base do seu jogo — sprites PNG entram por E.spr.load().
+// A engine e a fisica sao DEPS do app.json (instaladas pelo hub em
+// /local/modules — sem copias dentro do jogo).
 
-var E = require("engine");
-var P = require("physics");
+var E = require("celeros.engine");
+var P = require("celeros.physics");
 
 E.init({ dir: "{{APP_NAME}}", fps: 30, save: "quica." });
 var W = E.W, H = E.H;

@@ -2,10 +2,10 @@
 
 **English** | [Português (BR)](Game_Engine_Guide.pt-BR.md)
 
-A complete 2D game engine for CelerOS apps, shipped as two plain JS modules you vendor into your app folder — no firmware changes, no extra permissions:
+A complete 2D game engine for CelerOS apps, shipped as two plain JS modules — since API 30, **shared hub dependencies** (`"deps"` in `app.json`): the store installs them into the public `/local/modules` cache and `require()` resolves from there, one copy per version on the device (your game package gets ~53 KB lighter). No extra permissions; vendoring a copy into the app folder still works (and wins):
 
-- **`engine.js`** — game loop with scenes, touch gesture recognition, drawing with camera, sprites, particles, tweens/timers, chiptune audio with a beat clock, and NVS saves.
-- **`physics.js`** (optional) — arcade 2D physics: circles/AABB, gravity, bounce, friction, anti-tunneling substeps, tilemaps and Verlet ropes/cloth. Pure math, zero dependencies.
+- **`celeros.engine`** — game loop with scenes, touch gesture recognition, drawing with camera, sprites, particles, tweens/timers, chiptune audio with a beat clock, and NVS saves.
+- **`celeros.physics`** (optional) — arcade 2D physics: circles/AABB, gravity, bounce, friction, anti-tunneling substeps, tilemaps and Verlet ropes/cloth. Pure math, zero dependencies.
 
 Both are ES5 (Duktape) and feature-detect the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -13,22 +13,30 @@ Both are ES5 (Duktape) and feature-detect the firmware at runtime, so the same g
 
 | | |
 |---|---|
-| Firmware API | 23+ (newer features — smooth primitives, `playMusic`, native canvas — are auto-detected) |
+| Firmware API | 23+ for modules; **30+** for the shared deps (newer features — smooth primitives, `playMusic`, native canvas — are auto-detected) |
 | Intended boards | The ESP32-S3 boards with PSRAM: SmartDisplay, Waveshare watch, SpotPear dog |
-| Size budget | `engine.js` ≈ 33 KB + `physics.js` ≈ 16 KB. Declare `"requires": ["psram"]` in `app.json` to lift the JS budget from 48 KB to 128 KB (the store then blocks installing on non-PSRAM boards — which is what you want for engine games) |
+| Size budget | `celeros.engine` ≈ 35 KB + `celeros.physics` ≈ 17 KB — they count toward the app ceiling EVEN as deps (the engine still compiles inside each game's heap): declare `"requires": ["psram"]` in `app.json` to lift the JS budget from 48 KB to 128 KB (the store then blocks installing on non-PSRAM boards — which is what you want for engine games) |
 | App flavor | `"topbar": false` for fullscreen games (like Supernova) is recommended; the exit button lives in your title menu (`System.exitApp()`) |
-| CYD (no PSRAM) | Engine games don't fit the 48 KB budget. Either vendor `engine.js` alone (≈ 33 KB, leaving ~15 KB for your code) or write plain-canvas games |
+| CYD (no PSRAM) | Engine games don't fit the 48 KB budget — not even as deps (the sum still counts). Either vendor the engine alone (≈ 35 KB, leaving ~13 KB for your code) or write plain-canvas games |
 
 ## 2. Getting started
 
 ```bash
-# a ready-to-run game scaffold (app.json + Quica sample + engine vendored):
+# a ready-to-run game scaffold (app.json with deps + Quica sample; the
+# engine is NOT copied — it comes from the hub at install time):
 node tools/sdk/celer.js new MyGame --game
 
-# add/update the engine in an EXISTING app folder:
-node tools/sdk/celer.js engine path/to/MyApp
+# app.json deps vs versions on the hub (and the local tree):
+node tools/sdk/celer.js deps MyGame
+node tools/sdk/celer.js deps set celeros.engine ^1.0.0 MyGame
 
-# iterate (lint runs on save; emulator renders a PNG; device does live reload):
+# publish the engine deps to the hub repository (publishes the canonical
+# tools/sdk/engine/ tree; needs a token with the deps scope):
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 23
+
+# iterate (lint runs on save; emulator renders a PNG; device does live
+# reload — on the PC require resolves deps from the tools/sdk/engine tree):
 node tools/sdk/celer.js lint MyGame
 node tools/sdk/celer.js emu MyGame
 python3 tools/celerctl.py dev MyGame
@@ -40,8 +48,8 @@ python3 tools/celerctl.py dev MyGame
 
 ```js
 // main.js
-var E = require("engine");
-var P = require("physics");
+var E = require("celeros.engine");
+var P = require("celeros.physics");
 
 E.init({ dir: "Bolas", fps: 30, save: "bolas." });
 var W = E.W, H = E.H;
@@ -263,12 +271,12 @@ if (E.save.best("recorde", score)) { /* new record! */ }
 
 `E.m`: `clamp, lerp, map, rand(a,b), randInt, pick, dist, dist2, ang, approach, wrap, sign` + easings. `E.rng(seed)` returns a deterministic PRNG function — seed your level generation and your tests become reproducible.
 
-## 15. Physics (`physics.js`, optional)
+## 15. Physics (`celeros.physics`, optional)
 
-`require("physics")` — pure math, no `System` calls, so it unit-tests anywhere. Coordinates: y grows **down** (screen); body `x, y` is the **center**; circle bodies have `r`, boxes `w/h`.
+`require("celeros.physics")` — pure math, no `System` calls, so it unit-tests anywhere. Coordinates: y grows **down** (screen); body `x, y` is the **center**; circle bodies have `r`, boxes `w/h`.
 
 ```js
-var P = require("physics");
+var P = require("celeros.physics");
 var w = P.world({ gravity: { x: 0, y: 900 },
                   bounds: { x: 0, y: 0, w: 240, h: 320 },
                   walls: "contain" });          // contain | wrap | none
@@ -369,7 +377,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Engine+physics+game go over 48 KB → keep `"requires": ["psram"]`. Sizes today: `engine.js` ≈ 33 KB, `physics.js` ≈ 16 KB.
+- Engine+physics+game go over 48 KB (deps count toward the app ceiling!) → keep `"requires": ["psram"]`. Sizes today: `celeros.engine` ≈ 35 KB, `celeros.physics` ≈ 17 KB.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses.
 - Full-screen `fillScreen` + redraw everything at 30 fps is fine on the S3 boards; for few moving objects prefer dirty-erase (erase old position, draw new).
 - `world.step` is O(n²) on body count in the worst case, but a **sweep-and-prune** (bodies sorted by x each substep, early break on x distance) keeps it near-linear for spread-out scenes — shooters with ~40 bodies run comfortably.

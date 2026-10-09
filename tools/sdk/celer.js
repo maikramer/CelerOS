@@ -24,6 +24,8 @@ const { glyph } = require('./lib/font8x8.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const TYPES_OUT = path.join(__dirname, 'types', 'celer.d.ts');
+const ENGINE_DIR = path.join(__dirname, 'engine');
+const HUB_URL = process.env.CELER_HUB_URL || 'https://os.celer.tec.br';
 
 function die(msg, code = 1) {
     console.error('erro: ' + msg);
@@ -34,14 +36,16 @@ function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
-    console.log('                                               (--game: scaffold de jogo c/ engine)');
-    console.log('  engine PASTA                                 vendoriza/atualiza engine+physics no app');
+    console.log('                                               (--game: jogo c/ deps celeros.engine/physics)');
+    console.log('  deps [PASTA]                                 deps do app.json + versoes no hub/local');
+    console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
     console.log('  test PASTA                                   roda o app no harness (stubs Node)');
     console.log('  emu PASTA [--events ARQ] [--ms N] [--out ARQ] roda + snapshot PNG da tela (240x320)');
     console.log('  check                                        drift: codigo x docs x stubs x types x emulador');
     console.log('  publish PASTA... [--dry]                     publica na loja (celerhub)');
+    console.log('  publish-dep ARQUIVO.js [--hub URL] [--force] publica dependencia no repo do hub');
     console.log('  dev PASTA [--port P] [--shots]               watch + reload no device (celerctl)');
 }
 
@@ -115,9 +119,15 @@ function cmdNew(args) {
     };
     if (game) {
         // jogos com a engine rodam nas placas S3 com PSRAM (teto de 128 KB);
-        // sem topbar, tela cheia como o Supernova
+        // sem topbar, tela cheia como o Supernova. A engine/fisica sao DEPS
+        // do hub (API 30): nao sao copiadas — o install da loja as baixa em
+        // /local/modules e o require resolve de la
         appJson.requires = ['psram'];
         appJson.topbar = false;
+        appJson.deps = {
+            'celeros.engine': '^' + engineVersion('celeros.engine.js'),
+            'celeros.physics': '^' + engineVersion('celeros.physics.js'),
+        };
     }
 
     fs.mkdirSync(dir, { recursive: true });
@@ -133,42 +143,103 @@ function cmdNew(args) {
     fs.copyFileSync(TYPES_OUT, path.join(dir, 'celer.d.ts'));
     fs.writeFileSync(path.join(dir, 'jsconfig.json'), JSON.stringify({
         compilerOptions: { checkJs: false },
-        include: ['*.js', 'celer.d.ts'],
+        include: ['*.js', '*.d.ts'],
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(dir, 'icon.png'), makeIconPng(name[0]));
     if (game) {
-        for (const f of ['engine.js', 'physics.js', 'engine.d.ts']) {
-            fs.copyFileSync(path.join(__dirname, 'engine', f), path.join(dir, f));
-        }
+        // so o d.ts da engine (autocomplete no editor; dev-only, o publish
+        // exclui *.d.ts do zip) — o .js vem da dep do hub
+        fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.engine.d.ts'),
+                        path.join(dir, 'celeros.engine.d.ts'));
     }
 
-    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com engine' : '') + ')');
+    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com deps celeros.engine/physics' : '') + ')');
     console.log('proximos passos:');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);
     console.log("  python3 tools/celerctl.py dev " + dir);
 }
 
-// ------------------------------------------------------------- engine ----
+// ---------------------------------------------------------------- deps ----
 
-// vendoriza/atualiza engine.js + physics.js + engine.d.ts num app existente
-function cmdEngine(args) {
-    const folder = args.find((a) => !a.startsWith('--'));
-    if (!folder) die('engine: informe a PASTA do app');
+// Versao interna de um modulo da engine (var X = { version: 'x.y.z' }).
+function engineVersion(file) {
+    const m = fs.readFileSync(path.join(ENGINE_DIR, file), 'utf8')
+        .match(/version:\s*'([^']+)'/);
+    return m ? m[1] : '0.0.0';
+}
+
+// Indice de deps do hub (/store/deps.json) — https do core, timeout curto:
+// sem rede cai no so-local sem quebrar o comando.
+function fetchHubDeps(cb) {
+    const https = require('https');
+    const req = https.get(HUB_URL.replace(/\/$/, '') + '/store/deps.json', (res) => {
+        if (res.statusCode !== 200) { res.resume(); return cb(null); }
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => {
+            try { cb(JSON.parse(body)); } catch (e) { cb(null); }
+        });
+    });
+    req.on('error', () => cb(null));
+    req.setTimeout(5000, () => { req.destroy(); cb(null); });
+}
+
+// deps do app.json + o que existe no hub e na arvore local (tools/sdk/engine)
+function cmdDeps(args) {
+    if (args[0] === 'set') return cmdDepsSet(args.slice(1));
+    const folder = args.find((a) => !a.startsWith('--')) || '.';
     const dir = path.resolve(folder);
-    if (!fs.existsSync(dir)) die('engine: ' + dir + ' nao existe');
-    const src = path.join(__dirname, 'engine');
-    for (const f of ['engine.js', 'physics.js', 'engine.d.ts']) {
-        fs.copyFileSync(path.join(src, f), path.join(dir, f));
+    const appJsonPath = path.join(dir, 'app.json');
+    if (!fs.existsSync(appJsonPath)) die('deps: ' + appJsonPath + ' nao existe');
+    const meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    const deps = meta.deps || {};
+
+    // versao local (canonica do SDK) p/ cada nome conhecido
+    const local = {};
+    for (const n of ['celeros.engine', 'celeros.physics']) {
+        const f = path.join(ENGINE_DIR, n + '.js');
+        if (fs.existsSync(f)) local[n] = engineVersion(n + '.js');
     }
-    const ver = (f) => {
-        const m = fs.readFileSync(path.join(src, f), 'utf8')
-            .match(/version: '([^']+)'/);
-        return m ? m[1] : '?';
-    };
-    console.log('engine ' + ver('engine.js') + ' + physics ' + ver('physics.js') +
-                ' copiados para ' + dir);
-    console.log('no app: var E = require("engine"); var P = require("physics");');
+
+    fetchHubDeps((hub) => {
+        console.log('deps de ' + meta.packageName + ' (' + appJsonPath + '):');
+        const names = Object.keys(deps);
+        if (!names.length) console.log('  (nenhuma — "deps set celeros.engine ^1.0.0")');
+        for (const n of names) {
+            console.log('  ' + n + ' ' + deps[n]);
+            if (hub && hub.deps && hub.deps[n]) {
+                console.log('    hub: ' + Object.keys(hub.deps[n]).sort().join(', '));
+            } else if (hub) {
+                console.log('    hub: NAO PUBLICADA');
+            }
+            if (local[n]) console.log('    local (tools/sdk/engine): ' + local[n]);
+        }
+        if (!hub) console.log('(hub ' + HUB_URL + ' inalcancavel — mostrando so o local)');
+    });
+}
+
+// deps set NOME RANGE [PASTA]: grava/remove a dep no app.json ('-' remove)
+function cmdDepsSet(args) {
+    const nome = args[0];
+    const range = args[1];
+    const folder = args[2] || '.';
+    if (!nome || !range) die('deps set NOME RANGE [PASTA]  (range "-" remove)');
+    const appJsonPath = path.resolve(folder, 'app.json');
+    if (!fs.existsSync(appJsonPath)) die('deps: ' + appJsonPath + ' nao existe');
+    const meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    meta.deps = meta.deps || {};
+    if (range === '-') {
+        delete meta.deps[nome];
+        if (!Object.keys(meta.deps).length) delete meta.deps;
+    } else {
+        if (!/^\^?\d+\.\d+\.\d+$/.test(range)) die('range deve ser "^1.2.0" ou "1.2.0"');
+        if (!/^[a-z0-9]+(\.[a-z0-9-]+)+$/.test(nome)) die('nome deve ser prefixo.nome (ex: celeros.engine)');
+        meta.deps[nome] = range;
+    }
+    fs.writeFileSync(appJsonPath, JSON.stringify(meta, null, 2) + '\n');
+    console.log('deps de ' + meta.packageName + ': ' +
+                (meta.deps ? JSON.stringify(meta.deps) : '(nenhuma)'));
 }
 
 // ---------------------------------------------------------------- lint/types
@@ -331,6 +402,12 @@ function cmdPublish(args) {
     process.exit(r.status == null ? 1 : r.status);
 }
 
+function cmdPublishDep(args) {
+    const r = spawnSync('python3', [path.join(ROOT, 'tools', 'celerhub.py'), 'publish-dep', ...args],
+                        { stdio: 'inherit' });
+    process.exit(r.status == null ? 1 : r.status);
+}
+
 function cmdDev(args) {
     const r = spawnSync('python3', [path.join(ROOT, 'tools', 'celerctl.py'), 'dev', ...args],
                         { stdio: 'inherit' });
@@ -357,13 +434,14 @@ function main() {
     const [cmd, ...rest] = process.argv.slice(2);
     switch (cmd) {
         case 'new': return cmdNew(rest);
-        case 'engine': return cmdEngine(rest);
+        case 'deps': return cmdDeps(rest);
         case 'lint': return cmdLint(rest);
         case 'types': return cmdTypes(rest);
         case 'test': return cmdTest(rest);
         case 'emu': return cmdEmu(rest);
-        case 'check': return cmdCheck(rest);
+        case 'check': return cmdCheck();
         case 'publish': return cmdPublish(rest);
+        case 'publish-dep': return cmdPublishDep(rest);
         case 'dev': return cmdDev(rest);
         default:
             usage();
