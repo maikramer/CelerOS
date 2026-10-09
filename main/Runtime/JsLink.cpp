@@ -99,7 +99,7 @@ duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
     // String vai crua (bytes UTF-8); objeto e serializado como JSON —
     // comunicacao estruturada sem parser no firmware (quem le decide).
     // jsMsgBytes: teto com erro pre-formatado (duk_error sem varargs).
-    char buf[CelerLink::MAX_MSG];
+    uint8_t buf[CelerLink::MAX_MSG];
     size_t len;
     const char* data = jsMsgBytes(ctx, 0, buf, CelerLink::MAX_MSG, "mensagem", &len);
     duk_push_boolean(ctx, CelerLink::send(data, len) ? 1 : 0);
@@ -110,7 +110,7 @@ duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
 // AES-128-GCM com a chave do pareamento (CelerLink::sendSealed). Teto menor
 // (MAX_SEALED): o selo ocupa nonce + tag. false sem bond com o peer.
 duk_ret_t JSBindings::js_linkSendSealed(duk_context *ctx) {
-    char buf[CelerLink::MAX_MSG];
+    uint8_t buf[CelerLink::MAX_MSG];
     size_t len;
     const char* data = jsMsgBytes(ctx, 0, buf, CelerLink::MAX_SEALED, "mensagem selada", &len);
     const bool ok = CelerLink::sendSealed(data, len);
