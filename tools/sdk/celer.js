@@ -33,7 +33,9 @@ function die(msg, code = 1) {
 function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
-    console.log('  new NOME [--pkg br.autor.nome] [--dir BASE]   cria app de exemplo (passa no lint)');
+    console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
+    console.log('                                               (--game: scaffold de jogo c/ engine)');
+    console.log('  engine PASTA                                 vendoriza/atualiza engine+physics no app');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
     console.log('  test PASTA                                   roda o app no harness (stubs Node)');
@@ -91,6 +93,7 @@ function cmdNew(args) {
     const base = flags.dir ? path.resolve(flags.dir) : process.cwd();
     const dir = path.join(base, name);
     if (fs.existsSync(dir)) die('new: ' + dir + ' ja existe');
+    const game = !!flags.game;
 
     // packageName: default br.celer.<slug> (autor troca pelo proprio)
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -102,34 +105,70 @@ function cmdNew(args) {
         packageName: pkg,
         version: '0.1.0',
         author: 'Seu Nome',
-        description: 'App CelerOS criado com o SDK',
-        type: 'App',
-        category: 'Utilidades',
+        description: game ? 'Jogo feito com a engine CelerOS' :
+                            'App CelerOS criado com o SDK',
+        type: game ? 'Game' : 'App',
+        category: game ? 'Jogos' : 'Utilidades',
         api: api,
         permissions: [],
         changelog: '0.1.0: primeira versao',
     };
+    if (game) {
+        // jogos com a engine rodam nas placas S3 com PSRAM (teto de 128 KB);
+        // sem topbar, tela cheia como o Supernova
+        appJson.requires = ['psram'];
+        appJson.topbar = false;
+    }
 
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(appJson, null, 2) + '\n');
-    for (const f of ['main.js', 'README.md']) {
-        const text = fs.readFileSync(path.join(__dirname, 'template', f), 'utf8')
-            .replace(/\{\{APP_NAME\}\}/g, name)
-            .replace(/\{\{APP_DIR\}\}/g, name);
-        fs.writeFileSync(path.join(dir, f), text);
-    }
+    const mainSrc = fs.readFileSync(
+        path.join(__dirname, game ? 'template-game' : 'template', 'main.js'), 'utf8');
+    fs.writeFileSync(path.join(dir, 'main.js'),
+                     mainSrc.replace(/\{\{APP_NAME\}\}/g, name));
+    fs.writeFileSync(path.join(dir, 'README.md'),
+                     fs.readFileSync(path.join(__dirname, 'template', 'README.md'), 'utf8')
+                         .replace(/\{\{APP_NAME\}\}/g, name)
+                         .replace(/\{\{APP_DIR\}\}/g, name));
     fs.copyFileSync(TYPES_OUT, path.join(dir, 'celer.d.ts'));
     fs.writeFileSync(path.join(dir, 'jsconfig.json'), JSON.stringify({
         compilerOptions: { checkJs: false },
         include: ['*.js', 'celer.d.ts'],
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(dir, 'icon.png'), makeIconPng(name[0]));
+    if (game) {
+        for (const f of ['engine.js', 'physics.js', 'engine.d.ts']) {
+            fs.copyFileSync(path.join(__dirname, 'engine', f), path.join(dir, f));
+        }
+    }
 
-    console.log('criado: ' + dir + ' (api ' + api + ')');
+    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com engine' : '') + ')');
     console.log('proximos passos:');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);
     console.log("  python3 tools/celerctl.py dev " + dir);
+}
+
+// ------------------------------------------------------------- engine ----
+
+// vendoriza/atualiza engine.js + physics.js + engine.d.ts num app existente
+function cmdEngine(args) {
+    const folder = args.find((a) => !a.startsWith('--'));
+    if (!folder) die('engine: informe a PASTA do app');
+    const dir = path.resolve(folder);
+    if (!fs.existsSync(dir)) die('engine: ' + dir + ' nao existe');
+    const src = path.join(__dirname, 'engine');
+    for (const f of ['engine.js', 'physics.js', 'engine.d.ts']) {
+        fs.copyFileSync(path.join(src, f), path.join(dir, f));
+    }
+    const ver = (f) => {
+        const m = fs.readFileSync(path.join(src, f), 'utf8')
+            .match(/version: '([^']+)'/);
+        return m ? m[1] : '?';
+    };
+    console.log('engine ' + ver('engine.js') + ' + physics ' + ver('physics.js') +
+                ' copiados para ' + dir);
+    console.log('no app: var E = require("engine"); var P = require("physics");');
 }
 
 // ---------------------------------------------------------------- lint/types
@@ -318,6 +357,7 @@ function main() {
     const [cmd, ...rest] = process.argv.slice(2);
     switch (cmd) {
         case 'new': return cmdNew(rest);
+        case 'engine': return cmdEngine(rest);
         case 'lint': return cmdLint(rest);
         case 'types': return cmdTypes(rest);
         case 'test': return cmdTest(rest);
