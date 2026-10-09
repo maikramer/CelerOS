@@ -5,19 +5,19 @@
 
 /**
  * @file WifiErrorCodes.h
- * @brief Defines error codes specific to WiFi operations.
+ * @brief Codigos de erro de WiFi (ids 25..31 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // WiFi Errors
-    extern const ErrorCode WifiInitFailed;         /**< Initialization of the WiFi module failed. */
-    extern const ErrorCode WifiConnectionFailed;    /**< Failed to connect to the specified WiFi network. */
-    extern const ErrorCode WifiAPStartFailed;       /**< Failed to start the WiFi Access Point. */
-    extern const ErrorCode WifiScanFailed;          /**< WiFi scan for networks failed. */
-    extern const ErrorCode WifiNetworkNotFound;     /**< The specified WiFi network was not found. */
-    extern const ErrorCode WifiAuthFailed;          /**< WiFi authentication failed (wrong password, etc.) */
-    extern const ErrorCode WifiStopFailed;          /**< Failed to stop WiFi. */
+// Erros de WiFi
+inline constexpr ErrorCode WifiInitFailed{25};
+inline constexpr ErrorCode WifiConnectionFailed{26};
+inline constexpr ErrorCode WifiAPStartFailed{27};
+inline constexpr ErrorCode WifiScanFailed{28};
+inline constexpr ErrorCode WifiNetworkNotFound{29};
+inline constexpr ErrorCode WifiAuthFailed{30};
+inline constexpr ErrorCode WifiStopFailed{31};
 
 }
 

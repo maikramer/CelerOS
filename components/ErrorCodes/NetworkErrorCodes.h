@@ -5,26 +5,26 @@
 
 /**
  * @file NetworkErrorCodes.h
- * @brief Defines error codes related to network operations.
+ * @brief Codigos de erro de rede e socket (ids 13..24 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // Network Errors
-    extern const ErrorCode NetworkDown;        /**< The network connection is down or unavailable. */
-    extern const ErrorCode HostUnreachable;     /**< The specified host is unreachable. */
-    extern const ErrorCode ConnectionRefused;    /**< The connection attempt was refused. */
-    extern const ErrorCode AddressInUse;         /**< The requested network address is already in use. */
-    
-    // Socket Errors
-    extern const ErrorCode SocketClosed;        /**< The socket is closed. */
-    extern const ErrorCode SocketSendFailed;    /**< Failed to send data through the socket. */
-    extern const ErrorCode SocketReceiveFailed; /**< Failed to receive data from the socket. */
-    extern const ErrorCode SocketCreationFailed; /**< Failed to create a socket. */
-    extern const ErrorCode SocketConnectFailed;  /**< Failed to connect the socket. */
-    extern const ErrorCode SocketBindFailed;    /**< Failed to bind the socket. */
-    extern const ErrorCode SocketListenFailed;  /**< Failed to listen on the socket. */
-    extern const ErrorCode SocketAcceptFailed;  /**< Failed to accept a connection on the socket. */
+// Erros de rede
+inline constexpr ErrorCode NetworkDown{13};
+inline constexpr ErrorCode HostUnreachable{14};
+inline constexpr ErrorCode ConnectionRefused{15};
+inline constexpr ErrorCode AddressInUse{16};
+
+// Erros de socket
+inline constexpr ErrorCode SocketClosed{17};
+inline constexpr ErrorCode SocketSendFailed{18};
+inline constexpr ErrorCode SocketReceiveFailed{19};
+inline constexpr ErrorCode SocketCreationFailed{20};
+inline constexpr ErrorCode SocketConnectFailed{21};
+inline constexpr ErrorCode SocketBindFailed{22};
+inline constexpr ErrorCode SocketListenFailed{23};
+inline constexpr ErrorCode SocketAcceptFailed{24};
 
 }
 

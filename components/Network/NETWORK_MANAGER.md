@@ -153,7 +153,7 @@ void app_main() {
     ErrorCode err = netMgr.init();
     if (err != CommonErrorCodes::None) {
         ESP_LOGE("App", "Falha ao inicializar NetworkManager: %s", 
-                 err.description().c_str());
+                 err.description());
         return;
     }
     
@@ -170,7 +170,7 @@ ErrorCode err = netMgr.connect("MinhaRede", "MinhaSenha123");
 if (err == CommonErrorCodes::None) {
     ESP_LOGI("App", "Conectado! IP: %s", netMgr.getIpAddress().c_str());
 } else {
-    ESP_LOGE("App", "Falha: %s", err.description().c_str());
+    ESP_LOGE("App", "Falha: %s", err.description());
 }
 ```
 

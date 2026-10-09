@@ -5,17 +5,16 @@
 
 /**
  * @file BluetoothErrorCodes.h
- * @brief Defines error codes specific to Bluetooth operations. 
+ * @brief Codigos de erro de Bluetooth (ids 32..35 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // Bluetooth Errors
-    extern const ErrorCode BluetoothInitFailed;        /**< Initialization of the Bluetooth module failed. */
-    extern const ErrorCode BluetoothConnectionFailed;   /**< Failed to establish a Bluetooth connection. */
-    extern const ErrorCode BluetoothServiceCreationFailed; /**< Failed to create a Bluetooth service. */
-    extern const ErrorCode BluetoothCharacteristicCreationFailed; /**< Failed to create a Bluetooth characteristic. */
-    // ... Add more Bluetooth specific error codes ...
+// Erros de Bluetooth
+inline constexpr ErrorCode BluetoothInitFailed{32};
+inline constexpr ErrorCode BluetoothConnectionFailed{33};
+inline constexpr ErrorCode BluetoothServiceCreationFailed{34};
+inline constexpr ErrorCode BluetoothCharacteristicCreationFailed{35};
 
 }
 

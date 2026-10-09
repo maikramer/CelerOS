@@ -5,15 +5,15 @@
 
 /**
  * @file CommunicationErrorCodes.h
- * @brief Defines general communication-related error codes (Serial, I2C, SPI, etc.). 
+ * @brief Codigos de erro de comunicacao (Serial, I2C, SPI; ids 52..54 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // Communication Errors
-    extern const ErrorCode CommunicationError;      /**< A general communication error occurred. */
-    extern const ErrorCode CommunicationTimeout;     /**< A timeout occurred during communication. */
-    extern const ErrorCode ChecksumError;           /**< Data checksum or CRC verification failed. */
+// Erros de comunicacao
+inline constexpr ErrorCode CommunicationError{52};
+inline constexpr ErrorCode CommunicationTimeout{53};
+inline constexpr ErrorCode ChecksumError{54};
 
 }
 

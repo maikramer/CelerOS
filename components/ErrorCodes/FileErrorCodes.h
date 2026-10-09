@@ -5,18 +5,18 @@
 
 /**
  * @file FileErrorCodes.h
- * @brief Defines error codes related to file system operations.
+ * @brief Codigos de erro do sistema de arquivos (ids 36..41 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // File Errors
-    extern const ErrorCode FileNotFound;            /**< The specified file was not found. */
-    extern const ErrorCode FileOpenError;           /**< Error opening the file (e.g., permissions issue). */
-    extern const ErrorCode FileReadError;          /**< Error reading data from the file. */
-    extern const ErrorCode FileWriteError;         /**< Error writing data to the file. */
-    extern const ErrorCode FileExists;              /**< A file with the specified name already exists. */
-    extern const ErrorCode FileIsEmpty;            /**< The file is empty. */
+// Erros de arquivo
+inline constexpr ErrorCode FileNotFound{36};
+inline constexpr ErrorCode FileOpenError{37};
+inline constexpr ErrorCode FileReadError{38};
+inline constexpr ErrorCode FileWriteError{39};
+inline constexpr ErrorCode FileExists{40};
+inline constexpr ErrorCode FileIsEmpty{41};
 
 }
 

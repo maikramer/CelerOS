@@ -26,7 +26,7 @@ ErrorCode NetworkCredentialStore::init() {
     // Initialize NVS if not already done
     ErrorCode err = NVS::initialize();
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to initialize NVS: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to initialize NVS: %s", err.description());
         return err;
     }
 
@@ -34,7 +34,7 @@ ErrorCode NetworkCredentialStore::init() {
     err = loadFromNvs();
     if (err != CommonErrorCodes::None && err != CommonErrorCodes::FileNotFound && 
         err != CommonErrorCodes::FileIsEmpty) {
-        ESP_LOGE(TAG, "Failed to load networks from NVS: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to load networks from NVS: %s", err.description());
         return err;
     }
 
@@ -76,7 +76,7 @@ ErrorCode NetworkCredentialStore::saveNetwork(const KnownNetwork& network) {
     // Persist to NVS
     ErrorCode err = saveToNvs();
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description());
         return err;
     }
 
@@ -103,7 +103,7 @@ ErrorCode NetworkCredentialStore::removeNetwork(const std::string& ssid) {
     // Persist to NVS
     err = saveToNvs();
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description());
         return err;
     }
 
@@ -133,7 +133,7 @@ ErrorCode NetworkCredentialStore::clearAllNetworks() {
     // namespaces (webauth/pin do "celer", otadata, ...).
     ErrorCode err = saveToNvs();  // count=0 + limpeza das keys residuais
     if (err != CommonErrorCodes::None) {
-        ESP_LOGW(TAG, "Failed to clear NVS keys: %s", err.description().c_str());
+        ESP_LOGW(TAG, "Failed to clear NVS keys: %s", err.description());
     }
 
     // Trigger events for each removed network
@@ -268,7 +268,7 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
     }
 
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to read network count: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to read network count: %s", err.description());
         return err;
     }
 
@@ -285,7 +285,7 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
             _networks.push_back(network);
             ESP_LOGD(TAG, "Loaded network: %s (priority: %d)", network.ssid, network.priority);
         } else {
-            ESP_LOGW(TAG, "Failed to load network at index %d: %s", i, err.description().c_str());
+            ESP_LOGW(TAG, "Failed to load network at index %d: %s", i, err.description());
         }
     }
 
@@ -324,7 +324,7 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
                                              NetworkStoreConstants::INDEX_KEY, count, true);
 
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to save network count: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to save network count: %s", err.description());
         return err;
     }
 
@@ -332,7 +332,7 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
     for (size_t i = 0; i < _networks.size(); i++) {
         err = saveNetworkToNvs(i, _networks[i]);
         if (err != CommonErrorCodes::None) {
-            ESP_LOGE(TAG, "Failed to save network at index %zu: %s", i, err.description().c_str());
+            ESP_LOGE(TAG, "Failed to save network at index %zu: %s", i, err.description());
             return err;
         }
     }

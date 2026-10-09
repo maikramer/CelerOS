@@ -5,17 +5,17 @@
 
 /**
  * @file StorageErrorCodes.h
- * @brief Defines error codes related to storage operations (e.g., SD card, Flash).
+ * @brief Codigos de erro de armazenamento (ids 42..46 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // Storage Errors (SD Card, Flash, etc.)
-    extern const ErrorCode StorageInitFailed;       /**< Storage device initialization failed. */
-    extern const ErrorCode StorageReadError;        /**< Error reading data from the storage device. */
-    extern const ErrorCode StorageWriteError;       /**< Error writing data to the storage device. */
-    extern const ErrorCode StorageNotMounted;      /**< The storage device is not mounted or accessible. */
-    extern const ErrorCode StorageFull;            /**< The storage device is full. */
+// Erros de armazenamento (SD, flash, etc.)
+inline constexpr ErrorCode StorageInitFailed{42};
+inline constexpr ErrorCode StorageReadError{43};
+inline constexpr ErrorCode StorageWriteError{44};
+inline constexpr ErrorCode StorageNotMounted{45};
+inline constexpr ErrorCode StorageFull{46};
 
 }
 

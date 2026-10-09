@@ -5,15 +5,15 @@
 
 /**
  * @file UserErrorCodes.h
- * @brief Defines error codes related to user management operations.
+ * @brief Codigos de erro de usuario (ids 47..49 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // User-Related Errors
-    extern const ErrorCode AuthenticationFailed;    /**< User authentication failed (e.g., incorrect password). */
-    extern const ErrorCode UserNotFound;           /**< The specified user was not found. */
-    extern const ErrorCode UserAlreadyExists;      /**< A user with the same credentials already exists. */
+// Erros de usuario/autenticacao
+inline constexpr ErrorCode AuthenticationFailed{47};
+inline constexpr ErrorCode UserNotFound{48};
+inline constexpr ErrorCode UserAlreadyExists{49};
 
 }
 

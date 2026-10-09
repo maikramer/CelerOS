@@ -1,115 +1,75 @@
 #include "ErrorCode.h"
-#include <esp_log.h>
 
-#include <utility>
+#include <cstddef>
 
-// Use "Construct On First Use" idiom to avoid Static Initialization Order Fiasco
-std::map<std::string, ErrorCode>& ErrorCode::getErrorDatabase() {
-    static std::map<std::string, ErrorCode> database;
-    return database;
-}
+namespace {
 
-bool ErrorCode::initialized = false;
+// Descricoes dos codigos, indexadas por id-1 (ver ERROR_CODES.md).
+// Literais ficam em rodata; nao ha mapa nem string em RAM.
+const char* const kDescriptions[] = {
+    /*  1 Invalid */ "Invalid error code",
+    /*  2 None */ "No error occurred",
+    /*  3 UnknownError */ "An unexpected error occurred",
+    /*  4 OperationFailed */ "The requested operation failed",
+    /*  5 NotImplemented */ "Functionality not implemented yet",
+    /*  6 NotInitialized */ "Component not initialized",
+    /*  7 ArgumentError */ "Invalid argument provided",
+    /*  8 Timeout */ "Operation timed out",
+    /*  9 CommandAlreadyRegistered */ "Command already registered",
+    /* 10 InvalidCommand */ "Invalid command received",
+    /* 11 ConnectionClosed */ "Connection is closed",
+    /* 12 ListIsEmpty */ "The list is empty",
+    /* 13 NetworkDown */ "Network connection is down",
+    /* 14 HostUnreachable */ "Host is unreachable",
+    /* 15 ConnectionRefused */ "Connection refused",
+    /* 16 AddressInUse */ "Network address is in use",
+    /* 17 SocketClosed */ "Socket is closed",
+    /* 18 SocketSendFailed */ "Failed to send data through socket",
+    /* 19 SocketReceiveFailed */ "Failed to receive data from socket",
+    /* 20 SocketCreationFailed */ "Failed to create socket",
+    /* 21 SocketConnectFailed */ "Failed to connect socket",
+    /* 22 SocketBindFailed */ "Failed to bind socket",
+    /* 23 SocketListenFailed */ "Failed to listen on socket",
+    /* 24 SocketAcceptFailed */ "Failed to accept connection on socket",
+    /* 25 WifiInitFailed */ "WiFi initialization failed",
+    /* 26 WifiConnectionFailed */ "Failed to connect to WiFi network",
+    /* 27 WifiAPStartFailed */ "Failed to start WiFi Access Point",
+    /* 28 WifiScanFailed */ "WiFi scan for networks failed",
+    /* 29 WifiNetworkNotFound */ "The specified WiFi network was not found",
+    /* 30 WifiAuthFailed */ "WiFi authentication failed",
+    /* 31 WifiStopFailed */ "Failed to stop WiFi",
+    /* 32 BluetoothInitFailed */ "Bluetooth initialization failed",
+    /* 33 BluetoothConnectionFailed */ "Failed to establish Bluetooth connection",
+    /* 34 BluetoothServiceCreationFailed */ "Failed to create Bluetooth service",
+    /* 35 BluetoothCharacteristicCreationFailed */ "Failed to create Bluetooth characteristic",
+    /* 36 FileNotFound */ "File not found",
+    /* 37 FileOpenError */ "Error opening file",
+    /* 38 FileReadError */ "Error reading from file",
+    /* 39 FileWriteError */ "Error writing to file",
+    /* 40 FileExists */ "File already exists",
+    /* 41 FileIsEmpty */ "File is empty",
+    /* 42 StorageInitFailed */ "Storage device initialization failed",
+    /* 43 StorageReadError */ "Error reading from storage device",
+    /* 44 StorageWriteError */ "Error writing to storage device",
+    /* 45 StorageNotMounted */ "Storage device not mounted",
+    /* 46 StorageFull */ "Storage device is full",
+    /* 47 AuthenticationFailed */ "User authentication failed",
+    /* 48 UserNotFound */ "User not found",
+    /* 49 UserAlreadyExists */ "User already exists",
+    /* 50 SensorError */ "Sensor reading failed or is invalid",
+    /* 51 DeviceNotResponding */ "Hardware device not responding",
+    /* 52 CommunicationError */ "A communication error occurred",
+    /* 53 CommunicationTimeout */ "Communication timeout",
+    /* 54 ChecksumError */ "Checksum or CRC verification failed",
+};
 
-ErrorCode::ErrorCode() : _description("Invalid Error Code"), _type(ErrorCodeType::General) {}
+const size_t kDescriptionCount = sizeof(kDescriptions) / sizeof(kDescriptions[0]);
 
-ErrorCode::ErrorCode(std::string  name, std::string  description, ErrorCodeType type)
-        : _name(std::move(name)), _description(std::move(description)), _type(type) {}
+} // namespace
 
-const std::string& ErrorCode::description() const {
-    return _description;
-}
-
-const std::string& ErrorCode::name() const {
-    return _name;
-}
-
-ErrorCodeType ErrorCode::type() const {
-    return _type;
-}
-
-bool ErrorCode::isValid() const {
-    return !_name.empty();
-}
-
-bool ErrorCode::operator==(const ErrorCode& other) const {
-    return _name == other._name;
-}
-
-bool ErrorCode::operator!=(const ErrorCode& other) const {
-    return !(*this == other);
-}
-
-std::ostream& operator<<(std::ostream& os, const ErrorCode& errorCode) {
-    os << errorCode.description();
-    return os;
-}
-
-ErrorCode ErrorCode::define(const std::string& name, const std::string& description, ErrorCodeType type) {
-    auto& database = getErrorDatabase();
-    if (database.find(name) != database.end()) {
-        ESP_LOGE("ErrorCode", "Error code with name '%s' already defined.", name.c_str());
-        return {}; // Return an invalid error code
+const char* ErrorCode::description() const {
+    if (_id == 0 || _id > kDescriptionCount) {
+        return "Invalid Error Code";
     }
-
-    ErrorCode newErrorCode(name, description, type);
-    database[name] = newErrorCode;
-    return newErrorCode;
-}
-
-ErrorCode ErrorCode::get(const std::string& name) {
-    auto& database = getErrorDatabase();
-    auto it = database.find(name);
-    if (it != database.end()) {
-        return it->second;
-    } else {
-        ESP_LOGW("ErrorCode", "Error code '%s' not found in database.", name.c_str());
-        return {}; // Return an invalid error code
-    }
-}
-
-void ErrorCode::initialize() {
-    if (initialized) {
-        return;
-    }
-
-    // Common error codes are defined in CommonErrorCodes.cpp,
-    // so we don't need to define them here.
-
-    initialized = true;
-}
-
-void ErrorCode::log(const char* tag, esp_log_level_t level, const std::string& additionalMessage) const {
-    if (!isValid()) {
-        ESP_LOGW(tag, "Invalid ErrorCode: Attempting to log an invalid error code.");
-        return;
-    }
-
-    std::string logMessage = "[" + name() + "] " + description();
-
-    if (!additionalMessage.empty()) {
-        logMessage += " - " + additionalMessage;
-    }
-
-    switch (level) {
-        case ESP_LOG_ERROR:
-            ESP_LOGE(tag, "%s", logMessage.c_str());
-            break;
-        case ESP_LOG_WARN:
-            ESP_LOGW(tag, "%s", logMessage.c_str());
-            break;
-        case ESP_LOG_INFO:
-            ESP_LOGI(tag, "%s", logMessage.c_str());
-            break;
-        case ESP_LOG_DEBUG:
-            ESP_LOGD(tag, "%s", logMessage.c_str());
-            break;
-        case ESP_LOG_VERBOSE:
-            ESP_LOGV(tag, "%s", logMessage.c_str());
-            break;
-        default:
-            ESP_LOGW(tag, "Invalid log level provided: %d. Using ESP_LOG_ERROR.", level);
-            ESP_LOGE(tag, "%s", logMessage.c_str());
-            break;
-    }
+    return kDescriptions[_id - 1];
 }

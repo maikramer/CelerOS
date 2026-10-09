@@ -5,15 +5,14 @@
 
 /**
  * @file HardwareErrorCodes.h
- * @brief Defines error codes related to hardware operations. 
+ * @brief Codigos de erro de hardware (ids 50..51 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-    // Hardware Errors
-    extern const ErrorCode SensorError;             /**< A sensor reading failed or returned an invalid value. */
-    extern const ErrorCode DeviceNotResponding;    /**< A hardware device is not responding. */
-    // ... (Add more hardware-related error codes) ...
+// Erros de hardware
+inline constexpr ErrorCode SensorError{50};
+inline constexpr ErrorCode DeviceNotResponding{51};
 
 }
 

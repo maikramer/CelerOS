@@ -57,7 +57,7 @@ ErrorCode NetworkManager::init(bool startBackgroundTask) {
     // Initialize WiFi connection
     ErrorCode err = _wifiConnection->init();
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to initialize WiFi: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to initialize WiFi: %s", err.description());
         delete _wifiConnection;
         _wifiConnection = nullptr;
         return err;
@@ -66,7 +66,7 @@ ErrorCode NetworkManager::init(bool startBackgroundTask) {
     // Initialize credential store
     err = NetworkCredentialStore::instance().init();
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE(TAG, "Failed to initialize credential store: %s", err.description().c_str());
+        ESP_LOGE(TAG, "Failed to initialize credential store: %s", err.description());
         return err;
     }
 
@@ -113,7 +113,7 @@ ErrorCode NetworkManager::init(bool startBackgroundTask) {
     if (startBackgroundTask) {
         err = this->startBackgroundTask();
         if (err != CommonErrorCodes::None) {
-            ESP_LOGW(TAG, "Failed to start background task: %s", err.description().c_str());
+            ESP_LOGW(TAG, "Failed to start background task: %s", err.description());
             // Non-fatal error, continue
         }
     }
@@ -193,7 +193,7 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
         _stats.failedConnections++;
         setState(NetworkState::Disconnected);
         onConnectionFailed.trigger(ssid, err);
-        ESP_LOGE(TAG, "Failed to connect to %s: %s", ssid.c_str(), err.description().c_str());
+        ESP_LOGE(TAG, "Failed to connect to %s: %s", ssid.c_str(), err.description());
     }
 
     return err;
@@ -771,7 +771,7 @@ void NetworkManager::onWifiScanCompleted(WifiConnection* conn, const WiFiScanRes
 }
 
 void NetworkManager::onWifiAuthFailed(WifiConnection* conn, const std::string& ssid, ErrorCode error) {
-    ESP_LOGW(TAG, "WiFi auth failed for %s: %s", ssid.c_str(), error.description().c_str());
+    ESP_LOGW(TAG, "WiFi auth failed for %s: %s", ssid.c_str(), error.description());
 
     _stats.failedConnections++;
     setState(NetworkState::Disconnected);

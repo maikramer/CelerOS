@@ -204,7 +204,7 @@ void setupWifi() {
                                     const std::string& ssid, 
                                     ErrorCode error) {
         ESP_LOGE("WIFI", "Falha de autenticação em %s: %s", 
-                 ssid.c_str(), error.description().c_str());
+                 ssid.c_str(), error.description());
     });
     
     wifi.onRetrying.addHandler([](WifiConnection* conn, 
@@ -264,7 +264,7 @@ wifi.onScanCompleted.addHandler([](WifiConnection* conn,
                      network.ssid.c_str(), network.rssi);
         }
     } else {
-        ESP_LOGE("SCAN", "Erro: %s", result.error.description().c_str());
+        ESP_LOGE("SCAN", "Erro: %s", result.error.description());
     }
 });
 
@@ -303,7 +303,7 @@ void sendData() {
     
     ErrorCode err = client.connect("192.168.1.100", 8080);
     if (err != CommonErrorCodes::None) {
-        ESP_LOGE("APP", "Erro de conexão: %s", err.description().c_str());
+        ESP_LOGE("APP", "Erro de conexão: %s", err.description());
         return;
     }
     
@@ -380,7 +380,7 @@ void connectToWifi() {
         ESP_LOGI("WIFI", "Conectado!");
         ESP_LOGI("WIFI", "IP: %s", wifi.getIPAddress().toString().c_str());
     } else {
-        ESP_LOGE("WIFI", "Erro: %s", err.description().c_str());
+        ESP_LOGE("WIFI", "Erro: %s", err.description());
     }
 }
 ```

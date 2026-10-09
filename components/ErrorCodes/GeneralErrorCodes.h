@@ -5,24 +5,24 @@
 
 /**
  * @file GeneralErrorCodes.h
- * @brief Defines common, general-purpose error codes.
+ * @brief Codigos de erro gerais (ids 1..12 em ERROR_CODES.md).
  */
 
 namespace CommonErrorCodes {
 
-        // General Errors
-        extern const ErrorCode Invalid;             /**< Invalid error code. */
-        extern const ErrorCode None;                /**< No error occurred. */
-        extern const ErrorCode UnknownError;         /**< An unexpected or unknown error occurred. */
-        extern const ErrorCode OperationFailed;      /**< The requested operation failed. */
-        extern const ErrorCode NotImplemented;     /**< Functionality not yet implemented. */
-        extern const ErrorCode NotInitialized;     /**< Component not initialized. */
-        extern const ErrorCode ArgumentError;      /**< Invalid argument provided to a function or method. */
-        extern const ErrorCode Timeout;             /**< A timeout occurred. */
-        extern const ErrorCode CommandAlreadyRegistered; /**< Attempt to register an already registered command. */
-        extern const ErrorCode InvalidCommand;      /**< An invalid command was received. */
-        extern const ErrorCode ConnectionClosed;     /**< The connection is closed. */
-        extern const ErrorCode ListIsEmpty;          /**< The list is empty. */
+// Erros gerais
+inline constexpr ErrorCode Invalid{1};
+inline constexpr ErrorCode None{2};
+inline constexpr ErrorCode UnknownError{3};
+inline constexpr ErrorCode OperationFailed{4};
+inline constexpr ErrorCode NotImplemented{5};
+inline constexpr ErrorCode NotInitialized{6};
+inline constexpr ErrorCode ArgumentError{7};
+inline constexpr ErrorCode Timeout{8};
+inline constexpr ErrorCode CommandAlreadyRegistered{9};
+inline constexpr ErrorCode InvalidCommand{10};
+inline constexpr ErrorCode ConnectionClosed{11};
+inline constexpr ErrorCode ListIsEmpty{12};
 
 }
 
