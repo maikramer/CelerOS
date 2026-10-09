@@ -1,5 +1,7 @@
 #include "WifiAP.h"
 
+#include "NetworkTypes.h"
+
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -8,6 +10,21 @@
 
 #include <cstring>
 #include <cstdio>
+
+namespace {
+
+// Cliente do AP a partir do MAC reportado pela lista ou pelos eventos.
+WifiAPClientInfo makeClientInfo(const uint8_t* mac, int8_t rssi) {
+    WifiAPClientInfo info;
+    memcpy(info.mac, mac, 6);
+    char mac_str[18];
+    macToString(info.mac, mac_str);
+    info.macString = mac_str;
+    info.rssi = rssi;
+    return info;
+}
+
+} // namespace
 
 WifiAP* WifiAP::_instance = nullptr;
 
@@ -166,17 +183,10 @@ bool WifiAP::initWifi() {
         return true;
     }
 
-    // Initialize TCP/IP stack (only once)
-    esp_err_t err = esp_netif_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to init netif: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    // Create default event loop (only once)
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to create event loop: %s", esp_err_to_name(err));
+    // TCP/IP stack + event loop (idempotente, compartilhado com a STA)
+    esp_err_t err = netCoreInit();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init netif/event loop: %s", esp_err_to_name(err));
         return false;
     }
 
@@ -259,17 +269,7 @@ std::vector<WifiAPClientInfo> WifiAP::getClientList() const {
     }
 
     for (int i = 0; i < sta_list.num; i++) {
-        WifiAPClientInfo info;
-        memcpy(info.mac, sta_list.sta[i].mac, 6);
-        
-        char mac_str[18];
-        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 info.mac[0], info.mac[1], info.mac[2],
-                 info.mac[3], info.mac[4], info.mac[5]);
-        info.macString = mac_str;
-        info.rssi = sta_list.sta[i].rssi;
-        
-        clients.push_back(info);
+        clients.push_back(makeClientInfo(sta_list.sta[i].mac, sta_list.sta[i].rssi));
     }
 
     return clients;
@@ -324,39 +324,25 @@ void WifiAP::eventHandler(void* arg, esp_event_base_t event_base,
                 break;
 
             case WIFI_EVENT_AP_STACONNECTED: {
-                wifi_event_ap_staconnected_t* event = 
+                wifi_event_ap_staconnected_t* event =
                     static_cast<wifi_event_ap_staconnected_t*>(event_data);
-                
-                WifiAPClientInfo info;
-                memcpy(info.mac, event->mac, 6);
-                
-                char mac_str[18];
-                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-                         info.mac[0], info.mac[1], info.mac[2],
-                         info.mac[3], info.mac[4], info.mac[5]);
-                info.macString = mac_str;
-                info.rssi = 0;  // Not available at connection time
-                
-                ESP_LOGI(TAG, "Client connected: %s (AID=%d)", mac_str, event->aid);
+
+                WifiAPClientInfo info = makeClientInfo(event->mac, 0);
+
+                ESP_LOGI(TAG, "Client connected: %s (AID=%d)",
+                         info.macString.c_str(), event->aid);
                 self->onClientConnected.trigger(info);
                 break;
             }
 
             case WIFI_EVENT_AP_STADISCONNECTED: {
-                wifi_event_ap_stadisconnected_t* event = 
+                wifi_event_ap_stadisconnected_t* event =
                     static_cast<wifi_event_ap_stadisconnected_t*>(event_data);
-                
-                WifiAPClientInfo info;
-                memcpy(info.mac, event->mac, 6);
-                
-                char mac_str[18];
-                snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-                         info.mac[0], info.mac[1], info.mac[2],
-                         info.mac[3], info.mac[4], info.mac[5]);
-                info.macString = mac_str;
-                info.rssi = 0;
-                
-                ESP_LOGI(TAG, "Client disconnected: %s (AID=%d)", mac_str, event->aid);
+
+                WifiAPClientInfo info = makeClientInfo(event->mac, 0);
+
+                ESP_LOGI(TAG, "Client disconnected: %s (AID=%d)",
+                         info.macString.c_str(), event->aid);
                 self->onClientDisconnected.trigger(info);
                 break;
             }

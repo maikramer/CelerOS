@@ -226,6 +226,12 @@ public:
      */
     Event<const std::string&, const std::string&> onConnectionFailed;
 
+    /**
+     * @brief URL decode string (%XX e '+'); util compartilhada com o
+     * WebManager, que antes mantinha uma copia propria.
+     */
+    static std::string urlDecode(const std::string& str);
+
 private:
     /**
      * @brief Start DNS server.
@@ -271,11 +277,6 @@ private:
      * @brief Set state.
      */
     void setState(CaptivePortalState newState);
-
-    /**
-     * @brief URL decode string.
-     */
-    static std::string urlDecode(const std::string& str);
 
     CaptivePortalConfig _config;
     CaptivePortalState _state;

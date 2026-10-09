@@ -3,9 +3,12 @@
 
 #include <string>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 #include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_netif.h"
 
 // Forward declaration - IPAddress is defined in Wifi component
 // Use string representation for IP addresses in this header to avoid circular dependencies
@@ -80,6 +83,30 @@ inline WiFiAuthMode toWiFiAuthMode(wifi_auth_mode_t authMode) {
         default:
             return WiFiAuthMode::Open;
     }
+}
+
+/**
+ * @brief Formata os 6 bytes do MAC como "AA:BB:CC:DD:EE:FF".
+ * @param mac Bytes do endereco (ordem de transmissao).
+ * @param out Buffer de saida, pelo menos 18 bytes.
+ */
+inline void macToString(const uint8_t mac[6], char out[18]) {
+    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+/**
+ * @brief Prepara o stack TCP/IP e o event loop default (STA e AP usam).
+ *
+ * Idempotente: chamado duas vezes devolve ESP_ERR_INVALID_STATE, tratado
+ * como "ja feito". No erro real devolve o codigo para o chamador logar.
+ */
+inline esp_err_t netCoreInit() {
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+    return ESP_OK;
 }
 
 /**
@@ -215,9 +242,7 @@ struct ScannedNetwork {
           authMode(record.authmode), isKnown(false), isConnected(false) {
         strncpy(ssid, reinterpret_cast<const char*>(record.ssid), sizeof(ssid) - 1);
         ssid[sizeof(ssid) - 1] = '\0';
-        snprintf(bssid, sizeof(bssid), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 record.bssid[0], record.bssid[1], record.bssid[2],
-                 record.bssid[3], record.bssid[4], record.bssid[5]);
+        macToString(record.bssid, bssid);
     }
     
     /**

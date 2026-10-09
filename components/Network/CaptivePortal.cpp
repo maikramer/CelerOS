@@ -563,6 +563,16 @@ void CaptivePortal::dnsTaskFunc(void* param) {
     vTaskDelete(nullptr);
 }
 
+namespace {
+
+// Resposta HTTP de uma vez (tipo + corpo); usada pelos handlers abaixo.
+esp_err_t sendStr(httpd_req_t* req, const char* type, const char* body, size_t len) {
+    httpd_resp_set_type(req, type);
+    return httpd_resp_send(req, body, len);
+}
+
+} // namespace
+
 bool CaptivePortal::startHttpServer() {
     ESP_LOGI(TAG, "Starting HTTP server on port %d", _config.httpPort);
 
@@ -594,8 +604,7 @@ bool CaptivePortal::startHttpServer() {
         .handler = [](httpd_req_t* req) -> esp_err_t {
             CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
             std::string html = portal->generateHtml();
-            httpd_resp_set_type(req, "text/html");
-            httpd_resp_send(req, html.c_str(), html.length());
+            sendStr(req, "text/html", html.c_str(), html.length());
             return ESP_OK;
         },
         .user_ctx = self
@@ -610,8 +619,7 @@ bool CaptivePortal::startHttpServer() {
             CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
             portal->scanNetworks();
             std::string json = portal->generateScanJson();
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, json.c_str(), json.length());
+            sendStr(req, "application/json", json.c_str(), json.length());
             return ESP_OK;
         },
         .user_ctx = self
@@ -665,9 +673,8 @@ bool CaptivePortal::startHttpServer() {
 
             // Simple response - actual connection should be handled by event subscriber
             std::string response = "{\"success\":true,\"message\":\"Credenciais recebidas\",\"ip\":\"Verificar na rede\"}";
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, response.c_str(), response.length());
-            
+            sendStr(req, "application/json", response.c_str(), response.length());
+
             return ESP_OK;
         },
         .user_ctx = self
@@ -691,8 +698,7 @@ bool CaptivePortal::startHttpServer() {
             char buf[96];
             snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"ip\":\"%s\"}",
                      s, portal->_connIp.c_str());
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+            sendStr(req, "application/json", buf, HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         },
         .user_ctx = self

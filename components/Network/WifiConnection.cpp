@@ -81,15 +81,9 @@ ErrorCode WifiConnection::init() {
         }
     }
 
-    // Initialize netif
-    ret = esp_netif_init();
-    if (!ok(ret, true, "Erro ao inicializar netif")) {
-        return CommonErrorCodes::WifiInitFailed;
-    }
-
-    // Create event loop
-    ret = esp_event_loop_create_default();
-    if (!ok(ret, true, "Erro ao criar event loop")) {
+    // netif + event loop (idempotente, compartilhado com o AP)
+    ret = netCoreInit();
+    if (!ok(ret, false, "Erro ao inicializar netif/event loop")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
@@ -319,9 +313,7 @@ NetworkInfo WifiConnection::getNetworkInfo() const {
     wifi_ap_record_t ap_info;
     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
         char bssid[18];
-        snprintf(bssid, sizeof(bssid), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 ap_info.bssid[0], ap_info.bssid[1], ap_info.bssid[2],
-                 ap_info.bssid[3], ap_info.bssid[4], ap_info.bssid[5]);
+        macToString(ap_info.bssid, bssid);
         info.bssid = bssid;
         info.authMode = toWiFiAuthMode(ap_info.authmode);
     }
