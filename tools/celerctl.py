@@ -1543,8 +1543,12 @@ def cmd_coredump(args):
     if not data:
         die("nao ha coredump gravado (nenhum crash desde o ultimo reset)")
     Path(args.out).write_bytes(data)
-    print(f"{args.out}: {len(data)} bytes (ELF) — analise com:")
-    print(f"  idf.py -B build coredump-info -c {args.out}")
+    # o device manda a imagem CRUA da particao (header de 12 B do IDF + ELF):
+    # o espcoredump espera esse formato com -t raw (-t elf rejeita o header)
+    print(f"{args.out}: {len(data)} bytes (coredump cru da particao) — analise com:")
+    print(f"  python -m esp_coredump info_corefile -t raw -c {args.out} build/CelerOS.elf")
+    print("  (SHA invalido no -t raw = dump escrito pela metade: crash duro")
+    print("   no meio da propria gravacao do coredump)")
 
 
 def split_frames(buf, proto):
@@ -1929,6 +1933,24 @@ def _rm_tree(link, path):
     link.simple("DELETE", path.encode() + b"\0")
 
 
+def _remote_tree(link, path):
+    """Arvore remota como {caminho relativo: e_diretorio} (ls recursivo)."""
+    out = {}
+    try:
+        entries = link.ls(path)
+    except CelerError:
+        return out
+    for e in entries:
+        rpath = f"{path}/{e['name']}"
+        rel = rpath[len(path) + 1:]
+        if e["dir"]:
+            out[rel] = True
+            out.update(_remote_tree(link, rpath))
+        else:
+            out[rel] = False
+    return out
+
+
 def _lint_app_folder(folder, fatal=True):
     """Lint estatico (tools/app_lint) antes de empurrar o app ao dispositivo:
     parse ES5 + checagem contra a API do firmware. Sem Node no PATH so avisa e
@@ -2245,6 +2267,17 @@ def cmd_apps(args):
                     link.simple("MKDIR", d.encode() + b"\0")
             for f in files:
                 link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}")
+            # poda o que ficou para tras: modulos que sairam do app entre
+            # versoes seguem no device e o require ainda os acha — app misto
+            # (main novo + fx velho) quebra em runtime (Supernova 2.0:
+            # "doFlash undefined" com o fx.js da 1.0 sobrando na pasta)
+            remote = _remote_tree(link, dest)
+            local = {f.relative_to(src).as_posix() for f in files}
+            stale = sorted(r for r in remote if r not in local)
+            for rel in stale:
+                link.delete(f"{dest}/{rel}", recursive=remote[rel])
+            if stale:
+                print(f"poda: {len(stale)} arquivo(s) obsoleto(s) ({', '.join(stale)})")
             link.exec("rescan")
             print(f"instalado: {dest} ({len(files)} arquivos)")
             if args.run:

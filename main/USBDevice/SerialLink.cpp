@@ -68,7 +68,14 @@ constexpr uint8_t kWindow = 1;
 constexpr int kRxRing = 4096;
 #endif
 bool chanInit() {
-    esp_err_t err = uart_driver_install(K_UART, kRxRing, 0, 0, nullptr, 0);
+    // ISR do RX em IRAM: escritas na flash (commit do LittleFS no close de
+    // cada arquivo, flush do LogPersist, rescan) desligam a cache e mascaram
+    // ISRs que moram em flash — a rajada da janela de WRITE chegava a perder
+    // bytes no FIFO de 128 B e o push morria em "sem ACK" (bancada 4848:
+    // install de ~90 KB caiu no meio 2x). Com a flag, o RX segue enchendo o
+    // anel durante a escrita e o autorreparo da janela funciona.
+    esp_err_t err = uart_driver_install(K_UART, kRxRing, 0, 0, nullptr,
+                                        ESP_INTR_FLAG_IRAM);
     return err == ESP_OK || err == ESP_ERR_INVALID_STATE;
 }
 int chanRead(uint8_t* buf, size_t len, TickType_t ticks) {
