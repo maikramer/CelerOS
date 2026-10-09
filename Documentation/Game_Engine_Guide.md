@@ -175,7 +175,7 @@ Pools pre-allocate everything: no per-frame allocation means no GC hiccups.
 
 ## 9. Sprites and animation
 
-The firmware sprite pool has **4 slots** (PSRAM-backed). `E.spr.load` decodes each PNG **once** into a slot and keeps a procedural `paint` fallback, so the game runs even with missing assets or on boards without sprites:
+The firmware sprite pool has had **8 slots** on PSRAM boards since API 29 (`System.spriteSlots()` reports the board's limit; engine 1.1 queries it automatically). `E.spr.load` decodes each PNG **once** into a slot and keeps a procedural `paint` fallback, so the game runs even with missing assets or on boards without sprites:
 
 ```js
 E.spr.load([

@@ -175,7 +175,7 @@ Pools pré-alocam tudo: zero alocação por frame significa zero engasgo de GC.
 
 ## 9. Sprites e animação
 
-O pool de sprites do firmware tem **4 slots** (em PSRAM). O `E.spr.load` decodifica cada PNG **uma vez** para dentro de um slot e guarda um `paint` procedural de fallback, então o jogo roda mesmo sem os assets ou em placa sem sprites:
+O pool de sprites do firmware tem **8 slots** em PSRAM desde a API 29 (`System.spriteSlots()` informa o limite da placa; a engine 1.1 consulta sozinha). O `E.spr.load` decodifica cada PNG **uma vez** para dentro de um slot e guarda um `paint` procedural de fallback, então o jogo roda mesmo sem os assets ou em placa sem sprites:
 
 ```js
 E.spr.load([

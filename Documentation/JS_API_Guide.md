@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 27
+### API Level: 29
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1041,10 +1041,10 @@ Storage.clear();                       // wipes EVERYTHING of this app
 
 ### 16.3 Multi-sprites (`System.useSprite`)
 
-`System.createSprite(w, h)` now returns an **id** `1..4` (`0` = failed) and
+`System.createSprite(w, h)` now returns an **id** `1..8` (`0` = failed) and
 the new sprite becomes the target of subsequent operations (old apps that
 ignore the return keep working). `System.useSprite(id)` switches targets:
-`0` = frame/display, `1..4` = an existing sprite. `System.deleteSprite(id)`
+`0` = frame/display, `1..8` = an existing sprite. `System.deleteSprite(id)`
 deletes a specific sprite (no argument deletes the current one).
 
 ```js
@@ -1059,8 +1059,9 @@ System.pushSprite(10, 50);
 System.useSprite(0);                      // back to the frame
 ```
 
-Up to **4 sprites with PSRAM, 1 without** (the silent 8-bit fallback for
-huge sprites still applies).
+Up to **8 sprites with PSRAM, 1 without** (API 29 doubled the pool;
+`System.spriteSlots()` reports the board's limit — the silent 8-bit fallback
+for huge sprites still applies).
 
 ### 16.4 Binary FS (`FS.readFile` / `FS.writeFile`)
 
@@ -2174,3 +2175,24 @@ if (System.setNativeCanvas(true)) {
     }
 }
 ```
+
+## 34. API Level 29 — Sprite pool 8 + `System.spriteSlots()`
+
+The multi-sprite pool (section 16.3) doubled: **8 slots on PSRAM boards**
+(still 1 without PSRAM). Allocation stays on demand — a slot only costs
+memory once the app creates the sprite — so the larger pool is free for
+apps that don't use it.
+
+#### `System.spriteSlots()` → Integer (API 29)
+Returns the board's **actual** pool limit (8 with PSRAM, 1 without).
+Engines and games budget their slots instead of hardcoding the historical
+maximum:
+
+```js
+var cap = System.spriteSlots ? System.spriteSlots() : 4;  // degrades on old firmware
+if (System.createSprite(32, 32) === 0) { /* pool full: paint procedurally */ }
+```
+
+The full-pool `createSprite` compatibility behavior (recycling the current
+sprite) still applies — with 8 slots the case became rare; count your live
+ids and respect `spriteSlots()` before asking for more.

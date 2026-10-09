@@ -420,6 +420,7 @@ function makeEnv() {
         deleteSprite: function() {},
         pushSprite: function() {},
         bindSprite: function() { return true; },
+        spriteSlots: function() { return 4; },
         // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
         setPin: function() { return true; },
         verifyPin: function() { return true; },

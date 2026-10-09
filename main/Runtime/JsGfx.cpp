@@ -26,15 +26,16 @@
 // Double Buffering
 // =====================================================
 //
-// Sprites multiplos (API 12): pool de ate 4 (1 sem PSRAM — cada sprite
-// come RAM interna no fallback 8-bit). createSprite devolve um id 1..4
+// Sprites multiplos (API 12): pool de ate 8 (1 sem PSRAM — cada sprite
+// come RAM interna no fallback 8-bit). createSprite devolve um id 1..8
 // (0 = falhou) e o sprite novo vira o CORRENTE; draw*/pushSprite seguem
 // o corrente (compat: apps antigos ignoram o retorno). useSprite(id)
-// troca o alvo: 0 = quadro/display, 1..4 = sprite existente.
+// troca o alvo: 0 = quadro/display, 1..8 = sprite existente.
+// System.spriteSlots() (API 29) informa o limite real da placa.
 
 namespace {
-CelerSprite* s_spritePool[4] = {};  // nullptr = livre
-int spriteCap() { return Board::profile().hasPsram ? 4 : 1; }
+CelerSprite* s_spritePool[8] = {};  // nullptr = livre
+int spriteCap() { return Board::profile().hasPsram ? 8 : 1; }
 }  // namespace
 
 // Canvas nativo (API 28): definido aqui (dominio grafico), lido pelos
@@ -71,7 +72,7 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
         // pool cheio: apps antigos esperam que createSprite recicle o
         // anterior — mantem a compat derrubando o sprite corrente
         if (tftSprite != nullptr) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < spriteCap(); i++) {
                 if (s_spritePool[i] == tftSprite) { slot = i; break; }
             }
         }
@@ -120,7 +121,7 @@ duk_ret_t JSBindings::js_deleteSprite(duk_context *ctx) {
     CelerSprite* victim = tftSprite;
     if (duk_is_number(ctx, 0)) {
         int id = duk_require_int(ctx, 0);
-        if (id < 1 || id > 4) return 0;
+        if (id < 1 || id > spriteCap()) return 0;
         victim = s_spritePool[id - 1];
         if (victim == nullptr) return 0;
     }
@@ -179,7 +180,7 @@ duk_ret_t JSBindings::js_useSprite(duk_context *ctx) {
         duk_push_boolean(ctx, 1);
         return 1;
     }
-    if (id < 1 || id > 4 || s_spritePool[id - 1] == nullptr) {
+    if (id < 1 || id > spriteCap() || s_spritePool[id - 1] == nullptr) {
         useSprite = false;
         duk_push_boolean(ctx, 0);
         return 1;
@@ -187,6 +188,13 @@ duk_ret_t JSBindings::js_useSprite(duk_context *ctx) {
     tftSprite = s_spritePool[id - 1];
     useSprite = true;
     duk_push_boolean(ctx, 1);
+    return 1;
+}
+
+// API 29: o limite real do pool (8 com PSRAM, 1 sem) — engines e jogos
+// orcamentam os slots em vez de chumbar o maximo historico
+duk_ret_t JSBindings::js_spriteSlots(duk_context *ctx) {
+    duk_push_int(ctx, spriteCap());
     return 1;
 }
 

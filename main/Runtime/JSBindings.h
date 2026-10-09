@@ -52,6 +52,7 @@ private:
     static duk_ret_t js_pushSprite(duk_context *ctx);
     static duk_ret_t js_bindSprite(duk_context *ctx);
     static duk_ret_t js_useSprite(duk_context *ctx);   // troca de alvo (API 12)
+    static duk_ret_t js_spriteSlots(duk_context *ctx); // limite do pool (API 29)
     static void deleteAllSprites();                    // reset por app
     static bool useSprite;
 

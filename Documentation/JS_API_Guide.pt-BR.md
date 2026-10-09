@@ -10,8 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### API Level: 27
-### Nível de API: 13
+### Nível de API: 29
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -1307,10 +1306,10 @@ Storage.clear();                       // apaga TUDO do app
 
 ### 16.3 Sprites múltiplos (`System.useSprite`)
 
-`System.createSprite(w, h)` agora devolve um **id** `1..4` (`0` = falhou) e o
+`System.createSprite(w, h)` agora devolve um **id** `1..8` (`0` = falhou) e o
 sprite novo vira o alvo das próximas operações (apps antigos que ignoram o
 retorno continuam funcionando). `System.useSprite(id)` troca o alvo:
-`0` = quadro/display, `1..4` = sprite existente. `System.deleteSprite(id)`
+`0` = quadro/display, `1..8` = sprite existente. `System.deleteSprite(id)`
 apaga um sprite específico (sem argumento, apaga o corrente).
 
 ```js
@@ -1325,7 +1324,8 @@ System.pushSprite(10, 50);                   // heroi por cima
 System.useSprite(0);                         // volta a desenhar no quadro
 ```
 
-Máximo de **4 sprites com PSRAM, 1 sem PSRAM** (o degradê silencioso para
+Máximo de **8 sprites com PSRAM, 1 sem PSRAM** (API 29 dobrou o pool;
+`System.spriteSlots()` informa o limite da placa — o degradê silencioso para
 8-bit do sprite gigante continua valendo).
 
 ### 16.4 FS binário (`FS.readFile` / `FS.writeFile`)
@@ -2450,3 +2450,23 @@ if (System.setNativeCanvas(true)) {
     }
 }
 ```
+
+## 34. Nível de API 29 — Pool de sprites 8 + `System.spriteSlots()`
+
+O pool de sprites múltiplos (seção 16.3) dobrou: **8 slots em PSRAM**
+(continua 1 sem PSRAM). A alocação segue sob demanda — um slot só consome
+memória quando o app cria o sprite —, então o pool maior não custa nada
+para quem não usa.
+
+#### `System.spriteSlots()` → Inteiro (API 29)
+Devolve o limite **real** do pool na placa (8 com PSRAM, 1 sem). Engines
+e jogos orçamentam os slots em vez de chumbar o máximo histórico:
+
+```js
+var cap = System.spriteSlots ? System.spriteSlots() : 4;  // degrada no velho
+if (System.createSprite(32, 32) === 0) { /* pool cheio: pinta procedural */ }
+```
+
+O comportamento de compatibilidade do `createSprite` com pool cheio (reciclar
+o sprite corrente) segue valendo — com 8 slots o caso ficou raro; conte os
+ids vivos e respeite o `spriteSlots()` antes de pedir mais.

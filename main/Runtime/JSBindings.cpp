@@ -953,6 +953,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"pushSprite", js_pushSprite, 3},  // 3o = cor-chave (API 28)
         {"bindSprite", js_bindSprite, 1},
         {"useSprite", js_useSprite, 1},
+        {"spriteSlots", js_spriteSlots, 0},  // limite do pool (API 29)
         {"drawFastVLine", js_drawFastVLine, 4},
         {"drawFastHLine", js_drawFastHLine, 4},
     };
