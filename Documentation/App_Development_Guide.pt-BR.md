@@ -233,6 +233,21 @@ são o contrato — nunca assuma que um periférico existe.
   robótica: escaneia e conecta via Celer Link, pilota um D-pad que repete
   mensagens `{type:"move",dir}` e mostra a telemetria do robô.
 
+### Jogos: a engine do CelerOS (`engine.js` + `physics.js`)
+
+Para jogos 2D existe uma engine completa que você vendoriza no app: game loop
+com cenas, gestos de toque, câmera, sprites, partículas, áudio chiptune e um
+módulo opcional de física arcade (círculos/AABB, tilemaps, Verlet). Ela mira
+as placas S3 com PSRAM — declare `"requires": ["psram"]` e `"topbar": false`
+(o scaffold `new --game` faz isso por você):
+
+```bash
+node tools/sdk/celer.js new MeuJogo --game   # scaffold + jogo de exemplo
+node tools/sdk/celer.js engine caminho/MeuApp  # adiciona/atualiza num app existente
+```
+
+Documentação completa: **[Guia da Game Engine](Game_Engine_Guide.pt-BR.md)**.
+
 > [!IMPORTANT]
 > Para ver tudo o que dá para fazer no `main.js`, consulte o **[Guia da API
 > JS](JS_API_Guide.pt-BR.md)** completo! Lá está toda a documentação de

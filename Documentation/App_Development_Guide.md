@@ -164,6 +164,21 @@ never assume a peripheral exists.
   scans and connects over Celer Link, drives a D-pad that repeats
   `{type:"move",dir}` messages and shows the robot's telemetry.
 
+### Games: the CelerOS engine (`engine.js` + `physics.js`)
+
+For 2D games there is a complete engine you vendor into the app: game loop
+with scenes, touch gestures, camera, sprites, particles, chiptune audio and
+an optional arcade physics module (circles/AABB, tilemaps, Verlet). It
+targets the PSRAM S3 boards — declare `"requires": ["psram"]` and
+`"topbar": false` (the `new --game` scaffold does it for you):
+
+```bash
+node tools/sdk/celer.js new MyGame --game   # scaffold + sample game
+node tools/sdk/celer.js engine path/MyApp   # add/update in an existing app
+```
+
+Full documentation: **[Game Engine Guide](Game_Engine_Guide.md)**.
+
 > [!IMPORTANT]
 > To see everything you can do in `main.js`, please check out the full **[JS API Guide](JS_API_Guide.md)**! It contains all the documentation you need for drawing, GPIO pins, file systems, UI components, and more.
 
