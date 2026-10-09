@@ -45,7 +45,7 @@ function iniciar(mundo, nivel, plano) {
         mundo: mundo, nivel: nivel, tema: tema, bpm: 128, t0: S.millis(),
         cell: 0, ox: 0, oy: 0, hud: 0,
         grid: plano.grid, exit: { c: plano.exit.c, r: plano.exit.r, achada: false, aberta: false },
-        powerups: plano.powerups,
+        powerups: plano.powerups, spawns: plano.spawns || [],
         world: P.world({ gravity: { x: 0, y: 0 }, maxSub: 4 }),
         tiles: null, variacao: [],
         player: null, bombs: [], flames: [], enemies: [],
@@ -100,6 +100,20 @@ function mover(ax, ay, dt) {
         b.vx = Math.abs(cx - b.x) < st.cell * 0.45 ?
                Math.max(-speed, Math.min(speed, (cx - b.x) * 12)) : 0;
     } else { b.vx = 0; b.vy = 0; }
+    // CHUTE: andando contra uma bomba com o powerup, ela desliza
+    if (st.stats.kick && (ax !== 0 || ay !== 0)) {
+        var ac = cellOf(b.x + ax * (b.r + st.cell * 0.51));
+        var ar = cellOf(b.y + ay * (b.r + st.cell * 0.51));
+        if (em(ac, ar) === 'B') {
+            for (var i = 0; i < st.bombs.length; i++) {
+                var bo = st.bombs[i];
+                if (Math.round(bo.fx) === ac && Math.round(bo.fy) === ar && !bo.desliza) {
+                    bo.desliza = { dx: ax, dy: ay };
+                    st.onSfx('chute');
+                }
+            }
+        }
+    }
 }
 
 function celulaPlayer() {
@@ -112,14 +126,20 @@ function plantar() {
     if (vivas() >= st.stats.bombs) return false;
     if (em(cel.c, cel.r) === 'B') return false;
     if (st.grid[cel.r][cel.c] !== '.') return false;
-    st.grid[cel.r][cel.c] = 'B';
-    st.bombs.push({ c: cel.c, r: cel.r, vai: beatNow() + FUSE_BEATS,
-                    fum: beatNow() + 0.0001, range: st.stats.flame });
-    st.onSfx('planta');
+    return addBomba(cel.c, cel.r, FUSE_BEATS, st.stats.flame, true);
+}
+
+// bomba estrangeira (chefe joga; plantar do player passa sfx)
+function addBomba(c, r, fuseBeats, range, tocaSom) {
+    if (!st || em(c, r) !== '.') return false;
+    st.grid[r][c] = 'B';
+    st.bombs.push({ fx: c, fy: r, vai: beatNow() + fuseBeats,
+                    range: range, desliza: null });
+    if (tocaSom) st.onSfx('planta');
     return true;
 }
 
-// detonador remoto: a bomba mais antiga explode agora (no proximo beat)
+// detonador remoto: a bomba mais antiga explode quase agora
 function detonar() {
     if (!st || st.fim || !st.stats.remote || !st.bombs.length) return false;
     st.bombs[0].vai = Math.min(st.bombs[0].vai, beatNow() + 0.25);
@@ -143,9 +163,10 @@ function update(dt) {
     if (st.tLeft <= 0) { matar('tempo'); return; }
 
     var b = beatNow();
-    // bombas: pavio + fumaca no beat
+    // bombas: pavio no beat + deslizamento do chute
     for (var i = st.bombs.length - 1; i >= 0; i--) {
         var bo = st.bombs[i];
+        if (bo.desliza) desliza(bo, dt);
         if (b >= bo.vai) explodir(bo);
     }
     // labaredas: expiram e mordem
@@ -174,29 +195,50 @@ function update(dt) {
     }
 }
 
+// bomba chutada: desliza celula a celula ate a proxima ocupada
+function desliza(bo, dt) {
+    var passos = 8 * dt;   // 8 celulas/s
+    var nx = bo.fx + bo.desliza.dx * passos;
+    var ny = bo.fy + bo.desliza.dy * passos;
+    var ac = Math.floor(nx + 0.5 + bo.desliza.dx * 0.51);
+    var ar = Math.floor(ny + 0.5 + bo.desliza.dy * 0.51);
+    if (em(ac, ar) !== '.') {
+        // bateu: assenta na celula atual do centro
+        bo.fx = Math.round(bo.fx); bo.fy = Math.round(bo.fy);
+        bo.desliza = null;
+        st.grid[bo.fy][bo.fx] = 'B';
+        return;
+    }
+    // arrasta a marca 'B' junto (corrente/visual miram a celula do centro)
+    st.grid[Math.round(bo.fy)][Math.round(bo.fx)] = '.';
+    bo.fx = nx; bo.fy = ny;
+    st.grid[Math.round(bo.fy)][Math.round(bo.fx)] = 'B';
+}
+
 function explodir(bo) {
     // tira da lista antes (a corrente pode reentrar)
     for (var i = 0; i < st.bombs.length; i++) {
         if (st.bombs[i] === bo) { st.bombs.splice(i, 1); break; }
     }
-    if (st.grid[bo.r][bo.c] === 'B') st.grid[bo.r][bo.c] = '.';
+    var bc = Math.round(bo.fx), br = Math.round(bo.fy);
+    if (st.grid[br] && st.grid[br][bc] === 'B') st.grid[br][bc] = '.';
     var b = beatNow();
     var ate = b + FLAME_BEATS;
-    var cells = [{ c: bo.c, r: bo.r, tipo: 'nucleo' }];
+    var cells = [{ c: bc, r: br, tipo: 'nucleo' }];
     var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (var d = 0; d < 4; d++) {
-        var acertouMacio = false;
         for (var passos = 1; passos <= bo.range; passos++) {
-            var c = bo.c + dirs[d][0] * passos;
-            var r = bo.r + dirs[d][1] * passos;
+            var c = bc + dirs[d][0] * passos;
+            var r = br + dirs[d][1] * passos;
             var ch = em(c, r);
             if (ch === '#') break;
-            if (ch === '%') { destruirMacio(c, r); acertouMacio = true; break; }
+            if (ch === '%') { destruirMacio(c, r); break; }
             // bomba no caminho: dominó de meia batida
             if (ch === 'B') {
                 for (var k = 0; k < st.bombs.length; k++) {
-                    if (st.bombs[k].c === c && st.bombs[k].r === r) {
-                        st.bombs[k].vai = Math.min(st.bombs[k].vai, b + CHAIN_BEATS);
+                    var outra = st.bombs[k];
+                    if (Math.round(outra.fx) === c && Math.round(outra.fy) === r) {
+                        outra.vai = Math.min(outra.vai, b + CHAIN_BEATS);
                     }
                 }
                 break;
@@ -209,7 +251,7 @@ function explodir(bo) {
         st.flames.push({ c: cells[j].c, r: cells[j].r, tipo: cells[j].tipo,
                          de: b, ate: ate, dx: cells[j].dx || 0, dy: cells[j].dy || 0 });
     }
-    st.onFx('bum', bo, cells);
+    st.onFx('bum', { c: bc, r: br }, cells);
     st.onSfx('bum');
 }
 
@@ -279,10 +321,14 @@ function ferirInimigosNa(c, r) {
     st._ferirNa(c, r);
 }
 
+// contato com inimigo (ia chama)
+function tocarPlayer() { ferir(); }
+
 module.exports = {
     COLS: COLS, ROWS: ROWS,
     iniciar: iniciar, layout: layout, parar: parar, state: state,
     update: update, mover: mover, plantar: plantar, detonar: detonar,
+    addBomba: addBomba, tocarPlayer: tocarPlayer,
     beatNow: beatNow, beatLen: beatLen, celulaPlayer: celulaPlayer,
     em: em, setIA: setIA
 };

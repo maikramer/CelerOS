@@ -9,12 +9,13 @@
 // Pega de teste (so existe no harness): o test.js dirige a sim.
 if (typeof __harness !== "undefined") {
     __harness.detona = { arena: require("arena"), niveis: require("niveis"),
-                         E: null };   // E entra depois do require abaixo
+                         ia: require("ia"), E: null };   // E entra depois do require abaixo
 }
 
 var E = require("engine");
 var arena = require("arena");
 var NV = require("niveis");
+var ia = require("ia");
 if (typeof __harness !== "undefined") __harness.detona.E = E;
 
 E.init({ dir: "Detona", fps: 30, native: true, save: "detona.", particles: 140 });
@@ -65,6 +66,35 @@ function painterDuro(w, h, x, y) {
     System.fillRect(x + 2, y + 2, w - 4, 3, 0x39E7);
     System.fillRect(x + 2, y + 2, 3, h - 4, 0x39E7);
 }
+function painterBalao(w, h, x, y) {
+    var r = w * 0.42;
+    System.fillCircle(x + w / 2, y + h / 2, r, 0xFE19);
+    System.fillCircle(x + w / 2 - 3, y + h / 2 - 3, r * 0.3, 0xFFE0);
+    System.fillRect(x + w / 2 - 4, y + h / 2 + 1, 2, 3, 0x001F);
+    System.fillRect(x + w / 2 + 2, y + h / 2 + 1, 2, 3, 0x001F);
+}
+function painterFantasma(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h * 0.42, w * 0.4, 0x5FDF);
+    System.fillRect(x + w * 0.1, y + h * 0.42, w * 0.8, h * 0.28, 0x5FDF);
+    System.fillRect(x + w / 2 - 4, y + h * 0.4, 2, 3, 0x001F);
+    System.fillRect(x + w / 2 + 2, y + h * 0.4, 2, 3, 0x001F);
+}
+function painterCacador(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.42, 0xFD00);
+    System.fillCircle(x + w / 2, y + h * 2 / 3, w * 0.2, 0xFB80);
+    System.fillRect(x + w / 2 - 5, y + h / 2 - 3, 3, 3, C.preto);
+    System.fillRect(x + w / 2 + 2, y + h / 2 - 3, 3, 3, C.preto);
+}
+function painterChefe(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.46, 0x4208);
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.38, 0x630C);
+    System.fillTriangle(x + w * 0.3, y + 6, x + w * 0.45, y + 6,
+                        x + w * 0.37, y + h * 0.16, 0xFFE0);
+    System.fillTriangle(x + w * 0.55, y + 6, x + w * 0.7, y + 6,
+                        x + w * 0.63, y + h * 0.16, 0xFFE0);
+    System.fillCircle(x + w * 0.38, y + h * 0.45, 4, C.vermelho);
+    System.fillCircle(x + w * 0.62, y + h * 0.45, 4, C.vermelho);
+}
 var SPR = E.spr.load([
     { name: "jogador", file: USA_PNG ? "jogador" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
@@ -73,7 +103,15 @@ var SPR = E.spr.load([
     { name: "macio", file: USA_PNG ? "bloco_macio" : null,
       w: SZ.bloco, h: SZ.bloco, paint: painterMacio },
     { name: "duro", file: USA_PNG ? "bloco_duro" : null,
-      w: SZ.bloco, h: SZ.bloco, paint: painterDuro }
+      w: SZ.bloco, h: SZ.bloco, paint: painterDuro },
+    { name: "balao", file: USA_PNG ? "balao" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterBalao },
+    { name: "fantasma", file: USA_PNG ? "fantasma" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterFantasma },
+    { name: "cacador", file: USA_PNG ? "perseguidor" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
+    { name: "chefe", file: USA_PNG ? "chefe" : null,
+      w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe }
 ]);
 
 // ---------------------------------------------------------------- sons ---
@@ -83,6 +121,9 @@ E.audio.sfxTable.power = E.audio.sfxTable.coin;
 E.audio.sfxTable.escudo = [[1200, 40], [900, 60]];
 E.audio.sfxTable.morte = [[300, 90], [220, 90], [140, 220]];
 E.audio.sfxTable.venceu = [[523, 90], [659, 90], [784, 160]];
+E.audio.sfxTable.bicho = [[520, 40], [390, 70]];
+E.audio.sfxTable.hit = [220, 50];
+E.audio.sfxTable.chute = [[440, 30], [660, 40]];
 
 // ---------------------------------------------------------------- cenas --
 var RECT_JOGAR;   // botes: hit no update, desenho no draw (immediate)
@@ -134,17 +175,25 @@ E.run({
                 arena.iniciar(prog.mundo, prog.nivel, plano);
                 arena.layout(CELL, OX, OY);
                 wireArena();
+                ia.ligar();               // bichos do plano (+ chefe no 8º)
             } else {
                 E.data.retomar = false;
             }
             E.audio.music(NV.SONG_BATALHA);
         },
         update: function (dt) {
+            var s = arena.state();
             // pausa: canto superior direito
             if (E.input.tap && E.input.tap.x > W - 48 && E.input.tap.y < 48) {
                 E.data.retomar = true;
                 E.goto("pausa");
                 return;
+            }
+            // detonador remoto: chip BOOM no canto inferior direito do HUD
+            if (s && s.stats.remote && E.input.tap &&
+                E.input.tap.x > W - 76 && E.input.tap.y > CELL * NV.ROWS) {
+                arena.detonar();
+                E.input.tap = null;
             }
             // direcao por drag (a ultima direcao persiste enquanto desliza)
             var ax = 0, ay = 0;
@@ -228,6 +277,11 @@ function wireArena() {
             var cel = arena.celulaPlayer();
             var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
             E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano });
+        } else if (tipo === 'bicho') {
+            // a veio em pixels do centro do bicho
+            E.fx.burst(a.x, a.y, { n: 14, colors: [C.branco, C.laranja],
+                                   speed: CELL * 4, life: 0.5 });
+            E.fx.popText(a.x, a.y - CELL / 2, "+" + a.pontos, { color: C.ouro });
         } else if (tipo === 'morte') {
             E.fx.burst(a.x, a.y, { n: 22, colors: [C.branco, C.ciano],
                                    speed: CELL * 4, life: 0.6 });
@@ -327,6 +381,22 @@ function drawMundo() {
     for (var f = 0; f < s.flames.length; f++) {
         drawChama(s.flames[f], pulso);
     }
+    // inimigos: bob no compasso; chefe pisca ao levar acerto
+    for (var en = 0; en < s.enemies.length; en++) {
+        var e = s.enemies[en];
+        if (e.morto) continue;
+        var nome = e.kind === 'cacador' ? "cacador" : e.kind;
+        var ew = e.kind === 'chefe' ? CELL * 2 - 4 : SZ.jogador;
+        var eflash = e.flash > 0;
+        if (e.flash > 0) e.flash -= E.dt;
+        var exx = e.fx * CELL - ew / 2;
+        var eyy = e.fy * CELL - ew / 2 + Math.floor(2 * Math.sin(beat * Math.PI * 2 + en));
+        if (eflash && Math.floor(beat * 16) % 2 === 0) {
+            System.fillCircle(e.fx * CELL, e.fy * CELL, ew * 0.5, C.branco);
+        } else {
+            E.spr.blit(nome, exx, eyy);
+        }
+    }
     // jogador (pisca invulneravel; bob no compasso)
     var inv = s.stats.inv > 0 && Math.floor(beat * 8) % 2 === 0;
     if (!inv && !s.fim) {
@@ -335,6 +405,14 @@ function drawMundo() {
                    s.player.y - SZ.jogador / 2 + bob);
         if (s.stats.shield) System.drawCircle(s.player.x, s.player.y,
                                               SZ.jogador * 0.62, C.ciano);
+    }
+    // chefe na arena: barra de vida no topo
+    for (var ch2 = 0; ch2 < s.enemies.length; ch2++) {
+        if (s.enemies[ch2].kind !== 'chefe' || s.enemies[ch2].morto) continue;
+        var bw = Math.floor(W * 0.7);
+        E.gfx.bar((W - bw) / 2, 6, bw, 8, s.enemies[ch2].hp / 8,
+                  { fg: C.vermelho, screen: true });
+        break;
     }
     drawHUD(s, pulso);
     E.fx.draw();
@@ -395,6 +473,15 @@ function drawHUD(s, pulso) {
     // mundo.nivel + pontos
     E.gfx.text(s.mundo + "." + s.nivel, W / 2 + 46, y0 + 9, {
         color: t.hudTxt, size: 1, align: "center", screen: true });
-    E.gfx.text(String(s.score), W - 10, cy, {
+    E.gfx.text(String(s.score), s.stats.remote ? W - 76 : W - 10, cy, {
         color: C.ouro, size: 2, align: "right", valign: "middle", screen: true });
+    // detonador remoto: chip BOOM pulsando no canto direito
+    if (s.stats.remote) {
+        var bx = W - 64, by = y0 + 6, bw2 = 56, bh = H - y0 - 12;
+        var pulsa = 20 + Math.floor(18 * pulso);
+        System.fillRect(bx, by, bw2, bh,
+                        System.mixColor(C.preto, C.vermelho, pulsa));
+        E.gfx.text("BOOM", bx + bw2 / 2, y0 + (H - y0) / 2, {
+            color: C.branco, size: 1, align: "center", valign: "middle", screen: true });
+    }
 }

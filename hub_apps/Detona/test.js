@@ -31,6 +31,7 @@ module.exports.wire = function (env) {
     }
 
     var macios0 = 0, bombasAtivas = 0, explodiu = false, maciosDepois = -1;
+    var meuBalao = null;
 
     // titulo -> JOGAR (botao em H*0.62 + meia altura; 480 nativo)
     at(function () {
@@ -84,12 +85,68 @@ module.exports.wire = function (env) {
         if (!explodiu) return;
         // espera o pavio + um pouco: a labareda do proprio canto pega o player
     }, 6400);
+
+    // --- bichos (ia.js): mortos por labareda, chute e chefe ---------------
+    // (janela livre entre a 2a bomba do player e a morte: bicho novo +
+    // bomba estrangeira de pavio curtissimo em cima dele)
+    at(function () {
+        var d = h.detona, a = d.arena, s = a.state();
+        if (!explodiu || s.fim) return;
+        var cel = null;
+        for (var r = 1; r < 12 && !cel; r++)
+            for (var c = 3; c < 14 && !cel; c++)
+                if (a.em(c, r) === '.' && !(c === s.exit.c && r === s.exit.r)) cel = { c: c, r: r };
+        assert(cel, 'celula livre p/ o bicho');
+        meuBalao = d.ia.colocar('balao', cel.c, cel.r);
+        var ok = a.addBomba(cel.c, cel.r, 0.05, 1);
+        assert(ok, 'bomba sobre o bicho plantou');
+    }, 4700);
+    at(function () {
+        var d = h.detona, a = d.arena, s = a.state();
+        if (!explodiu || s.fim) return;
+        assert(meuBalao && meuBalao.morto, 'labareda matou o balao do teste');
+        assert(s.score > 0, 'bicho deu pontos (score=' + s.score + ')');
+        // CHUTE: bomba a leste do player ((2,1) e sempre livre), kick ligado
+        s.stats.kick = true;
+        var ok = a.addBomba(2, 1, 99, 1);
+        assert(ok, 'bomba chutavel plantou');
+        a.mover(1, 0, 1 / 60);   // anda pro leste: dispara o chute
+    }, 5100);
+    at(function () {
+        var a = h.detona.arena, s = a.state();
+        if (!explodiu || s.fim) return;
+        var bo = null;
+        for (var i = 0; i < s.bombs.length; i++)
+            if (s.bombs[i].range === 1 && s.bombs[i].vai > 90) bo = s.bombs[i];
+        assert(bo, 'bomba do chute na lista');
+        for (var k = 0; k < 20; k++) a.update(1 / 30);   // desliza
+        assert(bo.fx > 3, 'chute deslizou a bomba (fx=' + bo.fx.toFixed(2) + ')');
+        assert(a.em(Math.round(bo.fx), 1) === 'B', 'bomba assentou onde parou');
+        // CHEFE: hp 2 (deterministico), 2 acertos de labareda matam
+        var chefe = h.detona.ia.colocar('chefe', 6, 1);
+        chefe.hp = 2;
+        var ok2 = a.addBomba(6, 1, 0.03, 1);
+        assert(ok2, 'bomba no chefe plantou');
+    }, 5300);
+    at(function () {
+        var a = h.detona.arena, s = a.state();
+        if (!explodiu || s.fim) return;
+        var ok = a.addBomba(6, 1, 0.03, 1);   // 2o acerto (a 1a ja foi)
+        assert(ok, 'segundo acerto no chefe plantou');
+    }, 5500);
     at(function () {
         var a = h.detona.arena, s = a.state();
         if (!explodiu) return;
-        // o onFim agenda parar()+goto fim 900 ms apos a morte: o estado
-        // pode ja ter sido parado — o veredito vive em E.data.fimInfo
-        var fim = s ? s.fim : (h.detona.E.data.fimInfo && h.detona.E.data.fimInfo.fim);
-        assert(fim === 'dead', 'labareda matou (fim=dead), fim=' + fim);
+        var chefe = null;
+        for (var i2 = 0; i2 < s.enemies.length; i2++)
+            if (s.enemies[i2].kind === 'chefe') chefe = s.enemies[i2];
+        assert(!chefe || chefe.morto, 'chefe morreu com 2 acertos (hp=' +
+               (chefe ? chefe.hp : '-') + ')');
+    }, 5800);
+
+    at(function () {
+        var a = h.detona.arena, s = a.state();
+        if (!explodiu || s.fim) return;
+        assert(s.fim === 'dead', 'labareda matou (fim=dead), fim=' + s.fim);
     }, 7000);
 };

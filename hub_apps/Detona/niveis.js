@@ -139,6 +139,17 @@ function gerar(mundo, nivel) {
             macios.push([cc2, rr2]);
         }
     }
+    // chefe no fim do mundo: a area 2x2 de spawn dele respira (e sai da
+    // lista de macios — saida/powerup nunca escondem la)
+    if (p.chefe) {
+        for (var br = 1; br <= 2; br++)
+            for (var bc = (COLS >> 1) - 1; bc <= (COLS >> 1); bc++)
+                grid[br][bc] = '.';
+        var vivos = [];
+        for (var mf = 0; mf < macios.length; mf++)
+            if (grid[macios[mf][1]][macios[mf][0]] === '%') vivos.push(macios[mf]);
+        macios = vivos;
+    }
     // saida sob um macio longe do spawn
     var exit = null;
     for (var tries = 0; tries < 60 && !exit; tries++) {
