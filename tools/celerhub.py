@@ -423,7 +423,7 @@ def cmd_publish_dep(args):
                 "minApi": args.min_api, "deps": sub,
             }))
             zf.write(src, f"{name}.js")
-            blob = zpath.read_bytes()
+        blob = zpath.read_bytes()  # depois do with: zip fechado tem o central directory
 
     boundary = "----celeroshub7d1f2c"
     part = (
