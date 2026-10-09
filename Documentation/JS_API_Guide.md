@@ -2255,8 +2255,8 @@ app starts. The recommended entry point is the dep: `P.verletFast`
 (celeros.physics 1.2.0) feature-detects and falls back to the interpreted
 JS verlet on firmware without API 31 — the raw API:
 
-#### `System.verletNew([iterations])` → Integer (API 31)
-Creates a verlet world (relaxation iterations per step, default 4, max 16). Returns the id (1..4) or -1.
+#### `System.verletNew([iterations, radius])` → Integer (API 31)
+Creates a verlet world (relaxation iterations per step, default 4, max 16). `radius` > 0 enables **point-point collision**: unlinked pairs closer than `2×radius` separate (position correction without impulse — piles stay stable). Returns the id (1..4) or -1.
 
 #### `System.verletFree(id)` (API 31)
 Releases the world (malloc included). Worlds are also torn down when the app exits.
@@ -2284,3 +2284,12 @@ One full step: integration (gravity in px/s², `dt²` like `P.verlet`), iteratio
 
 #### `System.verletCount(id)` → Integer (API 31)
 How many points the world has.
+
+#### `System.verletDelStick(id, i)` → Boolean (API 31)
+Removes stick `i` (the last one takes its place — for several cuts, delete from the highest index down).
+
+#### `System.verletDelPoint(id, idx)` → Boolean (API 31)
+Removes point `idx`: its sticks go with it and the last point inherits the index (delete from the highest index down to keep indices coherent).
+
+#### `System.verletPins(id)` → Array (API 31)
+Pin state per point (`[0, 1, ...]`) — for highlighting and toggling.

@@ -876,12 +876,76 @@ function check(name, ok, detail) {
     delete env2.System.verletNew;
     var P2 = harness.makeRequire(tmp, env2)('celeros.physics');
     var v3 = P2.verletFast({ iterations: 4 });
-    check('sem System.verletNew: cai para o verlet JS (API classica)',
-          v3.native !== true && v3.points && typeof v3.step === 'function');
-    var x0 = v3.add ? null : v3.points.push({ x: 120, y: 10, pin: true });
-    v3.pin(0);
+    check('sem System.verletNew: cai para o verlet JS (mesma interface)',
+          v3.native === false && typeof v3.xy === 'function' &&
+          typeof v3.delStick === 'function' && typeof v3.step === 'function');
+    var x0 = v3.add(120, 10);
+    v3.pin(x0);
     for (var n = 0; n < 120; n++) v3.step(1 / 60, { gravity: { x: 0, y: 900 } });
-    check('fallback pende igual (points API do P.verlet)', v3.points[0].x === 120);
+    check('fallback pende igual (no preso no lugar)', Math.abs(v3.xy()[0] - 120) < 0.01);
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ------------------------------------------- verlet: manuseio + colisao --
+(function () {
+    console.log('SDK verletFast manuseio (del/pins/colisao, physics 1.3.0):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-vf2-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.physics': '^1.3.0' } }));
+    var env = harness.makeEnv();
+    var P = harness.makeRequire(tmp, env)('celeros.physics');
+
+    // delStick/delPoint mantem os indices coerentes (delecoes do fim pro comeco)
+    var v = P.verletFast({ iterations: 2 });
+    var a = v.add(50, 50), b = v.add(80, 50), c = v.add(110, 50), d = v.add(140, 50);
+    v.stick(a, b); v.stick(b, c); v.stick(c, d);
+    check('3 vinculos criados', v.sticks().length === 6);
+    check('delStick remove (swap do fim)', v.delStick(1) === true && v.sticks().length === 4);
+    check('delStick de indice morto devolve false', v.delStick(9) === false);
+    v.free();
+    // delPoint no meio: vinculos ligados saem e o ultimo ponto herda o indice
+    v = P.verletFast({ iterations: 2 });
+    a = v.add(50, 50); b = v.add(80, 50); c = v.add(110, 50); d = v.add(140, 50);
+    v.stick(a, b); v.stick(b, c); v.stick(c, d);
+    check('delPoint(b) derruba o ponto', v.delPoint(b) === true && v.count() === 3);
+    var st = v.sticks();
+    check('delPoint remove vinculos ligados e reindexa (c-d vira 1-2)',
+          st.length === 2 && st[0] === 1 && st[1] === 2,
+          JSON.stringify(st));
+    check('delPoint de indice morto devolve false', v.delPoint(7) === false);
+    v.free();
+
+    // pins: alterna e le
+    v = P.verletFast({});
+    var p0 = v.add(30, 30), p1 = v.add(60, 30);
+    v.pin(p0);
+    check('pins le o estado (1 fixado, 1 livre)',
+          JSON.stringify(v.pins()) === '[1,0]', JSON.stringify(v.pins()));
+    v.pin(p0, false);
+    check('pin(idx,false) solta', v.pins()[0] === 0);
+    v.free();
+
+    // colisao ponto-ponto: dois nos soltos sobrepostos se separam; um par
+    // VINCULADO nao se afasta alem do comprimento do vinculo
+    var vc = P.verletFast({ iterations: 2, radius: 4 });
+    var s0 = vc.add(100, 100), s1 = vc.add(101, 101);       // sobrepostos (d~1.4 < 8)
+    for (var i = 0; i < 30; i++) vc.step(1, { gravity: { x: 0, y: 0 } });
+    var xy = vc.xy();
+    var dd = Math.sqrt((xy[0] - xy[2]) * (xy[0] - xy[2]) + (xy[1] - xy[3]) * (xy[1] - xy[3]));
+    check('colisao separa nos sobrepostos e PARA (d ~ 2r, sem ejetar)',
+          dd >= 7.2 && dd <= 9, 'd=' + dd.toFixed(2));
+    vc.free();
+    var vr = P.verletFast({ iterations: 2, radius: 4 });
+    var r0 = vr.add(100, 100), r1 = vr.add(104, 100);
+    vr.stick(r0, r1, 4);                                      // vinculados a 4px
+    for (var k = 0; k < 30; k++) vr.step(1, { gravity: { x: 0, y: 0 } });
+    var xy2 = vr.xy();
+    var dr = Math.sqrt((xy2[0] - xy2[2]) * (xy2[0] - xy2[2]) + (xy2[1] - xy2[3]) * (xy2[1] - xy2[3]));
+    check('par vinculado nao e separado pela colisao (fica no len)', dr < 5,
+          'd=' + dr.toFixed(2));
+    v.free(); vc.free(); vr.free();
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 

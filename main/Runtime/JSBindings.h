@@ -69,6 +69,9 @@ private:
     static duk_ret_t js_verletXY(duk_context *ctx);
     static duk_ret_t js_verletSticks(duk_context *ctx);
     static duk_ret_t js_verletCount(duk_context *ctx);
+    static duk_ret_t js_verletDelStick(duk_context *ctx);
+    static duk_ret_t js_verletDelPoint(duk_context *ctx);
+    static duk_ret_t js_verletPins(duk_context *ctx);
 
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);

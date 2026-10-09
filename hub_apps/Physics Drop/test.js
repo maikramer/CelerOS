@@ -1,0 +1,91 @@
+// test.js — smoke do Physics Drop 4.0 no harness: Corda+Pano caem (com a
+// colisao ponto-ponto do stub), PEGAR arrasta um no do pano e CORTAR
+// remove vinculos na varredura. Agendamentos em env.setTimeout (relogio
+// virtual do harness); nunca embarca para o device.
+
+module.exports.wire = function (env) {
+    var h = env.__harness;
+    var at = env.setTimeout;
+
+    // watchdog: a rodada inteira cabe em ~6 s de relogio virtual
+    var origDelay = env.System.delay;
+    var stopAt = 1000 + 7000;
+    env.System.delay = function (ms) {
+        if (env.System.millis() > stopAt) throw { harnessStop: true };
+        return origDelay(ms);
+    };
+
+    var drop = null;
+    function need() {
+        if (!drop) drop = h.drop;
+        if (!drop) throw new Error('main.js nao expoe __harness.drop');
+    }
+    // chip i da linha de ferramentas (larguras acumuladas de TOOLS)
+    function chipX(i) {
+        var x = 10;
+        for (var k = 0; k < i; k++) x += drop.TOOLS[k].w + 2;
+        return x + drop.TOOLS[i].w / 2;
+    }
+
+    // 400ms: solta uma corda e um pano
+    at(function () { need(); h.tap(45, drop.BAR_Y + 70); }, 400);
+    at(function () { h.tap(119, drop.BAR_Y + 70); }, 700);
+    // 1600ms: os dois caem — muitos nos, muitos vinculos, colisao ativa
+    at(function () {
+        need();
+        if (drop.world().count() < 40) throw new Error('corda+pano nao spawnaram: ' + drop.world().count() + ' nos');
+        if (drop.world().sticks().length < 80) throw new Error('vinculos baixos: ' + drop.world().sticks().length / 2);
+    }, 1600);
+
+    // 2000ms: PEGAR — seleciona a ferramenta e arrasta o no 1 do pano
+    at(function () { need(); h.tap(chipX(1), drop.BAR_Y + 39); }, 2000);
+    at(function () {
+        var xy = drop.world().xy();
+        var y0 = xy[3];
+        var x0 = xy[2];
+        // sem o "up": o no fica seguro no dedo e a conferencia acontece
+        // com ele ainda pego (solto, o elastico do pano puxa de volta)
+        var frames = [
+            { x: x0, y: y0, touched: 1 },
+            { x: x0 + 30, y: y0 + 30, touched: 1 },
+            { x: x0 + 55, y: y0 + 45, touched: 1 }
+        ];
+        // dedo seguro: sem novos eventos o harness soltaria o toque (fila
+        // vazia = dedo levantou); 12 frames parado no alvo cobrem a checagem
+        for (var hf = 0; hf < 12; hf++) {
+            frames.push({ x: x0 + 55, y: y0 + 45, touched: 1 });
+        }
+        h.pushTouch(frames);
+        drop.__alvo = { x: x0 + 55, y: y0 + 45 };
+        env.System.print('grab: tool=' + drop.tool() + ' count=' + drop.world().count() + ' pega xy=' + x0.toFixed(0) + ',' + y0.toFixed(0));
+    }, 2400);
+    at(function () {
+        // prova pelo log do proprio app: cada frame de drag registra
+        // dedo x no1 — o no acompanhou o dedo em >= 4 frames
+        var seguiu = 0, ls = env.__harness.log;
+        for (var li = 0; li < ls.length; li++) {
+            var m = /\[grab\] drag dedo (\d+),(\d+) \| no1 (\d+),(\d+)/.exec(ls[li]);
+            if (m && m[1] === m[3] && m[2] === m[4]) seguiu++;
+        }
+        if (seguiu < 4) throw new Error('PEGAR nao segurou o no no dedo (' + seguiu + ' frames)');
+    }, 3000);
+
+    // 3600ms: CORTAR — varre a faixa do meio; a corda perde pedacos
+    at(function () { need(); h.tap(chipX(3), drop.BAR_Y + 39); }, 3600);
+    at(function () {
+        need();
+        drop.__st0 = drop.world().sticks().length / 2;
+        h.pushTouch([
+            { x: 20, y: 150, touched: 1 },
+            { x: 90, y: 150, touched: 1 },
+            { x: 160, y: 150, touched: 1 },
+            { x: 220, y: 150, touched: 1 },
+            { x: 220, y: 151, touched: 0 }
+        ]);
+    }, 3900);
+    at(function () {
+        need();
+        var st = drop.world().sticks().length / 2;
+        if (st >= drop.__st0) throw new Error('CORTAR nao removeu vinculos (' + st + ' vs ' + drop.__st0 + ')');
+    }, 4800);
+};

@@ -2527,8 +2527,8 @@ cada; todos saem no início do próximo app. O jeito recomendado de usar é a
 dep: `P.verletFast` (celeros.physics 1.2.0) faz o feature-detect e cai
 para o verlet JS interpretado em firmware sem API 31 — a API crua:
 
-#### `System.verletNew([iterations])` → Inteiro (API 31)
-Cria um mundo verlet (iterations de relaxação por step, default 4, máx 16). Devolve o id (1..4) ou -1.
+#### `System.verletNew([iterations, radius])` → Inteiro (API 31)
+Cria um mundo verlet (iterations de relaxação por step, default 4, máx 16). `radius` > 0 liga a **colisão ponto-ponto**: pares não vinculados mais próximos que `2×radius` se separam (reposicionamento sem impulso — pilhas ficam estáveis). Devolve o id (1..4) ou -1.
 
 #### `System.verletFree(id)` (API 31)
 Devolve o mundo (malloc incluso). Os mundos também saem sozinhos no fim do app.
@@ -2556,3 +2556,12 @@ Um step completo: integração (gravidade em px/s², `dt²` como no `P.verlet`),
 
 #### `System.verletCount(id)` → Inteiro (API 31)
 Quantos pontos o mundo tem.
+
+#### `System.verletDelStick(id, i)` → Boolean (API 31)
+Remove o vínculo `i` (o último entra no lugar — para vários cortes, delete do maior índice para o menor).
+
+#### `System.verletDelPoint(id, idx)` → Boolean (API 31)
+Remove o ponto `idx`: vínculos ligados a ele saem e o último ponto herda o índice (deleções do maior para o menor mantêm os índices coerentes).
+
+#### `System.verletPins(id)` → Array (API 31)
+Estado dos pinos por ponto (`[0, 1, ...]`) — para destacar e alternar.

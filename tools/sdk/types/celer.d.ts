@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 31 — 281 funcoes.
+// API level 31 — 284 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -41,7 +41,7 @@ declare const System: {
     bindSprite(enabled: boolean): void;
     useSprite(arg0: number): any;
     spriteSlots(): any;
-    verletNew(iterations?: number): any;
+    verletNew(iterations?: number, radius?: number): any;
     verletFree(id: string): void;
     verletAddPoint(id: string, x: number, y: number): any;
     verletStick(id: string, a: number, b: number, len?: number): any;
@@ -51,6 +51,9 @@ declare const System: {
     verletXY(id: string): any;
     verletSticks(id: string): any;
     verletCount(id: string): any;
+    verletDelStick(id: string, i: number): any;
+    verletDelPoint(id: string, idx: number): any;
+    verletPins(id: string): any;
     /** desenho de linha vertical acelerado por hardware. Substancialmente mais rápido que `System.fillRect()` para fatias de */
     drawFastVLine(x: number, y: number, h: number, color: number): void;
     /** desenho de linha horizontal acelerado por hardware. */

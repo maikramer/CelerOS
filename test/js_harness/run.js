@@ -261,10 +261,10 @@ function makeEnv() {
         var worlds = [null, null, null, null];
         function at(id) { return id >= 1 && id <= 4 ? worlds[id - 1] : null; }
         var api = {
-            verletNew: function (iterations) {
+            verletNew: function (iterations, radius) {
                 for (var i = 0; i < 4; i++) {
                     if (!worlds[i]) {
-                        worlds[i] = { pts: [], sticks: [],
+                        worlds[i] = { pts: [], sticks: [], radius: Math.max(0, radius || 0),
                                       iters: Math.max(1, Math.min(16, iterations || 4)) };
                         return i + 1;
                     }
@@ -333,6 +333,28 @@ function makeEnv() {
                         B.x -= dx * f * mb; B.y -= dy * f * mb;
                     }
                 }
+                if (w.radius > 0) {
+                    var rr = w.radius * 2, rr2 = rr * rr;
+                    var linkedSet = {};
+                    for (i = 0; i < w.sticks.length; i++) {
+                        linkedSet[w.sticks[i].a + '|' + w.sticks[i].b] = 1;
+                    }
+                    for (i = 0; i < w.pts.length; i++) {
+                        var A = w.pts[i];
+                        for (var j2 = i + 1; j2 < w.pts.length; j2++) {
+                            if (linkedSet[i + '|' + j2] || linkedSet[j2 + '|' + i]) continue;
+                            var B = w.pts[j2];
+                            var cdx = B.x - A.x, cdy = B.y - A.y;
+                            var cd2 = cdx * cdx + cdy * cdy;
+                            if (cd2 >= rr2 || cd2 < 1e-9) continue;
+                            var cd = Math.sqrt(cd2);
+                            var push = (rr - cd) / cd * 0.5;
+                            var cox = cdx * push, coy = cdy * push;
+                            if (!A.pin) { A.x -= cox; A.y -= coy; A.px -= cox; A.py -= coy; }
+                            if (!B.pin) { B.x += cox; B.y += coy; B.px += cox; B.py += coy; }
+                        }
+                    }
+                }
                 if (maxx > minx) {
                     for (i = 0; i < w.pts.length; i++) {
                         p = w.pts[i];
@@ -362,6 +384,29 @@ function makeEnv() {
             verletCount: function (id) {
                 var w = at(id);
                 return w ? w.pts.length : 0;
+            },
+            verletDelStick: function (id, i) {
+                var w = at(id);
+                if (!w || i < 0 || i >= w.sticks.length) return false;
+                w.sticks.splice(i, 1);
+                return true;
+            },
+            verletDelPoint: function (id, idx) {
+                var w = at(id);
+                if (!w || idx < 0 || idx >= w.pts.length) return false;
+                w.pts.splice(idx, 1);
+                w.sticks = w.sticks.filter(function (s) {
+                    return s.a !== idx && s.b !== idx;
+                }).map(function (s) {
+                    return { a: s.a > idx ? s.a - 1 : s.a,
+                             b: s.b > idx ? s.b - 1 : s.b, len: s.len };
+                });
+                return true;
+            },
+            verletPins: function (id) {
+                var w = at(id), out = [];
+                if (w) for (var i = 0; i < w.pts.length; i++) out.push(w.pts[i].pin ? 1 : 0);
+                return out;
             },
         };
         return api;
@@ -543,6 +588,9 @@ function makeEnv() {
     verletXY: verletStub.verletXY,
     verletSticks: verletStub.verletSticks,
     verletCount: verletStub.verletCount,
+    verletDelStick: verletStub.verletDelStick,
+    verletDelPoint: verletStub.verletDelPoint,
+    verletPins: verletStub.verletPins,
     // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
     setPin: function() { return true; },
     verifyPin: function() { return true; },

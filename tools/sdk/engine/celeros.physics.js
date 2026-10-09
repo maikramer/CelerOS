@@ -18,7 +18,7 @@
 // other, info{nx,ny,overlap}) e grounded (apoiado). Top-down: gravity 0 +
 // addTiles (P.flow faz o campo de perseguicao). Veja o guia.
 
-var P = { version: '1.2.0' };
+var P = { version: '1.3.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 function halfW(b) { return isCircle(b) ? b.r : b.w / 2; }
@@ -503,10 +503,13 @@ P.verlet = function (opts) {
 //   var st = v.sticks();      // [a0, b0, a1, b1, ...]
 //   v.set(b, 60, 40);         // move (o dedo puxando)
 //   v.free();                 // devolve o mundo (Limpar/Refazer)
+// 1.3.0: opts.radius liga a colisao ponto-ponto (nativo; O(n^2) em C++ —
+// o fallback JS nao tem colisao), delStick/delPoint/pins completam o
+// manuseio (tesoura/borracha/pinos) nos dois caminhos.
 P.verletFast = function (opts) {
     opts = opts || {};
-    if (typeof System === "undefined" || !System.verletNew) return P.verlet(opts);
-    var id = System.verletNew(opts.iterations || 4);
+    if (typeof System === "undefined" || !System.verletNew) return verletFastJS(opts);
+    var id = System.verletNew(opts.iterations || 4, opts.radius || 0);
     var v = {
         native: true, id: id,
         step: function (dt, o) {
@@ -526,12 +529,70 @@ P.verletFast = function (opts) {
         pin: function (i, on) { System.verletPin(id, i, on === undefined ? true : !!on); },
         set: function (i, x, y) { System.verletSet(id, i, x, y); },
         count: function () { return System.verletCount(id); },
+        delStick: function (i) { return System.verletDelStick(id, i); },
+        delPoint: function (i) { return System.verletDelPoint(id, i); },
+        pins: function () { return System.verletPins(id); },
         free: function () {
             if (id > 0) System.verletFree(id);
             id = -1;
         }
     };
     return v;
+};
+
+// fallback JS: o P.verlet classico embrulhado na MESMA interface do
+// verletFast (indices + arrays planos) — sem o binding nativo o app nao
+// muda; so a colisao ponto-ponto nao existe (O(n^2) interpretado nao cabe)
+function verletFastJS(opts) {
+    var v = P.verlet(opts);
+    return {
+        native: false,
+        step: function (dt, o) { v.step(dt, o); },
+        xy: function () {
+            var out = [];
+            for (var i = 0; i < v.points.length; i++) out.push(v.points[i].x, v.points[i].y);
+            return out;
+        },
+        sticks: function () {
+            var out = [];
+            for (var i = 0; i < v.sticks.length; i++) out.push(v.sticks[i].a, v.sticks[i].b);
+            return out;
+        },
+        add: function (x, y) {
+            v.points.push({ x: x, y: y, px: x, py: y, pin: false });
+            return v.points.length - 1;
+        },
+        stick: function (a, b, len) { v.stick(a, b, len); },
+        pin: function (i, on) { v.pin(i, on); },
+        set: function (i, x, y) {
+            var p = v.points[i];
+            if (p) { p.x = x; p.y = y; }
+        },
+        count: function () { return v.points.length; },
+        delStick: function (i) {
+            if (i >= 0 && i < v.sticks.length) { v.sticks.splice(i, 1); return true; }
+            return false;
+        },
+        delPoint: function (idx) {
+            if (idx < 0 || idx >= v.points.length) return false;
+            v.points.splice(idx, 1);
+            var keep = [];
+            for (var k = 0; k < v.sticks.length; k++) {
+                var s = v.sticks[k];
+                if (s.a === idx || s.b === idx) continue;
+                keep.push({ a: s.a > idx ? s.a - 1 : s.a,
+                            b: s.b > idx ? s.b - 1 : s.b, len: s.len });
+            }
+            v.sticks = keep;
+            return true;
+        },
+        pins: function () {
+            var out = [];
+            for (var i = 0; i < v.points.length; i++) out.push(v.points[i].pin ? 1 : 0);
+            return out;
+        },
+        free: function () { v.points = []; v.sticks = []; }
+    };
 };
 
 module.exports = P;
