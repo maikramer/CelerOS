@@ -20,6 +20,9 @@
 // duplicatas antigas sao removidas apos o update. X no canto sup. sai.
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
+var HUB_BASE = INDEX_URL.substring(0, INDEX_URL.indexOf("/store/"));
+// Cache de dependencias compartilhadas (API 30): /local/modules/<nome>/
+// <versao>/<nome>.js — escrita permitida a system apps (a loja e uma).
 // Compatibilidade de hardware: apps com requires ["psram"] sao bloqueados
 // em placa sem PSRAM (badge "Requer PSRAM"). Fallback para catalogo antigo
 // sem o campo: teto DINAMICO pela RAM da placa, calibrado na CYD
@@ -97,6 +100,90 @@ function cmpV(v1, v2) {
         p2++;
     }
     return 0;
+}
+
+// ---- deps compartilhadas (API 30) -------------------------------------------
+// "^1.2.0" = mesma major >= base; sem "^" = exata. Mesmo contrato do
+// celerhub.py e do servidor (range resolve no install, versao escolhida
+// grava em <pasta>/deps.json).
+function depRangeOk(rng, ver) {
+    rng = String(rng);
+    if (rng.charAt(0) !== "^") return rng === ver;
+    function parts(s) {
+        var seg = s.substring(1).split("."), o = [];
+        for (var i = 0; i < 3; i++) o.push(parseInt(seg[i], 10) || 0);
+        return o;
+    }
+    var R = parts(rng), V = parts(ver);
+    return V[0] === R[0] && (V[1] > R[1] || (V[1] === R[1] && V[2] >= R[2]));
+}
+// maior versao do nome que satisfaca TODOS os ranges coletados
+function depPick(nm, ranges, index) {
+    var vers = index[nm], best = null;
+    if (!vers) return null;
+    for (var v in vers) if (vers.hasOwnProperty(v)) {
+        var ok = true;
+        for (var i = 0; i < ranges.length; i++) {
+            if (!depRangeOk(ranges[i], v)) { ok = false; break; }
+        }
+        if (ok && (best === null || cmpV(v, best) > 0)) best = v;
+    }
+    return best;
+}
+// grafo diretas + transitivas -> {nome: versao}; null se algo nao resolve
+function resolveDeps(want, index) {
+    var wanted = {}, seen = {}, queue = [], k;
+    for (k in want) if (want.hasOwnProperty(k)) queue.push([k, want[k]]);
+    while (queue.length) {
+        var pair = queue.shift(), nm = pair[0], rng = String(pair[1]);
+        var key = nm + "|" + rng;
+        if (seen[key]) continue;
+        seen[key] = 1;
+        if (!wanted[nm]) wanted[nm] = [];
+        wanted[nm].push(rng);
+        var pick = depPick(nm, wanted[nm], index);
+        if (!pick) return null;
+        var sub = index[nm][pick].deps || {};
+        for (k in sub) if (sub.hasOwnProperty(k)) queue.push([k, sub[k]]);
+    }
+    var out = {};
+    for (k in wanted) if (wanted.hasOwnProperty(k)) {
+        var p = depPick(k, wanted[k], index);
+        if (!p) return null;
+        out[k] = p;
+    }
+    return out;
+}
+// alimenta o cache /local/modules/<nome>/<versao>/ com o que falta — mesmo
+// contrato dos arquivos do app: download streaming, MD5, .new + rename
+function installDeps(it, resolved, index) {
+    for (var nm in resolved) if (resolved.hasOwnProperty(nm)) {
+        var ver = resolved[nm];
+        var d = index[nm][ver];
+        var dir = "/local/modules/" + nm + "/" + ver;
+        var dst = dir + "/" + nm + ".js";
+        if (FS.exists(dst)) continue;  // ja no cache; o GC recolhe orfas
+        if (d.minApi && d.minApi > API) return nm + " exige API " + d.minApi;
+        if (!FS.isDirectory("/local/modules") && !FS.mkdir("/local/modules")) return "Erro no disco";
+        if (!FS.isDirectory("/local/modules/" + nm) && !FS.mkdir("/local/modules/" + nm)) return "Erro no disco";
+        if (!FS.isDirectory(dir) && !FS.mkdir(dir)) return "Erro no disco";
+        drawDownload(it.name, nm + " " + ver);
+        System.delay(30);
+        var tmp = dir + "/" + nm + ".js.new";
+        var ok = false;
+        try {
+            ok = Net.download(d.url, tmp, function (got, total) { drawProgress(got, total); });
+        } catch (e) { ok = false; }
+        if (!ok) { try { FS.deleteFile(tmp); } catch (e9) {} return "Erro ao baixar " + nm; }
+        var md = "";
+        try { md = FS.getFileMD5(tmp); } catch (e2) { md = ""; }
+        if (d.md5 && md !== d.md5) {
+            try { FS.deleteFile(tmp); } catch (e3) {}
+            return "Verificação falhou (" + nm + ")";
+        }
+        if (!FS.renameFile(tmp, dst)) return "Erro ao gravar " + nm;
+    }
+    return "";
 }
 
 // ---- estado ----------------------------------------------------------------
@@ -279,7 +366,8 @@ function entryToItem(pkg, e) {
         md5: e.md5 || "",
         published: e.published_at || "",
         req: e.requires || [],
-        files: e.files || null
+        files: e.files || null,
+        deps: e.deps || null
     };
 }
 
@@ -295,6 +383,7 @@ function fillItemFromMeta(it) {
     it.cat = m.category || "Apps";
     it.req = m.requires || it.req || [];
     it.files = m.files || it.files || null;
+    it.deps = m.deps || it.deps || null;
     return it;
 }
 
@@ -635,7 +724,8 @@ function screenDetail() {
         }
         infoRow("Autor", it.author || "-", BODY_Y + 10);
         infoRow("Instalado", lm ? "v" + (lm.ver || "?") : "não", BODY_Y + 30);
-        infoRow("No hub", it.appUrl ? ("v" + it.ver + (it.size ? " · " + fmtKB(it.size) : "")) : "-", BODY_Y + 50);
+        infoRow("No hub", it.appUrl ? ("v" + it.ver + (it.size ? " · " + fmtKB(it.size) : "") +
+                                       (it.deps ? " + deps" : "")) : "-", BODY_Y + 50);
         infoRow("Estado", st.txt, BODY_Y + 70, stateColor(st.code));
         UI.cardEnd();
 
@@ -842,6 +932,38 @@ function installApp() {
         if (!json) fail = "Erro ao baixar app.json";
     }
 
+    // Deps compartilhadas (API 30): resolve os ranges do app.json baixado
+    // contra o indice do hub e alimenta o cache /local/modules ANTES dos
+    // arquivos do app — falha no meio so deixa modulo orfao no cache (o GC
+    // do launcher recolhe no proximo scan). Deps vivem sempre no /local,
+    // mesmo com o app indo para o SD.
+    var depIndex = null, depResolved = null;
+    if (!fail && json) {
+        var wantDeps = null;
+        try { wantDeps = JSON.parse(json).deps || null; } catch (e5) { wantDeps = null; }
+        if (wantDeps) {
+            drawDownload(it.name, "dependências", false);
+            System.delay(30);
+            var idxTxt = fetchText(HUB_BASE + "/store/deps.json");
+            if (idxTxt) { try { depIndex = JSON.parse(idxTxt).deps; } catch (e6) { depIndex = null; } }
+            if (!depIndex) fail = "Erro ao baixar dependências";
+            if (!fail) {
+                depResolved = resolveDeps(wantDeps, depIndex);
+                if (!depResolved) fail = "Dependência indisponível no hub";
+            }
+            if (depResolved) {
+                var depBytes = 0, dn;
+                for (dn in depResolved) if (depResolved.hasOwnProperty(dn)) {
+                    depBytes += (depIndex[dn][depResolved[dn]].size) || 0;
+                }
+                var freeLocal = 0;
+                try { freeLocal = FS.getFreeSpace("/local"); } catch (e7) { freeLocal = 0; }
+                if (freeLocal > 0 && freeLocal < depBytes + 8192) fail = "Sem espaço p/ dependências";
+            }
+        }
+    }
+    if (!fail && depResolved) fail = installDeps(it, depResolved, depIndex);
+
     if (!fail && !FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
     if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
 
@@ -889,6 +1011,18 @@ function installApp() {
     if (!fail && json && !FS.writeTextFile(dir + "/app.json", json)) {
         fail = "Erro ao gravar app.json";
     }
+    // deps resolvidas (a fonte do require no device e do GC do launcher):
+    // gravado por ULTIMO — app + cache prontos, este e o commit do conjunto.
+    // Update sem deps deixa a limpeza de orfaos abaixo remover o antigo.
+    if (!fail && depResolved) {
+        var dj = [], dn2;
+        for (dn2 in depResolved) if (depResolved.hasOwnProperty(dn2)) {
+            dj.push('"' + dn2 + '":"' + depResolved[dn2] + '"');
+        }
+        if (!FS.writeTextFile(dir + "/deps.json", "{" + dj.join(",") + "}")) {
+            fail = "Erro ao gravar deps.json";
+        }
+    }
     if (!fail) {
         if (it.icon) {
             var iconTmp = dir + "/icon.png.new";
@@ -905,10 +1039,13 @@ function installApp() {
             FS.deleteFile(dir + "/icon.png");  // versao nova sem icone
         }
         // orfaos: a pasta e espelho do pacote — update que removeu um
-        // modulo/asset (ou .new de tentativa antiga) nao deixa lixo
+        // modulo/asset (ou .new de tentativa antiga) nao deixa lixo. O
+        // deps.json e do INSTALLER (versao resolvida das deps): mantido no
+        // update com deps, removido no update sem (o GC libera as versoes).
         try {
             var keep = { "app.json": 1, "main.js": 1, "icon.png": 1 };
             for (var fn in (it.files || {})) keep[fn] = 1;
+            if (depResolved) keep["deps.json"] = 1;
             var listing = FS.listDir(dir) || [];
             for (var li = 0; li < listing.length; li++) {
                 var p = listing[li];
