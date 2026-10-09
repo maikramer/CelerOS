@@ -1,0 +1,14 @@
+[
+  {
+    "id": "orbe",
+    "prompt": "retro arcade power-up sprite, one perfectly round glowing sphere of golden plasma energy, radially symmetric ball of light with a bright white hot core and subtle energy rays, single centered sphere filling most of the frame, on pure solid black background, crisp clean edges, vivid 16-bit arcade style, not a chess piece, not a pawn, no text, no letters, no watermark",
+    "seed": 4414,
+    "output": "orbe_src.png"
+  },
+  {
+    "id": "titulo",
+    "prompt": "wide dark space arcade menu backdrop, mostly empty deep black space with a faint violet and teal nebula glow in the top half, one tiny chrome spaceship with cyan engine trail flying upward near the center, very dark and minimal, bottom third almost pure solid black and completely empty, no text, no letters, no watermark",
+    "seed": 4515,
+    "output": "titulo_src.png"
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "name": "Supernova",
+  "packageName": "celeros.supernova",
+  "version": "1.0.0",
+  "api": 28,
+  "permissions": [],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "topbar": false,
+  "description": "Atirador espacial em tela cheia nos pixels nativos do vidro (480x480 no SmartDisplay 4\"): arraste a nave, ondas de inimigos caem na batida da trilha chiptune e a carga dos orbes detona a supernova. Arte dos sprites gerada por IA.",
+  "changelog": "1.0.0 - primeiro lancamento; primeiro app no canvas nativo (API 28): pixels fisicos 1:1 e toque fisico; sprites PNG gerados por IA decodificados uma vez em PSRAM e blit por quadro, com glow e nucleos pulsantes por cima; modulos require (engine/fx/audio); trilha chiptune de 4 canais que e o metronomo do jogo (spawn na batida via musicPos); particularias, ondas de choque, tremor de tela e flash; recorde no Storage NVS"
+}
