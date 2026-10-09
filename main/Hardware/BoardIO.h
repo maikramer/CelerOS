@@ -111,6 +111,12 @@ void micChanUnlock();
 // detector de wake word, que nao enxerga o handle I2S. -1 = sem dados.
 int micReadMonoLocked(int16_t* out, int maxSamples);
 
+// RMS 0..100 da componente AC (variancia) das amostras — o mic MEMS tem
+// offset DC. Escala unica do firmware (micLevel, gravacao, wake word).
+// stride/slot leem direto do chunk stereo do I2S (stride 2, slot 0 = L)
+// ou de um mono ja extraido (stride 1, slot 0).
+int rmsLevel100(const int16_t* samples, int n, int stride, int slot);
+
 // ---- gravacao de microfone (Mic.* do runtime, API 19) ----
 // Captura 16 kHz mono 16-bit (slot L do mesmo canal do micLevel) numa task
 // propria: o app segue desenhando enquanto grava. Sem microfone na placa

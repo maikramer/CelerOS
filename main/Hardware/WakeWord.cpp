@@ -177,17 +177,7 @@ void wakeTask(void*) {
             continue;
         }
         s_readFails = 0;
-        int64_t sum = 0, acc = 0;
-        for (int i = 0; i < n; i++) {
-            const int32_t v = buf[i];
-            sum += v;
-            acc += (int64_t)v * v;
-        }
-        const int64_t mean = sum / n;
-        int64_t var = acc / n - mean * mean;
-        if (var < 0) var = 0;
-        int lvl = (int)sqrtf((float)var) / 60;  // mesma escala do micLevel
-        s_level = lvl > 100 ? 100 : lvl;
+        s_level = BoardIO::rmsLevel100(buf, n, 1, 0);  // mesma escala do micLevel
 
         // consome o bloco: cada chamada le ate fechar uma janela e diz quantas
         // amostras usou (o laco antigo repassava o MESMO bloco e nunca saia)

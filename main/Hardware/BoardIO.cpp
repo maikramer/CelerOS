@@ -828,17 +828,10 @@ void micRecTask(void*) {
         BoardIO::micChanUnlock();
         if (rr != ESP_OK || r < 4) continue;
         const int frames = (int)(r / 4);
-        int64_t sum = 0, acc = 0, sumR = 0, accR = 0;
         bool dropped = false;
         if (xSemaphoreTake(s_rec.mux, pdMS_TO_TICKS(50)) == pdTRUE) {
             for (int i = 0; i < frames; i++) {
-                const int32_t v = buf[2 * i];      // slot L (mono capturado)
-                const int32_t vr = buf[2 * i + 1]; // slot R (telemetria)
-                sum += v;
-                acc += (int64_t)v * v;
-                sumR += vr;
-                accR += (int64_t)vr * vr;
-                if (s_rec.n < s_rec.cap) s_rec.pcm[s_rec.n++] = (int16_t)v;
+                if (s_rec.n < s_rec.cap) s_rec.pcm[s_rec.n++] = buf[2 * i];  // slot L (mono capturado)
                 else dropped = true;
             }
             if (dropped) s_rec.overflow = true;
@@ -846,16 +839,8 @@ void micRecTask(void*) {
         } else {
             s_rec.overflow = true;
         }
-        const int64_t mean = frames > 0 ? sum / frames : 0;
-        int64_t var = frames > 0 ? acc / frames - mean * mean : 0;
-        if (var < 0) var = 0;
-        int lvl = (int)sqrtf((float)var) / 60;
-        s_rec.level = lvl > 100 ? 100 : lvl;
-        const int64_t meanR = frames > 0 ? sumR / frames : 0;
-        int64_t varR = frames > 0 ? accR / frames - meanR * meanR : 0;
-        if (varR < 0) varR = 0;
-        int lvlR = (int)sqrtf((float)varR) / 60;
-        s_rec.levelR = lvlR > 100 ? 100 : lvlR;
+        s_rec.level = rmsLevel100(buf, frames, 2, 0);
+        s_rec.levelR = rmsLevel100(buf, frames, 2, 1);  // telemetria de slot
         if (++tele % 31 == 0)  // ~1 s de chunks de 32 ms
             celer_log_printf("[micrec] slotL=%d slotR=%d\n", s_rec.level, s_rec.levelR);
         if (s_rec.n >= s_rec.cap) break;  // teto: encerra sozinho
@@ -866,6 +851,24 @@ void micRecTask(void*) {
     vTaskDelete(nullptr);
 }
 }  // namespace
+
+int rmsLevel100(const int16_t* samples, int n, int stride, int slot) {
+    if (n <= 0) return 0;
+    // Mic MEMS tem offset DC: RMS da componente AC (variancia), senao o
+    // "silencio" mede o offset e o nivel nunca chega perto de 0. Escala
+    // unica no firmware (micLevel, gravacao e wake word).
+    int64_t sum = 0, acc = 0;
+    for (int i = 0; i < n; i++) {
+        const int32_t v = samples[i * stride + slot];
+        sum += v;
+        acc += (int64_t)v * v;
+    }
+    const int64_t mean = sum / n;
+    int64_t var = acc / n - mean * mean;
+    if (var < 0) var = 0;
+    const int lvl = (int)sqrtf((float)var) / 60;  // fundo ~0-3, voz/media sala 15-40, grito >60
+    return lvl > 100 ? 100 : lvl;
+}
 
 void micPinsDirty() { s_micPinsDirty = true; }
 
@@ -997,34 +1000,15 @@ int micLevel() {
     // Gravacao em curso: a task do gravador e a unica leitora do canal —
     // o nivel ao vivo sai dela (ler aqui roubaria chunks do audio)
     if (s_rec.state != 0) return s_rec.done ? -1 : s_rec.level;
-    if (!micInit()) return -1;
     // Placa com codec de captura (watch): o ES7210 dorme entre usos —
     // religa a cada leitura (~1 ms de I2C; os clocks ja correm pelo canal).
     const BoardProfile& bp = Board::profile();
     if (bp.micCodecWake != nullptr && !bp.micCodecWake()) return -1;
 
-    int16_t buf[512];  // 256 frames stereo
-    size_t r = 0;
-    if (!micChanLock(150)) return -1;
-    const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
-    micChanUnlock();
-    if (rr != ESP_OK || r < 64) return -1;
-    const int frames = (int)(r / 4);
-    if (frames <= 0) return 0;
-    // Mic MEMS tem offset DC: RMS da componente AC (variancia), senao o
-    // "silencio" mede o offset e o nivel nunca chega perto de 0.
-    int64_t sum = 0, acc = 0;
-    for (int i = 0; i < frames; i++) {
-        const int32_t v = buf[2 * i];  // slot L
-        sum += v;
-        acc += (int64_t)v * v;
-    }
-    const int64_t mean = sum / frames;
-    int64_t var = acc / frames - mean * mean;
-    if (var < 0) var = 0;
-    const int rms = (int)sqrtf((float)var);
-    int lvl = rms / 60;  // fundo ~0-3, voz/media sala 15-40, grito >60
-    return lvl > 100 ? 100 : lvl;
+    int16_t mono[256];  // 32 ms de audio (um chunk do canal)
+    const int n = micReadMonoLocked(mono, 256);
+    if (n < 16) return -1;  // janela curta demais (antes: r < 64 bytes)
+    return rmsLevel100(mono, n, 1, 0);
 }
 
 // ---- gravacao de microfone: API do runtime (Mic.*) ---------------------------
