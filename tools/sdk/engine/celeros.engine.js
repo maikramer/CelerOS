@@ -14,7 +14,7 @@
 // keepAwake 13, smooth 22, playMusic 25, canvas nativo 28) — roda em toda
 // placa e no harness/emu sem mudanca. Veja Documentation/Game_Engine_Guide.
 
-var E = { version: '1.0.0' };
+var E = { version: '1.1.0' };
 var S = System;
 
 // ------------------------------------------------------- caps / init ------
@@ -33,6 +33,7 @@ E.caps = (function () {
         gradient: typeof S.fillGradient === 'function',
         arc: typeof S.fillArc === 'function',
         wide: typeof S.drawWideLine === 'function',
+        slots: typeof S.spriteSlots === 'function' ? S.spriteSlots() : 4,
         native: false, w: 240, h: 320
     };
 })();
@@ -434,7 +435,8 @@ E.pool = function (n, factory) {
 
 // --------------------------------------------------------- sprites -------
 
-// pool do firmware tem 4 slots; o que nao couber vira painter procedural
+// o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
+// PSRAM); o que nao couber vira painter procedural
 E.spr = {
     bases: [],
     _slots: {},
@@ -449,7 +451,7 @@ E.spr = {
         for (var i = 0; i < defs.length; i++) {
             var d = defs[i];
             var slot = { id: 0, w: d.w, h: d.h, paint: d.paint || null };
-            if (E.caps.sprites && E.spr._used < 4) {
+            if (E.caps.sprites && E.spr._used < E.caps.slots) {
                 var id = S.createSprite(d.w, d.h);
                 if (id) {
                     var ok = false;
@@ -944,6 +946,9 @@ E.audio = {
     },
     _song: null,
     _bpm: 120,
+    _duckSong: null,       // trilha guardada durante um duck
+    _duckFrom: 0,          // ms de retomada (ponto onde parou)
+    _duckUntil: 0,
 
     // song = {bpm, loops, tracks:[...]} (API 25); opts {startMs} retoma
     music: function (song, opts) {
@@ -959,6 +964,7 @@ E.audio = {
     },
     stop: function () {
         E.audio._song = null;
+        E.audio._duckSong = null;   // stop explicito vence um duck em curso
         if (typeof S.musicStop === 'function') {
             try { S.musicStop(); } catch (e) {}
         }
@@ -984,6 +990,26 @@ E.audio = {
         if (typeof mel[0] === 'number') mel = [mel];
         try { S.playTone(mel); } catch (e) {}
     },
+    // abafa a trilha por ms (um sfx alto, ex. explosao, rouba o canal):
+    // para a musica e o _tick retoma do ponto onde parou quando a janela
+    // fecha — sfx toca normal na janela (playing() esta falso)
+    duck: function (ms) {
+        var song = E.audio._song;
+        if (!song || E.audio.muted) return false;
+        var pos = -1;
+        if (typeof S.musicPos === 'function') {
+            try { pos = S.musicPos(); } catch (e) {}
+        }
+        // para sem passar pelo stop() (que cancelaria o proprio duck)
+        E.audio._song = null;
+        if (typeof S.musicStop === 'function') {
+            try { S.musicStop(); } catch (e) {}
+        }
+        E.audio._duckSong = song;
+        E.audio._duckFrom = pos > 0 ? pos : 0;
+        E.audio._duckUntil = S.millis() + ms;
+        return true;
+    },
     mute: function (on) {
         E.audio.muted = !!on;
         if (E.audio.muted) E.audio.stop();
@@ -994,6 +1020,15 @@ E.audio = {
         }
     },
     _tick: function () {
+        // janela do duck aberta: musica parada, nada a fazer
+        if (E.audio._duckSong) {
+            if (S.millis() < E.audio._duckUntil) return;
+            var song = E.audio._duckSong;
+            E.audio._duckSong = null;
+            // outra musica comecou durante a janela? ela fica
+            if (!E.audio._song) E.audio.music(song, { startMs: E.audio._duckFrom });
+            return;
+        }
         // reinicia a trilha quando os loops acabam
         if (E.audio._song && !E.audio.playing()) {
             try { S.playMusic(E.audio._song); } catch (e) {}

@@ -190,7 +190,7 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = chroma 
 
 - Assets are probed in `E.spr.bases` (set by `init({dir})` to `/local/apps/<dir>/assets/` and `/sd/apps/<dir>/assets/`).
 - **Transparency convention:** masterize PNGs with a *pure black* background (the chroma key) and turn interior blacks into near-black `(0,0,8)` — same trick as Supernova. Only slot-backed sprites support the key; painter fallbacks draw whatever you draw.
-- More defs than slots → extras become painter-only automatically. `E.spr.backed(name)` tells you whether a sprite got a real slot (fast chroma-key blit) or will draw through its painter.
+- More defs than slots → extras become painter-only automatically. `E.spr.backed(name)` tells you whether a sprite got a real slot (fast chroma-key blit) or will draw through its painter. `E.caps.slots` holds the probed limit (8 on API 29 PSRAM boards, 4 on older firmware) — budget your defs against it.
 
 Flipbook animation without extra slots: frames are painter functions (or loaded sprite names):
 
@@ -241,6 +241,9 @@ E.audio.sfx("coin");   // named sfx (skipped while music plays; sfxOverMusic=tru
 E.audio.sfx([880, 60]);        // or a raw [freq, ms]
 E.audio.sfx([[660,60],[880,80]]); // or a short melody (BLOCKING — keep it short)
 E.audio.stop(); E.audio.mute(true); E.audio.volume(80);
+E.audio.duck(600);  // mutes the track for ms (a loud sfx takes the channel);
+                    // the engine resumes it from where it stopped — sfx
+                    // unlock inside the window (playing() is false)
 ```
 
 Music auto-restarts when its loops end (keep-alive). Spawn-on-the-beat: `if (Math.floor(E.audio.beat()) !== lastBeat) spawn()`. Default sfx table: `ui, ok, back, bad, hit, coin, boom` — replace entries in `E.audio.sfxTable`. Boards without a speaker (CYD) no-op everything.

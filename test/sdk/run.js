@@ -411,12 +411,12 @@ function check(name, ok, detail) {
 
 // ----------------------------------------------------------------- engine --
 (function () {
-    console.log('SDK engine (tools/sdk/engine/engine.js):');
+    console.log('SDK engine (tools/sdk/engine/celeros.engine.js):');
     var harness = require('../../test/js_harness/run.js');
     var ENGINE_DIR = path.join(ROOT, 'tools', 'sdk', 'engine');
 
-    // roda um snippet com require("engine") real sobre o harness (relogio
-    // virtual, touchQ); setup(env) roda antes do snippet
+    // roda um snippet com require("celeros.engine") real sobre o harness
+    // (relogio virtual, touchQ); setup(env) roda antes do snippet
     function runEngine(code, setup) {
         var env = harness.makeEnv();
         var req = harness.makeRequire(ENGINE_DIR, env);
@@ -430,7 +430,7 @@ function check(name, ok, detail) {
 
     // caps e init
     var r = runEngine(
-        'var E = require("engine");' +
+        'var E = require("celeros.engine");' +
         '__harness.grab("caps", E.init({ fps: 30, save: "tst." }));' +
         '__harness.grab("wh", [E.W, E.H]);');
     check('init devolve caps com tela 240x320',
@@ -442,7 +442,7 @@ function check(name, ok, detail) {
 
     // cenas: enter/update/draw/exit na ordem, goto e quit
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var marks = [];' +
         'E.run({' +
         '  a: { enter: function () { marks.push("a.enter"); },' +
@@ -460,7 +460,7 @@ function check(name, ok, detail) {
 
     // input: tap, swipe e justDown sinteticos via touchQ
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var ev = [];' +
         'E.run({ jogo: { update: function () {' +
         '  if (E.input.justDown) ev.push("down");' +
@@ -481,7 +481,7 @@ function check(name, ok, detail) {
 
     // timers da engine: after e every (tickados pelo loop, sem setTimeout)
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var got = [];' +
         'E.after(200, function () { got.push("after"); });' +
         'var id = E.every(100, function () { got.push("every"); E.cancel(id); });' +
@@ -494,7 +494,7 @@ function check(name, ok, detail) {
 
     // tween com easing linear chega no alvo e chama onDone
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var obj = { x: 0, done: false };' +
         'E.tween(obj, { x: 100 }, 500, { ease: E.m.linear,' +
         '          onDone: function () { obj.done = true; } });' +
@@ -505,7 +505,7 @@ function check(name, ok, detail) {
 
     // grupo: swap-pop remove mortos; pool recicla
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var g = E.group();' +
         'g.add({ update: function () { this.n = (this.n || 0) + 1; } });' +
         'g.add({ dead: true, update: function () { throw "nao devia rodar"; } });' +
@@ -528,7 +528,7 @@ function check(name, ok, detail) {
     // sprites sem API de sprite (placa pobre): painter e chamado no load e
     // no blit com x/y absolutos
     r = runEngine(
-        'var E = require("engine"); E.init({ dir: "Teste" });' +
+        'var E = require("celeros.engine"); E.init({ dir: "Teste" });' +
         'var painted = [];' +
         'E.spr.load([{ name: "heroi", file: "heroi", w: 8, h: 8,' +
         '  paint: function (w, h, x, y) { painted.push([w, h, x, y]); } }]);' +
@@ -543,7 +543,7 @@ function check(name, ok, detail) {
 
     // com sprites + PNG disponiveis, o slot aloca id do pool
     r = runEngine(
-        'var E = require("engine"); E.init({ dir: "Teste" });' +
+        'var E = require("celeros.engine"); E.init({ dir: "Teste" });' +
         'E.spr.load([{ name: "a", file: "a", w: 8, h: 8, paint: function () {} },' +
         '            { name: "b", file: "b", w: 8, h: 8, paint: function () {} }]);' +
         '__harness.grab("slots", [!!E.spr._slots.a.id, !!E.spr._slots.b.id, E.spr._used]);' +
@@ -556,7 +556,7 @@ function check(name, ok, detail) {
 
     // fx: burst spawna, tick mata por life, popText registra floater
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'E.fx.burst(120, 160, { n: 5, life: 0.2 });' +
         'var vivas0 = 0;' +
         'for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) vivas0++;' +
@@ -573,7 +573,7 @@ function check(name, ok, detail) {
 
     // audio: sfx por nome e melodia, beat via musicPos
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'var b0 = E.audio.beat();' +
         'E.audio.sfx("ui");' +
         'E.audio.sfx("inexistente");' +
@@ -590,9 +590,64 @@ function check(name, ok, detail) {
           r.grabbed.aud[0] === -1 && r.grabbed.aud[1] === true && r.grabbed.aud[2] === true,
           JSON.stringify(r.grabbed.aud));
 
+    // slots por sonda: o cap vem do firmware (spriteSlots) — a def que passa
+    // do limite vira painter; sem a chamada (firmware velho) fica em 4
+    function slotDefs(n) {
+        var defs = [];
+        for (var i = 0; i < n; i++)
+            defs.push({ name: 's' + i, w: 8, h: 8, paint: function () {} });
+        return defs;
+    }
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({ dir: "Teste" });' +
+        '__harness.grab("cap", E.caps.slots);' +
+        'E.spr.load(__harness.defs);' +
+        '__harness.grab("res", [E.spr._used, E.spr.backed("s3"), E.spr.backed("s4")]);',
+        function (env) { env.__harness.defs = slotDefs(5); });
+    check('slots: cap 4 do stub — 4 slots e a 5a def vira painter',
+          r.grabbed.cap === 4 && r.grabbed.res[0] === 4 &&
+          r.grabbed.res[1] === true && r.grabbed.res[2] === false,
+          JSON.stringify(r.grabbed));
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({ dir: "Teste" });' +
+        '__harness.grab("cap", E.caps.slots);' +
+        'E.spr.load(__harness.defs);' +
+        '__harness.grab("res", [E.spr._used, E.spr.backed("s7"), E.spr.backed("s8")]);',
+        function (env) {
+            env.System.spriteSlots = function () { return 8; };
+            env.__harness.defs = slotDefs(9);
+        });
+    check('slots: cap 8 (API 29) — 8 slots e a 9a def vira painter',
+          r.grabbed.cap === 8 && r.grabbed.res[0] === 8 &&
+          r.grabbed.res[1] === true && r.grabbed.res[2] === false,
+          JSON.stringify(r.grabbed));
+
+    // audio.duck: abafa a trilha (sfx destrava na janela) e retoma sozinho
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var semMusica = E.audio.duck(300);' +
+        'E.audio.music({ bpm: 120, loops: 1,' +
+        '  tracks: [{ wave: "sq", vol: 80, notes: [[69, 16]] }] });' +
+        'var d1 = E.audio.duck(500);' +
+        'var parada = E.audio.playing();' +
+        'E.audio.sfx("boom");' +
+        'E.audio._tick();' +
+        'var aindaParada = E.audio.playing();' +
+        'System.delay(600);' +
+        'E.audio._tick();' +
+        '__harness.grab("duck", [semMusica, d1, parada, aindaParada, E.audio.playing()]);');
+    var duckTones = r.log.filter(function (l) { return l.indexOf('[tone]') === 0; });
+    check('audio.duck: sfx toca na janela (playing falso destrava o canal)',
+          duckTones.length === 1, JSON.stringify(duckTones));
+    check('audio.duck: para a trilha e retoma sozinho depois da janela',
+          r.grabbed.duck[0] === false && r.grabbed.duck[1] === true &&
+          r.grabbed.duck[2] === false && r.grabbed.duck[3] === false &&
+          r.grabbed.duck[4] === true,
+          JSON.stringify(r.grabbed.duck));
+
     // save: prefixo + best (recorde)
     r = runEngine(
-        'var E = require("engine"); E.init({ save: "tst." });' +
+        'var E = require("celeros.engine"); E.init({ save: "tst." });' +
         'E.save.set("hi", 42);' +
         'var get = [E.save.get("hi"), E.save.get("nada", "def"), E.save.num("hi")];' +
         'var b1 = E.save.best("hi", 10);' +
@@ -607,7 +662,7 @@ function check(name, ok, detail) {
 
     // mat/rng: clamp/lerp/wrap e xorshift deterministico
     r = runEngine(
-        'var E = require("engine");' +
+        'var E = require("celeros.engine");' +
         'var r1 = E.rng(42), r2 = E.rng(42);' +
         'var s1 = [r1(), r1(), r1()].join(","), s2 = [r2(), r2(), r2()].join(",");' +
         '__harness.grab("rng", [s1 === s2, s1.length > 0]);' +
@@ -619,7 +674,7 @@ function check(name, ok, detail) {
 
     // fps por cena: cena com fps 10 avanca o relogio ~100 ms por frame
     r = runEngine(
-        'var E = require("engine"); E.init({ fps: 60 });' +
+        'var E = require("celeros.engine"); E.init({ fps: 60 });' +
         'var frames = 0;' +
         'E.run({ lento: { fps: 10, update: function () {' +
         '  frames++; if (frames >= 6) E.quit(); } } }, "lento");' +
@@ -629,7 +684,7 @@ function check(name, ok, detail) {
 
     // E.fx.ring: onda de choque com expansao propria
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'E.fx.ring(100, 100, { speed: 500, color: 0xFFE0, life: 0.5 });' +
         'var p = null;' +
         'for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) p = E.fx._parts[i];' +
@@ -640,7 +695,7 @@ function check(name, ok, detail) {
 
     // spr.backed: sem createSprite o sprite existe, mas nao tem slot real
     r = runEngine(
-        'var E = require("engine"); E.init({});' +
+        'var E = require("celeros.engine"); E.init({});' +
         'E.spr.load([{ name: "x", file: "x", w: 4, h: 4, paint: function () {} }]);' +
         '__harness.grab("backed", [E.spr.has("x"), E.spr.backed("x")]);',
         function (env) { delete env.System.createSprite; delete env.System.drawPNG; });

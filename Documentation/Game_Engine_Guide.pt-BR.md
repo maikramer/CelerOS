@@ -190,7 +190,7 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = cor-cha
 
 - Os assets são sondados em `E.spr.bases` (o `init({dir})` monta `/local/apps/<dir>/assets/` e `/sd/apps/<dir>/assets/`).
 - **Convenção de transparência:** masterize os PNGs com fundo *preto puro* (a cor-chave) e transforme os pretos internos em quase-preto `(0,0,8)` — o mesmo truque do Supernova. Só sprite em slot aceita a chave; o painter desenha o que você mandar.
-- Mais defs que slots → os excedentes viram painter automaticamente. `E.spr.backed(name)` diz se o sprite ganhou slot real (blit com cor-chave rápido) ou vai desenhar pelo painter.
+- Mais defs que slots → os excedentes viram painter automaticamente. `E.spr.backed(name)` diz se o sprite ganhou slot real (blit com cor-chave rápido) ou vai desenhar pelo painter. `E.caps.slots` guarda o limite sondado (8 nas placas PSRAM com API 29, 4 em firmware velho) — orce suas defs contra ele.
 
 Flipbook sem slot extra: os frames são painters (ou nomes de sprite carregado):
 
@@ -241,6 +241,9 @@ E.audio.sfx("coin");   // sfx nomeado (pula enquanto a música toca; sfxOverMusi
 E.audio.sfx([880, 60]);           // ou [freq, ms] cru
 E.audio.sfx([[660,60],[880,80]]); // ou melodia curta (BLOQUEANTE — mantenha curta)
 E.audio.stop(); E.audio.mute(true); E.audio.volume(80);
+E.audio.duck(600);  // abafa a trilha por ms (um sfx alto rouba o canal);
+                    // a engine retoma do ponto onde parou — e o sfx
+                    // destrava na janela (playing() esta falso)
 ```
 
 A música reinicia sozinha quando os loops acabam (keep-alive). Spawnar na batida: `if (Math.floor(E.audio.beat()) !== ultimaBatida) spawna()`. Tabela de sfx default: `ui, ok, back, bad, hit, coin, boom` — troque entradas no `E.audio.sfxTable`. Placas sem alto-falante (CYD) não fazem nada.

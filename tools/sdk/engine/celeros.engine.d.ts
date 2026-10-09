@@ -9,12 +9,13 @@ declare namespace E {
         speaker: boolean;
         music: boolean;      // playMusic (API 25)
         png: boolean;        // drawPNG
-        sprites: boolean;    // createSprite (pool de 4)
+        sprites: boolean;    // createSprite
         smooth: boolean;     // fillSmoothCircle (API 22)
         round: boolean;      // fillSmoothRoundRect (API 22)
         gradient: boolean;   // fillGradient (API 22)
         arc: boolean;        // fillArc (API 22)
         wide: boolean;       // drawWideLine/mixColor (API 22)
+        slots: number;       // limite do pool (spriteSlots, API 29; 4 em firmware velho)
         native: boolean;     // canvas nativo ativo (API 28)
         w: number;
         h: number;
@@ -251,6 +252,8 @@ declare namespace E {
         playing(): boolean;
         beat(): number;      // -1 sem musica
         sfx(what: string | number[] | number[][]): void;
+        /** Abafa a trilha por ms (sfx alto rouba o canal) e retoma sozinho do ponto onde parou. */
+        duck(ms: number): boolean;
         mute(on: boolean): void;
         volume(v: number): void;
     };
