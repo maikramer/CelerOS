@@ -230,17 +230,13 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
 
     duk_push_object(ctx);
     if (s_kbEvent == KB_EV_ENTER) {
-        duk_push_string(ctx, "enter");
-        duk_put_prop_string(ctx, -2, "type");
-        duk_push_string(ctx, s_kbEnterText.c_str());
-        duk_put_prop_string(ctx, -2, "text");
+        putStr(ctx, "type", "enter");
+        putStr(ctx, "text", s_kbEnterText.c_str());
         s_kbEnterText.clear();
     } else if (s_kbEvent == KB_EV_CHANGE) {
-        duk_push_string(ctx, "change");
-        duk_put_prop_string(ctx, -2, "type");
+        putStr(ctx, "type", "change");
     } else {  // cancel: o X encerrou a sessao
-        duk_push_string(ctx, "cancel");
-        duk_put_prop_string(ctx, -2, "type");
+        putStr(ctx, "type", "cancel");
         keypadCloseSession();
     }
     return 1;
@@ -264,14 +260,10 @@ duk_ret_t JSBindings::js_keypadRect(duk_context *ctx) {
         if (topV > 320) topV = 320;
     }
     duk_push_object(ctx);
-    duk_push_int(ctx, 0);
-    duk_put_prop_string(ctx, -2, "x");
-    duk_push_int(ctx, topV);
-    duk_put_prop_string(ctx, -2, "y");
-    duk_push_int(ctx, 240);
-    duk_put_prop_string(ctx, -2, "w");
-    duk_push_int(ctx, 320 - topV);
-    duk_put_prop_string(ctx, -2, "h");
+    putInt(ctx, "x", 0);
+    putInt(ctx, "y", topV);
+    putInt(ctx, "w", 240);
+    putInt(ctx, "h", 320 - topV);
     return 1;
 }
 

@@ -45,20 +45,17 @@ duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
     if (timeoutMs < 500) timeoutMs = 500;
     if (timeoutMs > 8000) timeoutMs = 8000;
 
-    present();  // bloqueante por segundos
+    // Bloqueante por segundos: a tela fica viva e a janela do exec-timeout
+    // renova para o retorno (espera de 0,5-8s)
     CelerLink::Peer peers[16];  // = cache do scan; RSSI mais forte primeiro
-    int n = CelerLink::scan((uint32_t)timeoutMs, peers, 16);
-    CelerKernel::noteAppYield();  // espera de 0,5-8s: renova a janela p/ o retorno
+    int n = jsBlocking([&] { return CelerLink::scan((uint32_t)timeoutMs, peers, 16); });
 
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
         duk_push_object(ctx);
-        duk_push_string(ctx, peers[i].id);
-        duk_put_prop_string(ctx, -2, "id");
-        duk_push_string(ctx, peers[i].name);
-        duk_put_prop_string(ctx, -2, "name");
-        duk_push_int(ctx, peers[i].rssi);
-        duk_put_prop_string(ctx, -2, "rssi");
+        putStr(ctx, "id", peers[i].id);
+        putStr(ctx, "name", peers[i].name);
+        putInt(ctx, "rssi", peers[i].rssi);
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
@@ -71,9 +68,7 @@ duk_ret_t JSBindings::js_linkConnect(duk_context *ctx) {
     if (timeoutMs < 1000) timeoutMs = 1000;
     if (timeoutMs > 8000) timeoutMs = 8000;
 
-    present();  // bloqueante por segundos
-    bool ok = CelerLink::connect(id, (uint32_t)timeoutMs);
-    CelerKernel::noteAppYield();  // espera de 1-8s
+    bool ok = jsBlocking([&] { return CelerLink::connect(id, (uint32_t)timeoutMs); });  // espera de 1-8s
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
@@ -85,9 +80,8 @@ duk_ret_t JSBindings::js_linkDisconnect(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_linkVerify(duk_context *ctx) {
     const char* code = duk_require_string(ctx, 0);
-    present();  // write + read ATT podem esperar segundos
-    bool ok = CelerLink::verify(code);
-    CelerKernel::noteAppYield();
+    // write + read ATT podem esperar segundos
+    bool ok = jsBlocking([&] { return CelerLink::verify(code); });
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
@@ -101,49 +95,15 @@ duk_ret_t JSBindings::js_linkUnpair(duk_context *ctx) {
     return 1;
 }
 
-// Erro de tamanho com mensagem pre-formatada e duk_error SEM argumentos de
-// conversao — throw com %d a partir de lightfunc corrompe o heap do runtime
-// (mesma razao do requirePin; bancada 2026-10-02).
-static void throwLinkSize(duk_context* ctx) {
-    char msg[64];
-    snprintf(msg, sizeof(msg), "mensagem deve ter 1 a %d bytes", (int)CelerLink::MAX_MSG);
-    duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
-}
-
 duk_ret_t JSBindings::js_linkSend(duk_context *ctx) {
     // String vai crua (bytes UTF-8); objeto e serializado como JSON —
     // comunicacao estruturada sem parser no firmware (quem le decide).
-    const char* data;
+    // jsMsgBytes: teto com erro pre-formatado (duk_error sem varargs).
+    char buf[CelerLink::MAX_MSG];
     size_t len;
-    if (duk_is_object(ctx, 0) && !duk_is_callable(ctx, 0)) {
-        const char* json = duk_json_encode(ctx, 0);
-        if (json == nullptr) {
-            duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
-            return 0;
-        }
-        len = strlen(json);
-        if (len == 0 || len > CelerLink::MAX_MSG) {
-            throwLinkSize(ctx);
-            return 0;
-        }
-        char buf[CelerLink::MAX_MSG];
-        memcpy(buf, json, len);  // ponteiro do duk nao sobrevive a proxima chamada
-        duk_push_boolean(ctx, CelerLink::send(buf, len) ? 1 : 0);
-        return 1;
-    }
-    data = duk_require_lstring(ctx, 0, &len);
-    if (len == 0 || len > CelerLink::MAX_MSG) {
-        throwLinkSize(ctx);
-        return 0;
-    }
+    const char* data = jsMsgBytes(ctx, 0, buf, CelerLink::MAX_MSG, "mensagem", &len);
     duk_push_boolean(ctx, CelerLink::send(data, len) ? 1 : 0);
     return 1;
-}
-
-static void throwSealedSize(duk_context* ctx) {
-    char msg[64];
-    snprintf(msg, sizeof(msg), "mensagem selada deve ter 1 a %d bytes", (int)CelerLink::MAX_SEALED);
-    duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
 }
 
 // CelerLink.sendSealed(objOuString) -> bool (API 21): igual ao send, mas
@@ -152,27 +112,8 @@ static void throwSealedSize(duk_context* ctx) {
 duk_ret_t JSBindings::js_linkSendSealed(duk_context *ctx) {
     char buf[CelerLink::MAX_MSG];
     size_t len;
-    if (duk_is_object(ctx, 0) && !duk_is_callable(ctx, 0)) {
-        const char* json = duk_json_encode(ctx, 0);
-        if (json == nullptr) {
-            duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
-            return 0;
-        }
-        len = strlen(json);
-        if (len == 0 || len > CelerLink::MAX_SEALED) {
-            throwSealedSize(ctx);
-            return 0;
-        }
-        memcpy(buf, json, len);
-    } else {
-        const char* s = duk_require_lstring(ctx, 0, &len);
-        if (len == 0 || len > CelerLink::MAX_SEALED) {
-            throwSealedSize(ctx);
-            return 0;
-        }
-        memcpy(buf, s, len);
-    }
-    const bool ok = CelerLink::sendSealed(buf, len);
+    const char* data = jsMsgBytes(ctx, 0, buf, CelerLink::MAX_SEALED, "mensagem selada", &len);
+    const bool ok = CelerLink::sendSealed(data, len);
     memset(buf, 0, sizeof(buf));  // segredo nao fica na pilha
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
@@ -207,32 +148,20 @@ duk_ret_t JSBindings::js_linkStatus(duk_context *ctx) {
     CelerLink::Info st;
     CelerLink::info(&st);
     duk_push_object(ctx);
-    duk_push_boolean(ctx, st.connected ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "connected");
-    duk_push_string(ctx, st.peer);
-    duk_put_prop_string(ctx, -2, "peer");
-    duk_push_boolean(ctx, st.listening ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "listening");
+    putBool(ctx, "connected", st.connected);
+    putStr(ctx, "peer", st.peer);
+    putBool(ctx, "listening", st.listening);
     // "central" = nos conectamos; "peripheral" = conectaram em nos
-    duk_push_string(ctx, !st.connected ? "" : (st.central ? "central" : "peripheral"));
-    duk_put_prop_string(ctx, -2, "role");
-    duk_push_string(ctx, st.name);
-    duk_put_prop_string(ctx, -2, "name");
-    duk_push_boolean(ctx, st.pairing ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "pairing");
-    duk_push_boolean(ctx, st.verified ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "verified");
+    putStr(ctx, "role", !st.connected ? "" : (st.central ? "central" : "peripheral"));
+    putStr(ctx, "name", st.name);
+    putBool(ctx, "pairing", st.pairing);
+    putBool(ctx, "verified", st.verified);
     // so faz sentido no peripheral em handshake pendente ("" nos demais):
     // e o codigo pra MOSTRAR NA TELA, nunca vai parar no peer
-    duk_push_string(ctx, st.code);
-    duk_put_prop_string(ctx, -2, "code");
-    duk_push_int(ctx, st.mtu);
-    duk_put_prop_string(ctx, -2, "mtu");
-    duk_push_int(ctx, st.rssi);
-    duk_put_prop_string(ctx, -2, "rssi");
-    duk_push_int(ctx, st.pending);
-    duk_put_prop_string(ctx, -2, "pending");
-    duk_push_uint(ctx, st.dropped);
-    duk_put_prop_string(ctx, -2, "dropped");
+    putStr(ctx, "code", st.code);
+    putInt(ctx, "mtu", st.mtu);
+    putInt(ctx, "rssi", st.rssi);
+    putInt(ctx, "pending", st.pending);
+    putUint(ctx, "dropped", st.dropped);
     return 1;
 }

@@ -263,10 +263,8 @@ duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_appData(duk_context *ctx) {
     // Pasta privada do app (F4): /local/data/<packageName>/ criada na
     // primeira chamada. Sem packageName no app.json devolve "".
-    if (s_appPkg.empty()) { duk_push_string(ctx, ""); return 1; }
-    std::string dir = "/local/data/" + s_appPkg;
-    FileSystem::mkdir("/local/data");
-    FileSystem::mkdir(dir.c_str());
+    std::string dir = jsAppDataDir();
+    if (dir.empty()) { duk_push_string(ctx, ""); return 1; }
     duk_push_string(ctx, (dir + "/").c_str());
     return 1;
 }

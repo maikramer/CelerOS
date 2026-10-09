@@ -87,6 +87,14 @@ static const AiProvider& aiProviderByName(const char* name) {
     return AI_PROVIDERS[0];
 }
 
+// Nome (ou null = default) pertence a tabela de providers?
+static bool aiProviderKnown(const char* name) {
+    for (const AiProvider& p : AI_PROVIDERS) {
+        if (name == nullptr || strcmp(name, p.id) == 0) return true;
+    }
+    return false;
+}
+
 // duk_error SEM varargs (regra do projeto: argumentos de conversao em
 // lightfunc corrompem o heap) — mensagem pre-formatada com snprintf
 static void aiThrow(duk_context* ctx, const char* fmt, const char* a) {
@@ -118,27 +126,7 @@ static void aiThrow(duk_context* ctx, const char* fmt, const char* a) {
 // devolve 400 do OpenRouter com a mensagem no r.detail.
 #define AI_TTS_VOICE "Charon"
 
-struct AiBody {
-    char* p = nullptr;
-    size_t n = 0, cap = 0;
-    bool append(const char* d, size_t len) {
-        if (n >= AI_MAX_BODY) return true;  // teto: descarta o excedente
-        if (len > AI_MAX_BODY - n) len = AI_MAX_BODY - n;
-        if (n + len > cap) {
-            size_t want = cap * 2 > n + len ? cap * 2 : n + len;
-            if (want < 1024) want = 1024;
-            if (want > AI_MAX_BODY) want = AI_MAX_BODY;
-            char* q = (char*)realloc(p, want);
-            if (q == nullptr) q = (char*)realloc(p, want = n + len);  // exato
-            if (q == nullptr) return false;
-            p = q;
-            cap = want;
-        }
-        memcpy(p + n, d, len);
-        n += len;
-        return true;
-    }
-};
+// Corpo no JsBodySink do JsInternal.h (teto AI_MAX_BODY, malloc/realloc).
 
 // Um slot serial: assistente conversa uma requisicao por vez. Estado
 // guardado por mutex e UM unico escritor — a task dona publica 1->2
@@ -149,7 +137,7 @@ struct AiSlot {
     bool discard = false;             // cancel/reset: resultado sera descartado
     bool ok = false;                  // HTTP 2xx
     int status = 0;
-    char* body = nullptr;             // malloc (AiBody), escrito SO pela task (1->2)
+    char* body = nullptr;             // malloc (JsBodySink), escrito SO pela task (1->2)
     size_t bodyLen = 0;
     char error[96] = {0};
     // Pedido (imutavel enquanto state==1; a task libera apos o POST)
@@ -172,16 +160,8 @@ struct AiSlot {
 static AiSlot s_aiSlot;
 static bool s_aiPending = false;  // callback do app esperando resultado
 
-static bool aiMuxTake(AiSlot& s) {
-    if (s.mux == nullptr) s.mux = xSemaphoreCreateMutex();
-    return s.mux != nullptr && xSemaphoreTake(s.mux, portMAX_DELAY) == pdTRUE;
-}
-
-static void aiFreeBody(AiSlot& s) {
-    free(s.body);
-    s.body = nullptr;
-    s.bodyLen = 0;
-}
+// mux/body do slot vieram para o JsInternal.h (jsSlotMuxTake/jsSlotFreeBody,
+// templates compartilhados com o Net assincrono)
 
 static char* aiDupBuf(const char* src, size_t n) {
     char* p = (char*)malloc(n + 1);
@@ -245,14 +225,14 @@ static void ttsDetailFrom(const char* body, char* out, size_t outLen) {
 void JSBindings::aiReset() {
     s_aiPending = false;
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) return;
+    if (!jsSlotMuxTake(s)) return;
     // fala do app anterior ainda na worker: silencia na hora (o slot pode
     // estar no meio do playback, que ignora o discard sozinho)
     if (s.speak && s.state == 1) AudioPlayer::requestStop();
     s.discard = true;
     if (s.state == 2) {
         s.state = 0;
-        aiFreeBody(s);
+        jsSlotFreeBody(s);
         free(s.path);
         s.path = nullptr;
     }
@@ -316,7 +296,7 @@ static HttpResponse aiHttpPost(HttpClient& http, const char* url, const std::str
 // Um POST: le o pedido do slot (state==1) e publica o resultado (state==2).
 // Corpo do worker persistente abaixo.
 static void aiRunRequest(AiSlot* s) {
-    AiBody got;
+    JsBodySink<AI_MAX_BODY> got;
     bool ok;
     int status;
     char err[96];
@@ -356,26 +336,7 @@ static void aiRunRequest(AiSlot* s) {
     }  // TLS viva no cliente persistente: o resultado publica sem ela em jogo
     free(s->key);
     s->key = nullptr;
-    if (aiMuxTake(*s)) {
-        aiFreeBody(*s);
-        if (s->discard) {
-            free(got.p);
-            s->ok = false;
-            s->status = 0;
-            snprintf(s->error, sizeof(s->error), "cancelado");
-        } else {
-            s->ok = ok;
-            s->status = status;
-            s->body = got.p;  // posse transferida ao slot
-            s->bodyLen = got.n;
-            snprintf(s->error, sizeof(s->error), "%s", err);
-        }
-        s->discard = false;
-        s->state = 2;
-        xSemaphoreGive(s->mux);
-    } else {
-        free(got.p);
-    }
+    jsSlotPublish(*s, got.p, got.n, ok, status, err);
 }
 
 // Um POST de FALA (AI.speak), tudo na worker (o JS segue livre). O status
@@ -399,7 +360,7 @@ static void aiRunSpeak(AiSlot* s) {
     bool statusOk = false, liveOpened = false, feedOk = true;
     bool toFile = false, fileOpened = false;
     FILE* f = nullptr;
-    AiBody errBody;
+    JsBodySink<AI_MAX_BODY> errBody;
     char part[104];
     snprintf(part, sizeof(part), "%s.part", s->path);
     // Voz ao vivo: o download so ENFILEIRA no PcmFeed (player proprio, fila
@@ -586,8 +547,8 @@ static void aiRunSpeak(AiSlot* s) {
         s->path = nullptr;
     }
 
-    if (aiMuxTake(*s)) {
-        aiFreeBody(*s);
+    if (jsSlotMuxTake(*s)) {
+        jsSlotFreeBody(*s);
         if (s->discard) {
             free(s->path);
             s->path = nullptr;
@@ -635,7 +596,7 @@ static char* s_aiWarmKey = nullptr;
 // voz e correm enquanto o dono ainda fala. Corpo descartado.
 static void aiRunWarm() {
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) return;
+    if (!jsSlotMuxTake(s)) return;
     const AiProvider* prov = s_aiWarmProv;
     char* key = s_aiWarmKey;
     s_aiWarmProv = nullptr;
@@ -692,7 +653,7 @@ static void aiWorker(void*) {
         // Acordar nao implica pedido (warm, give atrasado): so roda com o
         // slot em 1. speak e fixado no begin ANTES do state 1 (sob lock)
         bool run = false;
-        if (aiMuxTake(s_aiSlot)) {
+        if (jsSlotMuxTake(s_aiSlot)) {
             run = (s_aiSlot.state == 1);
             xSemaphoreGive(s_aiSlot.mux);
         }
@@ -758,7 +719,7 @@ static bool aiWakeWorker(duk_context* ctx) {
     if (s_aiWorker == nullptr || s_aiWork == nullptr) {
         // worker nao nasceu: devolve o slot e esquece o callback
         AiSlot& s = s_aiSlot;
-        aiMuxTake(s);
+        jsSlotMuxTake(s);
         if (s.state == 1) s.state = 0;
         xSemaphoreGive(s.mux);
         s_aiPending = false;
@@ -781,19 +742,13 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     JSBindings::present();  // cedida universal: o "Pensando..." aparece antes
     duk_require_object(ctx, 0);
     duk_require_callable(ctx, 1);
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "AI: WiFi is not connected");
-    }
+    jsRequireWifi(ctx, "AI");
     // Provider (opts.provider): "deepseek" e o default. Nome desconhecido
     // lanca na cara do app — errar a casa mandaria a chave pro lugar errado.
     duk_get_prop_string(ctx, 0, "provider");
     const char* provName = duk_is_string(ctx, -1) ? duk_get_string(ctx, -1) : nullptr;
     duk_pop(ctx);
-    bool provKnown = false;
-    for (const AiProvider& p : AI_PROVIDERS) {
-        if (provName == nullptr || strcmp(provName, p.id) == 0) { provKnown = true; break; }
-    }
-    if (!provKnown) {
+    if (!aiProviderKnown(provName)) {
         aiThrow(ctx, "AI: provider '%.40s' desconhecido", provName);
     }
     const AiProvider& prov = aiProviderByName(provName);
@@ -805,15 +760,12 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     // Defaults do framework por cima do opts do app
     duk_dup(ctx, 0);
     duk_del_prop_string(ctx, -1, "provider");  // campo interno: nao viaja no JSON
-    duk_push_boolean(ctx, 0);  // o runtime nao consome SSE
-    duk_put_prop_string(ctx, -2, "stream");
+    putBool(ctx, "stream", 0);  // o runtime nao consome SSE
     if (!duk_has_prop_string(ctx, -1, "model")) {
-        duk_push_string(ctx, prov.defaultModel);
-        duk_put_prop_string(ctx, -2, "model");
+        putStr(ctx, "model", prov.defaultModel);
     }
     if (!duk_has_prop_string(ctx, -1, "max_tokens")) {
-        duk_push_int(ctx, 1024);  // limita latencia e o corpo longe do teto
-        duk_put_prop_string(ctx, -2, "max_tokens");
+        putInt(ctx, "max_tokens", 1024);  // limita latencia e o corpo longe do teto
     }
     duk_get_prop_string(ctx, -1, "messages");
     if (!duk_is_array(ctx, -1)) {
@@ -828,7 +780,7 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     const char* encoded = duk_get_lstring(ctx, -1, &encLen);
 
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) { duk_pop(ctx); duk_push_boolean(ctx, 0); return 1; }
+    if (!jsSlotMuxTake(s)) { duk_pop(ctx); duk_push_boolean(ctx, 0); return 1; }
     if (s.state == 1) {  // requisicao em curso (ou zumbi cancelado)
         xSemaphoreGive(s.mux);
         duk_pop(ctx);
@@ -839,7 +791,7 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     s.discard = false;
     s.ok = false;
     s.status = 0;
-    aiFreeBody(s);
+    jsSlotFreeBody(s);
     s.error[0] = '\0';
     s.speak = false;  // este pedido e chat (a worker ramifica pelo campo)
     free(s.path);
@@ -874,9 +826,7 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     JSBindings::present();  // cedida universal: o "Pensando..." aparece antes
     duk_require_object(ctx, 0);
     duk_require_callable(ctx, 1);
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "AI: WiFi is not connected");
-    }
+    jsRequireWifi(ctx, "AI");
     const AiProvider& prov = aiProviderByName("openrouter");
     if (prov.ttsUrl == nullptr) {
         duk_error(ctx, DUK_ERR_ERROR, "AI.speak: provider sem TTS");
@@ -917,12 +867,11 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     }
     duk_pop(ctx);
     if (path[0] == '\0') {
-        if (s_appPkg.empty()) {
+        // destino default = appData do app corrente (mesma casa do FS.appData)
+        std::string dir = jsAppDataDir();
+        if (dir.empty()) {
             duk_error(ctx, DUK_ERR_ERROR, "AI.speak: app sem packageName; passe opts.path");
         }
-        std::string dir = "/local/data/" + s_appPkg;
-        FileSystem::mkdir("/local/data");
-        FileSystem::mkdir(dir.c_str());
         snprintf(path, sizeof(path), "%s/tts.wav", dir.c_str());
     }
     if (!fsWriteAllowed(path)) {
@@ -936,18 +885,15 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     if (duk_is_string(ctx, -1)) duk_put_prop_string(ctx, -2, "model");
     else {
         duk_pop(ctx);
-        duk_push_string(ctx, prov.ttsModel);
-        duk_put_prop_string(ctx, -2, "model");
+        putStr(ctx, "model", prov.ttsModel);
     }
     duk_get_prop_string(ctx, 0, "voice");
     if (duk_is_string(ctx, -1)) duk_put_prop_string(ctx, -2, "voice");
     else {
         duk_pop(ctx);
-        duk_push_string(ctx, AI_TTS_VOICE);
-        duk_put_prop_string(ctx, -2, "voice");
+        putStr(ctx, "voice", AI_TTS_VOICE);
     }
-    duk_push_string(ctx, "pcm");  // mp3 saiu do firmware (migracao QOA)
-    duk_put_prop_string(ctx, -2, "response_format");
+    putStr(ctx, "response_format", "pcm");  // mp3 saiu do firmware (migracao QOA)
     duk_dup(ctx, -2);  // text (2 abaixo do objeto): vira o campo input
     duk_put_prop_string(ctx, -2, "input");
     duk_json_encode(ctx, -1);
@@ -964,7 +910,7 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     duk_pop(ctx);
 
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) { duk_pop_2(ctx); duk_push_boolean(ctx, 0); return 1; }
+    if (!jsSlotMuxTake(s)) { duk_pop_2(ctx); duk_push_boolean(ctx, 0); return 1; }
     if (s.state == 1) {  // chat/fala em curso (ou zumbi cancelado)
         xSemaphoreGive(s.mux);
         duk_pop_2(ctx);
@@ -974,7 +920,7 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     s.discard = false;
     s.ok = false;
     s.status = 0;
-    aiFreeBody(s);
+    jsSlotFreeBody(s);
     s.error[0] = '\0';
     s.outBytes = 0;
     s.played = false;
@@ -1010,10 +956,7 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
 // Nome desconhecido devolve false (nao lanca: e um detector, nao uma chamada)
 duk_ret_t JSBindings::js_aiConfigured(duk_context *ctx) {
     const char* provName = duk_is_string(ctx, 0) ? duk_get_string(ctx, 0) : nullptr;
-    bool known = false;
-    for (const AiProvider& p : AI_PROVIDERS) {
-        if (provName == nullptr || strcmp(provName, p.id) == 0) { known = true; break; }
-    }
+    bool known = aiProviderKnown(provName);
     duk_push_boolean(ctx, (known && !aiReadKey(aiProviderByName(provName)).empty()) ? 1 : 0);
     return 1;
 }
@@ -1027,11 +970,7 @@ duk_ret_t JSBindings::js_aiConfigured(duk_context *ctx) {
 // la o handle nao fica vivo entre pedidos — ou pedido ja no ar).
 duk_ret_t JSBindings::js_aiWarm(duk_context *ctx) {
     const char* provName = duk_is_string(ctx, 0) ? duk_get_string(ctx, 0) : nullptr;
-    bool known = false;
-    for (const AiProvider& p : AI_PROVIDERS) {
-        if (provName == nullptr || strcmp(provName, p.id) == 0) { known = true; break; }
-    }
-    if (!known || !Board::profile().hasPsram || !WebManager::isWifiConnected()) {
+    if (!aiProviderKnown(provName) || !Board::profile().hasPsram || !WebManager::isWifiConnected()) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -1045,7 +984,7 @@ duk_ret_t JSBindings::js_aiWarm(duk_context *ctx) {
     }
     AiSlot& s = s_aiSlot;
     bool queued = false;
-    if (aiMuxTake(s)) {
+    if (jsSlotMuxTake(s)) {
         if (s.state != 1) {  // pedido no ar ja usa (e aquece) a conexao
             free(s_aiWarmKey);
             s_aiWarmKey = k;
@@ -1068,7 +1007,7 @@ duk_ret_t JSBindings::js_aiWarm(duk_context *ctx) {
 duk_ret_t JSBindings::js_aiCancel(duk_context *ctx) {
     AiSlot& s = s_aiSlot;
     bool dropped = false;
-    if (aiMuxTake(s)) {
+    if (jsSlotMuxTake(s)) {
         if (s.state == 1) {
             s.discard = true;
             dropped = true;
@@ -1158,22 +1097,15 @@ static void aiToolCallsFromMessage(duk_context* ctx) {
 static duk_ret_t aiPushSpeakResult(duk_context* ctx, void* udata) {
     AiResult* r = (AiResult*)udata;
     duk_push_object(ctx);
-    duk_push_boolean(ctx, r->ok ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "ok");
-    duk_push_int(ctx, r->status);
-    duk_put_prop_string(ctx, -2, "status");
-    duk_push_string(ctx, r->path);
-    duk_put_prop_string(ctx, -2, "path");
-    duk_push_int(ctx, (duk_int_t)r->outBytes);
-    duk_put_prop_string(ctx, -2, "bytes");
-    duk_push_boolean(ctx, r->played ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "played");
+    putBool(ctx, "ok", r->ok);
+    putInt(ctx, "status", r->status);
+    putStr(ctx, "path", r->path);
+    putInt(ctx, "bytes", (duk_int_t)r->outBytes);
+    putBool(ctx, "played", r->played);
     if (!r->ok) {
-        duk_push_string(ctx, r->error);
-        duk_put_prop_string(ctx, -2, "error");
+        putStr(ctx, "error", r->error);
         if (r->detail[0] != '\0') {
-            duk_push_string(ctx, r->detail);
-            duk_put_prop_string(ctx, -2, "detail");
+            putStr(ctx, "detail", r->detail);
         }
     }
     return 1;
@@ -1182,17 +1114,13 @@ static duk_ret_t aiPushSpeakResult(duk_context* ctx, void* udata) {
 static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
     AiResult* r = (AiResult*)udata;
     duk_push_object(ctx);
-    duk_push_boolean(ctx, r->ok ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "ok");
-    duk_push_int(ctx, r->status);
-    duk_put_prop_string(ctx, -2, "status");
-    duk_push_lstring(ctx, r->body ? r->body : "", r->bodyLen);
-    duk_put_prop_string(ctx, -2, "raw");
+    putBool(ctx, "ok", r->ok);
+    putInt(ctx, "status", r->status);
+    putLStr(ctx, "raw", r->body ? r->body : "", r->bodyLen);
     duk_push_null(ctx);
     duk_put_prop_string(ctx, -2, "content");
     if (!r->ok) {
-        duk_push_string(ctx, r->error);
-        duk_put_prop_string(ctx, -2, "error");
+        putStr(ctx, "error", r->error);
         // Detalhe do erro da API (corpo {"error":{"message":...}}): chave
         // invalida, saldo, rate limit — sem isso o app so ve "HTTP 401"
         duk_push_lstring(ctx, r->body ? r->body : "", r->bodyLen);
@@ -1263,7 +1191,7 @@ static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
 void JSBindings::aiTick(duk_context* ctx) {
     if (ctx == nullptr || !s_aiPending) return;
     AiSlot& s = s_aiSlot;
-    if (!aiMuxTake(s)) return;
+    if (!jsSlotMuxTake(s)) return;
     if (s.state != 2) {
         xSemaphoreGive(s.mux);
         return;

@@ -10,6 +10,9 @@
 #include "../Display/Layout.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Display/FrameSprite.h"
+#include "../Kernel/Core/CelerKernel.h"
+#include "../WebManager/WebManager.h"
+#include "../FileSystem/FileSystem.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 
 extern CelerDisplay* s_jsTft;
@@ -147,6 +150,226 @@ inline int jsu(int v) {
 }
 inline int jsH(int v) { return appSh(v); }
 inline int jsy(int v) { return JSBindings::mapY(v); }
+
+// ===================== helpers compartilhados dos bindings =====================
+// put*: propriedade tipada no objeto de retorno do topo da pilha. Encurtam os
+// corpos js_* (o par push+put_prop se repetia ~240x); o parser do manifest
+// (tools/app_lint) le apenas o init() do JSBindings, que segue com as
+// chamadas literais — os corpos nao passam por ele.
+inline void putInt(duk_context* ctx, const char* k, int v) {
+    duk_push_int(ctx, v);
+    duk_put_prop_string(ctx, -2, k);
+}
+inline void putUint(duk_context* ctx, const char* k, unsigned int v) {
+    duk_push_uint(ctx, v);
+    duk_put_prop_string(ctx, -2, k);
+}
+inline void putNum(duk_context* ctx, const char* k, double v) {
+    duk_push_number(ctx, v);
+    duk_put_prop_string(ctx, -2, k);
+}
+inline void putBool(duk_context* ctx, const char* k, bool v) {
+    duk_push_boolean(ctx, v ? 1 : 0);
+    duk_put_prop_string(ctx, -2, k);
+}
+inline void putStr(duk_context* ctx, const char* k, const char* v) {
+    duk_push_string(ctx, v);
+    duk_put_prop_string(ctx, -2, k);
+}
+inline void putLStr(duk_context* ctx, const char* k, const char* v, size_t len) {
+    duk_push_lstring(ctx, v, (duk_size_t)len);
+    duk_put_prop_string(ctx, -2, k);
+}
+
+// Id hex de 4 digitos do no da malha (CelerNet/Pack) como propriedade de um
+// objeto de retorno: o par snprintf+"%04X" era copiado 6x entre JsMesh/JsPack.
+inline void putNodeId(duk_context* ctx, const char* k, uint16_t id) {
+    char s[8];
+    snprintf(s, sizeof(s), "%04X", id);
+    duk_push_string(ctx, s);
+    duk_put_prop_string(ctx, -2, k);
+}
+
+// String crua (bytes UTF-8) ou objeto serializado como JSON — quem le do
+// outro lado decide o formato (mesma regra do CelerLink.send). Teto com
+// RangeError pre-formatado (duk_error com %d a partir de lightfunc corrompe
+// o heap — bancada 2026-10-02) e TypeError se o valor nao serializa. O
+// caminho string devolve o ponteiro do duk (estavel enquanto o valor nao
+// sai da pilha); o JSON devolve a copia em buf (o ponteiro do encode nao
+// sobrevive a proxima chamada). "what" abre a mensagem de tamanho
+// ("mensagem", "mensagem selada", "envelope"...).
+inline const char* jsMsgBytes(duk_context* ctx, duk_idx_t idx, uint8_t* buf,
+                              size_t cap, const char* what, size_t* len) {
+    if (duk_is_object(ctx, idx) && !duk_is_callable(ctx, idx)) {
+        const char* json = duk_json_encode(ctx, idx);
+        if (json == nullptr) duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
+        size_t n = strlen(json);
+        if (n == 0 || n > cap) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "%s deve ter 1 a %d bytes", what, (int)cap);
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+        }
+        memcpy(buf, json, n);
+        *len = n;
+        return (const char*)buf;
+    }
+    const char* s = duk_require_lstring(ctx, idx, len);
+    if (*len == 0 || *len > cap) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%s deve ter 1 a %d bytes", what, (int)cap);
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+    }
+    return s;
+}
+
+// ----------------------------------------------------------- opcoes JS ----
+// Propriedade opcional de um objeto de opcoes no idx: ausente ou tipo errado
+// devolve o default (lightfunc: a pilha SEMPRE tem nargs entradas, faltante
+// = undefined — por isso o teste de tipo, nao de contagem).
+inline int optInt(duk_context* ctx, duk_idx_t idx, const char* key, int def) {
+    if (!duk_is_object(ctx, idx)) return def;
+    int v = def;
+    if (duk_get_prop_string(ctx, idx, key) && duk_is_number(ctx, -1)) v = duk_get_int(ctx, -1);
+    duk_pop(ctx);
+    return v;
+}
+inline unsigned int optUint(duk_context* ctx, duk_idx_t idx, const char* key, unsigned int def) {
+    if (!duk_is_object(ctx, idx)) return def;
+    unsigned int v = def;
+    if (duk_get_prop_string(ctx, idx, key) && duk_is_number(ctx, -1)) v = duk_get_uint(ctx, -1);
+    duk_pop(ctx);
+    return v;
+}
+inline bool optBool(duk_context* ctx, duk_idx_t idx, const char* key, bool def) {
+    if (!duk_is_object(ctx, idx)) return def;
+    bool v = def;
+    if (duk_get_prop_string(ctx, idx, key) && !duk_is_undefined(ctx, -1)) v = duk_to_boolean(ctx, -1) != 0;
+    duk_pop(ctx);
+    return v;
+}
+// Ponteiro valido enquanto o objeto de opcoes estiver vivo (argumento)
+inline const char* optStr(duk_context* ctx, duk_idx_t idx, const char* key, const char* def) {
+    if (!duk_is_object(ctx, idx)) return def;
+    const char* v = def;
+    if (duk_get_prop_string(ctx, idx, key) && duk_is_string(ctx, -1)) v = duk_get_string(ctx, -1);
+    duk_pop(ctx);
+    return v;
+}
+// Cor JS (RGB565) opcional -> RGB888; def ja em 888
+inline uint32_t optColor(duk_context* ctx, duk_idx_t idx, const char* key, uint32_t def) {
+    int v = optInt(ctx, idx, key, -1);
+    return v < 0 ? def : jsc((uint32_t)v);
+}
+// Texto de argumento (qualquer tipo vira string; undefined/null = "")
+inline const char* argStr(duk_context* ctx, duk_idx_t idx) {
+    if (duk_is_null_or_undefined(ctx, idx)) return "";
+    return duk_to_string(ctx, idx);
+}
+// Texto obrigatorio: undefined e erro de tipo (o resto vira string). Nome no
+// molde require* para o app_lint inferir a aridade minima.
+inline const char* requireText(duk_context* ctx, duk_idx_t idx) {
+    if (duk_is_undefined(ctx, idx)) duk_error(ctx, DUK_ERR_TYPE_ERROR, "texto obrigatorio");
+    return argStr(ctx, idx);
+}
+
+// Chamada de rede exige WiFi conectado: erro legivel no script em vez de um
+// null silencioso (prefixo do modulo na mensagem — "Net:", "AI:"). duk_error
+// SEM argumentos de conversao (regra do lightfunc).
+inline void jsRequireWifi(duk_context* ctx, const char* who) {
+    if (WebManager::isWifiConnected()) return;
+    char msg[48];
+    snprintf(msg, sizeof(msg), "%s: WiFi is not connected", who);
+    duk_error(ctx, DUK_ERR_ERROR, msg);
+}
+
+// Pasta privada do app corrente (/local/data/<pkg>), criando a arvore.
+// Vazia quando o app nao tem packageName — o chamador decide o que fazer.
+inline std::string jsAppDataDir() {
+    if (s_appPkg.empty()) return std::string();
+    std::string dir = "/local/data/" + s_appPkg;
+    FileSystem::mkdir("/local/data");
+    FileSystem::mkdir(dir.c_str());
+    return dir;
+}
+
+// Chamada bloqueante com a tela viva: present() antes (o quadro/progresso do
+// app aparece durante a espera) e noteAppYield() depois (renova a janela do
+// exec-timeout para o retorno — o present de entrada nao cobre o tempo DA
+// chamada bloqueante).
+template <typename F>
+static inline auto jsBlocking(F&& f) -> decltype(f()) {
+    JSBindings::present();
+    auto r = f();
+    CelerKernel::noteAppYield();
+    return r;
+}
+
+// Corpo acumulado em malloc/realloc (sink do HttpClient): sem RAM a
+// requisicao falha limpa (null no script). Com std::string, o crescimento
+// sem excecao abortava o aparelho no heap apertado da CYD (medido).
+template <size_t MAX>
+struct JsBodySink {
+    char* p = nullptr;
+    size_t n = 0, cap = 0;
+    bool append(const char* d, size_t len) {
+        if (n >= MAX) return true;  // teto: descarta o excedente
+        if (len > MAX - n) len = MAX - n;
+        if (n + len > cap) {
+            size_t want = cap * 2 > n + len ? cap * 2 : n + len;
+            if (want < 1024) want = 1024;
+            if (want > MAX) want = MAX;
+            char* q = (char*)realloc(p, want);
+            if (q == nullptr) q = (char*)realloc(p, want = n + len);  // exato
+            if (q == nullptr) return false;
+            p = q;
+            cap = want;
+        }
+        memcpy(p + n, d, len);
+        n += len;
+        return true;
+    }
+};
+
+// Slot serial de tarefa assincrona (Net async / AI): UM escritor publica o
+// resultado (1->2) sob mutex; o app consome/devolve no present. Os campos
+// mux/discard/ok/status/body/bodyLen/error/state sao o contrato comum dos
+// dois slots (o tamanho do error, 64/96 B, entra pelo sizeof do campo).
+template <typename S>
+static inline bool jsSlotMuxTake(S& s) {
+    if (s.mux == nullptr) s.mux = xSemaphoreCreateMutex();
+    return s.mux != nullptr && xSemaphoreTake(s.mux, portMAX_DELAY) == pdTRUE;
+}
+template <typename S>
+static inline void jsSlotFreeBody(S& s) {
+    free(s.body);
+    s.body = nullptr;
+    s.bodyLen = 0;
+}
+// Publicacao do resultado pela task dona (1->2): descartado se o app saiu,
+// posse do corpo transferida ao slot. Sem mutex: corpo liberado na task.
+template <typename S>
+static inline void jsSlotPublish(S& s, char* body, size_t bodyLen, bool ok, int status, const char* err) {
+    if (jsSlotMuxTake(s)) {
+        jsSlotFreeBody(s);
+        if (s.discard) {
+            free(body);
+            s.ok = false;
+            s.status = 0;
+            snprintf(s.error, sizeof(s.error), "cancelado");
+        } else {
+            s.ok = ok;
+            s.status = status;
+            s.body = body;
+            s.bodyLen = bodyLen;
+            snprintf(s.error, sizeof(s.error), "%s", err);
+        }
+        s.discard = false;
+        s.state = 2;
+        xSemaphoreGive(s.mux);
+    } else {
+        free(body);
+    }
+}
 
 struct CelerFileWrapper : public lgfx::DataWrapper {
     bool open(const char* path) override {

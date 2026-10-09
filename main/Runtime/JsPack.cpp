@@ -23,35 +23,24 @@ namespace {
 // caps num bitmask -> {speaker, mic, display, motors, leds, hub}
 void pushCaps(duk_context* ctx, uint8_t caps) {
     duk_push_object(ctx);
-    duk_push_boolean(ctx, (caps & netframe::CAPS_SPEAKER) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "speaker");
-    duk_push_boolean(ctx, (caps & netframe::CAPS_MIC) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "mic");
-    duk_push_boolean(ctx, (caps & netframe::CAPS_DISPLAY) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "display");
-    duk_push_boolean(ctx, (caps & netframe::CAPS_MOTORS) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "motors");
-    duk_push_boolean(ctx, (caps & netframe::CAPS_LEDS) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "leds");
-    duk_push_boolean(ctx, (caps & netframe::CAPS_HUB) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "hub");
+    putBool(ctx, "speaker", (caps & netframe::CAPS_SPEAKER));
+    putBool(ctx, "mic", (caps & netframe::CAPS_MIC));
+    putBool(ctx, "display", (caps & netframe::CAPS_DISPLAY));
+    putBool(ctx, "motors", (caps & netframe::CAPS_MOTORS));
+    putBool(ctx, "leds", (caps & netframe::CAPS_LEDS));
+    putBool(ctx, "hub", (caps & netframe::CAPS_HUB));
 }
 }  // namespace
 
 duk_ret_t JSBindings::js_packMe(duk_context *ctx) {
     CelerNet::Info st;
     CelerNet::info(&st);
-    char id[8];
-    snprintf(id, sizeof(id), "%04X", st.node);
     duk_push_object(ctx);
-    duk_push_string(ctx, id);
-    duk_put_prop_string(ctx, -2, "id");
-    duk_push_string(ctx, st.name);
-    duk_put_prop_string(ctx, -2, "name");
+    putNodeId(ctx, "id", st.node);
+    putStr(ctx, "name", st.name);
     pushCaps(ctx, Pack::myCaps());
     duk_put_prop_string(ctx, -2, "caps");
-    duk_push_boolean(ctx, st.active ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "meshActive");
+    putBool(ctx, "meshActive", st.active);
     return 1;
 }
 
@@ -60,21 +49,14 @@ duk_ret_t JSBindings::js_packMembers(duk_context *ctx) {
     int n = Pack::members(list, CelerNet::NODES_MAX);
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
-        char id[8];
-        snprintf(id, sizeof(id), "%04X", list[i].id);
         duk_push_object(ctx);
-        duk_push_string(ctx, id);
-        duk_put_prop_string(ctx, -2, "id");
-        duk_push_string(ctx, list[i].name);
-        duk_put_prop_string(ctx, -2, "name");
+        putNodeId(ctx, "id", list[i].id);
+        putStr(ctx, "name", list[i].name);
         pushCaps(ctx, list[i].caps);
         duk_put_prop_string(ctx, -2, "caps");
-        duk_push_int(ctx, list[i].rssi);
-        duk_put_prop_string(ctx, -2, "rssi");
-        duk_push_int(ctx, list[i].hops);
-        duk_put_prop_string(ctx, -2, "hops");
-        duk_push_uint(ctx, list[i].lastSeenMs / 1000);
-        duk_put_prop_string(ctx, -2, "lastSeen");
+        putInt(ctx, "rssi", list[i].rssi);
+        putInt(ctx, "hops", list[i].hops);
+        putUint(ctx, "lastSeen", list[i].lastSeenMs / 1000);
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
@@ -93,30 +75,7 @@ duk_ret_t JSBindings::js_packSend(duk_context *ctx) {
     }
     uint8_t buf[Pack::MAX_PAYLOAD];
     size_t len;
-    if (duk_is_object(ctx, 1) && !duk_is_callable(ctx, 1)) {
-        const char* json = duk_json_encode(ctx, 1);
-        if (json == nullptr) {
-            duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
-            return 0;
-        }
-        len = strlen(json);
-        if (len == 0 || len > Pack::MAX_PAYLOAD) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "envelope deve ter 1 a %d bytes", (int)Pack::MAX_PAYLOAD);
-            duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
-            return 0;
-        }
-        memcpy(buf, json, len);
-    } else {
-        const char* s = duk_require_lstring(ctx, 1, &len);
-        if (len == 0 || len > Pack::MAX_PAYLOAD) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "envelope deve ter 1 a %d bytes", (int)Pack::MAX_PAYLOAD);
-            duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
-            return 0;
-        }
-        memcpy(buf, s, len);
-    }
+    jsMsgBytes(ctx, 1, buf, Pack::MAX_PAYLOAD, "envelope", &len);
     bool urgent = false;
     if (duk_is_object(ctx, 2) && !duk_is_callable(ctx, 2)) {
         duk_get_prop_string(ctx, 2, "urgent");
@@ -136,15 +95,10 @@ duk_ret_t JSBindings::js_packPoll(duk_context *ctx) {
         duk_push_null(ctx);
         return 1;
     }
-    char id[8];
-    snprintf(id, sizeof(id), "%04X", from);
     duk_push_object(ctx);
-    duk_push_string(ctx, id);
-    duk_put_prop_string(ctx, -2, "from");
-    duk_push_string(ctx, fromName);
-    duk_put_prop_string(ctx, -2, "fromName");
-    duk_push_lstring(ctx, (const char*)data, (duk_size_t)len);
-    duk_put_prop_string(ctx, -2, "data");
+    putNodeId(ctx, "from", from);
+    putStr(ctx, "fromName", fromName);
+    putLStr(ctx, "data", (const char*)data, (duk_size_t)len);
     return 1;
 }
 
@@ -158,9 +112,8 @@ duk_ret_t JSBindings::js_packHandoffMusic(duk_context *ctx) {
             return 1;
         }
     }
-    present();  // o envio drena a fila da malha: da chance ao tick
-    bool ok = Pack::handoffMusic(to);
-    CelerKernel::noteAppYield();
+    // o envio drena a fila da malha: da chance ao tick antes do handoff
+    bool ok = jsBlocking([&] { return Pack::handoffMusic(to); });
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }

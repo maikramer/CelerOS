@@ -36,50 +36,15 @@
 // ~90KB do runtime JS. Limitar payloads a dezenas de KB.
 #define NET_MAX_BODY 32768
 
-// Corpo acumulado em malloc/realloc (sink do HttpClient): sem RAM a
-// requisicao falha limpa (null no script). Com std::string, o crescimento
-// sem excecao abortava o aparelho no heap apertado da CYD (medido).
-struct NetBody {
-    char* p = nullptr;
-    size_t n = 0, cap = 0;
-    bool append(const char* d, size_t len) {
-        if (n >= NET_MAX_BODY) return true;  // teto: descarta o excedente
-        if (len > NET_MAX_BODY - n) len = NET_MAX_BODY - n;
-        if (n + len > cap) {
-            size_t want = cap * 2 > n + len ? cap * 2 : n + len;
-            if (want < 1024) want = 1024;
-            if (want > NET_MAX_BODY) want = NET_MAX_BODY;
-            char* q = (char*)realloc(p, want);
-            if (q == nullptr) q = (char*)realloc(p, want = n + len);  // exato
-            if (q == nullptr) return false;
-            p = q;
-            cap = want;
-        }
-        memcpy(p + n, d, len);
-        n += len;
-        return true;
-    }
-};
-
-struct NetPush {
-    const NetBody* body;
-};
-
-static duk_ret_t netPushBody(duk_context *ctx, void *udata) {
-    const NetBody* b = ((NetPush*)udata)->body;
-    duk_push_lstring(ctx, b->p ? b->p : "", b->n);
-    return 1;
-}
+// Corpo no JsBodySink do JsInternal.h (teto NET_MAX_BODY aplicado no
+// stream, malloc/realloc — ver comentario do helper).
 
 // Executa GET/POST e EMPILHA o body (string). false = falhou (nada
 // empilhado). Sem WiFi conectado: duk_error (o script ve um erro legivel em
 // vez de um null silencioso).
 static bool netFetch(duk_context *ctx, bool isPost) {
     JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
-        return false;
-    }
+    jsRequireWifi(ctx, "Net");
     const char *url = duk_require_string(ctx, 0);
 
     std::string body;
@@ -90,7 +55,7 @@ static bool netFetch(duk_context *ctx, bool isPost) {
     }
 
     // Componente Http (esp_http_client): https usa o cert bundle do sistema
-    NetBody got;
+    JsBodySink<NET_MAX_BODY> got;
     bool ok;
     char failWhy[64] = "";  // copia: o HttpResponse morre no fim do bloco
     {
@@ -114,12 +79,9 @@ static bool netFetch(duk_context *ctx, bool isPost) {
         return false;
     }
     // Copia para o heap JS protegida: sem RAM o Duktape lanca (longjmp) — o
-    // buffer C e liberado antes de repassar o erro ao script
-    NetPush args{&got};
-    duk_int_t rc = duk_safe_call(ctx, netPushBody, &args, 0, 1);
-    free(got.p);
-    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
-    return true;
+    // buffer C e liberado antes de repassar o erro ao script (helper
+    // jsPushOwnedString do JsInternal.h)
+    return jsPushOwnedString(ctx, got.p, got.n) == 1;
 }
 
 duk_ret_t JSBindings::js_netGet(duk_context *ctx) {
@@ -146,9 +108,7 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
 // um erro de script nao estourar o longjmp no meio do download.
 duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
-    if (!WebManager::isWifiConnected()) {
-        duk_error(ctx, DUK_ERR_ERROR, "Net: WiFi is not connected");
-    }
+    jsRequireWifi(ctx, "Net");
     const char *url = duk_require_string(ctx, 0);
     const char *path = duk_require_string(ctx, 1);
     // Grava no FS: mesma capability e mesmo jail do FS.writeFile. Antes so
@@ -243,26 +203,15 @@ struct NetAsyncSlot {
 };
 static NetAsyncSlot s_netAsync[2];
 
-static bool netMuxTake(NetAsyncSlot& s) {
-    if (s.mux == nullptr) s.mux = xSemaphoreCreateMutex();
-    return s.mux != nullptr && xSemaphoreTake(s.mux, portMAX_DELAY) == pdTRUE;
-}
-
-static void netSlotFreeBody(NetAsyncSlot& s) {
-    free(s.body);
-    s.body = nullptr;
-    s.bodyLen = 0;
-}
-
 // Chamado no lancamento de cada app: zumbis do app anterior descartam,
 // resultados nao consumidos sao liberados. O slot nunca atravessa apps.
 void JSBindings::netAsyncReset() {
     for (NetAsyncSlot& s : s_netAsync) {
-        if (!netMuxTake(s)) continue;
+        if (!jsSlotMuxTake(s)) continue;
         s.discard = true;
         if (s.state == 2) {
             s.state = 0;
-            netSlotFreeBody(s);
+            jsSlotFreeBody(s);
         }
         xSemaphoreGive(s.mux);
     }
@@ -273,7 +222,7 @@ static void netAsyncTask(void* raw) {
     // Corpo no mesmo sink do Net.get: teto de 32 KB APLICADO durante o
     // download (antes o corpo inteiro crescia num std::string e so depois
     // era cortado — uma resposta grande esgotava o heap)
-    NetBody got;
+    JsBodySink<NET_MAX_BODY> got;
     bool ok;
     int status;
     char err[64];
@@ -286,26 +235,7 @@ static void netAsyncTask(void* raw) {
         status = resp.statusCode;
         snprintf(err, sizeof(err), "%s", resp.success ? "" : resp.errorMessage.c_str());
     }  // TLS/cliente liberados antes de publicar o resultado
-    if (netMuxTake(*s)) {
-        netSlotFreeBody(*s);
-        if (s->discard) {
-            free(got.p);
-            s->ok = false;
-            s->status = 0;
-            snprintf(s->error, sizeof(s->error), "cancelado");
-        } else {
-            s->ok = ok;
-            s->status = status;
-            s->body = got.p;  // posse transferida ao slot
-            s->bodyLen = got.n;
-            snprintf(s->error, sizeof(s->error), "%s", err);
-        }
-        s->discard = false;
-        s->state = 2;
-        xSemaphoreGive(s->mux);
-    } else {
-        free(got.p);
-    }
+    jsSlotPublish(*s, got.p, got.n, ok, status, err);
     vTaskDelete(nullptr);
 }
 
@@ -319,7 +249,7 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
 
     for (int i = 0; i < 2; i++) {
         NetAsyncSlot& s = s_netAsync[i];
-        if (!netMuxTake(s)) continue;
+        if (!jsSlotMuxTake(s)) continue;
         if (s.state == 1) {  // task viva (rodando ou zumbi cancelado)
             xSemaphoreGive(s.mux);
             celer_log_printf("[net] beginGet -1: slot %d ocupado (state 1)\n", i);
@@ -329,7 +259,7 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         s.discard = false;
         s.ok = false;
         s.status = 0;
-        netSlotFreeBody(s);
+        jsSlotFreeBody(s);
         s.error[0] = '\0';
         s.url = url;  // nenhuma task viva: seguro reescrever
         s.state = 1;
@@ -343,7 +273,7 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         if (xTaskCreate(netAsyncTask, "jsnet", 24576, &s, 3, nullptr) != pdPASS) {
             celer_log_println("[net] beginGet -1: xTaskCreate falhou (RAM p/ stack de 24KB)");
             // task nao nasceu: nada escrevera o slot, devolve ao estado livre
-            netMuxTake(s);
+            jsSlotMuxTake(s);
             if (s.state == 1) s.state = 0;
             xSemaphoreGive(s.mux);
             break;
@@ -368,16 +298,11 @@ struct NetPollResult {
 static duk_ret_t netPushPoll(duk_context *ctx, void *udata) {
     const NetPollResult* r = (const NetPollResult*)udata;
     duk_push_object(ctx);
-    duk_push_boolean(ctx, 1);
-    duk_put_prop_string(ctx, -2, "done");
-    duk_push_boolean(ctx, r->ok ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "ok");
-    duk_push_int(ctx, r->status);
-    duk_put_prop_string(ctx, -2, "status");
-    duk_push_lstring(ctx, r->body ? r->body : "", r->bodyLen);  // corpo pode conter NUL
-    duk_put_prop_string(ctx, -2, "body");
-    duk_push_string(ctx, r->error);
-    duk_put_prop_string(ctx, -2, "error");
+    putBool(ctx, "done", 1);
+    putBool(ctx, "ok", r->ok);
+    putInt(ctx, "status", r->status);
+    putLStr(ctx, "body", r->body ? r->body : "", r->bodyLen);  // corpo pode conter NUL
+    putStr(ctx, "error", r->error);
     return 1;
 }
 
@@ -385,7 +310,7 @@ duk_ret_t JSBindings::js_netPollGet(duk_context *ctx) {
     int h = duk_require_int(ctx, 0);
     if (h < 0 || h >= 2) { duk_push_null(ctx); return 1; }
     NetAsyncSlot& s = s_netAsync[h];
-    if (!netMuxTake(s)) { duk_push_null(ctx); return 1; }
+    if (!jsSlotMuxTake(s)) { duk_push_null(ctx); return 1; }
     if (s.state != 2) {
         xSemaphoreGive(s.mux);
         duk_push_null(ctx);
@@ -416,7 +341,7 @@ duk_ret_t JSBindings::js_netCancelGet(duk_context *ctx) {
     // quando a task terminar (timeout 10s no pior caso) ela mesma grava o
     // resultado "cancelado" e libera o slot
     NetAsyncSlot& s = s_netAsync[h];
-    if (netMuxTake(s)) {
+    if (jsSlotMuxTake(s)) {
         if (s.state == 1) s.discard = true;
         xSemaphoreGive(s.mux);
     }

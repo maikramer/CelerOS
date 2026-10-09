@@ -159,44 +159,8 @@ bool tapIn(int x, int y, int w, int h) {
 }
 
 // ----------------------------------------------------------- opcoes JS ----
-int optInt(duk_context* ctx, duk_idx_t idx, const char* key, int def) {
-    if (!duk_is_object(ctx, idx)) return def;
-    int v = def;
-    if (duk_get_prop_string(ctx, idx, key) && duk_is_number(ctx, -1)) v = duk_get_int(ctx, -1);
-    duk_pop(ctx);
-    return v;
-}
-bool optBool(duk_context* ctx, duk_idx_t idx, const char* key, bool def) {
-    if (!duk_is_object(ctx, idx)) return def;
-    bool v = def;
-    if (duk_get_prop_string(ctx, idx, key) && !duk_is_undefined(ctx, -1)) v = duk_to_boolean(ctx, -1) != 0;
-    duk_pop(ctx);
-    return v;
-}
-// Ponteiro valido enquanto o objeto de opcoes estiver vivo (argumento)
-const char* optStr(duk_context* ctx, duk_idx_t idx, const char* key, const char* def) {
-    if (!duk_is_object(ctx, idx)) return def;
-    const char* v = def;
-    if (duk_get_prop_string(ctx, idx, key) && duk_is_string(ctx, -1)) v = duk_get_string(ctx, -1);
-    duk_pop(ctx);
-    return v;
-}
-// Cor JS (RGB565) opcional -> RGB888; def ja em 888
-uint32_t optColor(duk_context* ctx, duk_idx_t idx, const char* key, uint32_t def) {
-    int v = optInt(ctx, idx, key, -1);
-    return v < 0 ? def : jsc((uint32_t)v);
-}
-// Texto de argumento (qualquer tipo vira string; undefined/null = "")
-const char* argStr(duk_context* ctx, duk_idx_t idx) {
-    if (duk_is_null_or_undefined(ctx, idx)) return "";
-    return duk_to_string(ctx, idx);
-}
-// Texto obrigatorio: undefined e erro de tipo (o resto vira string). Nome no
-// molde require* para o app_lint inferir a aridade minima.
-const char* requireText(duk_context* ctx, duk_idx_t idx) {
-    if (duk_is_undefined(ctx, idx)) duk_error(ctx, DUK_ERR_TYPE_ERROR, "texto obrigatorio");
-    return argStr(ctx, idx);
-}
+// optInt/optBool/optStr/optColor/argStr/requireText vieram para o
+// JsInternal.h (compartilhados com os demais modulos do runtime).
 
 const lgfx::IFont* roleFont(const char* role) {
     if (role) {
@@ -406,22 +370,14 @@ duk_ret_t JSBindings::js_uiToast(duk_context* ctx) {
 // os widgets viram): widgets proprios do app e "persistir ao soltar"
 duk_ret_t JSBindings::js_uiTouch(duk_context* ctx) {
     duk_push_object(ctx);
-    duk_push_boolean(ctx, s_t.down ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "down");
-    duk_push_int(ctx, s_t.x);
-    duk_put_prop_string(ctx, -2, "x");
-    duk_push_int(ctx, s_t.y);
-    duk_put_prop_string(ctx, -2, "y");
-    duk_push_boolean(ctx, (s_t.tap && !s_tapUsed) ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "tap");
-    duk_push_boolean(ctx, s_t.released ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "released");
-    duk_push_boolean(ctx, s_t.moved ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "moved");
-    duk_push_int(ctx, s_t.sx);  // pouso: swipe = (x - sx, y - sy) no released
-    duk_put_prop_string(ctx, -2, "sx");
-    duk_push_int(ctx, s_t.sy);
-    duk_put_prop_string(ctx, -2, "sy");
+    putBool(ctx, "down", s_t.down);
+    putInt(ctx, "x", s_t.x);
+    putInt(ctx, "y", s_t.y);
+    putBool(ctx, "tap", (s_t.tap && !s_tapUsed));
+    putBool(ctx, "released", s_t.released);
+    putBool(ctx, "moved", s_t.moved);
+    putInt(ctx, "sx", s_t.sx);  // pouso: swipe = (x - sx, y - sy) no released
+    putInt(ctx, "sy", s_t.sy);
     return 1;
 }
 

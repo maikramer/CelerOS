@@ -13,14 +13,10 @@
 // Phone.status() -> {enabled, connected, passkey, name}
 duk_ret_t JSBindings::js_phoneStatus(duk_context* ctx) {
     duk_push_object(ctx);
-    duk_push_boolean(ctx, PhoneLink::enabled());
-    duk_put_prop_string(ctx, -2, "enabled");
-    duk_push_boolean(ctx, PhoneLink::connected());
-    duk_put_prop_string(ctx, -2, "connected");
-    duk_push_int(ctx, (duk_int_t)PhoneLink::passkey());
-    duk_put_prop_string(ctx, -2, "passkey");
-    duk_push_string(ctx, PhoneLink::advName());
-    duk_put_prop_string(ctx, -2, "name");
+    putBool(ctx, "enabled", PhoneLink::enabled());
+    putBool(ctx, "connected", PhoneLink::connected());
+    putInt(ctx, "passkey", (duk_int_t)PhoneLink::passkey());
+    putStr(ctx, "name", PhoneLink::advName());
     return 1;
 }
 
@@ -52,14 +48,10 @@ duk_ret_t JSBindings::js_phoneMusicInfo(duk_context* ctx) {
         return 1;
     }
     duk_push_object(ctx);
-    duk_push_string(ctx, m.artist.c_str());
-    duk_put_prop_string(ctx, -2, "artist");
-    duk_push_string(ctx, m.track.c_str());
-    duk_put_prop_string(ctx, -2, "track");
-    duk_push_string(ctx, m.album.c_str());
-    duk_put_prop_string(ctx, -2, "album");
-    duk_push_string(ctx, m.state.c_str());
-    duk_put_prop_string(ctx, -2, "state");
+    putStr(ctx, "artist", m.artist.c_str());
+    putStr(ctx, "track", m.track.c_str());
+    putStr(ctx, "album", m.album.c_str());
+    putStr(ctx, "state", m.state.c_str());
     return 1;
 }
 
@@ -73,16 +65,11 @@ duk_ret_t JSBindings::js_phoneWeather(duk_context* ctx) {
     time_t now;
     time(&now);
     duk_push_object(ctx);
-    duk_push_number(ctx, w.tempC);
-    duk_put_prop_string(ctx, -2, "temp");
-    duk_push_int(ctx, w.hum);
-    duk_put_prop_string(ctx, -2, "hum");
-    duk_push_string(ctx, w.txt.c_str());
-    duk_put_prop_string(ctx, -2, "txt");
-    duk_push_string(ctx, w.loc.c_str());
-    duk_put_prop_string(ctx, -2, "loc");
-    duk_push_number(ctx, (double)(now > w.at ? now - w.at : 0));
-    duk_put_prop_string(ctx, -2, "age");
+    putNum(ctx, "temp", w.tempC);
+    putInt(ctx, "hum", w.hum);
+    putStr(ctx, "txt", w.txt.c_str());
+    putStr(ctx, "loc", w.loc.c_str());
+    putNum(ctx, "age", (double)(now > w.at ? now - w.at : 0));
     return 1;
 }
 

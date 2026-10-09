@@ -77,12 +77,9 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     int jx = 0, jy = 0;
     bool touched = readAppTouch(ctx, &jx, &jy);
     duk_push_object(ctx);
-    duk_push_int(ctx, jx);
-    duk_put_prop_string(ctx, -2, "x");
-    duk_push_int(ctx, jy);
-    duk_put_prop_string(ctx, -2, "y");
-    duk_push_boolean(ctx, touched ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "touched");
+    putInt(ctx, "x", jx);
+    putInt(ctx, "y", jy);
+    putBool(ctx, "touched", touched);
     return 1;
 }
 
@@ -197,91 +194,64 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     duk_push_object(ctx);
 
     // RAM
-    duk_push_uint(ctx, mem.totalHeap);
-    duk_put_prop_string(ctx, -2, "totalRAM");
+    putUint(ctx, "totalRAM", mem.totalHeap);
 
-    duk_push_uint(ctx, mem.freeHeap);
-    duk_put_prop_string(ctx, -2, "freeRAM");
+    putUint(ctx, "freeRAM", mem.freeHeap);
 
-    duk_push_uint(ctx, mem.minFreeHeap);
-    duk_put_prop_string(ctx, -2, "minFreeRAM");
+    putUint(ctx, "minFreeRAM", mem.minFreeHeap);
 
-    duk_push_uint(ctx, mem.largestFreeBlock);
-    duk_put_prop_string(ctx, -2, "maxAllocRAM");
+    putUint(ctx, "maxAllocRAM", mem.largestFreeBlock);
 
-    duk_push_uint(ctx, mem.totalPsram);
-    duk_put_prop_string(ctx, -2, "totalPSRAM");
+    putUint(ctx, "totalPSRAM", mem.totalPsram);
 
-    duk_push_uint(ctx, mem.freePsram);
-    duk_put_prop_string(ctx, -2, "freePSRAM");
+    putUint(ctx, "freePSRAM", mem.freePsram);
 
     // Heap livre no INICIO deste app (antes do fonte/heap JS): quanto um app
     // pode ocupar nesta placa. freeRAM e medido agora, com o app atual ja
     // carregado — a loja usa appRAM para o teto de tamanho sem PSRAM.
-    duk_push_uint(ctx, (duk_uint_t)CelerKernel::appLaunchFreeHeap);
-    duk_put_prop_string(ctx, -2, "appRAM");
+    putUint(ctx, "appRAM", (duk_uint_t)CelerKernel::appLaunchFreeHeap);
 
     // perifericos da placa (API 7): feature detection sem tentativa e erro
-    duk_push_boolean(ctx, BoardIO::hasLed() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "hasLed");
-    duk_push_boolean(ctx, BoardIO::hasLightSensor() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "hasLightSensor");
-    duk_push_boolean(ctx, BoardIO::hasSpeaker() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "hasSpeaker");
-    duk_push_boolean(ctx, Board::profile().mic.ws >= 0);  // API 13
-    duk_put_prop_string(ctx, -2, "hasMic");
-    duk_push_boolean(ctx, Board::profile().imuAccel != nullptr);  // API 13
-    duk_put_prop_string(ctx, -2, "hasImu");
+    putBool(ctx, "hasLed", BoardIO::hasLed());
+    putBool(ctx, "hasLightSensor", BoardIO::hasLightSensor());
+    putBool(ctx, "hasSpeaker", BoardIO::hasSpeaker());
+    putBool(ctx, "hasMic", Board::profile().mic.ws >= 0);  // API 13
+    putBool(ctx, "hasImu", Board::profile().imuAccel != nullptr);  // API 13
     // API 15: bateria, placa e geometria do vidro (relogio: cantos mortos)
-    duk_push_boolean(ctx, BoardIO::batteryMv() >= 0);
-    duk_put_prop_string(ctx, -2, "hasBattery");
-    duk_push_string(ctx, Board::profile().id);
-    duk_put_prop_string(ctx, -2, "board");
+    putBool(ctx, "hasBattery", BoardIO::batteryMv() >= 0);
+    putStr(ctx, "board", Board::profile().id);
     // inset em coordenadas virtuais 240 (arredondado p/ cima: margem segura)
-    duk_push_int(ctx, (Board::profile().screenInset * 240 + UI::W - 1) / UI::W);
-    duk_put_prop_string(ctx, -2, "inset");
+    putInt(ctx, "inset", (Board::profile().screenInset * 240 + UI::W - 1) / UI::W);
     // API 17: placas headless (devkit) nao tem vidro — apps que desenham
     // fazem feature detect aqui antes de tocar em Canvas/tela
     duk_push_string(ctx, Board::profile().headless ? "headless"
                    : Board::profile().screenInset > 0 ? "rounded" : "rect");
     duk_put_prop_string(ctx, -2, "shape");
-    duk_push_boolean(ctx, Board::profile().headless ? 0 : 1);
-    duk_put_prop_string(ctx, -2, "hasDisplay");
+    putBool(ctx, "hasDisplay", Board::profile().headless ? 0 : 1);
     // vidro fisico: apps que desenham geometria (ponteiros) compensam a
     // escala nao uniforme do 240x320
-    duk_push_int(ctx, UI::W);
-    duk_put_prop_string(ctx, -2, "screenW");
-    duk_push_int(ctx, UI::H);
-    duk_put_prop_string(ctx, -2, "screenH");
+    putInt(ctx, "screenW", UI::W);
+    putInt(ctx, "screenH", UI::H);
 
     // Chip & CPU (frequencia vem do Compat — SystemInfo nao expoe)
-    duk_push_uint(ctx, ESP.getCpuFreqMHz());
-    duk_put_prop_string(ctx, -2, "cpuFreqMHz");
+    putUint(ctx, "cpuFreqMHz", ESP.getCpuFreqMHz());
 
-    duk_push_string(ctx, sys.getChipModel().c_str());
-    duk_put_prop_string(ctx, -2, "chipModel");
+    putStr(ctx, "chipModel", sys.getChipModel().c_str());
 
-    duk_push_uint(ctx, chip.cores);
-    duk_put_prop_string(ctx, -2, "chipCores");
+    putUint(ctx, "chipCores", chip.cores);
 
-    duk_push_uint(ctx, chip.revision);
-    duk_put_prop_string(ctx, -2, "chipRevision");
+    putUint(ctx, "chipRevision", chip.revision);
 
-    duk_push_uint(ctx, sys.getFlashSize());
-    duk_put_prop_string(ctx, -2, "flashSize");
+    putUint(ctx, "flashSize", sys.getFlashSize());
 
     // Uptime e identidade
-    duk_push_number(ctx, (duk_double_t)sys.getUptimeMillis());  // sem volta aos 49 dias
-    duk_put_prop_string(ctx, -2, "uptimeMs");
+    putNum(ctx, "uptimeMs", (duk_double_t)sys.getUptimeMillis());  // sem volta aos 49 dias
 
-    duk_push_string(ctx, sys.getMacAddress().c_str());
-    duk_put_prop_string(ctx, -2, "macAddress");
+    putStr(ctx, "macAddress", sys.getMacAddress().c_str());
 
-    duk_push_string(ctx, sys.getResetReasonString().c_str());
-    duk_put_prop_string(ctx, -2, "resetReason");
+    putStr(ctx, "resetReason", sys.getResetReasonString().c_str());
 
-    duk_push_string(ctx, sys.getIdfVersion().c_str());
-    duk_put_prop_string(ctx, -2, "idfVersion");
+    putStr(ctx, "idfVersion", sys.getIdfVersion().c_str());
 
     return 1;
 }
@@ -477,16 +447,11 @@ duk_ret_t JSBindings::js_batteryInfo(duk_context *ctx) {
     }
     const int st = BoardIO::chargeState();
     duk_push_object(ctx);
-    duk_push_int(ctx, mv);
-    duk_put_prop_string(ctx, -2, "mv");
-    duk_push_int(ctx, BoardIO::batteryPct());
-    duk_put_prop_string(ctx, -2, "pct");
-    duk_push_boolean(ctx, st > 0 && (st & 1));
-    duk_put_prop_string(ctx, -2, "charging");
-    duk_push_boolean(ctx, st > 0 && (st & 2));
-    duk_put_prop_string(ctx, -2, "usb");
-    duk_push_boolean(ctx, st > 0 && (st & 4));
-    duk_put_prop_string(ctx, -2, "full");
+    putInt(ctx, "mv", mv);
+    putInt(ctx, "pct", BoardIO::batteryPct());
+    putBool(ctx, "charging", st > 0 && (st & 1));
+    putBool(ctx, "usb", st > 0 && (st & 2));
+    putBool(ctx, "full", st > 0 && (st & 4));
     return 1;
 }
 

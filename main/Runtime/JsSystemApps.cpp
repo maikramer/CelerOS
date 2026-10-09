@@ -166,14 +166,10 @@ duk_ret_t JSBindings::js_launchApp(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {
     duk_push_object(ctx);
-    duk_push_boolean(ctx, WebManager::isActive() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "connected");
-    duk_push_string(ctx, WebManager::getIPAddress().c_str());
-    duk_put_prop_string(ctx, -2, "ip");
-    duk_push_boolean(ctx, WebManager::isServerRunning() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "webServer");
-    duk_push_boolean(ctx, WebManager::hasSavedNetworks() ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "savedNetworks");
+    putBool(ctx, "connected", WebManager::isActive());
+    putStr(ctx, "ip", WebManager::getIPAddress().c_str());
+    putBool(ctx, "webServer", WebManager::isServerRunning());
+    putBool(ctx, "savedNetworks", WebManager::hasSavedNetworks());
     return 1;
 }
 
@@ -248,10 +244,8 @@ duk_ret_t JSBindings::js_pinState(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_webAuthInfo(duk_context *ctx) {
     duk_push_object(ctx);
-    duk_push_string(ctx, "admin");
-    duk_put_prop_string(ctx, -2, "user");
-    duk_push_string(ctx, WebAuth::password());
-    duk_put_prop_string(ctx, -2, "pass");
+    putStr(ctx, "user", "admin");
+    putStr(ctx, "pass", WebAuth::password());
     return 1;
 }
 
@@ -306,24 +300,15 @@ duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
     CelerKernel::noteAppYield();  // fetch HTTPS do update.json passa de 1s
     const OtaUpdateInfo& info = OtaManager::info;
     duk_push_object(ctx);
-    duk_push_boolean(ctx, info.fetchFailed ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "fetchFailed");
-    duk_push_boolean(ctx, info.available ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "available");
-    duk_push_boolean(ctx, info.hasFirmware ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "hasFirmware");
-    duk_push_int(ctx, info.apiVersion);
-    duk_put_prop_string(ctx, -2, "apiVersion");
-    duk_push_string(ctx, info.version.c_str());
-    duk_put_prop_string(ctx, -2, "version");
-    duk_push_string(ctx, info.firmwareUrl.c_str());
-    duk_put_prop_string(ctx, -2, "url");
-    duk_push_string(ctx, info.changelog.c_str());
-    duk_put_prop_string(ctx, -2, "changelog");
-    duk_push_string(ctx, info.guide.c_str());
-    duk_put_prop_string(ctx, -2, "guide");
-    duk_push_string(ctx, info.type.c_str());
-    duk_put_prop_string(ctx, -2, "type");
+    putBool(ctx, "fetchFailed", info.fetchFailed);
+    putBool(ctx, "available", info.available);
+    putBool(ctx, "hasFirmware", info.hasFirmware);
+    putInt(ctx, "apiVersion", info.apiVersion);
+    putStr(ctx, "version", info.version.c_str());
+    putStr(ctx, "url", info.firmwareUrl.c_str());
+    putStr(ctx, "changelog", info.changelog.c_str());
+    putStr(ctx, "guide", info.guide.c_str());
+    putStr(ctx, "type", info.type.c_str());
     return 1;
 }
 
@@ -374,11 +359,9 @@ duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
     }
 
     duk_push_object(ctx);
-    duk_push_boolean(ctx, ok ? 1 : 0);
-    duk_put_prop_string(ctx, -2, "ok");
+    putBool(ctx, "ok", ok);
     if (!ok) {
-        duk_push_string(ctx, OtaManager::lastError.c_str());
-        duk_put_prop_string(ctx, -2, "error");
+        putStr(ctx, "error", OtaManager::lastError.c_str());
     }
     return 1;
 }
@@ -451,12 +434,9 @@ duk_ret_t JSBindings::js_wifiScan(duk_context *ctx) {
     duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
         duk_push_object(ctx);
-        duk_push_string(ctx, entries[i].ssid.c_str());
-        duk_put_prop_string(ctx, -2, "ssid");
-        duk_push_int(ctx, entries[i].rssi);
-        duk_put_prop_string(ctx, -2, "rssi");
-        duk_push_boolean(ctx, entries[i].secure ? 1 : 0);
-        duk_put_prop_string(ctx, -2, "secure");
+        putStr(ctx, "ssid", entries[i].ssid.c_str());
+        putInt(ctx, "rssi", entries[i].rssi);
+        putBool(ctx, "secure", entries[i].secure);
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
@@ -544,14 +524,10 @@ duk_ret_t JSBindings::js_getAlarm(duk_context *ctx) {
     std::string msg;
     if (!TimeManager::getAlarm(h, m, msg)) { duk_push_null(ctx); return 1; }
     duk_push_object(ctx);
-    duk_push_boolean(ctx, 1);
-    duk_put_prop_string(ctx, -2, "armed");
-    duk_push_int(ctx, h);
-    duk_put_prop_string(ctx, -2, "hour");
-    duk_push_int(ctx, m);
-    duk_put_prop_string(ctx, -2, "minute");
-    duk_push_lstring(ctx, msg.data(), msg.size());
-    duk_put_prop_string(ctx, -2, "msg");
+    putBool(ctx, "armed", 1);
+    putInt(ctx, "hour", h);
+    putInt(ctx, "minute", m);
+    putLStr(ctx, "msg", msg.data(), msg.size());
     return 1;
 }
 
@@ -590,21 +566,14 @@ duk_ret_t JSBindings::js_alarms(duk_context *ctx) {
         celer::AlarmSpec a;
         if (!Alarms::get(i, a)) continue;
         duk_push_object(ctx);
-        duk_push_int(ctx, i);
-        duk_put_prop_string(ctx, -2, "id");
-        duk_push_int(ctx, a.hour);
-        duk_put_prop_string(ctx, -2, "hour");
-        duk_push_int(ctx, a.minute);
-        duk_put_prop_string(ctx, -2, "minute");
-        duk_push_int(ctx, a.days);
-        duk_put_prop_string(ctx, -2, "days");
-        duk_push_boolean(ctx, a.enabled);
-        duk_put_prop_string(ctx, -2, "enabled");
-        duk_push_lstring(ctx, a.label.data(), a.label.size());
-        duk_put_prop_string(ctx, -2, "label");
+        putInt(ctx, "id", i);
+        putInt(ctx, "hour", a.hour);
+        putInt(ctx, "minute", a.minute);
+        putInt(ctx, "days", a.days);
+        putBool(ctx, "enabled", a.enabled);
+        putLStr(ctx, "label", a.label.data(), a.label.size());
         time_t next = (a.enabled && TimeManager::isTimeValid()) ? celer::nextAlarmAfter(a, now) : 0;
-        duk_push_number(ctx, (double)next);
-        duk_put_prop_string(ctx, -2, "next");
+        putNum(ctx, "next", (double)next);
         duk_put_prop_index(ctx, arr, n++);
     }
     return 1;
@@ -646,10 +615,8 @@ duk_ret_t JSBindings::js_getTimer(duk_context *ctx) {
         return 1;
     }
     duk_push_object(ctx);
-    duk_push_int(ctx, rem);
-    duk_put_prop_string(ctx, -2, "remaining");
-    duk_push_lstring(ctx, lbl.data(), lbl.size());
-    duk_put_prop_string(ctx, -2, "label");
+    putInt(ctx, "remaining", rem);
+    putLStr(ctx, "label", lbl.data(), lbl.size());
     return 1;
 }
 
@@ -855,16 +822,11 @@ duk_ret_t JSBindings::js_notifications(duk_context *ctx) {
     duk_push_array(ctx);
     for (size_t i = 0; i < l.size(); i++) {
         duk_push_object(ctx);
-        duk_push_number(ctx, (duk_double_t)l[i].epoch);
-        duk_put_prop_string(ctx, -2, "epoch");
-        duk_push_string(ctx, l[i].title.c_str());
-        duk_put_prop_string(ctx, -2, "title");
-        duk_push_string(ctx, l[i].msg.c_str());
-        duk_put_prop_string(ctx, -2, "msg");
-        duk_push_string(ctx, l[i].src.c_str());
-        duk_put_prop_string(ctx, -2, "src");
-        duk_push_boolean(ctx, l[i].read);
-        duk_put_prop_string(ctx, -2, "read");
+        putNum(ctx, "epoch", (duk_double_t)l[i].epoch);
+        putStr(ctx, "title", l[i].title.c_str());
+        putStr(ctx, "msg", l[i].msg.c_str());
+        putStr(ctx, "src", l[i].src.c_str());
+        putBool(ctx, "read", l[i].read);
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;

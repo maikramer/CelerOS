@@ -18,12 +18,9 @@ duk_ret_t JSBindings::js_sensorsAccel(duk_context* ctx) {
         return 1;
     }
     duk_push_object(ctx);
-    duk_push_number(ctx, x);
-    duk_put_prop_string(ctx, -2, "x");
-    duk_push_number(ctx, y);
-    duk_put_prop_string(ctx, -2, "y");
-    duk_push_number(ctx, z);
-    duk_put_prop_string(ctx, -2, "z");
+    putNum(ctx, "x", x);
+    putNum(ctx, "y", y);
+    putNum(ctx, "z", z);
     return 1;
 }
 
@@ -58,10 +55,8 @@ duk_ret_t JSBindings::js_sensorsStepHistory(duk_context* ctx) {
     duk_idx_t arr = duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
         duk_push_object(ctx);
-        duk_push_int(ctx, (duk_int_t)days[i]);
-        duk_put_prop_string(ctx, -2, "date");
-        duk_push_int(ctx, (duk_int_t)counts[i]);
-        duk_put_prop_string(ctx, -2, "steps");
+        putInt(ctx, "date", (duk_int_t)days[i]);
+        putInt(ctx, "steps", (duk_int_t)counts[i]);
         duk_put_prop_index(ctx, arr, (duk_uarridx_t)i);
     }
     return 1;
