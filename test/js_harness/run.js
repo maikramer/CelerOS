@@ -904,8 +904,23 @@ function makeEnv() {
 // require() do host (mesma semantica do firmware, main/Runtime/JsModules.cpp):
 // le .js irmao na pasta do app, embrulha como funcao(module, exports,
 // require), cache compartilhado por rodada (ciclo recebe exports parcial).
+// Os globals da API (System/FS/...) entram como parametros — no device sao
+// globais de verdade do Duktape e o modulo os ve; no host, o new Function
+// nao herda o escopo do runApp, entao injetamos a mesma lista dele aqui.
 // dir=null => "sem pasta de app", como um .js avulso no device.
-function makeRequire(appDir) {
+var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
+                    'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                    'UI', 'require', 'CelerNet', 'Pack'];
+// Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
+// (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
+// wrapper, senao o ultimo sombreia o primeiro.
+function globalValues(env, req) {
+    var mesh = !!env.__exposeMesh;
+    return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
+            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
+            env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined];
+}
+function makeRequire(appDir, env) {
     var cache = {};
     function req(name) {
         if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
@@ -916,8 +931,8 @@ function makeRequire(appDir) {
         var mod = { exports: {} };
         cache[base] = mod.exports;   // parcial: ciclo pega o que ja foi exportado
         var src = fs.readFileSync(path.join(appDir, base + '.js'), 'utf8');
-        var fn = new Function('module', 'exports', 'require', src);
-        fn(mod, mod.exports, req);
+        var fn = Function.apply(null, ['module', 'exports'].concat(GLOBAL_NAMES).concat([src]));
+        fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
         cache[base] = mod.exports;
         return mod.exports;
     }
@@ -936,15 +951,9 @@ function runApp(relPath, wire) {
     wire && wire(env);
     // CelerNet/Pack (API 26/27) so existem com env.__exposeMesh: os apps
     // antigos seguem vendo typeof CelerNet === "undefined" (placa sem BT)
-    var mesh = !!env.__exposeMesh;
     try {
-        var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                              'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
-                              'CelerNet', 'Pack',
-                              (env.__prelude || '') + '\n' + src);
-        fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-           env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
-           makeRequire(appDir), mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined);
+        var fn = Function.apply(null, GLOBAL_NAMES.concat([(env.__prelude || '') + '\n' + src]));
+        fn.apply(null, globalValues(env, makeRequire(appDir, env)));
     } catch (e) {
         if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
         return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
