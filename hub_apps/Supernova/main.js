@@ -25,7 +25,7 @@ var C = {
     ouro: 0xFFE0, branco: 0xFFFF, verde: 0x07E0,
     cinza: System.mixColor(0x0000, 0xFFFF, 18)
 };
-var HUD_H = 44;
+var HUD_H = 64;   // 480 nativo: score size 2 font 4 (~52px) + recorde abaixo
 var hi = E.save.num("hi", 0);
 
 // Pega de teste (so existe no harness): deixa o test.js dirigir a sim
@@ -183,8 +183,8 @@ function drawHUD(s, pulse) {
                    C.espaco, { screen: true });
     System.drawFastHLine(0, HUD_H, W, C.cianoD);
 
-    E.gfx.text(String(s.score), 14, 6, { size: 2, font: 4, color: C.branco, screen: true });
-    E.gfx.text("rec " + hi, 14, 38, { font: 1, color: C.cinza, screen: true });
+    E.gfx.text(String(s.score), 14, 4, { size: 2, font: 4, color: C.branco, screen: true });
+    E.gfx.text("rec " + hi, W - 14, 22, { align: "right", font: 1, color: C.cinza, screen: true });
     E.gfx.text("onda " + s.wave, W - 14, 8, { align: "right", color: C.cinza, screen: true });
     // combo x2..x5 pulsa quando sobe
     if (s.mult > 1) {
@@ -192,11 +192,14 @@ function drawHUD(s, pulse) {
         E.gfx.text("x" + s.mult, W / 2, 8, { align: "center", size: 2, screen: true,
                    color: pk > 0.2 ? C.ouro : System.mixColor(C.ouro, C.espaco, 30) });
     }
-    for (var l = 0; l < s.lives; l++) {
-        System.fillTriangle(W - 20 - l * 22, 44, W - 28 - l * 22, 32, W - 12 - l * 22, 32, C.ciano);
+    if (s.triple > 0) {
+        E.gfx.text("TRIPLO " + Math.ceil(s.triple) + "s", W / 2, HUD_H - 14,
+                   { align: "center", font: 1, color: C.verde, screen: true });
     }
-    System.fillRect(W - 40, 32, 6, 12, C.cinza);
-    System.fillRect(W - 30, 32, 6, 12, C.cinza);
+    for (var l = 0; l < s.lives; l++) {
+        System.fillTriangle(W - 20 - l * 22, HUD_H, W - 28 - l * 22, HUD_H - 12,
+                            W - 12 - l * 22, HUD_H - 12, C.ciano);
+    }
 
     if (s.boss) {
         E.gfx.bar(W / 2 - 110, HUD_H + 6, 220, 8, s.boss.hp / s.boss.hpMax,
@@ -214,10 +217,6 @@ function drawHUD(s, pulse) {
     E.gfx.arc(gx, gy, 12, 16, -90, -90 + Math.round(s.charge * 3.6), C.ouro, { screen: true });
     if (cheio) {
         E.gfx.text("SUPERNOVA", gx, gy - 34, { align: "center", font: 1, color: C.ouro, screen: true });
-    }
-    if (s.triple > 0) {
-        E.gfx.text("TRIPLO " + Math.ceil(s.triple) + "s", gx, gy + 26,
-                   { align: "center", font: 1, color: C.verde, screen: true });
     }
 }
 
@@ -245,22 +244,25 @@ E.run({
             System.fillRect(0, TIT_Y0, W, H - TIT_Y0, C.espaco);
             E.gfx.gradient(0, TIT_Y0, W, H - TIT_Y0, C.espaco,
                            System.mixColor(C.espaco, C.branco, 4), { screen: true });
-            E.gfx.text("SUPERNOVA", W / 2, TIT_Y0 + 30,
-                       { size: 4, align: "center", color: C.ciano, screen: true });
+            // size 3: "SUPERNOVA" tem 9 glifos — no size 4 (~504px) nem
+            // centrado cabe no vidro de 480
+            E.gfx.text("SUPERNOVA", W / 2, TIT_Y0 + 24,
+                       { size: 3, align: "center", color: C.ciano, screen: true });
             E.gfx.text("arraste para voar; ondas na batida da musica",
-                       W / 2, TIT_Y0 + 62, { align: "center", font: 1, color: C.cinza, screen: true });
+                       W / 2, TIT_Y0 + 112, { align: "center", font: 1, color: C.cinza, screen: true });
             E.gfx.text("colete orbes e detone a supernova",
-                       W / 2, TIT_Y0 + 76, { align: "center", font: 1, color: C.cinza, screen: true });
-            this.btnJogar = E.gfx.button("JOGAR", W / 2 - 90, TIT_Y0 + 96, 180, 52,
+                       W / 2, TIT_Y0 + 126, { align: "center", font: 1, color: C.cinza, screen: true });
+            this.btnJogar = E.gfx.button("JOGAR", W / 2 - 90, TIT_Y0 + 148, 180, 52,
                                          { color: C.ciano, r: 12, screen: true });
-            this.btnSair = E.gfx.button("SAIR", W / 2 - 90, TIT_Y0 + 160, 180, 44,
+            this.btnSair = E.gfx.button("SAIR", W / 2 - 90, TIT_Y0 + 212, 180, 44,
                                         { primary: false, bg: System.mixColor(C.ciano, C.espaco, 72),
                                           r: 12, screen: true });
         }
     },
 
     jogando: {
-        fps: 0,   // sem teto: o frame vale o que a placa der
+        fps: 30,   // teto de quadros: sem ele o push da caixa suja corre
+                   // solto e o rastro das estrelas cintila no vidro
         enter: function () {
             E.cam.reset();
             if (!E.audio.playing() && !jogo.state().resumeAt) E.audio.music(jogo.SONG);
@@ -287,6 +289,9 @@ E.run({
         draw: function () {
             var s = jogo.state();
             var pulse = beatPulse();
+            // quadro persistente: SEM este fill cada estrela/tiro/inimigo
+            // pinta por cima do frame anterior e o rastro fica no vidro
+            System.fillScreen(C.espaco);
             E.data.stars.draw();
             drawGame(s, pulse);
             E.fx.draw();

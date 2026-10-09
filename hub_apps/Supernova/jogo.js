@@ -404,7 +404,9 @@ function explosionFx(e) {
     E.fx.burst(e.x, e.y, { n: big ? 26 : 14, color: col, speed: big ? 170 : 120, life: 0.7 });
     E.fx.burst(e.x, e.y, { n: big ? 10 : 5, color: BRANCO, speed: 90, life: 0.4, size: 1 });
     E.fx.ring(e.x, e.y, { color: col, speed: big ? 420 : 260, life: 0.55 });
-    E.cam.shake(big ? 8 : 3, big ? 0.35 : 0.2);
+    // tremor so em evento grande: drone comum abatido em serie sacudia a
+    // tela o tempo todo (a "vibracao" que o player sentia)
+    if (big) E.cam.shake(5, 0.3);
 }
 
 function killEnemy(e) {
@@ -438,7 +440,7 @@ function bossDown(e) {
     s.triple = 10;
     E.fx.flash(BRANCO, 350);
     E.fx.ring(e.x, e.y, { color: MAGENTA, speed: 700, life: 0.7, r0: 20 });
-    E.cam.shake(14, 0.5);
+    E.cam.shake(8, 0.4);
     spawnOrb(e.x - 50);
     spawnOrb(e.x + 50);
     E.fx.popText(W / 2, H * 0.4, "CHEFE AO CHAO! TIRO TRIPLO", { color: MAGENTA, life: 1.4 });
@@ -453,7 +455,7 @@ function hitPlayer() {
     E.fx.burst(p.x, p.y, { n: 26, color: CIANO, speed: 170, life: 0.8 });
     E.fx.ring(p.x, p.y, { color: CIANO, speed: 420, life: 0.55 });
     E.fx.flash(BRANCO, 220);
-    E.cam.shake(10, 0.4);
+    E.cam.shake(6, 0.35);
     if (s.lives <= 0) {
         s.over = true;
         s.overT = 0;
@@ -503,7 +505,7 @@ function detonate() {
     E.fx.ring(s.player.x, s.player.y - 30, { color: OURO, speed: 700, life: 0.7, r0: 10 });
     E.fx.ring(s.player.x, s.player.y - 30, { color: CIANO, speed: 520, life: 0.7, r0: 10 });
     E.fx.flash(BRANCO, 500);
-    E.cam.shake(14, 0.6);
+    E.cam.shake(8, 0.45);
     E.fx.popText(W / 2, H / 2 - 30, "SUPERNOVA! +" + gained, { color: OURO, life: 1.4 });
     E.audio.stop();
     E.audio.sfx("boom");

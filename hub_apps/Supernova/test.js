@@ -22,9 +22,9 @@ module.exports.wire = function (env) {
         return origDelay(ms);
     };
 
-    // TIT_Y0 = 480*0.42 = 202; JOGAR em y 298..350, x 150..330
+    // TIT_Y0 = 480*0.42 = 202; JOGAR em y 350..402, x 150..330
     at(function () {
-        h.pushTouch([{ x: 240, y: 324, touched: 1 }, { x: 240, y: 324, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 375, touched: 1 }, { x: 240, y: 375, touched: 0 }]);
     }, 400);
 
     // arrasto na jogatina (a nave desvia e esquenta o motor)

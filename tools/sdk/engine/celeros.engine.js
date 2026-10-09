@@ -14,7 +14,7 @@
 // keepAwake 13, smooth 22, playMusic 25, canvas nativo 28) — roda em toda
 // placa e no harness/emu sem mudanca. Veja Documentation/Game_Engine_Guide.
 
-var E = { version: '1.1.0' };
+var E = { version: '1.1.1' };
 var S = System;
 
 // ------------------------------------------------------- caps / init ------
@@ -688,8 +688,12 @@ E.gfx = (function () {
             } else {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color, o.bg);
             }
+            // datum no LAYOUT DO LOVYANGFX (nao TFT_eSPI): linha vale 4 —
+            // 4=middle-left, 5=middle-center, 8=bottom-left (9=BC, 10=BR);
+            // row+col com base 3 (TFT_eSPI) casava middle-center em 4 = o
+            // texto ancorava a esquerda e escorria pra direita
             var col = o.align === 'center' ? 1 : (o.align === 'right' ? 2 : 0);
-            var row = o.valign === 'middle' ? 3 : (o.valign === 'bottom' ? 6 : 0);
+            var row = o.valign === 'middle' ? 4 : (o.valign === 'bottom' ? 8 : 0);
             S.setTextDatum(row + col);
             if (o.size) S.setTextSize(o.size);
             S.drawString(String(str), p[0], p[1], o.font || 2);
