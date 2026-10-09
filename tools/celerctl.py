@@ -704,6 +704,37 @@ class HostLink:
         if got != total:
             raise CelerError(f"pull incompleto: {got} de {total} bytes")
 
+    def verify_file(self, local_path, remote_path):
+        """Rele o arquivo no device e confere tamanho + CRC32 contra o local.
+
+        O CRC do WRITE_END (proto 2) prova o que o stdio do device escreveu,
+        nao o que o filesystem passa a SERVIR depois: na bancada (2026-10-09)
+        um push reportou ok, o `ls` mostrava tamanho/mtime novos e o `cat`/run
+        devolviam o conteudo antigo (inode velho no LittleFS). So a releitura
+        pega esse fantasma — e funciona com firmware antigo (leitura pura).
+        """
+        with open(local_path, "rb") as f:
+            local_data = f.read()
+        st = self.stat(remote_path)
+        if st is None or st["dir"]:
+            raise CelerError(f"verificacao: {remote_path} sumiu apos a escrita")
+        if st["size"] != len(local_data):
+            raise CelerError(
+                f"verificacao FALHOU: {remote_path} tem {st['size']} B no device, "
+                f"enviei {len(local_data)} B — tente `rm` + push de novo; se persistir, reboot")
+        crc = 0
+        want = self.max_chunk - 1 - (4 if self.proto == 2 else 0)
+        for off in range(0, len(local_data), want):
+            data = self.read_chunk(remote_path, off, min(want, len(local_data) - off))
+            if len(data) != min(want, len(local_data) - off):
+                raise CelerError(f"verificacao: leitura curta em {remote_path}+{off}")
+            crc = zlib.crc32(data, crc)
+        if crc != zlib.crc32(local_data):
+            raise CelerError(
+                f"verificacao FALHOU: conteudo de {remote_path} no device difere do enviado "
+                f"(push fantasma) — `shell rm {remote_path}` + push de novo; se persistir, reboot")
+        return len(local_data), crc
+
     def simple(self, op, payload=b""):
         self.xfer(KL[op], payload)
 
@@ -1341,6 +1372,13 @@ def cmd_push(args):
     link = open_link(args)
     try:
         link.write_file(args.local, args.remote)
+        # verify por padrão: rele e confere o crc — o transporte dizer ok
+        # nao prova que o filesystem vai SERVIR o conteudo novo (bancada
+        # 2026-10-09: ls novo, cat antigo). --no-verify pula (scripting).
+        if args.no_verify:
+            return
+        n, crc = link.verify_file(args.local, args.remote)
+        print(f"verificado: {args.remote} ({n} B, crc32 {crc:08x})")
     finally:
         link.close()
 
@@ -2261,33 +2299,72 @@ def _install_shared_deps(link, deps, hub):
     return resolved
 
 
+def _sd_note(montado, apps_ok):
+    """Rodape da origem SD: "sem cartao" (raiz /sd ausente) nao e o mesmo
+    caso de "montado sem /sd/apps" (o 4848 vive montado e vazio) — a
+    mensagem certa poupa o debug do falso-positivo (2026-10-09)."""
+    if apps_ok:
+        return ""
+    if not montado:
+        return " — sd: sem cartao"
+    return " — sd: montado, /sd/apps ausente (apps install --sd cria)"
+
+
 def cmd_apps(args):
     link = open_link(args)
     try:
         if args.action == "list":
             found = []
+            sd_montado = False
+            sd_apps_ok = False
+            sd_root = None
+            try:
+                sd_root = link.stat("/sd")
+            except CelerError:
+                pass
+            sd_montado = bool(sd_root and sd_root["dir"])
             for base in ("/local/apps", "/sd/apps"):
                 try:
                     entries = link.ls(base)
                 except CelerError:
-                    continue
+                    continue  # /sd sem cartao ou /sd/apps ausente
+                sd_apps_ok = sd_apps_ok or base.startswith("/sd")
                 for e in entries:
                     if not e["dir"]:
                         continue
                     meta = _app_meta(link, base, e["name"]) or {"name": e["name"], "_base": base}
                     found.append(meta)
             if not found:
-                print("nenhum app instalado")
+                print("nenhum app instalado" + _sd_note(sd_montado, sd_apps_ok))
                 return
+            # sombreado local/SD: o launcher deduplica pelo packageName
+            # (fallback nome) e a copia LOCAL vence — a copia do cartao
+            # sombreada continua na listagem, mas marcada: editar la e
+            # "nao pegar" e o classico (bancada 2026-10-09)
+            def _chave(m):
+                return m.get("packageName") or m.get("_dir") or m.get("name", "?")
+            locais = {_chave(m) for m in found if m["_base"].startswith("/local")}
             found.sort(key=lambda m: (not m.get("system"), m.get("name", "").lower()))
-            tag_width = 8
+            tag_width = 7
+            n_local = n_sd = 0
+            sombreada = False
             for m in found:
-                where = "sd" if m["_base"].startswith("/sd") else "local"
-                tag = "sistema" if m.get("system") else where
-                # app.json sem packageName (meta do FS nao ganha _dir): mostar
-                # o nome em vez de quebrar a listagem inteira
-                pkg = m.get("packageName") or m.get("_dir") or m.get("name", "?")
-                print(f"{tag:<{tag_width}} {m.get('name', '?'):<16} v{m.get('version', '?'):<10} api {m.get('api', '?'):<3} {pkg}")
+                sd = m["_base"].startswith("/sd")
+                n_local += not sd
+                n_sd += sd
+                onde = "sd" if sd else "local"
+                if sd and _chave(m) in locais:
+                    onde += " *"
+                    sombreada = True
+                nome = m.get("name", "?")
+                extra = " [sistema]" if m.get("system") else ""
+                pkg = m.get("packageName") or m.get("_dir") or nome
+                print(f"{onde:<{tag_width}} {nome:<18} v{m.get('version', '?'):<10} "
+                      f"api {m.get('api', '?'):<4}{pkg}{extra}")
+            rodape = f"({len(found)} apps: local {n_local}, sd {n_sd})" + _sd_note(sd_montado, sd_apps_ok)
+            print(rodape)
+            if sombreada:
+                print("* sombreada: a copia em /local/apps e a que abre")
         elif args.action == "install":
             src = Path(args.folder).resolve()
             if not (src / "app.json").is_file():
@@ -2304,8 +2381,16 @@ def cmd_apps(args):
                 if str(rel) != ".":
                     d = dest + "/" + rel.as_posix()
                     link.simple("MKDIR", d.encode() + b"\0")
+            verificados = 0
             for f in files:
-                link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}")
+                dest_f = f"{dest}/{f.relative_to(src).as_posix()}"
+                link.write_file(str(f), dest_f)
+                if not args.pula_verify:
+                    # rele cada arquivo: o push dizer ok nao prova que o
+                    # filesystem vai servir o conteudo novo (push fantasma
+                    # calado quebra o app so em runtime)
+                    link.verify_file(str(f), dest_f)
+                    verificados += 1
             # poda o que ficou para tras: modulos que sairam do app entre
             # versoes seguem no device e o require ainda os acha — app misto
             # (main novo + fx velho) quebra em runtime (Supernova 2.0:
@@ -2349,7 +2434,8 @@ def cmd_apps(args):
                     dj.write_text(json.dumps(resolved), encoding="utf-8")
                     link.write_file(str(dj), f"{dest}/deps.json")
             link.exec("rescan")
-            print(f"instalado: {dest} ({len(files)} arquivos)")
+            nota_v = f", {verificados} verificados" if verificados else ""
+            print(f"instalado: {dest} ({len(files)} arquivos{nota_v})")
             if args.run:
                 _relaunch(link, src.name)
                 print(f"abrindo: {src.name}")
@@ -2469,6 +2555,8 @@ def main():
     p = sub.add_parser("push", help="envia arquivo ao dispositivo")
     p.add_argument("local")
     p.add_argument("remote")
+    p.add_argument("--no-verify", action="store_true",
+                   help="pula a releitura de verificacao (crc32) apos a escrita")
     p.set_defaults(func=cmd_push)
 
     p = sub.add_parser("pull", help="baixa arquivo do dispositivo")
@@ -2562,6 +2650,8 @@ def main():
     a.add_argument("folder", help="pasta com app.json + main.js (+ icon.bin)")
     a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
     a.add_argument("--pula-lint", action="store_true", help="instala mesmo com erros de lint")
+    a.add_argument("--pula-verify", action="store_true",
+                   help="pula a releitura de verificacao (crc32) de cada arquivo")
     a.add_argument("--run", action="store_true",
                    help="abre o app ao final (exit + run; encerra o anterior)")
     a = apps_sub.add_parser("pull", help="baixa um app instalado para o PC")

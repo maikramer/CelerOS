@@ -8,6 +8,7 @@
 #include "Kernel/DeviceStats.h"
 #include "NetworkManager.h"
 #include "DebugBridge.h"
+#include "HostFrame.h"
 #include "WebManager/WebManager.h"
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
@@ -83,7 +84,9 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  info            versao/board/rede\n"
         "  reboot          reinicia o sistema\n"
         "  rescan          reler lista de apps do launcher\n"
+        "  apps            lista apps com origem (local/sd) e caminho\n"
         "  run <app>       abre um app (pasta, nome ou pacote)\n"
+        "  stat <arq>      tamanho + crc32 + mtime do arquivo\n"
         "  grant <app>     concede as permissoes declaradas (consentimento headless)\n"
         "  lasterror       ultimo erro de app gravado (/local/lastcrash.txt)\n"
         "  debug on|off    arma o debugger Duktape (a sessao e do celerctl debug)\n"
@@ -456,6 +459,82 @@ int cmdRescan(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// Lista os apps que o launcher enxerga, COM a origem: /local e /sd
+// deduplicam pelo packageName e a copia local vence — sem a origem na
+// listagem o dev edita a copia do cartao, da run e a mudanca "nao pega"
+// (bancada 2026-10-09: Supernova editado em /local rodava a copia velha).
+int cmdApps(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    int n = LauncherUI::appEntryCount();
+    if (n <= 0) {
+        // boot recente (ou lista zerada): o rescan roda no onTick do
+        // launcher — espera curta, padrao do cmdGrant
+        LauncherUI::requestRescan();
+        for (int t = 0; t < 20 && LauncherUI::appEntryCount() <= 0; t++) {
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
+        n = LauncherUI::appEntryCount();
+    }
+    if (n <= 0) {
+        print(ctx, "nenhum app na lista do launcher (rescan pendente?)\r\n");
+        return 1;
+    }
+    for (int i = 0; i < n; i++) {
+        const std::string& p = LauncherUI::appEntryPath(i);
+        const std::string& pkg = LauncherUI::appEntryPkg(i);
+        const char* mount = p.compare(0, 4, "/sd/") == 0 ? "sd" : "local";
+        print(ctx, "%-6s %-18s %-24s %s%s\r\n", mount,
+              LauncherUI::appEntryName(i).c_str(),
+              pkg.empty() ? "-" : pkg.c_str(), p.c_str(),
+              LauncherUI::appEntryIsSystem(i) ? " [sistema]" : "");
+    }
+    return 0;
+}
+
+// Diagnostico de arquivo no PROPRIO device: tamanho/mtime + CRC32 do
+// conteudo lido agora. O par do `push --verify` da ferramenta: quando o
+// filesystem serve um conteudo velho (ls mostra tamanho novo, cat devolve
+// antigo — bancada 2026-10-09), o crc aqui prova sem puxar o arquivo.
+int cmdStat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: stat <arquivo|diretorio>\r\n");
+        return 1;
+    }
+    std::string path = argv[1];
+    if (!CelerShell::pathAllowed(path)) {
+        print(ctx, "stat: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (stat(path.c_str(), &st) != 0) {
+        print(ctx, "stat: %s nao existe\r\n", path.c_str());
+        return 1;
+    }
+    char when[24] = "--------------------";
+    struct tm tmv;
+    if (st.st_mtime > 0 && localtime_r(&st.st_mtime, &tmv) != nullptr) {
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tmv);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        print(ctx, "dir      %s\r\n mtime %s\r\n", path.c_str(), when);
+        return 0;
+    }
+    uint32_t crc = 0;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        print(ctx, "stat: nao consegui abrir %s\r\n", path.c_str());
+        return 1;
+    }
+    uint8_t buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) crc = hostframe::crc32(buf, n, crc);
+    fclose(f);
+    print(ctx, "arquivo  %s\r\n tamanho %u  crc32 %08X  mtime %s\r\n",
+          path.c_str(), (unsigned)st.st_size, crc, when);
+    return 0;
+}
+
 // Ultimo erro de app registrado: /local/lastcrash.txt e gravado pelo kernel
 // em todo erro de app (inclusive OOM) e no boot apos um fatal do runtime —
 // a stack nao morre mais com o reboot ou com o ring de logs (2KB) rolando.
@@ -488,6 +567,18 @@ int cmdLastError(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
+// acha a entrada na lista do launcher esperando o rescan pedido antes
+// (lista nova leva ate ~3 s pra ficar pronta; com app aberto o onTick do
+// launcher nao roda e a resposta vem da lista atual — o cmdGrant espera igual)
+static int waitEntry(const std::string& target) {
+    for (int t = 0;; t++) {
+        int idx = LauncherUI::findEntry(target);
+        if (idx >= 0) return idx;
+        if (t >= 20) return -1;
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+}
+
 int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
         print(ctx, "uso: run <pasta|nome|pacote do app>\r\n");
@@ -501,6 +592,16 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     // tela devolve o ritmo e o app abre em segundos, nao em minutos
     Backlight::noteActivity();
     LauncherUI::requestRescan();  // app recem-instalado entra na lista
+    // Acha a entrada ANTES de pedir o launch: um alvo inexistente falhava
+    // calado ("abrindo X" que nunca abria — bancada 2026-10-08) e a resposta
+    // agora diz DE ONDE o app abre (o dedup do launcher faz a copia local
+    // vencer a do cartao; sem isso o dev edita /sd, da run e "nada muda").
+    const int idx = waitEntry(target);
+    if (idx < 0) {
+        print(ctx, "run: '%s' nao esta na lista do launcher (veja 'apps'); nada aberto\r\n",
+              target.c_str());
+        return 1;
+    }
     LauncherUI::requestLaunch(target);
     // E fecha o app atual: em placa com tela inicial (cao/relogio) o "exit"
     // seguido de "run" perdia a corrida — o launcher reabria a casa entre os
@@ -509,12 +610,13 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     // aberto: no launcher ocioso o app pedido abre em < 2 s e uma saida
     // pedida "por garantia" o fecharia logo ao nascer.
     if (LauncherUI::appRunning()) LauncherUI::requestAppExit();
-    print(ctx, "abrindo %s\r\n", target.c_str());
+    const std::string& path = LauncherUI::appEntryPath(idx);
+    print(ctx, "abrindo %s -> %s (%s)\r\n", LauncherUI::appEntryName(idx).c_str(),
+          path.c_str(), path.compare(0, 4, "/sd/") == 0 ? "sd" : "local");
     // Sem consentimento o launcher abre o dialogo "Permitir?" na tela — num
     // relogio de tela apagada (ou no cao, sem toque) ninguem responde e o
     // idle-home volta para a casa: o run "sumia" sem aviso (bancada 2026-10-08)
-    const int idx = LauncherUI::findEntry(target);
-    const uint32_t missing = idx >= 0 ? LauncherUI::appEntryMissingPerms(idx) : 0;
+    const uint32_t missing = LauncherUI::appEntryMissingPerms(idx);
     if (missing != 0) {
         print(ctx, "aviso: falta consentimento (%s) — vai pedir na tela; sem toque: grant %s\r\n",
               AppGrants::describe(missing).c_str(), target.c_str());
@@ -719,7 +821,8 @@ const ShellCmd kCommands[] = {
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"top", cmdTop},
-    {"rescan", cmdRescan}, {"run", cmdRun}, {"exit", cmdExit},
+    {"rescan", cmdRescan}, {"apps", cmdApps}, {"stat", cmdStat},
+    {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},
     {"debug", cmdDebug},
