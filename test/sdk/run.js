@@ -415,6 +415,72 @@ function check(name, ok, detail) {
           'hits=' + hits6 + ' x=' + lone.x.toFixed(1));
 })();
 
+// ------------------------------------------------------------------- deps --
+(function () {
+    console.log('SDK deps (celeros.sfx + celeros.grid):');
+    var SFX = require('../../tools/sdk/engine/celeros.sfx.js');
+    var GRID = require('../../tools/sdk/engine/celeros.grid.js');
+
+    // sfx
+    check('sfx exporta version e tabela', typeof SFX.version === 'string' &&
+          Array.isArray(SFX.tabela.boomPeq));
+    var m = SFX.mel('coin');
+    m[0][0] = 1;
+    check('sfx.mel devolve copia (mutar nao suja a tabela)',
+          SFX.tabela.coin[0][0] === 988, JSON.stringify(SFX.tabela.coin[0]));
+    check('sfx.mel de nome unico vira melodia de 1 nota',
+          SFX.mel('ui').length === 1 && SFX.mel('ui')[0][0] === 880);
+    check('sfx.mel de nome inexistente e null', SFX.mel('nada') === null);
+    var tr = SFX.transpor([[440, 100], [0, 50]], 12);
+    check('sfx.transpor dobra a frequencia e preserva a pausa',
+          tr[0][0] === 880 && tr[1][0] === 0, JSON.stringify(tr));
+    check('sfx.tempo escala duracoes com piso de 15 ms',
+          SFX.tempo([[440, 100]], 0.5)[0][1] === 50 &&
+          SFX.tempo([[440, 10]], 0.5)[0][1] === 15);
+    var tocou = null;
+    var audioFake = { sfx: function (mel) { tocou = mel; } };
+    SFX.via(audioFake, 'boomGra', { oitava: 1 });
+    check('sfx.via toca variante (transposta) pelo audio',
+          tocou && tocou.length === 3 && tocou[0][0] === 200,
+          tocou ? JSON.stringify(tocou[0]) : 'null');
+    check('sfx.via sem audio e no-op', SFX.via(null, 'ui') === false);
+
+    // grid
+    check('grid exporta version', typeof GRID.version === 'string');
+    var ra = GRID.rng(7), rb = GRID.rng(7);
+    check('grid.rng deterministico', ra() === rb() && ra() === rb());
+    var ar = GRID.classica(15, 13, GRID.rng(101), { dens: 0.55 });
+    check('grid.classica: borda e pilares nas pares',
+          ar.grid[0][0] === '#' && ar.grid[12][14] === '#' && ar.grid[2][2] === '#');
+    check('grid.classica: canto do spawn respira (protege + vizinhos)',
+          ar.grid[1][1] === '.' && ar.grid[2][1] === '.' && ar.grid[1][2] === '.');
+    check('grid.classica: lista de macios bate com o grid',
+          GRID.contar(ar.grid, '%') === ar.macios.length && ar.macios.length > 0);
+    var fr = GRID.flood(ar.grid, 1, 1, function (ch) { return ch !== '#'; });
+    check('grid.flood: explodindo macios alcansa a maioria da arena',
+          fr.quantos > 15 * 13 * 0.5, 'quantos=' + fr.quantos);
+    var fl = GRID.flood(ar.grid, 1, 1, function (ch) { return ch === '.'; });
+    check('grid.flood: so celulas livres alcanca menos',
+          fl.quantos < fr.quantos, 'livres=' + fl.quantos);
+    // escolheAlcancavel: bolso cercado por # e rejeitado em favor do livre
+    var gsel = GRID.nova(7, 5, '#');
+    for (var cc = 1; cc <= 5; cc++) gsel[1][cc] = '.';
+    gsel[2][5] = '%';   // vizinho de (5,1): alcancavel
+    // (3,3) segue '#': qualquer candidato la dentro e isolado
+    var escolhido = GRID.escolheAlcancavel(gsel, [{ c: 3, r: 3 }, { c: 5, r: 2 }], 1, 1);
+    check('grid.escolheAlcancavel pula o bolso isolado',
+          escolhido && escolhido.c === 5 && escolhido.r === 2,
+          escolhido ? escolhido.c + ',' + escolhido.r : 'null');
+    check('grid.escolheAlcancavel sem opcao devolve o primeiro',
+          GRID.escolheAlcancavel(gsel, [{ c: 3, r: 3 }], 1, 1).c === 3);
+    var livre = GRID.celulaLivre(ar.grid, GRID.rng(3), function (c, r, ch) {
+        return ch === '.' && c + r > 12;
+    });
+    check('grid.celulaLivre respeita o filtro',
+          livre && ar.grid[livre.r][livre.c] === '.' && livre.c + livre.r > 12,
+          livre ? livre.c + ',' + livre.r : 'null');
+})();
+
 // ----------------------------------------------------------------- engine --
 (function () {
     console.log('SDK engine (tools/sdk/engine/celeros.engine.js):');
