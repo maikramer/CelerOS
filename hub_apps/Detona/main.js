@@ -126,7 +126,7 @@ E.audio.sfxTable.hit = [220, 50];
 E.audio.sfxTable.chute = [[440, 30], [660, 40]];
 
 // ---------------------------------------------------------------- cenas --
-var RECT_JOGAR;   // botes: hit no update, desenho no draw (immediate)
+var RECT_JOGAR, RECT_SOBRE;   // botoes: hit no update, desenho no draw
 
 var tituloBase = false;
 function drawTituloBase() {
@@ -143,11 +143,17 @@ E.run({
             E.audio.music(NV.SONG_MENU);
         },
         update: function () {
-            RECT_JOGAR = { x: W / 2 - 90, y: H * 0.62, w: 180, h: 52 };
+            RECT_JOGAR = { x: W / 2 - 90, y: H * 0.56, w: 180, h: 50 };
+            RECT_SOBRE = { x: W / 2 - 90, y: H * 0.56 + 62, w: 180, h: 50 };
             if (E.hit(RECT_JOGAR)) {
                 E.data.retomar = false;
+                E.data.modo = "campanha";
                 prog.mundo = E.save.num("mundo", 1);
                 prog.nivel = E.save.num("nivel", 1);
+                E.goto("jogando");
+            } else if (E.hit(RECT_SOBRE)) {
+                E.data.retomar = false;
+                E.data.modo = "sobre";
                 E.goto("jogando");
             }
         },
@@ -155,14 +161,17 @@ E.run({
             if (!tituloBase) drawTituloBase();
             // repinta so a metade de baixo (o PNG fica; nada de decode/frame)
             System.fillRect(0, Math.floor(H * 0.5), W, Math.ceil(H * 0.5) + 1, C.preto);
-            E.gfx.text("DETONA!", W / 2, Math.floor(H * 0.40), {
+            E.gfx.text("DETONA!", W / 2, Math.floor(H * 0.36), {
                 color: C.ouro, size: 3, align: "center", screen: true });
-            E.gfx.text("RECORDE " + hi, W / 2, Math.floor(H * 0.52), {
-                color: C.cinza, size: 2, align: "center", screen: true });
+            E.gfx.text("campanha " + hi + " . sobrevivencia " + E.save.num("sobre.hi", 0),
+                       W / 2, Math.floor(H * 0.47), {
+                       color: C.cinza, size: 1, align: "center", screen: true });
             E.gfx.button("JOGAR", RECT_JOGAR.x, RECT_JOGAR.y,
                          RECT_JOGAR.w, RECT_JOGAR.h, { primary: true });
+            E.gfx.button("SOBREVIVENCIA", RECT_SOBRE.x, RECT_SOBRE.y,
+                         RECT_SOBRE.w, RECT_SOBRE.h);
             E.gfx.text("arraste p/ andar . toque p/ bomba", W / 2,
-                       Math.floor(H * 0.62) + 76, {
+                       Math.floor(H * 0.56) + 128, {
                        color: C.cinza, size: 1, align: "center", screen: true });
         }
     },
@@ -170,16 +179,19 @@ E.run({
     jogando: {
         fps: 0,   // sem teto: o frame vale o que a placa der
         enter: function () {
+            var sobre = E.data.modo === "sobre";
             if (!E.data.retomar) {
-                var plano = NV.gerar(prog.mundo, prog.nivel);
+                var plano = sobre ? NV.gerar(1, 1, { sobrevivencia: true })
+                                  : NV.gerar(prog.mundo, prog.nivel);
                 arena.iniciar(prog.mundo, prog.nivel, plano);
                 arena.layout(CELL, OX, OY);
                 wireArena();
                 ia.ligar();               // bichos do plano (+ chefe no 8º)
+                if (sobre) { ia.onda(); E.data.ondaBeat = -1; }
             } else {
                 E.data.retomar = false;
             }
-            E.audio.music(NV.SONG_BATALHA);
+            E.audio.music(NV.musica(prog.mundo, prog.nivel, sobre));
         },
         update: function (dt) {
             var s = arena.state();
@@ -204,6 +216,15 @@ E.run({
             arena.mover(ax, ay, dt);
             if (E.input.tap) arena.plantar();
             arena.update(dt);
+            // sobrevivencia: onda na batida (a cada 12) ou arena vazia
+            if (s && s.sobrevivencia && !s.fim) {
+                var bInt = Math.floor(arena.beatNow());
+                if (bInt !== E.data.ondaBeat) {
+                    E.data.ondaBeat = bInt;
+                    if (bInt % 12 === 0 ||
+                        (s.enemies.length === 0 && s.ondaAte <= 0)) ia.onda();
+                }
+            }
         },
         draw: function () { drawMundo(); }
     },
@@ -231,24 +252,39 @@ E.run({
         enter: function () {
             E.audio.stop();
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
-            E.data.novoRec = E.save.best("hi", info.score);
-            hi = E.save.num("hi", 0);
+            E.data.novoRec = E.save.best(info.sobre ? "sobre.hi" : "hi", info.score);
         },
         update: function () {
-            var r = { x: W / 2 - 90, y: H * 0.62, w: 180, h: 50 };
-            if (E.hit(r)) E.goto("titulo");
+            var info = E.data.fimInfo || { fim: 'dead', score: 0 };
+            var r1 = { x: W / 2 - 100, y: H * 0.60, w: 200, h: 50 };
+            var r2 = { x: W / 2 - 100, y: H * 0.60 + 62, w: 200, h: 44 };
+            if (E.hit(r1)) {
+                E.data.retomar = false;
+                if (!info.sobre && info.fim === 'win') {
+                    prog.mundo = E.save.num("mundo", 1);
+                    prog.nivel = E.save.num("nivel", 1);
+                }
+                E.data.modo = info.sobre ? "sobre" : "campanha";
+                E.goto("jogando");
+            } else if (E.hit(r2)) {
+                E.goto("titulo");
+            }
         },
         draw: function () {
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
             System.fillRect(0, 0, W, H, C.preto);
-            E.gfx.text(info.fim === 'win' ? "FASE LIMPA!" : "FIM DE JOGO",
-                        W / 2, Math.floor(H * 0.32), {
+            var titulo = info.sobre ? "ONDA " + info.onda :
+                         info.fim === 'win' ? "FASE LIMPA!" : "FIM DE JOGO";
+            E.gfx.text(titulo, W / 2, Math.floor(H * 0.30), {
                         color: C.ouro, size: 3, align: "center", screen: true });
-            E.gfx.text("PONTOS " + info.score, W / 2, Math.floor(H * 0.46), {
+            E.gfx.text("PONTOS " + info.score, W / 2, Math.floor(H * 0.44), {
                         color: C.branco, size: 2, align: "center", screen: true });
-            if (E.data.novoRec) E.gfx.text("NOVO RECORDE!", W / 2, Math.floor(H * 0.54), {
+            if (E.data.novoRec) E.gfx.text("NOVO RECORDE!", W / 2, Math.floor(H * 0.52), {
                         color: C.laranja, size: 2, align: "center", screen: true });
-            E.gfx.button("DE NOVO", W / 2 - 90, H * 0.62, 180, 50, { primary: true });
+            var rotulo = info.sobre ? "DE NOVO"
+                       : info.fim === 'win' ? "PROXIMA FASE" : "TENTAR DE NOVO";
+            E.gfx.button(rotulo, W / 2 - 100, H * 0.60, 200, 50, { primary: true });
+            E.gfx.button("MENU", W / 2 - 100, H * 0.60 + 62, 200, 44);
         }
     }
 }, "titulo");
@@ -291,12 +327,16 @@ function wireArena() {
     };
     s.onFim = function () {
         var st = arena.state();
-        E.data.fimInfo = { fim: st.fim, score: st.score };
+        var sobre = !!st.sobrevivencia;
+        E.data.fimInfo = { fim: st.fim, score: st.score, sobre: sobre,
+                           onda: st.onda, mundo: st.mundo, nivel: st.nivel };
         if (st.fim === 'win') {
             var nv = st.nivel + 1, mu = st.mundo;
             if (nv > NV.NIVEIS_POR_MUNDO) { nv = 1; mu++; }
             E.save.set("mundo", String(mu));
             E.save.set("nivel", String(nv));
+        } else if (sobre) {
+            E.save.best("sobre.hi", st.score);
         }
         E.after(900, function () { arena.parar(); E.goto("fim"); });
     };
@@ -465,14 +505,20 @@ function drawHUD(s, pulso) {
     E.gfx.text("B" + s.stats.bombs + " C" + s.stats.flame + " V" + s.stats.vel,
                Math.floor(W * 0.34), cy, {
                color: t.hudTxt, size: 2, valign: "middle", screen: true });
-    // tempo (vermelho piscando no fim)
-    var seg = Math.max(0, Math.ceil(s.tLeft));
-    E.gfx.text(String(seg), W / 2 + 46, cy, {
-        color: seg < 30 && pulso > 0.5 ? C.vermelho : t.hudTxt,
-        size: 2, valign: "middle", screen: true });
-    // mundo.nivel + pontos
-    E.gfx.text(s.mundo + "." + s.nivel, W / 2 + 46, y0 + 9, {
-        color: t.hudTxt, size: 1, align: "center", screen: true });
+    // tempo (vermelho piscando no fim) ou onda na sobrevivencia
+    if (s.sobrevivencia) {
+        E.gfx.text("ONDA " + s.onda, W / 2 + 46, cy, {
+            color: t.hudTxt, size: 2, valign: "middle", screen: true });
+        E.gfx.text("SOBRE", W / 2 + 46, y0 + 9, {
+            color: t.hudTxt, size: 1, align: "center", screen: true });
+    } else {
+        var seg = Math.max(0, Math.ceil(s.tLeft));
+        E.gfx.text(String(seg), W / 2 + 46, cy, {
+            color: seg < 30 && pulso > 0.5 ? C.vermelho : t.hudTxt,
+            size: 2, valign: "middle", screen: true });
+        E.gfx.text(s.mundo + "." + s.nivel, W / 2 + 46, y0 + 9, {
+            color: t.hudTxt, size: 1, align: "center", screen: true });
+    }
     E.gfx.text(String(s.score), s.stats.remote ? W - 76 : W - 10, cy, {
         color: C.ouro, size: 2, align: "right", valign: "middle", screen: true });
     // detonador remoto: chip BOOM pulsando no canto direito

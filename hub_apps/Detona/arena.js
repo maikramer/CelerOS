@@ -46,6 +46,7 @@ function iniciar(mundo, nivel, plano) {
         cell: 0, ox: 0, oy: 0, hud: 0,
         grid: plano.grid, exit: { c: plano.exit.c, r: plano.exit.r, achada: false, aberta: false },
         powerups: plano.powerups, spawns: plano.spawns || [],
+        sobrevivencia: !!plano.sobrevivencia, onda: 0, ondaAte: 4,
         world: P.world({ gravity: { x: 0, y: 0 }, maxSub: 4 }),
         tiles: null, variacao: [],
         player: null, bombs: [], flames: [], enemies: [],
@@ -159,8 +160,12 @@ function update(dt) {
     if (!st || st.fim) return;
     st.world.step(dt);
     if (st.stats.inv > 0) st.stats.inv -= dt;
-    st.tLeft -= dt;
-    if (st.tLeft <= 0) { matar('tempo'); return; }
+    if (!st.sobrevivencia) {
+        st.tLeft -= dt;
+        if (st.tLeft <= 0) { matar('tempo'); return; }
+    } else if (st.ondaAte > 0) {
+        st.ondaAte -= dt;   // relogio da proxima onda (main cria os bichos)
+    }
 
     var b = beatNow();
     // bombas: pavio no beat + deslizamento do chute

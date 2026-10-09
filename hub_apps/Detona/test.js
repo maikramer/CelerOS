@@ -33,10 +33,10 @@ module.exports.wire = function (env) {
     var macios0 = 0, bombasAtivas = 0, explodiu = false, maciosDepois = -1;
     var meuBalao = null;
 
-    // titulo -> JOGAR (botao em H*0.62 + meia altura; 480 nativo)
+    // titulo -> JOGAR (botao em H*0.56 + meia altura; 480 nativo)
     at(function () {
-        h.pushTouch([{ x: 240, y: Math.floor(480 * 0.62 + 26), touched: 1 },
-                     { x: 240, y: Math.floor(480 * 0.62 + 26), touched: 0 }]);
+        h.pushTouch([{ x: 240, y: Math.floor(480 * 0.56 + 25), touched: 1 },
+                     { x: 240, y: Math.floor(480 * 0.56 + 25), touched: 0 }]);
     }, 400);
 
     // entrou na fase: player no canto, grid com macios
@@ -149,4 +149,21 @@ module.exports.wire = function (env) {
         if (!explodiu || s.fim) return;
         assert(s.fim === 'dead', 'labareda matou (fim=dead), fim=' + s.fim);
     }, 7000);
+
+    // --- sobrevivencia: MENU no fim -> SOBREVIVENCIA no titulo -> onda 1 --
+    at(function () {
+        h.pushTouch([{ x: 240, y: Math.floor(480 * 0.60 + 62 + 22), touched: 1 },
+                     { x: 240, y: Math.floor(480 * 0.60 + 62 + 22), touched: 0 }]);
+    }, 8000);
+    at(function () {
+        h.pushTouch([{ x: 240, y: Math.floor(480 * 0.56 + 62 + 25), touched: 1 },
+                     { x: 240, y: Math.floor(480 * 0.56 + 62 + 25), touched: 0 }]);
+    }, 8800);
+    at(function () {
+        var a = h.detona.arena, s = a.state();
+        assert(s && s.sobrevivencia, 'modo sobrevivencia ativo');
+        assert(s.onda >= 1, 'onda inicial spawned (' + s.onda + ')');
+        assert(s.enemies.length >= 2, 'bichos na arena (' + s.enemies.length + ')');
+        assert(s.exit.c < 0, 'sobrevivencia sem saida');
+    }, 9600);
 };

@@ -1,7 +1,7 @@
 {
   "name": "Detona!",
   "packageName": "celeros.detona",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "api": 28,
   "permissions": [],
   "requires": ["psram"],
@@ -10,5 +10,5 @@
   "category": "Estrategia",
   "topbar": false,
   "description": "Bomberman de grade em tela cheia nos pixels nativos do vidro: abra caminho com bombas, pegue powerups (chute, detonador, escudo), acha a saida escondida e limpa a arena. O pavio das bombas e quantizado na BATIDA da trilha chiptune — a explosao cai no compasso e as correntes cascateiam de meio tempo em meio tempo. Campanha em 3 mundos com chefes e modo sobrevivencia.",
-  "changelog": "0.1.0 - nucleo: arena 15x13 procedural por seed, movimento top-down com lane assist na fisica da engine, bombas no beat (pavio de 4 batidas, corrente em dominó de meia batida), powerups basicos (+bomba/+chama/velocidade), saida sob bloco macio, HUD e cenas; sprites gerados por IA (tools/detona_sprites.py); engine+physics 1.1 vendorizadas (migram para deps do hub)"
+  "changelog": "0.2.0 - campanha completa: 3 mundos com trilhas proprias (Jardim 128bpm, Forno 140, Nucleo 120) e tema de chefe a 150; fim de fase contextual (PROXIMA/TENTAR DE NOVO/MENU); MODO SOBREVIVENCIA: arena fixa sem saida nem tempo, ondas a cada 12 batidas piorando o mix (balao/fantasma/cacador), recorde proprio; 0.1.0 - nucleo: arena 15x13 procedural por seed, movimento top-down com lane assist na fisica da engine, bombas no beat (pavio de 4 batidas, corrente em dominó de meia batida), bichos com campo de fluxo (P.flow), chefe 2x2 que joga bombas na batida forte, chute e detonador, saida sob bloco macio; sprites gerados por IA (tools/detona_sprites.py); engine+physics 1.1 vendorizadas (migram para deps do hub)"
 }

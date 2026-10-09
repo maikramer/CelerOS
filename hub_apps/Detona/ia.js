@@ -228,4 +228,30 @@ function matar(e) {
     st.onSfx('bicho');
 }
 
-module.exports = { ligar: ligar, colocar: colocar, update: update, ferirNa: ferirNa };
+// SOBREVIVENCIA: onda nova (chamada pelo main na batida ou quando a arena
+// esvazia): +2..4 bichos, mix piorando com o tempo, nunca perto do player
+function onda() {
+    var st = arena.state();
+    if (!st || !st.sobrevivencia || st.fim) return st ? st.onda : 0;
+    if (st.enemies.length > 4) return st.onda;
+    st.onda++;
+    st.ondaAte = 6;
+    var n = Math.min(2 + Math.floor(st.onda / 3), 4);
+    var mix = st.onda < 2 ? ['balao']
+            : st.onda < 4 ? ['balao', 'fantasma']
+            : ['balao', 'fantasma', 'cacador'];
+    var cel = arena.celulaPlayer();
+    for (var i = 0; i < n; i++) {
+        for (var t = 0; t < 80; t++) {
+            var c = 1 + Math.floor(R() * 14), r = 1 + Math.floor(R() * 12);
+            if (arena.em(c, r) !== '.') continue;
+            if (Math.abs(c - cel.c) + Math.abs(r - cel.r) < 6) continue;
+            colocar(mix[Math.floor(R() * mix.length)], c, r);
+            break;
+        }
+    }
+    return st.onda;
+}
+
+module.exports = { ligar: ligar, colocar: colocar, update: update,
+                   ferirNa: ferirNa, onda: onda };

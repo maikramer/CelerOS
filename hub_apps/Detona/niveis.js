@@ -94,6 +94,80 @@ var SONG_MENU = {
     ]
 };
 
+// mundo 2 (Forno): 140 BPM, maior e agressiva, em mi
+var SONG_FORNO = {
+    bpm: 140, loops: 8,
+    tracks: [
+        { drum: true, vol: 75,
+          notes: [[36, 2], [36, 2], [38, 2], [42, 1], [42, 1],
+                  [36, 2], [36, 2], [38, 2], [42, 2],
+                  [36, 2], [36, 2], [38, 2], [42, 1], [42, 1],
+                  [38, 2], [42, 2], [38, 2], [42, 2]] },
+        { wave: "tri", vol: 60,
+          notes: [[40, 2], [40, 2], [47, 2], [40, 2], [45, 2], [43, 2],
+                  [40, 2], [40, 2], [47, 2], [40, 2], [50, 2], [47, 2],
+                  [40, 2], [40, 2], [47, 2], [40, 2], [45, 2], [43, 2],
+                  [38, 2], [38, 2], [45, 2], [38, 2], [43, 2], [40, 2]] },
+        { wave: "sq", vol: 42,
+          notes: [[64, 2], [67, 2], [71, 2], [67, 2], [69, 4], [67, 4],
+                  [64, 2], [67, 2], [71, 2], [74, 2], [72, 4], [71, 4],
+                  [76, 2], [74, 2], [72, 2], [71, 2], [69, 4], [71, 4],
+                  [67, 6], [64, 6], [64, 4]] }
+    ]
+};
+
+// mundo 3 (Nucleo): 120 BPM, grave e mecanico, em do menor
+var SONG_NUCLEO = {
+    bpm: 120, loops: 8,
+    tracks: [
+        { drum: true, vol: 70,
+          notes: [[36, 4], [42, 2], [38, 2],
+                  [36, 4], [42, 2], [38, 2],
+                  [36, 4], [42, 2], [38, 4],
+                  [36, 2], [36, 2], [42, 2], [38, 2]] },
+        { wave: "saw", vol: 38,
+          notes: [[36, 4], [39, 4], [43, 4], [39, 4],
+                  [34, 4], [38, 4], [41, 4], [38, 4],
+                  [36, 4], [39, 4], [43, 4], [46, 4],
+                  [44, 4], [43, 4], [39, 4], [36, 4]] },
+        { wave: "sq25", vol: 30,
+          notes: [[60, 2], [63, 2], [67, 2], [63, 2],
+                  [58, 2], [62, 2], [65, 2], [62, 2],
+                  [60, 2], [63, 2], [67, 2], [70, 2],
+                  [68, 2], [67, 2], [63, 2], [60, 2]] }
+    ]
+};
+
+// chefe: 150 BPM, tensa, bumbo dobrado
+var SONG_CHEFE = {
+    bpm: 150, loops: 8,
+    tracks: [
+        { drum: true, vol: 85,
+          notes: [[36, 1], [36, 1], [42, 2], [38, 2],
+                  [36, 1], [36, 1], [42, 2], [38, 2],
+                  [36, 1], [36, 1], [36, 1], [36, 1], [38, 2], [42, 2]] },
+        { wave: "saw", vol: 45,
+          notes: [[38, 2], [38, 2], [41, 2], [38, 2],
+                  [36, 2], [36, 2], [43, 2], [36, 2],
+                  [38, 2], [38, 2], [41, 2], [44, 2],
+                  [43, 4], [41, 4], [38, 4], [36, 4]] },
+        { wave: "sq", vol: 40,
+          notes: [[62, 4], [65, 4], [69, 4], [68, 4],
+                  [62, 4], [65, 4], [70, 4], [69, 4],
+                  [74, 2], [72, 2], [70, 2], [68, 2],
+                  [67, 4], [65, 4], [62, 8]] }
+    ]
+};
+
+// trilha da fase: mundo 1 = batalha, 2 = forno, 3 = nucleo; chefe no 8o
+function musica(mundo, nivel, sobrevivencia) {
+    if (sobrevivencia) return SONG_FORNO;
+    if (nivel % NIVEIS_POR_MUNDO === 0) return SONG_CHEFE;
+    if (mundo === 2) return SONG_FORNO;
+    if (mundo >= 3) return SONG_NUCLEO;
+    return SONG_BATALHA;
+}
+
 // dificuldade por nivel absoluto (1..24): densidade de macios, bichos e
 // mix — os chefes fecham cada mundo (nivel % 8 == 0)
 function params(mundo, nivel) {
@@ -107,10 +181,14 @@ function params(mundo, nivel) {
     };
 }
 
-// gera {grid, exit, powerups, spawns} para mundo/nivel (1-based)
-function gerar(mundo, nivel) {
+// gera {grid, exit, powerups, spawns} para mundo/nivel (1-based).
+// opts.sobrevivencia: arena fixa (seed proprio), mais vazia, sem saida,
+// sem tempo — as ondas quem comandam sao o main/ia
+function gerar(mundo, nivel, opts) {
+    opts = opts || {};
     var p = params(mundo, nivel);
-    var r = rng(mundo * 100 + nivel);
+    var r = opts.sobrevivencia ? rng(9090) : rng(mundo * 100 + nivel);
+    var dens = opts.sobrevivencia ? 0.45 : p.dens;
     var grid = [], macios = [];
     for (var row = 0; row < ROWS; row++) {
         var linha = [];
@@ -127,7 +205,7 @@ function gerar(mundo, nivel) {
         for (var cc = 1; cc < COLS - 1; cc++) {
             if (grid[rr][cc] !== '.') continue;
             if ((cc <= 2 && rr <= 2)) continue;   // canto do spawn
-            if (r() < p.dens) { grid[rr][cc] = '%'; macios.push([cc, rr]); }
+            if (r() < dens) { grid[rr][cc] = '%'; macios.push([cc, rr]); }
         }
     }
     // garante macios minimos p/ saida + powerups
@@ -150,13 +228,14 @@ function gerar(mundo, nivel) {
             if (grid[macios[mf][1]][macios[mf][0]] === '%') vivos.push(macios[mf]);
         macios = vivos;
     }
-    // saida sob um macio longe do spawn
-    var exit = null;
-    for (var tries = 0; tries < 60 && !exit; tries++) {
+    // saida sob um macio longe do spawn (sobrevivencia nao tem saida)
+    var exit = { c: -1, r: -1 };
+    for (var tries = 0; tries < 60 && !opts.sobrevivencia; tries++) {
         var m = macios[Math.floor(r() * macios.length)];
-        if (m[0] + m[1] > 12) exit = { c: m[0], r: m[1] };
+        if (m[0] + m[1] > 12) { exit = { c: m[0], r: m[1] }; break; }
     }
-    if (!exit) exit = { c: macios[macios.length - 1][0], r: macios[macios.length - 1][1] };
+    if (!opts.sobrevivencia && exit.c < 0)
+        exit = { c: macios[macios.length - 1][0], r: macios[macios.length - 1][1] };
     // powerups sob macios distintos da saida (kinds basicos aqui; o
     // restante do catalogo entra conforme o mundo avanca)
     var catalogo = ['B', 'C', 'V'];
@@ -178,10 +257,12 @@ function gerar(mundo, nivel) {
     }
     // spawns de inimigos: celulas livres longe do canto do spawn
     var spawns = [];
-    var kinds = p.abs < 3 ? ['balao']
+    var kinds = opts.sobrevivencia ? ['balao', 'fantasma', 'cacador']
+              : p.abs < 3 ? ['balao']
               : p.abs < 9 ? ['balao', 'fantasma']
               : ['balao', 'fantasma', 'cacador'];
-    for (var e = 0; e < p.inimigos; e++) {
+    var ninim = opts.sobrevivencia ? 3 : p.inimigos;
+    for (var e = 0; e < ninim; e++) {
         for (var t3 = 0; t3 < 80; t3++) {
             var c3 = 1 + Math.floor(r() * (COLS - 2));
             var r3 = 1 + Math.floor(r() * (ROWS - 2));
@@ -191,13 +272,16 @@ function gerar(mundo, nivel) {
             break;
         }
     }
-    if (p.chefe) spawns.push({ kind: 'chefe', c: (COLS >> 1) - 1, r: 1 });
+    if (p.chefe && !opts.sobrevivencia) spawns.push({ kind: 'chefe', c: (COLS >> 1) - 1, r: 1 });
     return { grid: grid, exit: exit, powerups: powerups, spawns: spawns,
-             tempo: p.tempo, tema: TEMAS[Math.min(mundo - 1, TEMAS.length - 1)] };
+             sobrevivencia: !!opts.sobrevivencia,
+             tempo: opts.sobrevivencia ? 99999 : p.tempo,
+             tema: TEMAS[Math.min(mundo - 1, TEMAS.length - 1)] };
 }
 
 module.exports = {
     COLS: COLS, ROWS: ROWS, NIVEIS_POR_MUNDO: NIVEIS_POR_MUNDO,
     TEMAS: TEMAS, SONG_BATALHA: SONG_BATALHA, SONG_MENU: SONG_MENU,
-    params: params, gerar: gerar, rng: rng
+    SONG_FORNO: SONG_FORNO, SONG_NUCLEO: SONG_NUCLEO, SONG_CHEFE: SONG_CHEFE,
+    musica: musica, params: params, gerar: gerar, rng: rng
 };
