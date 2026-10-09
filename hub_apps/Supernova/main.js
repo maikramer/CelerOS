@@ -1,22 +1,22 @@
-// Supernova — atirador espacial em tela cheia nos PIXELS NATIVOS do vidro
-// (API 28: 480x480 no SmartDisplay 4", sem a esticada do canvas virtual).
-// O que este app mostra de "poder de ESP32":
-//   - canvas nativo: coordenadas/toque em pixels fisicos 1:1;
-//   - sprites PNG gerados por IA (text2d) decodificados UMA vez em sprites
-//     PSRAM e blit por quadro (pushSprite), com glow por cima do blit;
-//   - trilha chiptune de 4 canais (playMusic) que e o metronomo do jogo:
-//     ondas de inimigos spawnam na batida (musicPos);
-//   - modulos require (engine/fx/audio), recorde no Storage NVS,
-//     particularias/ondas de choque/tremor em primitivas anti-aliasadas.
-// Sem topbar: saida pelo proprio menu (System.exitApp).
+// Supernova 2.0 — atirador espacial construido sobre a game engine do SDK
+// (engine.js + physics.js), tela cheia nos PIXELS NATIVOS do vidro (API 28;
+// 480x480 no SmartDisplay 4"). A trilha chiptune segue sendo o metronomo
+// (ondas caem na batida via beat clock) e a carga dos orbes detona a
+// SUPERNOVA. Novo na 2.0: SENTINELA-MOR (chefe a cada 5 ondas, rajadas
+// radiais na batida, barra de vida), combo x2..x5 por abates em serie,
+// drones splitter, tiro triplo de premiacao e barra de chefe no HUD —
+// tudo com as cenas, gestos, camera (tremor), particulas e fisica da
+// engine. A saida e pelo menu (System.exitApp): sem topbar.
+//
+// Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao na fisica) +
+// engine.js/physics.js vendorizados. Arte dos sprites gerada por IA.
 
-var T = System.theme();
-if (typeof System.setNativeCanvas === "function") System.setNativeCanvas(true);
-var W = System.screenWidth(), H = System.screenHeight();
+var E = require("engine");
+var jogo = require("jogo");
 
-var engine = require("engine");
-var fx = require("fx");
-var audio = require("audio");
+E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120 });
+var W = E.W, H = E.H;
+var T = E.theme;
 
 var C = {
     espaco: 0x0000,
@@ -24,414 +24,347 @@ var C = {
     ouro: 0xFFE0, branco: 0xFFFF, verde: 0x07E0,
     cinza: System.mixColor(0x0000, 0xFFFF, 18)
 };
+var HUD_H = 44;
+var hi = E.save.num("hi", 0);
+
+// Pega de teste (so existe no harness): deixa o test.js dirigir a sim
+// deterministicamente.
+if (typeof __harness !== "undefined") {
+    __harness.supernova = { jogo: jogo, E: E };
+}
 
 // ------------------------------------------------------------- sprites ---
-// Pool de 4 slots (PSRAM): cada PNG e decodificado uma unica vez para
-// dentro do sprite; no jogo e so blit. Sem assets (ou no emulador) cai na
-// via procedural — o jogo roda igual.
-var SPR = { nave: 0, inimigo: 0, olho: 0, orbe: 0 };
-var hasSpr = false;
-
+// Pool de 4 slots (PSRAM): cada PNG e decodificado uma unica vez e o blit
+// usa cor-chave. Sem assets (ou no harness) a engine cai no painter
+// procedural — o jogo roda igual.
 var BASES = ["/local/apps/Supernova/assets/", "/sd/apps/Supernova/assets/"];
-var hasPNG = (typeof System.drawPNG === "function");
 
-// drawPNG e a unica sonda de existencia de asset: no boot nada foi
-// apresentado ainda, e nos sprites o alvo e o proprio sprite — em ambos
-// a sonda desenhou exatamente o que queriamos.
-function loadSprite(w, h, file, fallbackPaint) {
-    if (typeof System.createSprite !== "function") return 0;
-    var id = System.createSprite(w, h);
-    if (!id) return 0;
-    System.useSprite(id);
-    System.fillScreen(C.espaco);
-    var ok = false;
-    if (hasPNG) {
-        for (var i = 0; i < BASES.length && !ok; i++) {
-            try { ok = System.drawPNG(BASES[i] + file + ".png", 0, 0); } catch (e) { ok = false; }
-        }
-    }
-    if (!ok) fallbackPaint(w, h);
-    System.useSprite(0);
-    return id;
+function paintNave(w, h, x, y) {
+    System.fillTriangle(x + w / 2, y + 2, x + 6, y + h - 8, x + w - 6, y + h - 8, C.ciano);
+    System.fillTriangle(x + w / 2, y + 10, x + w / 2 - 12, y + h - 14, x + w / 2 + 12, y + h - 14, C.branco);
+    System.fillCircle(x + w / 2, y + h / 2 + 2, 5, C.cianoD);
+}
+function paintDrone(w, h, x, y) {
+    System.fillTriangle(x + w / 2, y + 4, x + 2, y + h - 6, x + w - 2, y + h - 6, C.laranja);
+    System.fillCircle(x + w / 2, y + h / 2, 6, C.magenta);
+}
+function paintOlho(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2, w / 2 - 3, C.magenta);
+    System.fillCircle(x + w / 2, y + h / 2, w / 3, C.branco);
+    System.fillCircle(x + w / 2, y + h / 2, w / 6, 0x0000);
+}
+function paintOrbe(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2, w / 2 - 2, C.ouro);
+    System.fillCircle(x + w / 2, y + h / 2, w / 4, C.branco);
 }
 
-function paintNave(w, h) {
-    System.fillTriangle(w / 2, 2, 6, h - 8, w - 6, h - 8, C.ciano);
-    System.fillTriangle(w / 2, 10, w / 2 - 12, h - 14, w / 2 + 12, h - 14, C.branco);
-    System.fillCircle(w / 2, h / 2 + 2, 5, C.cianoD);
-}
-function paintDrone(w, h) {
-    System.fillTriangle(w / 2, 4, 2, h - 6, w - 2, h - 6, C.laranja);
-    System.fillCircle(w / 2, h / 2, 6, C.magenta);
-}
-function paintOlho(w, h) {
-    System.fillCircle(w / 2, h / 2, w / 2 - 3, C.magenta);
-    System.fillCircle(w / 2, h / 2, w / 3, C.branco);
-    System.fillCircle(w / 2, h / 2, w / 6, 0x0000);
-}
-function paintOrbe(w, h) {
-    System.fillCircle(w / 2, h / 2, w / 2 - 2, C.ouro);
-    System.fillCircle(w / 2, h / 2, w / 4, C.branco);
-}
+E.spr.load([
+    { name: "nave", file: "nave", w: 72, h: 72, paint: paintNave },
+    { name: "inimigo", file: "inimigo", w: 56, h: 56, paint: paintDrone },
+    { name: "olho", file: "olho", w: 56, h: 56, paint: paintOlho },
+    { name: "orbe", file: "orbe", w: 44, h: 44, paint: paintOrbe }
+], { bases: BASES });
 
-// blit com cor-chave: o fundo preto do sprite (unico 0x0000 do PNG — os
-// pretos internos viraram quase-preto na masterizacao) nao transfere, e a
-// arte passa sobre estrelas/glow/outros sprites sem o quadrado.
-function blit(id, cx, cy, size) {
-    System.useSprite(id);
-    System.pushSprite(Math.round(cx - size / 2), Math.round(cy - size / 2), 0x0000);
-    System.useSprite(0);
-}
+// Campo de estrelas em 2 tons (guardado no E.data: sobrevive as cenas)
+E.data.stars = E.fx.stars(Math.round(W / 8), {
+    w: W, h: H, vy: 30,
+    colors: [0x39E7, 0xC5F9]   // cinza-azulado longe, branco quente perto
+});
 
-// ---------------------------------------------------------------- estado ---
-var MODE = "titulo";   // titulo | jogando | pausa | fim
-var hi = 0;
-try { hi = parseInt(Storage.get("hi", "0"), 10) || 0; } catch (e) { hi = 0; }
-
-System.keepAwake(true);
-engine.init(W, H);
-fx.init(W, H, T);
-
-// Pega de teste (so existe no harness; no device __harness e indefinido):
-// deixa o test.js dirigir engine/fx/audio deterministicamente — cobrir
-// hit/fim-de-jogo/supernova sem depender de sorte do spawn.
-if (typeof __harness !== "undefined") {
-    __harness.supernova = { engine: engine, fx: fx, audio: audio };
-}
-
-SPR.nave = loadSprite(engine.NAVE, engine.NAVE, "nave", paintNave);
-SPR.inimigo = loadSprite(engine.INIMIGO, engine.INIMIGO, "inimigo", paintDrone);
-SPR.olho = loadSprite(engine.OLHO, engine.OLHO, "olho", paintOlho);
-SPR.orbe = loadSprite(engine.ORBE, engine.ORBE, "orbe", paintOrbe);
-hasSpr = (SPR.nave !== 0 && typeof System.pushSprite === "function");
-
-var tituloPath = null;   // resolvido no drawTituloBase (sonda invisivel pre-loop)
-var last = System.millis();
-
-// ------------------------------------------------------------- entrada ---
-var touch = { down: false, x: 0, y: 0, sx: 0, sy: 0, t0: 0, moved: false };
-var tap = null;   // {x, y} do toque seco (so quando solta sem arrastar)
-
-function pollInput() {
-    tap = null;
-    var t = System.getTouch();
-    var now = System.millis();
-    if (t.touched) {
-        if (!touch.down) { touch.down = true; touch.sx = t.x; touch.sy = t.y; touch.t0 = now; touch.moved = false; }
-        touch.x = t.x; touch.y = t.y;
-        if (Math.abs(t.x - touch.sx) > 12 || Math.abs(t.y - touch.sy) > 12) touch.moved = true;
-    } else if (touch.down) {
-        touch.down = false;
-        if (!touch.moved && now - touch.t0 < 300) tap = { x: touch.sx, y: touch.sy };
-    }
-    return t;
-}
-
-function hit(b) {
-    return !!tap && tap.x >= b.x && tap.x <= b.x + b.w && tap.y >= b.y && tap.y <= b.y + b.h;
-}
-
-// arrasto horizontal move a nave (relativo: o dedo nao cobre a nave)
-function drivePlayer(t) {
-    var p = engine.state().player;
-    if (!p.alive) return;
-    if (t.touched && touch.moved) {
-        var nx = p.x + t.x - touch.sx;
-        if (nx < 30) nx = 30;
-        if (nx > W - 30) nx = W - 30;
-        p.x = nx;
-        touch.sx = t.x; touch.sy = t.y;
-    }
-}
-
-// --------------------------------------------------------------- desenho ---
-var HUD_H = 44;
-
-function drawGame(now, beatF) {
-    var s = engine.state();
-    fx.roll();
-    var shx = fx.shakeX(), shy = fx.shakeY();
-    var pulse = beatF >= 0 ? Math.max(0, 1 - (beatF - Math.floor(beatF)) * 3) : 0;
-
-    System.fillScreen(C.espaco);
-    fx.drawStars(now, pulse);
-
-    // orbes (halo pulsante + blit)
-    var i;
-    for (i = 0; i < s.orbs.length; i++) {
-        var o = s.orbs[i];
-        var pulso = 0.5 + 0.5 * Math.sin(o.ph);
-        System.fillSmoothCircle(Math.round(o.x + shx), Math.round(o.y + shy), 26 + pulso * 5,
-                                System.mixColor(C.ouro, C.espaco, 55 - pulso * 25));
-        if (hasSpr && SPR.orbe) blit(SPR.orbe, o.x + shx, o.y + shy, engine.ORBE);
-        else { System.fillCircle(Math.round(o.x + shx), Math.round(o.y + shy), 14, C.ouro);
-               System.fillCircle(Math.round(o.x + shx), Math.round(o.y + shy), 6, C.branco); }
-    }
-
-    // inimigos
-    for (i = 0; i < s.enemies.length; i++) {
-        var e = s.enemies[i];
-        var sz = e.kind === 1 ? engine.OLHO : engine.INIMIGO;
-        var sid = e.kind === 1 ? SPR.olho : SPR.inimigo;
-        var x = Math.round(e.x + shx), y = Math.round(e.y + shy);
-        if (hasSpr && sid) {
-            blit(sid, x, y, sz);
-            // nucleo pulsante POR CIMA do blit: animacao sem slot extra
-            if (e.kind === 1) System.fillCircle(x, y, 4 + Math.sin(now / 130 + e.ph) * 2, C.verde);
-            else System.fillCircle(x, y + 8, 3 + Math.sin(now / 90 + e.ph) * 2, C.magenta);
-        } else {
-            var col = e.kind === 1 ? C.magenta : C.laranja;
-            System.fillSmoothCircle(x, y, sz / 2 - 2, col);
-            System.fillCircle(x, y, 6, C.branco);
-            if (e.kind === 0) System.fillTriangle(x, y - 6, x - 14, y + 10, x + 14, y + 10, col);
-        }
-    }
-
-    // nave (pisca invulneravel)
-    var p = s.player;
-    if (p.alive && (p.invuln <= 0 || Math.floor(now / 90) % 2 === 0)) {
-        var px = Math.round(p.x + shx), py = Math.round(p.y + shy);
-        var fl = 10 + Math.sin(now / 40) * 5;
-        System.fillSmoothCircle(px - 12, py + 40, 5, C.cianoD);
-        System.fillSmoothCircle(px + 12, py + 40, 5, C.cianoD);
-        System.fillTriangle(px - 9, py + 34, px + 9, py + 34, px, py + 34 + fl, C.ciano);
-        if (hasSpr && SPR.nave) blit(SPR.nave, px, py, engine.NAVE);
-        else {
-            System.fillTriangle(px, py - 30, px - 20, py + 26, px + 20, py + 26, C.ciano);
-            System.fillTriangle(px, py - 20, px - 9, py + 18, px + 9, py + 18, C.branco);
-        }
-    }
-
-    // tiros
-    for (i = 0; i < s.bullets.length; i++) {
-        var b = s.bullets[i];
-        System.drawFastVLine(Math.round(b.x + shx), Math.round(b.y + shy), 14, C.ciano);
-        System.drawPixel(Math.round(b.x + shx), Math.round(b.y + shy + 15), C.branco);
-    }
-    for (i = 0; i < s.ebullets.length; i++) {
-        var eb = s.ebullets[i];
-        System.fillCircle(Math.round(eb.x + shx), Math.round(eb.y + shy), 4, C.magenta);
-        System.drawPixel(Math.round(eb.x + shx), Math.round(eb.y + shy), C.branco);
-    }
-
-    fx.draw();
-    drawHUD(now, s);
-    fx.drawFlash();
-}
-
-function drawHUD(now, s) {
-    System.fillGradient(0, 0, W, HUD_H, System.mixColor(T.bg, 0x0000, 45), 0x0000, 0);
-    System.drawFastHLine(0, HUD_H, W, C.cianoD);
-
-    System.setTextColor(C.branco, 0x0000);
-    System.setTextDatum(0);
-    System.drawString(String(s.score), 14, 6, 4);
-    System.setTextColor(C.cinza, 0x0000);
-    System.drawString("rec " + hi, 14, 36, 1);
-    System.setTextDatum(2);
-    System.drawString("onda " + s.wave, W - 14, 8, 2);
-    // pausa: duas barras no canto
-    System.fillRect(W - 40, 32, 6, 12, C.cinza);
-    System.fillRect(W - 30, 32, 6, 12, C.cinza);
-    // vidas: mini naves
-    for (var i = 0; i < s.lives; i++) {
-        System.fillTriangle(W - 20 - i * 22, 44, W - 28 - i * 22, 32, W - 12 - i * 22, 32, C.ciano);
-    }
-    System.setTextDatum(0);
-
-    // medidor supernova: orbe no rodape (arco de carga)
-    var gx = W / 2, gy = H - 30;
-    var cheio = s.charge >= 100;
-    var pulso = cheio ? 0.5 + 0.5 * Math.sin(now / 110) : 0;
-    System.fillSmoothCircle(gx, gy, 20 + pulso * 4,
-                            System.mixColor(C.ouro, 0x0000, 45 - pulso * 30));
-    System.fillArc(gx, gy, 12, 16, -90, -90 + Math.round(s.charge * 3.6), C.ouro);
-    if (cheio) {
-        System.setTextColor(C.ouro, 0x0000);
-        System.setTextDatum(5);
-        System.drawString("SUPERNOVA", gx, gy - 34, 1);
-        System.setTextDatum(0);
-    }
-}
-
-// ------------------------------------------------------------ telas/menu ---
-function btn(label, x, y, w, h, primary) {
-    var fill = primary ? C.ciano : System.mixColor(C.ciano, 0x0000, 72);
-    System.fillSmoothRoundRect(x, y, w, h, 12, fill);
-    System.setTextColor(primary ? 0x0000 : C.branco, fill);
-    System.setTextDatum(5);
-    System.drawString(label, x + w / 2, y + h / 2, 2);
-    System.setTextDatum(0);
-    return { x: x, y: y, w: w, h: h };
-}
-
-// A arte do titulo (PNG 480x230) e desenhada UMA vez por entrada no
-// estado; por frame so a metade de baixo (titulo + botoes) repinta.
+// A arte do titulo (PNG) e desenhada UMA vez por entrada na cena; por
+// frame so a metade de baixo repinta (drawPNG decodifica: nada de decode
+// por quadro).
+var tituloPath = null;
 var TIT_Y0 = 0;
 function drawTituloBase() {
     System.fillScreen(C.espaco);
-    if (hasPNG && !tituloPath) {
+    if (E.caps.png && !tituloPath) {
         for (var i = 0; i < BASES.length && !tituloPath; i++) {
-            var p = BASES[i] + "titulo.png";
-            try { if (System.drawPNG(p, 0, 0)) tituloPath = p; } catch (e) {}
+            try { if (System.drawPNG(BASES[i] + "titulo.png", 0, 0)) tituloPath = BASES[i] + "titulo.png"; } catch (e) {}
         }
     } else if (tituloPath) {
         try { System.drawPNG(tituloPath, 0, 0); } catch (e) { tituloPath = null; }
     }
     TIT_Y0 = Math.round(H * 0.42);
-    if (!tituloPath) {   // sem arte: campo de estrelas serve de fundo
+    if (!tituloPath) {
         for (var j = 0; j < 60; j++) {
             System.drawPixel(Math.floor(Math.random() * W), Math.floor(Math.random() * H), C.cinza);
         }
     }
 }
 
-function drawTitulo(now) {
-    var y0 = TIT_Y0;
-    System.fillGradient(0, y0, W, H - y0, 0x0000, System.mixColor(T.bg, 0x0000, 35), 0);
-    System.setTextColor(C.ciano, 0x0000);
-    System.setTextDatum(5);
-    System.drawString("SUPERNOVA", W / 2, y0 + 36, 4);
-    System.setTextColor(C.cinza, 0x0000);
-    System.drawString("arraste para voar, ondas na batida da música", W / 2, y0 + 66, 1);
-    System.setTextDatum(0);
-    return {
-        jogar: btn("JOGAR", W / 2 - 90, y0 + 96, 180, 52, true),
-        sair: btn("SAIR", W / 2 - 90, y0 + 160, 180, 44, false)
-    };
+// fracao alta da batida (1 logo apos o tempo forte, decai ate o proximo)
+function beatPulse() {
+    var b = E.audio.beat();
+    if (b < 0) return 0;
+    return Math.max(0, 1 - (b - Math.floor(b)) * 3);
 }
 
-function drawPausa() {
-    System.fillScreen(System.mixColor(T.bg, 0x0000, 12));
-    System.fillSmoothRoundRect(W / 2 - 110, H / 2 - 130, 220, 300, 16, System.mixColor(T.bg, 0x0000, 25));
-    System.setTextColor(C.branco, 0x0000);
-    System.setTextDatum(5);
-    System.drawString("PAUSA", W / 2, H / 2 - 96, 4);
-    System.setTextDatum(0);
-    return {
-        seguir: btn("CONTINUAR", W / 2 - 90, H / 2 - 44, 180, 48, true),
-        sair: btn("SAIR", W / 2 - 90, H / 2 + 84, 180, 44, false)
-    };
+// ------------------------------------------------------------- visao -----
+
+function drawOrb(o, shx, shy, pulse) {
+    var x = Math.round(o.x + shx), y = Math.round(o.y + shy);
+    var pulso = 0.5 + 0.5 * Math.sin(o.ph);
+    System.fillSmoothCircle(x, y, 26 + pulso * 5 + pulse * 3,
+                            System.mixColor(C.ouro, C.espaco, 55 - pulso * 25));
+    E.spr.blit("orbe", x, y, { cx: true, cy: true, key: C.espaco });
 }
 
-function drawFim() {
-    var s = engine.state();
-    System.fillScreen(C.espaco);
-    fx.drawStars(System.millis(), 0);
-    fx.draw();
-    System.setTextColor(C.magenta, 0x0000);
-    System.setTextDatum(5);
-    System.drawString("NAVE PERDIDA", W / 2, H / 2 - 116, 4);
-    System.setTextColor(C.branco, 0x0000);
-    System.drawString("pontuação " + s.score, W / 2, H / 2 - 58, 2);
-    if (s.newRecord) {
-        System.setTextColor(C.ouro, 0x0000);
-        System.drawString("NOVO RECORDE!", W / 2, H / 2 - 26, 2);
+function drawEnemy(e, shx, shy) {
+    var x = Math.round(e.x + shx), y = Math.round(e.y + shy);
+    if (e.kind === 2) {
+        // SENTINELA-MOR: olho grande com aura, nucleo pela vida e
+        // escudos orbitando; na fase rapida a aura fecha
+        var fast = e.hp < e.hpMax / 2;
+        System.fillSmoothCircle(x, y, 60 + Math.sin(System.millis() / 110) * 5,
+                                System.mixColor(C.magenta, C.espaco, fast ? 35 : 55));
+        E.spr.blit("olho", x, y, { cx: true, cy: true, key: C.espaco });
+        var hpk = e.hp / e.hpMax;
+        System.fillCircle(x, y, 8, hpk > 0.5 ? C.verde : (hpk > 0.25 ? C.ouro : 0xF800));
+        var a = System.millis() / 300;
+        System.fillCircle(x + Math.cos(a) * 52, y + Math.sin(a) * 52, 4, C.magenta);
+        System.fillCircle(x - Math.cos(a) * 52, y - Math.sin(a) * 52, 4, C.magenta);
+    } else if (e.kind === 4) {
+        System.fillTriangle(x, y - 10, x - 9, y + 8, x + 9, y + 8, C.laranja);
     } else {
-        System.setTextColor(C.cinza, 0x0000);
-        System.drawString("recorde " + hi, W / 2, H / 2 - 26, 1);
-    }
-    System.setTextDatum(0);
-    return {
-        deNovo: btn("DE NOVO", W / 2 - 90, H / 2 + 14, 180, 52, true),
-        sair: btn("SAIR", W / 2 - 90, H / 2 + 78, 180, 44, false)
-    };
-}
-
-// ------------------------------------------------------------ transicoes ---
-function enterJogo() {
-    engine.reset();
-    fx.init(W, H, T);
-    MODE = "jogando";
-    audio.start(0);
-    audio.sfx("ui");
-}
-
-function enterTitulo() {
-    MODE = "titulo";
-    audio.stop();
-    drawTituloBase();
-}
-
-function salvarFim() {
-    var s = engine.state();
-    if (s.score > hi) {
-        hi = s.score;
-        s.newRecord = true;
-        try { Storage.set("hi", String(hi)); } catch (e) {}
-        audio.sfx("record");
-    }
-}
-
-// ------------------------------------------------------------------ loop ---
-drawTituloBase();
-while (true) {
-    var now = System.millis();
-    var dt = (now - last) / 1000.0;
-    last = now;
-    if (dt > 0.1) dt = 0.1;
-
-    var beatF = audio.beat();
-    var t = pollInput();
-
-    if (MODE === "titulo") {
-        var bu = drawTitulo(now);
-        if (hit(bu.jogar)) enterJogo();
-        else if (hit(bu.sair)) { audio.sfx("ui"); System.exitApp(); }
-        System.delay(16);
-        continue;
-    }
-
-    if (MODE === "pausa") {
-        var bp = drawPausa();
-        if (hit(bp.seguir)) { MODE = "jogando"; last = System.millis(); audio.sfx("ui"); }
-        else if (hit(bp.sair)) { audio.stop(); System.exitApp(); }
-        System.delay(16);
-        continue;
-    }
-
-    if (MODE === "fim") {
-        engine.update(dt, -1, fx, audio);   // so adianta overT/efeitos
-        fx.update(dt, 0, 0);
-        var bf = drawFim();
-        if (engine.state().overT > 0.6) {
-            if (hit(bf.deNovo)) enterJogo();
-            else if (hit(bf.sair)) { enterTitulo(); audio.sfx("ui"); }
+        E.spr.blit(e.kind === 1 ? "olho" : "inimigo", x, y, { cx: true, cy: true, key: C.espaco });
+        // nucleo pulsante POR CIMA do blit: animacao sem slot extra
+        if (e.kind === 1) {
+            System.fillCircle(x, y, 4 + Math.sin(System.millis() / 130 + e.ph) * 2, C.verde);
+        } else if (e.kind === 3) {
+            System.fillCircle(x, y + 8, 4 + Math.sin(System.millis() / 70 + e.ph) * 2, C.ouro);
+        } else {
+            System.fillCircle(x, y + 8, 3 + Math.sin(System.millis() / 90 + e.ph) * 2, C.magenta);
         }
-        System.delay(16);
-        continue;
     }
-
-    // ------------------------------------------------------------ jogando
-    audio.keepAlive(now);
-    engine.musicPump(audio, now);
-    drivePlayer(t);
-    engine.update(dt, beatF, fx, audio);
-    fx.update(dt, engine.state().intensity,
-              beatF >= 0 ? Math.max(0, 1 - (beatF - Math.floor(beatF)) * 2.5) : 0);
-
-    var s = engine.state();
-
-    // detonar supernova: toque no medidor cheio
-    if (tap && s.charge >= 100 &&
-        Math.abs(tap.x - W / 2) < 48 && Math.abs(tap.y - (H - 30)) < 48) {
-        engine.detonate(fx, audio);
+    if (e.flashT > 0) {   // leva tiro: pisca branco
+        System.fillSmoothCircle(x, y, e.kind === 2 ? 50 : 26,
+                                System.mixColor(C.branco, C.espaco, 45));
     }
-
-    // pausa: canto superior direito
-    if (tap && tap.x > W - 64 && tap.y < HUD_H + 12) {
-        MODE = "pausa";
-        audio.stop();
-        audio.sfx("ui");
-        continue;
-    }
-
-    if (s.over) {
-        salvarFim();
-        MODE = "fim";
-        continue;
-    }
-
-    drawGame(now, beatF);
-    System.delay(1);
 }
+
+function drawPlayer(p, shx, shy) {
+    if (p.invuln > 0 && Math.floor(System.millis() / 90) % 2 !== 0) return;
+    var px = Math.round(p.x + shx), py = Math.round(p.y + shy);
+    var fl = 10 + Math.sin(System.millis() / 40) * 5;
+    System.fillSmoothCircle(px - 12, py + 40, 5, C.cianoD);
+    System.fillSmoothCircle(px + 12, py + 40, 5, C.cianoD);
+    System.fillTriangle(px - 9, py + 34, px + 9, py + 34, px, py + 34 + fl, C.ciano);
+    E.spr.blit("nave", px, py, { cx: true, cy: true, key: C.espaco });
+}
+
+function drawGame(s, pulse) {
+    var shx = E.cam.ox, shy = E.cam.oy;   // tremor vem da camera da engine
+    var all = s.world.all;
+    var i, b;
+    for (i = 0; i < all.length; i++) {
+        if (all[i].cat === 'orb') drawOrb(all[i], shx, shy, pulse);
+    }
+    for (i = 0; i < all.length; i++) {
+        if (all[i].cat === 'enemy') drawEnemy(all[i], shx, shy);
+    }
+    if (!s.over || s.overT < 0.4) drawPlayer(s.player, shx, shy);
+    for (i = 0; i < all.length; i++) {
+        b = all[i];
+        if (b.cat === 'pbullet') {
+            System.drawFastVLine(Math.round(b.x + shx), Math.round(b.y + shy), 14, C.ciano);
+            System.drawPixel(Math.round(b.x + shx), Math.round(b.y + shy + 15), C.branco);
+        } else if (b.cat === 'ebullet') {
+            System.fillCircle(Math.round(b.x + shx), Math.round(b.y + shy), 4, C.magenta);
+            System.drawPixel(Math.round(b.x + shx), Math.round(b.y + shy), C.branco);
+        }
+    }
+}
+
+function drawHUD(s, pulse) {
+    var btnBg = System.mixColor(C.ciano, C.espaco, 72);
+    E.gfx.gradient(0, 0, W, HUD_H, T ? System.mixColor(T.bg, C.espaco, 45) : 0x0208,
+                   C.espaco, { screen: true });
+    System.drawFastHLine(0, HUD_H, W, C.cianoD);
+
+    E.gfx.text(String(s.score), 14, 6, { size: 2, font: 4, color: C.branco, screen: true });
+    E.gfx.text("rec " + hi, 14, 38, { font: 1, color: C.cinza, screen: true });
+    E.gfx.text("onda " + s.wave, W - 14, 8, { align: "right", color: C.cinza, screen: true });
+    // combo x2..x5 pulsa quando sobe
+    if (s.mult > 1) {
+        var pk = s.multPulse > 0 ? 0.5 + 0.5 * Math.sin(System.millis() / 60) : 0;
+        E.gfx.text("x" + s.mult, W / 2, 8, { align: "center", size: 2, screen: true,
+                   color: pk > 0.2 ? C.ouro : System.mixColor(C.ouro, C.espaco, 30) });
+    }
+    for (var l = 0; l < s.lives; l++) {
+        System.fillTriangle(W - 20 - l * 22, 44, W - 28 - l * 22, 32, W - 12 - l * 22, 32, C.ciano);
+    }
+    System.fillRect(W - 40, 32, 6, 12, C.cinza);
+    System.fillRect(W - 30, 32, 6, 12, C.cinza);
+
+    if (s.boss) {
+        E.gfx.bar(W / 2 - 110, HUD_H + 6, 220, 8, s.boss.hp / s.boss.hpMax,
+                  { fg: C.magenta, screen: true });
+        E.gfx.text("SENTINELA-MOR", W / 2, HUD_H + 17, { align: "center", font: 1,
+                   color: C.magenta, screen: true });
+    }
+
+    // medidor da supernova no rodape (arco de carga + pulso no beat)
+    var gx = W / 2, gy = H - 30;
+    var cheio = s.charge >= 100;
+    var pulso = cheio ? 0.5 + 0.5 * Math.sin(System.millis() / 110) : 0;
+    System.fillSmoothCircle(gx, gy, 20 + pulso * 4 + pulse * 2,
+                            System.mixColor(C.ouro, C.espaco, 45 - pulso * 30));
+    E.gfx.arc(gx, gy, 12, 16, -90, -90 + Math.round(s.charge * 3.6), C.ouro, { screen: true });
+    if (cheio) {
+        E.gfx.text("SUPERNOVA", gx, gy - 34, { align: "center", font: 1, color: C.ouro, screen: true });
+    }
+    if (s.triple > 0) {
+        E.gfx.text("TRIPLO " + Math.ceil(s.triple) + "s", gx, gy + 26,
+                   { align: "center", font: 1, color: C.verde, screen: true });
+    }
+}
+
+// ------------------------------------------------------------- cenas -----
+
+E.run({
+    titulo: {
+        fps: 30,
+        enter: function () {
+            E.cam.reset();
+            this.t = 0;
+            drawTituloBase();
+        },
+        update: function () {
+            if (E.hit(this.btnJogar)) {
+                E.audio.sfx("ok");
+                jogo.reset();
+                E.goto("jogando");
+            } else if (E.hit(this.btnSair)) {
+                System.exitApp();
+            }
+        },
+        draw: function () {
+            // por frame so a metade de baixo (a arte do titulo fica viva)
+            System.fillRect(0, TIT_Y0, W, H - TIT_Y0, C.espaco);
+            E.gfx.gradient(0, TIT_Y0, W, H - TIT_Y0, C.espaco,
+                           System.mixColor(C.espaco, C.branco, 4), { screen: true });
+            E.gfx.text("SUPERNOVA", W / 2, TIT_Y0 + 30,
+                       { size: 4, align: "center", color: C.ciano, screen: true });
+            E.gfx.text("arraste para voar; ondas na batida da musica",
+                       W / 2, TIT_Y0 + 62, { align: "center", font: 1, color: C.cinza, screen: true });
+            E.gfx.text("colete orbes e detone a supernova",
+                       W / 2, TIT_Y0 + 76, { align: "center", font: 1, color: C.cinza, screen: true });
+            this.btnJogar = E.gfx.button("JOGAR", W / 2 - 90, TIT_Y0 + 96, 180, 52,
+                                         { color: C.ciano, r: 12, screen: true });
+            this.btnSair = E.gfx.button("SAIR", W / 2 - 90, TIT_Y0 + 160, 180, 44,
+                                        { primary: false, bg: System.mixColor(C.ciano, C.espaco, 72),
+                                          r: 12, screen: true });
+        }
+    },
+
+    jogando: {
+        fps: 0,   // sem teto: o frame vale o que a placa der
+        enter: function () {
+            E.cam.reset();
+            if (!E.audio.playing() && !jogo.state().resumeAt) E.audio.music(jogo.SONG);
+        },
+        update: function (dt) {
+            var s = jogo.state();
+            if (E.input.down) jogo.movePlayer(E.input.dx);
+            E.data.stars.update(dt * (1 + s.intensity * 0.12));
+            jogo.update(dt);
+            // detonar: toque no medidor cheio
+            if (E.input.tap && s.charge >= 100 &&
+                Math.abs(E.input.tap.x - W / 2) < 48 &&
+                Math.abs(E.input.tap.y - (H - 30)) < 48) {
+                jogo.detonate();
+            }
+            // pausa: canto superior direito
+            if (E.input.tap && E.input.tap.x > W - 64 && E.input.tap.y < HUD_H + 12) {
+                E.audio.sfx("ui");
+                E.goto("pausa");
+                return;
+            }
+            if (s.over && s.overT > 0.6) E.goto("fim");
+        },
+        draw: function () {
+            var s = jogo.state();
+            var pulse = beatPulse();
+            E.data.stars.draw();
+            drawGame(s, pulse);
+            E.fx.draw();
+            drawHUD(s, pulse);
+        }
+    },
+
+    pausa: {
+        fps: 30,
+        enter: function () {
+            E.audio.stop();
+        },
+        update: function () {
+            if (E.hit(this.btnSeguir)) {
+                E.audio.sfx("ui");
+                E.goto("jogando");
+            } else if (E.hit(this.btnSair)) {
+                System.exitApp();
+            }
+        },
+        draw: function () {
+            System.fillScreen(System.mixColor(C.espaco, C.branco, 3));
+            E.gfx.panel(W / 2 - 110, H / 2 - 130, 220, 300, { screen: true });
+            E.gfx.text("PAUSA", W / 2, H / 2 - 96,
+                       { size: 4, align: "center", color: C.branco, screen: true });
+            this.btnSeguir = E.gfx.button("CONTINUAR", W / 2 - 90, H / 2 - 44, 180, 48,
+                                          { color: C.ciano, r: 12, screen: true });
+            this.btnSair = E.gfx.button("SAIR", W / 2 - 90, H / 2 + 84, 180, 44,
+                                        { primary: false, bg: System.mixColor(C.ciano, C.espaco, 72),
+                                          r: 12, screen: true });
+        }
+    },
+
+    fim: {
+        fps: 30,
+        enter: function () {
+            this.t = 0;
+            this.newBest = E.save.best("hi", jogo.state().score);
+            if (this.newBest) {
+                hi = jogo.state().score;
+                E.audio.sfx("record");
+            }
+        },
+        update: function (dt) {
+            this.t += dt;
+            if (this.t < 0.5) return;   // engole o tap do momento da morte
+            if (E.hit(this.btnNovo)) {
+                E.audio.sfx("ok");
+                jogo.reset();
+                E.goto("jogando");
+            } else if (E.hit(this.btnMenu)) {
+                E.audio.sfx("ui");
+                E.goto("titulo");
+            }
+        },
+        draw: function () {
+            var s = jogo.state();
+            var y0 = Math.round(H * 0.18);
+            System.fillScreen(C.espaco);
+            E.data.stars.draw();
+            E.gfx.panel(W / 2 - 130, y0, 260, Math.round(H * 0.4), { screen: true });
+            E.gfx.text("NAVE PERDIDA", W / 2, y0 + 34,
+                       { size: 4, align: "center", color: C.magenta, screen: true });
+            E.gfx.text("pontuacao " + s.score, W / 2, y0 + 76,
+                       { size: 2, align: "center", color: C.branco, screen: true });
+            E.gfx.text("onda " + s.wave + "  |  " + s.kills + " abates",
+                       W / 2, y0 + 106, { align: "center", font: 1, color: C.cinza, screen: true });
+            if (this.newBest) {
+                E.gfx.text("NOVO RECORDE!", W / 2, y0 + 126,
+                           { align: "center", font: 1, color: C.ouro, screen: true });
+            } else {
+                E.gfx.text("recorde " + hi, W / 2, y0 + 126,
+                           { align: "center", font: 1, color: C.cinza, screen: true });
+            }
+            this.btnNovo = E.gfx.button("DE NOVO", W / 2 - 90, y0 + 160, 180, 52,
+                                        { color: C.ciano, r: 12, screen: true });
+            this.btnMenu = E.gfx.button("MENU", W / 2 - 90, y0 + 224, 180, 44,
+                                        { primary: false, bg: System.mixColor(C.ciano, C.espaco, 72),
+                                          r: 12, screen: true });
+        }
+    }
+}, "titulo");

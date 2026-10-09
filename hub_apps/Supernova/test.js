@@ -1,9 +1,10 @@
-// test.js — smoke do Supernova no harness: exercita titulo -> jogando ->
-// arrasto -> MORTE (hit deterministico via pega __harness.supernova) ->
-// fim de jogo -> de novo -> SUPERNOVA (detonacao) e para no watchdog.
-// No harness roda a via procedural (sem createSprite/drawPNG) no canvas
-// nativo do stub (480x480), o que prova justamente o caminho de
-// degradacao graciosa sem assets/sprites.
+// test.js — smoke do Supernova 2.0 no harness: titulo -> jogando -> arrasto
+// -> MORTE (hit deterministico via __harness.supernova.jogo) -> fim ->
+// de novo -> SUPERNOVA (detonacao com carga furada) -> pausa -> continuar,
+// parando no watchdog. No harness roda a via procedural (sem
+// createSprite/drawPNG) no canvas nativo do stub (480x480), provando a
+// degradacao graciosa sem assets/sprites — e a fisica da engine (corpos
+// sensor) faz a deteccao de acertos.
 //
 // ATENCAO: os agendamentos usam env.setTimeout (relogio virtual do harness,
 // disparado no delay/getTouch) — o setTimeout do Node nunca rodaria: a
@@ -21,9 +22,9 @@ module.exports.wire = function (env) {
         return origDelay(ms);
     };
 
-    // y0 do menu = 480*0.42 = 202; JOGAR em y 298..350, x 150..330
+    // TIT_Y0 = 480*0.42 = 202; JOGAR em y 298..350, x 150..330
     at(function () {
-        h.pushTouch([{ x: 240, y: 320, touched: 1 }, { x: 240, y: 320, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 324, touched: 1 }, { x: 240, y: 324, touched: 0 }]);
     }, 400);
 
     // arrasto na jogatina (a nave desvia e esquenta o motor)
@@ -37,25 +38,25 @@ module.exports.wire = function (env) {
         ]);
     }, 800);
 
-    // morte deterministica: 1 vida, tiro inimigo em cima da nave
+    // morte deterministica: 1 vida + tiro inimigo em cima da nave
     at(function () {
         var m = h.supernova;
         if (!m) return;
-        var s = m.engine.state();
+        var s = m.jogo.state();
         s.lives = 1;
         s.player.invuln = 0;
-        s.ebullets.push({ x: s.player.x, y: s.player.y, vx: 0, vy: 120 });
+        m.jogo.debugHit();
     }, 2200);
 
-    // fim de jogo (overT > 0,6): DE NOVO em y 254..306, x 150..330
+    // fim de jogo (t > 0,5): DE NOVO em y 246..298, x 150..330
     at(function () {
-        h.pushTouch([{ x: 240, y: 280, touched: 1 }, { x: 240, y: 280, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 272, touched: 1 }, { x: 240, y: 272, touched: 0 }]);
     }, 3600);
 
     // carrega e detona a supernova (toque no medidor do rodape)
     at(function () {
         var m = h.supernova;
-        if (m) m.engine.state().charge = 100;
+        if (m) m.jogo.state().charge = 100;
     }, 4600);
     at(function () {
         h.pushTouch([{ x: 240, y: 450, touched: 1 }, { x: 240, y: 450, touched: 0 }]);
@@ -66,6 +67,6 @@ module.exports.wire = function (env) {
         h.pushTouch([{ x: 440, y: 20, touched: 1 }, { x: 440, y: 20, touched: 0 }]);
     }, 6400);
     at(function () {
-        h.pushTouch([{ x: 240, y: 240, touched: 1 }, { x: 240, y: 240, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 220, touched: 1 }, { x: 240, y: 220, touched: 0 }]);
     }, 7200);
 };
