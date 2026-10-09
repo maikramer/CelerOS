@@ -1,0 +1,14 @@
+{
+  "name": "Detona!",
+  "packageName": "celeros.detona",
+  "version": "0.1.0",
+  "api": 28,
+  "permissions": [],
+  "requires": ["psram"],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Estrategia",
+  "topbar": false,
+  "description": "Bomberman de grade em tela cheia nos pixels nativos do vidro: abra caminho com bombas, pegue powerups (chute, detonador, escudo), acha a saida escondida e limpa a arena. O pavio das bombas e quantizado na BATIDA da trilha chiptune — a explosao cai no compasso e as correntes cascateiam de meio tempo em meio tempo. Campanha em 3 mundos com chefes e modo sobrevivencia.",
+  "changelog": "0.1.0 - nucleo: arena 15x13 procedural por seed, movimento top-down com lane assist na fisica da engine, bombas no beat (pavio de 4 batidas, corrente em dominó de meia batida), powerups basicos (+bomba/+chama/velocidade), saida sob bloco macio, HUD e cenas; sprites gerados por IA (tools/detona_sprites.py); engine+physics 1.1 vendorizadas (migram para deps do hub)"
+}

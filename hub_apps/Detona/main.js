@@ -1,0 +1,400 @@
+// Detona! — bomberman de grade no CelerOS, sobre a game engine do SDK.
+// Tela cheia nos pixels nativos do vidro (API 28; 480x480 no SmartDisplay
+// 4"), trilha chiptune como relogio: o pavio das bombas e quantizado na
+// BATIDA e as correntes cascateiam de meio tempo em meio tempo — a
+// explosao cai no compasso. Modulos: main.js (cenas/visao/HUD) +
+// arena.js (simulacao) + niveis.js (geracao por seed, temas, trilhas).
+// engine.js/physics.js vendorizadas por enquanto (migram p/ deps do hub).
+//
+// Pega de teste (so existe no harness): o test.js dirige a sim.
+if (typeof __harness !== "undefined") {
+    __harness.detona = { arena: require("arena"), niveis: require("niveis"),
+                         E: null };   // E entra depois do require abaixo
+}
+
+var E = require("engine");
+var arena = require("arena");
+var NV = require("niveis");
+if (typeof __harness !== "undefined") __harness.detona.E = E;
+
+E.init({ dir: "Detona", fps: 30, native: true, save: "detona.", particles: 140 });
+var W = E.W, H = E.H;
+
+// layout adaptativo: grade 15x13 + faixa de HUD; no 480 nativo da 32px
+// de celula com HUD de 64, no canvas virtual 240x320 da 16px com HUD 44
+var CELL = Math.min(Math.floor(W / NV.COLS), Math.floor((H - 44) / NV.ROWS));
+var HUD = H - CELL * NV.ROWS;
+var OX = Math.floor((W - CELL * NV.COLS) / 2);
+var OY = 0;
+var SZ = { jogador: CELL - 2, bomba: CELL - 4, bloco: CELL };
+// PNGs sao masterizados p/ celula 32: em tela menor o blit 1:1 estoura
+// a grade — sem nativo/sem folga os painters assumem (e ganham slot)
+var USA_PNG = E.caps.native && CELL >= 28;
+
+var C = {
+    preto: 0x0000,
+    branco: 0xFFFF, ouro: 0xFFE0, laranja: 0xFD20, vermelho: 0xF800,
+    verde: 0x07E0, ciano: 0x07FF, magenta: 0xF81F,
+    cinza: System.mixColor(0x0000, 0xFFFF, 25)
+};
+
+var hi = E.save.num("hi", 0);
+var prog = { mundo: E.save.num("mundo", 1), nivel: E.save.num("nivel", 1) };
+
+// ------------------------------------------------------------- sprites ---
+function painterJogador(w, h, x, y) {
+    var r = w * 0.42;
+    System.fillCircle(x + w / 2, y + h / 2, r, C.branco);
+    System.fillCircle(x + w / 2, y + h / 2, r * 0.62, C.ciano);
+    System.fillCircle(x + w / 2, y + h * 0.4, r * 0.34, 0x001F);
+}
+function painterBomba(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2 + 2, w * 0.36, 0x4208);
+    System.fillCircle(x + w / 2 - 3, y + h / 2 - 3, Math.max(2, w * 0.1), C.cinza);
+    System.fillRect(x + w / 2 - 1, y + 2, 2, Math.max(3, h * 0.2), 0x8410);
+}
+function painterMacio(w, h, x, y) {
+    System.fillRect(x + 1, y + 1, w - 2, h - 2, 0x8410);
+    System.drawLine(x + 1, y + 1, x + w - 2, y + h - 2, 0x4208);
+    System.drawLine(x + w - 2, y + 1, x + 1, y + h - 2, 0x4208);
+    System.fillRect(x + 1, y + 1, w - 2, 2, 0xA514);
+}
+function painterDuro(w, h, x, y) {
+    System.fillRect(x, y, w, h, 0x7BEF);
+    System.fillRect(x + 1, y + 1, w - 2, h - 2, 0x528A);
+    System.fillRect(x + 2, y + 2, w - 4, 3, 0x39E7);
+    System.fillRect(x + 2, y + 2, 3, h - 4, 0x39E7);
+}
+var SPR = E.spr.load([
+    { name: "jogador", file: USA_PNG ? "jogador" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
+    { name: "bomba", file: USA_PNG ? "bomba" : null,
+      w: SZ.bomba, h: SZ.bomba, paint: painterBomba },
+    { name: "macio", file: USA_PNG ? "bloco_macio" : null,
+      w: SZ.bloco, h: SZ.bloco, paint: painterMacio },
+    { name: "duro", file: USA_PNG ? "bloco_duro" : null,
+      w: SZ.bloco, h: SZ.bloco, paint: painterDuro }
+]);
+
+// ---------------------------------------------------------------- sons ---
+E.audio.sfxTable.planta = [700, 35];
+E.audio.sfxTable.bum = [[100, 70], [60, 150], [40, 120]];
+E.audio.sfxTable.power = E.audio.sfxTable.coin;
+E.audio.sfxTable.escudo = [[1200, 40], [900, 60]];
+E.audio.sfxTable.morte = [[300, 90], [220, 90], [140, 220]];
+E.audio.sfxTable.venceu = [[523, 90], [659, 90], [784, 160]];
+
+// ---------------------------------------------------------------- cenas --
+var RECT_JOGAR;   // botes: hit no update, desenho no draw (immediate)
+
+var tituloBase = false;
+function drawTituloBase() {
+    System.drawPNG(E.spr.bases[0] + "titulo.png", 0, 0);
+    tituloBase = true;
+}
+
+E.run({
+    titulo: {
+        fps: 30,
+        enter: function () {
+            tituloBase = false;
+            hi = E.save.num("hi", 0);
+            E.audio.music(NV.SONG_MENU);
+        },
+        update: function () {
+            RECT_JOGAR = { x: W / 2 - 90, y: H * 0.62, w: 180, h: 52 };
+            if (E.hit(RECT_JOGAR)) {
+                E.data.retomar = false;
+                prog.mundo = E.save.num("mundo", 1);
+                prog.nivel = E.save.num("nivel", 1);
+                E.goto("jogando");
+            }
+        },
+        draw: function () {
+            if (!tituloBase) drawTituloBase();
+            // repinta so a metade de baixo (o PNG fica; nada de decode/frame)
+            System.fillRect(0, Math.floor(H * 0.5), W, Math.ceil(H * 0.5) + 1, C.preto);
+            E.gfx.text("DETONA!", W / 2, Math.floor(H * 0.40), {
+                color: C.ouro, size: 3, align: "center", screen: true });
+            E.gfx.text("RECORDE " + hi, W / 2, Math.floor(H * 0.52), {
+                color: C.cinza, size: 2, align: "center", screen: true });
+            E.gfx.button("JOGAR", RECT_JOGAR.x, RECT_JOGAR.y,
+                         RECT_JOGAR.w, RECT_JOGAR.h, { primary: true });
+            E.gfx.text("arraste p/ andar . toque p/ bomba", W / 2,
+                       Math.floor(H * 0.62) + 76, {
+                       color: C.cinza, size: 1, align: "center", screen: true });
+        }
+    },
+
+    jogando: {
+        fps: 0,   // sem teto: o frame vale o que a placa der
+        enter: function () {
+            if (!E.data.retomar) {
+                var plano = NV.gerar(prog.mundo, prog.nivel);
+                arena.iniciar(prog.mundo, prog.nivel, plano);
+                arena.layout(CELL, OX, OY);
+                wireArena();
+            } else {
+                E.data.retomar = false;
+            }
+            E.audio.music(NV.SONG_BATALHA);
+        },
+        update: function (dt) {
+            // pausa: canto superior direito
+            if (E.input.tap && E.input.tap.x > W - 48 && E.input.tap.y < 48) {
+                E.data.retomar = true;
+                E.goto("pausa");
+                return;
+            }
+            // direcao por drag (a ultima direcao persiste enquanto desliza)
+            var ax = 0, ay = 0;
+            if (E.input.down) {
+                if (Math.abs(E.input.dx) > Math.abs(E.input.dy)) ax = E.input.dx > 0 ? 1 : -1;
+                else if (E.input.dy !== 0) ay = E.input.dy > 0 ? 1 : -1;
+            }
+            arena.mover(ax, ay, dt);
+            if (E.input.tap) arena.plantar();
+            arena.update(dt);
+        },
+        draw: function () { drawMundo(); }
+    },
+
+    pausa: {
+        fps: 30,
+        update: function () {
+            var r1 = { x: W / 2 - 100, y: H * 0.38, w: 200, h: 50 };
+            var r2 = { x: W / 2 - 100, y: H * 0.38 + 66, w: 200, h: 50 };
+            if (E.hit(r1)) { E.goto("jogando"); }          // retomar (estado vivo)
+            if (E.hit(r2)) { arena.parar(); E.goto("titulo"); }
+        },
+        draw: function () {
+            drawMundo();
+            System.fillRect(0, 0, W, H, C.preto);
+            E.gfx.text("PAUSA", W / 2, Math.floor(H * 0.26), {
+                color: C.ouro, size: 3, align: "center", screen: true });
+            E.gfx.button("CONTINUAR", W / 2 - 100, H * 0.38, 200, 50, { primary: true });
+            E.gfx.button("SAIR", W / 2 - 100, H * 0.38 + 66, 200, 50);
+        }
+    },
+
+    fim: {
+        fps: 30,
+        enter: function () {
+            E.audio.stop();
+            var info = E.data.fimInfo || { fim: 'dead', score: 0 };
+            E.data.novoRec = E.save.best("hi", info.score);
+            hi = E.save.num("hi", 0);
+        },
+        update: function () {
+            var r = { x: W / 2 - 90, y: H * 0.62, w: 180, h: 50 };
+            if (E.hit(r)) E.goto("titulo");
+        },
+        draw: function () {
+            var info = E.data.fimInfo || { fim: 'dead', score: 0 };
+            System.fillRect(0, 0, W, H, C.preto);
+            E.gfx.text(info.fim === 'win' ? "FASE LIMPA!" : "FIM DE JOGO",
+                        W / 2, Math.floor(H * 0.32), {
+                        color: C.ouro, size: 3, align: "center", screen: true });
+            E.gfx.text("PONTOS " + info.score, W / 2, Math.floor(H * 0.46), {
+                        color: C.branco, size: 2, align: "center", screen: true });
+            if (E.data.novoRec) E.gfx.text("NOVO RECORDE!", W / 2, Math.floor(H * 0.54), {
+                        color: C.laranja, size: 2, align: "center", screen: true });
+            E.gfx.button("DE NOVO", W / 2 - 90, H * 0.62, 180, 50, { primary: true });
+        }
+    }
+}, "titulo");
+
+// ---------------------------------------------------------------- visao --
+
+function wireArena() {
+    var s = arena.state();
+    s.onSfx = function (nome) {
+        if (nome === 'bum') E.audio.duck(650);
+        E.audio.sfx(nome);
+    };
+    s.onFx = function (tipo, a, b) {
+        if (tipo === 'bum') {
+            var cx = OX + (a.c + 0.5) * CELL, cy = OY + (a.r + 0.5) * CELL;
+            E.fx.ring(cx, cy, { speed: CELL * 9, color: C.laranja, life: 0.4 });
+            E.fx.burst(cx, cy, { n: 18, colors: [C.ouro, C.laranja, C.vermelho],
+                                 speed: CELL * 5, life: 0.5 });
+            E.cam.shake(9, 0.35);
+            E.fx.flash(C.ouro, 120);
+        } else if (tipo === 'macio') {
+            var mx = OX + (a.c + 0.5) * CELL, my = OY + (a.r + 0.5) * CELL;
+            E.fx.burst(mx, my, { n: 8, colors: [0x8410, 0x6204, C.cinza],
+                                 speed: CELL * 3, life: 0.45, grav: CELL * 6 });
+        } else if (tipo === 'power') {
+            var cel = arena.celulaPlayer();
+            var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
+            E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano });
+        } else if (tipo === 'morte') {
+            E.fx.burst(a.x, a.y, { n: 22, colors: [C.branco, C.ciano],
+                                   speed: CELL * 4, life: 0.6 });
+            E.fx.flash(C.vermelho, 300);
+            E.cam.shake(12, 0.5);
+        }
+    };
+    s.onFim = function () {
+        var st = arena.state();
+        E.data.fimInfo = { fim: st.fim, score: st.score };
+        if (st.fim === 'win') {
+            var nv = st.nivel + 1, mu = st.mundo;
+            if (nv > NV.NIVEIS_POR_MUNDO) { nv = 1; mu++; }
+            E.save.set("mundo", String(mu));
+            E.save.set("nivel", String(nv));
+        }
+        E.after(900, function () { arena.parar(); E.goto("fim"); });
+    };
+}
+
+function nomePower(k) {
+    if (k === 'B') return "+BOMBA";
+    if (k === 'C') return "+CHAMA";
+    if (k === 'V') return "VELOCIDADE";
+    if (k === 'K') return "CHUTE";
+    if (k === 'R') return "DETONADOR";
+    if (k === 'E') return "ESCUDO";
+    if (k === 'X') return "+VIDA";
+    return "?";
+}
+
+function drawMundo() {
+    var s = arena.state();
+    if (!s) return;
+    var t = s.tema;
+    var beat = arena.beatNow();
+    var pulso = beat - Math.floor(beat);   // 0..1 dentro da batida
+
+    // chao procedural: lajotas 2 tons por paridade + variacao por seed
+    for (var r = 0; r < NV.ROWS; r++) {
+        for (var c = 0; c < NV.COLS; c++) {
+            var x = OX + c * CELL, y = OY + r * CELL;
+            var v = s.variacao[r * NV.COLS + c];
+            var base = (c + r) % 2 === 0 ? t.a : t.b;
+            System.fillRect(x, y, CELL, CELL, v > 0.85 ?
+                            System.mixColor(base, t.detalhe, 8) : base);
+            System.fillRect(x, y + CELL - 1, CELL, 1, t.junta);
+            System.fillRect(x + CELL - 1, y, 1, CELL, t.junta);
+        }
+    }
+    // blocos
+    for (var r2 = 0; r2 < NV.ROWS; r2++) {
+        for (var c2 = 0; c2 < NV.COLS; c2++) {
+            var ch = s.grid[r2][c2];
+            if (ch === '#') E.spr.blit("duro", OX + c2 * CELL, OY + r2 * CELL);
+            else if (ch === '%') E.spr.blit("macio", OX + c2 * CELL, OY + r2 * CELL);
+        }
+    }
+    // saida achada: portinha pulsando na batida
+    if (s.exit.achada) {
+        var ex = OX + s.exit.c * CELL, ey = OY + s.exit.r * CELL;
+        var brilho = s.exit.aberta ? 40 + Math.floor(40 * pulso) : 18;
+        System.fillRect(ex + 2, ey + 2, CELL - 4, CELL - 4,
+                        System.mixColor(t.a, C.verde, brilho));
+        System.fillRect(ex + 5, ey + 4, CELL - 10, CELL - 8,
+                        System.mixColor(C.preto, C.verde, 60));
+        if (s.exit.aberta) {
+            E.gfx.text(">", ex + CELL / 2, ey + CELL / 2, {
+                color: C.branco, size: 2, align: "center", valign: "middle" });
+        }
+    }
+    // powerups: caixinha com glifo, pulso na batida
+    for (var key in s.powerups) {
+        var pc = parseInt(key, 10);
+        var pr = parseInt(key.slice(key.indexOf(',') + 1), 10);
+        if (s.grid[pr][pc] !== '.') continue;
+        var kx = OX + pc * CELL + 2, ky = OY + pr * CELL + 2, kw = CELL - 4;
+        var k = s.powerups[key];
+        var kor = k === 'B' ? C.ciano : k === 'C' ? C.laranja : k === 'V' ? C.verde :
+                  k === 'K' ? C.magenta : k === 'R' ? C.vermelho :
+                  k === 'E' ? C.branco : C.ouro;
+        var p2 = 0.5 + 0.5 * pulso;
+        System.fillRect(kx, ky, kw, kw,
+                        System.mixColor(C.preto, kor, 25 + Math.floor(20 * p2)));
+        E.gfx.text(glifoPower(k), kx + kw / 2, ky + kw / 2, {
+            color: kor, size: 1, align: "center", valign: "middle" });
+    }
+    // bombas: blit + faisca do pavio piscando na batida
+    for (var i = 0; i < s.bombs.length; i++) {
+        var bo = s.bombs[i];
+        var bx = OX + bo.c * CELL + (CELL - SZ.bomba) / 2;
+        var by = OY + bo.r * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso);
+        E.spr.blit("bomba", bx, by);
+        if (pulso < 0.5) System.fillCircle(bx + SZ.bomba / 2, by + 1, 2, C.ouro);
+    }
+    // labaredas: nucleo + bracos em 3 tons, crescendo dentro da batida
+    for (var f = 0; f < s.flames.length; f++) {
+        drawChama(s.flames[f], pulso);
+    }
+    // jogador (pisca invulneravel; bob no compasso)
+    var inv = s.stats.inv > 0 && Math.floor(beat * 8) % 2 === 0;
+    if (!inv && !s.fim) {
+        var bob = Math.floor(2 * Math.sin(beat * Math.PI * 2));
+        E.spr.blit("jogador", s.player.x - SZ.jogador / 2,
+                   s.player.y - SZ.jogador / 2 + bob);
+        if (s.stats.shield) System.drawCircle(s.player.x, s.player.y,
+                                              SZ.jogador * 0.62, C.ciano);
+    }
+    drawHUD(s, pulso);
+    E.fx.draw();
+}
+
+function drawChama(fl, pulso) {
+    var x = OX + fl.c * CELL, y = OY + fl.r * CELL;
+    var meia = CELL / 2;
+    var cresce = 0.55 + 0.45 * pulso;
+    if (fl.tipo === 'nucleo') {
+        System.fillCircle(x + meia, y + meia, meia * 0.95 * cresce + 2, C.branco);
+        System.fillCircle(x + meia, y + meia, meia * 0.7 * cresce, C.ouro);
+        System.fillCircle(x + meia, y + meia, meia * 0.4 * cresce, 0xFB18);
+    } else {
+        var len = CELL * cresce, esp = Math.floor(CELL * 0.7);
+        var x0 = fl.dx > 0 ? x + meia : fl.dx < 0 ? x + meia - len : x + meia - esp / 2;
+        var y0 = fl.dy > 0 ? y + meia : fl.dy < 0 ? y + meia - len : y + meia - esp / 2;
+        var w_ = fl.dy !== 0 ? esp : len;
+        var h_ = fl.dy !== 0 ? len : esp;
+        System.fillRect(x0, y0, w_, h_, C.laranja);
+        System.fillRect(x0 + (fl.dy !== 0 ? 2 : 0), y0 + (fl.dx !== 0 ? 2 : 0),
+                        fl.dy !== 0 ? esp - 4 : w_, fl.dx !== 0 ? esp - 4 : h_, C.ouro);
+        if (fl.tipo === 'ponta') {
+            System.fillCircle(x + meia + fl.dx * (meia * 0.6),
+                              y + meia + fl.dy * (meia * 0.6), 3, C.branco);
+        }
+    }
+}
+
+function glifoPower(k) {
+    return k === 'B' ? "B" : k === 'C' ? "C" : k === 'V' ? "V" :
+           k === 'K' ? "K" : k === 'R' ? "R" : k === 'E' ? "E" : "+";
+}
+
+function drawHUD(s, pulso) {
+    var y0 = OY + NV.ROWS * CELL;
+    var t = s.tema;
+    System.fillRect(0, y0, W, H - y0, t.hud);
+    System.fillRect(0, y0, W, 2, t.detalhe);
+    var cy = Math.floor((y0 + H) / 2);
+
+    // vidas: coracoes
+    for (var v = 0; v <= s.stats.vidas && v < 6; v++) {
+        System.fillCircle(8 + v * 14, cy - 4, 4, C.vermelho);
+        System.fillCircle(12 + v * 14, cy - 4, 4, C.vermelho);
+        System.fillTriangle(4 + v * 14, cy - 1, 16 + v * 14, cy - 1,
+                            10 + v * 14, cy + 6, C.vermelho);
+    }
+    // contadores: bomba / chama / patins
+    E.gfx.text("B" + s.stats.bombs + " C" + s.stats.flame + " V" + s.stats.vel,
+               Math.floor(W * 0.34), cy, {
+               color: t.hudTxt, size: 2, valign: "middle", screen: true });
+    // tempo (vermelho piscando no fim)
+    var seg = Math.max(0, Math.ceil(s.tLeft));
+    E.gfx.text(String(seg), W / 2 + 46, cy, {
+        color: seg < 30 && pulso > 0.5 ? C.vermelho : t.hudTxt,
+        size: 2, valign: "middle", screen: true });
+    // mundo.nivel + pontos
+    E.gfx.text(s.mundo + "." + s.nivel, W / 2 + 46, y0 + 9, {
+        color: t.hudTxt, size: 1, align: "center", screen: true });
+    E.gfx.text(String(s.score), W - 10, cy, {
+        color: C.ouro, size: 2, align: "right", valign: "middle", screen: true });
+}

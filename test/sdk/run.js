@@ -141,6 +141,12 @@ function check(name, ok, detail) {
     // o watchdog e do proprio test.js do app
     var r4 = runAppFolder(path.join(ROOT, 'hub_apps', 'Supernova'));
     check('Supernova roda limpo no harness (smoke completo)', r4.err === null, r4.err);
+
+    // Detona! (bomberman de grade): smoke completo no canvas nativo do
+    // stub (titulo -> jogar -> bomba no beat -> explosao abre macio ->
+    // morte por labareda -> fim) — watchdog do proprio test.js do app
+    var r5 = runAppFolder(path.join(ROOT, 'hub_apps', 'Detona'));
+    check('Detona roda limpo no harness (smoke completo)', r5.err === null, r5.err);
 })();
 
 // ---------------------------------------------------------------- physics --
