@@ -530,6 +530,45 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
     }
 }
 
+int FileSystem::parseJsonStringMap(const std::string& json, JsonStringPair* out, int maxPairs) {
+    // Escaneia "chave":"valor" de um objeto flat (deps.json). O parser e
+    // tolerante no estilo do parseJsonValue: o que nao for par de strings
+    // e pulado, sem falhar o resto.
+    int count = 0;
+    size_t i = 0;
+    const size_t n = json.length();
+    auto skipWs = [&json, &i, n]() {
+        while (i < n && (json[i] == ' ' || json[i] == '\t' || json[i] == '\n' || json[i] == '\r')) i++;
+    };
+    auto readString = [&json, &i, n](std::string* outStr) -> bool {
+        if (i >= n || json[i] != '"') return false;
+        size_t start = ++i;
+        while (i < n && json[i] != '"') {
+            if (json[i] == '\\' && i + 1 < n) i++;  // escape: pula o char
+            i++;
+        }
+        if (i >= n) return false;
+        *outStr = json.substr(start, i - start);
+        i++;  // fecha aspa
+        return true;
+    };
+    while (count < maxPairs) {
+        skipWs();
+        std::string key;
+        if (!readString(&key)) break;
+        skipWs();
+        if (i >= n || json[i] != ':') continue;  // string solta: procura o proximo par
+        i++;
+        skipWs();
+        std::string value;
+        if (!readString(&value)) continue;       // valor nao-string: ignora o par
+        out[count].key = std::move(key);
+        out[count].value = std::move(value);
+        count++;
+    }
+    return count;
+}
+
 bool FileSystem::mkdir(const char* path) {
     if (!pathOk(path)) return false;
     return ::mkdir(path, 0775) == 0 || errno == EEXIST;

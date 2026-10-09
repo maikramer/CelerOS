@@ -57,6 +57,16 @@ inline bool fsUnderAppsDir(const char* path) {
     return under("/local/apps") || under("/sd/apps");
 }
 
+// Modulos compartilhados do hub (/local/modules/<nome>/<versao>/): codigo
+// que os apps carregam por require() (engine/fisica). Escrever ali trocaria
+// o codigo que OUTROS apps executam — mesma regra das pastas de apps.
+// Leitura segue livre (o require le com fopen, sem jail).
+inline bool fsUnderSharedModules(const char* path) {
+    size_t n = strlen("/local/modules");
+    return strncmp(path, "/local/modules", n) == 0 &&
+           (path[n] == '\0' || path[n] == '/');
+}
+
 // /local/data/<pkg>/ e a pasta privada de CADA app (FS.appData): a de outro
 // pacote e invisivel. A raiz /local/data (lista de nomes) segue legivel.
 inline bool fsOtherAppData(const char* path) {
@@ -108,10 +118,12 @@ inline bool fsPathAllowed(const char* path) {
     return true;
 }
 
-// Escrita/remocao/criacao: a regra de leitura + nada nas pastas de apps
+// Escrita/remocao/criacao: a regra de leitura + nada nas pastas de apps nem
+// no cache de modulos compartilhados
 inline bool fsWriteAllowed(const char* path) {
     if (!fsPathAllowed(path)) return false;
-    return perm(celer::PERM_SYSTEM) || !fsUnderAppsDir(path);
+    if (perm(celer::PERM_SYSTEM)) return true;
+    return !fsUnderAppsDir(path) && !fsUnderSharedModules(path);
 }
 
 // Operacoes de ARVORE (copiar a origem): a raiz /local (credenciais, PIN,
@@ -126,10 +138,10 @@ inline bool fsTreeAllowed(const char* path) {
 
 // Arvore como DESTINO ou removida (copyDirectory/removeDirectory/rmdir):
 // alem da leitura, nenhuma raiz de montagem (o /sd contem /sd/apps; o
-// /local, os protegidos) e nada nas pastas de apps.
+// /local, os protegidos) e nada nas pastas de apps/modulos compartilhados.
 inline bool fsTreeWriteAllowed(const char* path) {
     if (!fsTreeAllowed(path)) return false;
     if (perm(celer::PERM_SYSTEM)) return true;
     if (fsIsMountRoot(path, "/sd")) return false;
-    return !fsUnderAppsDir(path);
+    return !fsUnderAppsDir(path) && !fsUnderSharedModules(path);
 }

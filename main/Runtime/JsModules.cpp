@@ -16,8 +16,16 @@
 // atualizada DEPOIS (module.exports pode ter sido trocado). Falha de
 // compile/eval remove a entrada — retry recarrega do disco.
 //
+// Dependencias compartilhadas (API 30): se o arquivo NAO esta na pasta do
+// app e o deps.json dela referencia o nome, o require cai para o cache
+// publico /local/modules/<nome>/<versao>/<nome>.js — a engine/fisica do
+// hub instaladas pela loja. Precedencia da pasta local (vendoring) e o
+// deps.json e gravado pelo installer (loja/celerctl) com a versao
+// RESOLVIDA do range declarado no app.json; o GC do launcher (scanLocalApps)
+// remove versoes sem app referenciando.
+//
 // Sem gate de permissao: e codigo do proprio app e a resolucao e restrita a
-// s_appDir (nome [A-Za-z0-9_-], sem "..", sem subpasta), entao o jail do FS
+// s_appDir (nome [A-Za-z0-9_.-], sem "..", sem subpasta), entao o jail do FS
 // nem entra. noteAppYield antes do eval renova a janela do exec-timeout
 // (padrao do fix 4b5b9ce: carregar N modulos no boot nao pode virar
 // RangeError).
@@ -25,6 +33,7 @@
 #include "JsInternal.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Utils/JsStrip.h"
+#include "../FileSystem/FileSystem.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,20 +49,71 @@ namespace {
 // compile ~8,5KB). Teto explicito e baixo em vez de stack overflow.
 constexpr int kMaxRequireDepth = 8;
 int g_depth = 0;
+// Deps compartilhadas do app corrente (deps.json resolvido no install).
+constexpr int kMaxSharedDeps = 8;
+struct SharedDep {
+    char name[64];
+    char ver[24];
+};
+SharedDep s_sharedDeps[kMaxSharedDeps];
+int s_sharedDepCount = 0;
 
-// Nome de modulo: [A-Za-z0-9_-], 1..63 chars (sufixo ".js" opcional).
+// Nome de modulo: [A-Za-z0-9_.-], 1..63 chars (sufixo ".js" opcional). O
+// ponto entrou com as deps compartilhadas (identidade "celeros.engine");
+// nome so de pontuacao ("..") e barrado na hora.
 bool validModuleName(const char* s, size_t n) {
     if (n == 0 || n > 63) return false;
+    bool hasAlnum = false;
     for (size_t i = 0; i < n; i++) {
         char c = s[i];
         bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '-';
+                  (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
         if (!ok) return false;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) hasAlnum = true;
     }
-    return true;
+    return hasAlnum;
+}
+
+// Versao de dep no path: so digitos e pontos ("1.0.0"), ao menos 1 digito.
+bool validDepVersion(const char* s) {
+    bool hasDigit = false;
+    for (const char* p = s; *p; p++) {
+        if (*p >= '0' && *p <= '9') { hasDigit = true; continue; }
+        if (*p != '.') return false;
+    }
+    return hasDigit;
+}
+
+const SharedDep* findSharedDep(const char* mod) {
+    for (int i = 0; i < s_sharedDepCount; i++) {
+        if (strcmp(s_sharedDeps[i].name, mod) == 0) return &s_sharedDeps[i];
+    }
+    return nullptr;
 }
 
 }  // namespace
+
+void jsLoadAppDeps(const char* appDir) {
+    // Mapa nome->versao do deps.json (gravado pelo installer com a versao
+    // RESOLVIDA do range do app.json). Chamado no runFile junto com o
+    // s_appDir; sem pasta/deps.json = nenhuma dep (vendoring puro).
+    s_sharedDepCount = 0;
+    if (appDir == nullptr || appDir[0] == '\0') return;
+    std::string json = FileSystem::readTextFile((std::string(appDir) + "/deps.json").c_str());
+    if (json.empty()) return;
+    FileSystem::JsonStringPair pairs[kMaxSharedDeps];
+    int n = FileSystem::parseJsonStringMap(json, pairs, kMaxSharedDeps);
+    for (int i = 0; i < n && s_sharedDepCount < kMaxSharedDeps; i++) {
+        const char* nm = pairs[i].key.c_str();
+        const char* vr = pairs[i].value.c_str();
+        if (!validModuleName(nm, strlen(nm))) continue;
+        if (!validDepVersion(vr) || strlen(vr) >= sizeof(SharedDep::ver)) continue;
+        SharedDep& d = s_sharedDeps[s_sharedDepCount++];
+        strncpy(d.name, nm, sizeof(d.name) - 1);
+        d.name[sizeof(d.name) - 1] = '\0';
+        strcpy(d.ver, vr);
+    }
+}
 
 duk_ret_t JSBindings::js_require(duk_context* ctx) {
     const char* name = duk_require_string(ctx, 0);
@@ -66,7 +126,7 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
         // NAO ecoa o nome no duk_error: texto do app viraria format-string
         // (require("%d") = heap corrompido; padrao do guard duk_error)
         duk_error(ctx, DUK_ERR_ERROR,
-                  "require: nome de modulo invalido (use [A-Za-z0-9_-], sem caminho)");
+                  "require: nome de modulo invalido (use [A-Za-z0-9_.-], sem caminho)");
     }
     snprintf(mod, sizeof(mod), "%.*s", (int)nlen, name);
     if (s_appDir.empty()) {
@@ -101,8 +161,24 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     const size_t pre = sizeof(kWrapA) - 1;
     FILE* f = fopen(path, "rb");
     if (!f) {
-        snprintf(err, sizeof(err), "require: modulo nao encontrado: %s.js", mod);
-        duk_error(ctx, DUK_ERR_ERROR, err);
+        // Dep compartilhada (API 30): arquivo nao esta na pasta do app e o
+        // deps.json referencia o nome -> cache publico do hub em
+        // /local/modules/<nome>/<versao>/ (instalado pela loja)
+        const SharedDep* dep = findSharedDep(mod);
+        if (dep) {
+            snprintf(path, sizeof(path), "/local/modules/%s/%s/%s.js",
+                     dep->name, dep->ver, dep->name);
+            f = fopen(path, "rb");
+        }
+        if (!f) {
+            if (dep)
+                snprintf(err, sizeof(err),
+                         "require: dependencia %s %s ausente — reinstale o app pela loja",
+                         dep->name, dep->ver);
+            else
+                snprintf(err, sizeof(err), "require: modulo nao encontrado: %s.js", mod);
+            duk_error(ctx, DUK_ERR_ERROR, err);
+        }
     }
     fseek(f, 0, SEEK_END);
     long fsz = ftell(f);

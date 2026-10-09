@@ -1773,7 +1773,7 @@ folder); cycles receive the partial `exports` (CommonJS behavior). No
 permission needed: it is the app's own code.
 
 #### `require(name)` (API 23)
-- **Parameters:** module `name`, `[A-Za-z0-9_-]` (optional `.js` suffix, no path) — resolves to `<app folder>/name.js`.
+- **Parameters:** module `name`, `[A-Za-z0-9_.-]` (optional `.js` suffix, no path) — resolves to `<app folder>/name.js`; since API 30, if the file is not in the folder and the app's `deps.json` references the name, it falls back to the dependency cache at `/local/modules` (section 35).
 - **Returns:** the module's `module.exports` (`{}` when it exports nothing).
 - **Errors:** module not found, invalid name, syntax/eval error (propagates as a catchable exception), max nesting depth (8).
 
@@ -2196,3 +2196,48 @@ if (System.createSprite(32, 32) === 0) { /* pool full: paint procedurally */ }
 The full-pool `createSprite` compatibility behavior (recycling the current
 sprite) still applies — with 8 slots the case became rare; count your live
 ids and respect `spriteSlots()` before asking for more.
+
+## 35. API Level 30 — Shared dependencies: `deps` in app.json
+
+The SDK game engine and physics (53 KB combined) are no longer copied into
+every game: the app **declares** its dependencies in `app.json` and the
+store installs them into a public cache at `/local/modules/<name>/<version>/`
+— a single copy per version on the device, shared across apps. `require()`
+resolves the fallback.
+
+#### `"deps"` in app.json (API 30)
+
+```json
+"deps": { "celeros.engine": "^1.0.0", "celeros.physics": "^1.0.0" }
+```
+
+- **Name** = the module's identity everywhere: `require("celeros.engine")`,
+  file `celeros.engine.js`, folder `/local/modules/celeros.engine/`. The
+  `require` validator accepts `.` from this API on (format `prefix.name`,
+  lowercase).
+- **Version** = range `^X.Y.Z` (same major, ≥ base) or exact `"1.0.0"`.
+  Resolution happens **at install time**: the store picks the highest
+  version from the hub index (`/store/deps.json`) that satisfies the range
+  and writes the choice to `<app folder>/deps.json` (the runtime source for
+  `require`). Updating the app re-resolves the ranges.
+- The hub validates at publish: deps exist in the repository, the package's
+  `.js` sum **+ resolved deps** counts toward the 48/128 KB ceiling (the dep
+  still compiles inside each app's heap) and the app's `api` ≥ the dep's
+  `minApi`.
+
+#### `require` resolution (precedence)
+
+1. `<app folder>/<name>.js` — local file wins (vendoring still works; handy
+   to test a modified copy);
+2. `/local/modules/<name>/<version from deps.json>/<name>.js` — the hub
+   cache installed by the store;
+3. a clear error: "dependency missing — reinstall the app from the store".
+
+The launcher garbage-collects the cache: versions with no app referencing
+them in `deps.json` leave the disk on each scan (boot, install, uninstall).
+Writing under `/local/modules` requires the `system` permission (reading is
+free) — a regular app cannot swap the code other apps load.
+
+The `celer.js new --game` scaffold generates the `app.json` with the engine
+deps; in the emulator/harness `require` resolves deps from the
+`tools/sdk/engine` tree (see the Game Engine Guide).

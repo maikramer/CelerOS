@@ -22,7 +22,7 @@ data/
 
 ## app.json RULES
 - Required: `name`, `packageName` (unique install key, `celeros.<x>` for system apps; the first hub publisher owns it), `version` (semver; the hub rejects a republish of the same version unless `--force` is given), `api` (the minimum `CELEROS_API_LEVEL`).
-- Optional: `author`, `description`, `type` (System|App|Game), `category`, `system`, `order` (launcher sort), `icon` (id in `data/icons/`), `topbar`, `changelog`, `requires` (hardware needs; `"psram"` is the only value today — it raises the hub `main.js` ceiling from 48KB to 128KB and the store badges/blocks the app on boards without PSRAM).
+- Optional: `author`, `description`, `type` (System|App|Game), `category`, `system`, `order` (launcher sort), `icon` (id in `data/icons/`), `topbar`, `changelog`, `requires` (hardware needs; `"psram"` is the only value today — it raises the hub `main.js` ceiling from 48KB to 128KB and the store badges/blocks the app on boards without PSRAM), `deps` (API 30, shared JS dependencies: `{ "celeros.engine": "^1.0.0" }` — installed by the store into `/local/modules/<nome>/<versão>/`, one copy per version on the device, `require()` falls back to it; resolution happens at install, the resolved versions live in `<pasta>/deps.json`, and the launcher GCs unreferenced versions; the hub validates the deps exist and the `.js` sum of package + deps against the ceiling).
 - Never set `size`/`md5`/`files` by hand; the hub computes them on publish.
 - Most apps declare `api: 3`. Declare the lowest level whose calls you actually use. CelerLink needs `api >= 9`; the pairing gate (`start` options, `verify`, `unpair`, `status().code`) and the keyboard `hint` option (`prompt`/`keypadOpen` `{hint:"num"}`) need `api >= 11`; `require()` needs `api >= 23`.
 

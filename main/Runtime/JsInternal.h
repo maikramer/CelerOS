@@ -32,6 +32,10 @@ extern std::string s_appPkg;
 // Pasta do app em execucao (dirname do main.js; vazia p/ .js avulso):
 // base do require() de modulos (JsModules.cpp). Alimentada no runFile.
 extern std::string s_appDir;
+// Deps compartilhadas do app corrente (deps.json da pasta, versoes
+// RESOLVIDAS no install): require() cai p/ /local/modules/<nome>/<versao>/
+// quando o modulo nao esta na pasta do app. Tambem alimentada no runFile.
+void jsLoadAppDeps(const char* appDir);
 inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 // Saida limpa de app (F2): erro MARCADO com a propriedade celerExit — o

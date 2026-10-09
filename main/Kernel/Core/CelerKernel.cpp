@@ -620,11 +620,15 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     // main.js de uma pasta de app; .js avulso (shell run) nao ganha modulos
     {
         extern std::string s_appDir;  // Runtime/JsInternal.h; define JsModules.cpp
+        extern void jsLoadAppDeps(const char* appDir);  // idem, JsModules.cpp
         const char* slash = strrchr(filePath, '/');
         if (slash && strcmp(slash + 1, "main.js") == 0)
             s_appDir.assign(filePath, (size_t)(slash - filePath));
         else
             s_appDir.clear();
+        // Deps compartilhadas (API 30): deps.json da pasta resolve os
+        // require() que caem fora dela (cache do hub em /local/modules)
+        jsLoadAppDeps(s_appDir.c_str());
     }
 
     JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);

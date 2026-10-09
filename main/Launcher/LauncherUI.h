@@ -23,6 +23,10 @@ public:
     static bool appRunning();  // um app JS esta em execucao agora
     static int findEntry(const std::string& pathOrName);  // -1 se nao achar
     static void scanLocalApps();
+    // GC de deps compartilhadas (API 30): versoes em /local/modules que
+    // nenhum app referencia no deps.json saem do disco. Roda no fim do
+    // scanLocalApps — boot, install (rescan) e uninstall (que rescaneia).
+    static void gcSharedModules();
     // Abre sozinho apos o boot o app cujo pacote/caminho esta em
     // /local/autostart.txt (ex.: a cara do cao robotico). Sem o arquivo,
     // nada acontece. O launcher continua acessivel pelo voltar do topbar.

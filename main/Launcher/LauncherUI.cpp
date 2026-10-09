@@ -331,6 +331,67 @@ void LauncherUI::scanLocalApps() {
     std::stable_sort(apps.begin(), apps.end(),
                      [&](const AppEntry& x, const AppEntry& y) { return sortKey(x) < sortKey(y); });
     apps.shrink_to_fit();  // sem folga do crescimento: a lista vive o boot inteiro
+
+    gcSharedModules();
+}
+
+void LauncherUI::gcSharedModules() {
+    // Versoes de /local/modules sem nenhum app referenciando no deps.json
+    // saem do disco: desinstalar o ultimo jogo que usava a engine libera os
+    // ~53KB dela. Referencias = deps.json de TODAS as pastas de apps (local
+    // e SD — app do cartao usa o cache do /local). Dezenas de arquivos no
+    // pior caso: custa menos que um icone do prewarm acima.
+    if (!FileSystem::exists("/local/modules")) return;
+
+    std::vector<std::string> refs;  // "nome/versao" referenciados
+    const char* appDirs[] = { "/local/apps/", "/sd/apps/" };
+    for (int d = 0; d < 2; d++) {
+        if (!FileSystem::exists(appDirs[d])) continue;
+        FileEntry entries[50];
+        int count = FileSystem::listDirectory(appDirs[d], entries, 50);
+        for (int i = 0; i < count; i++) {
+            if (!entries[i].isDir) continue;
+            std::string depsJson = entries[i].path;
+            if (!kstr::endsWith(depsJson, "/")) depsJson += "/";
+            depsJson += "deps.json";
+            if (!FileSystem::exists(depsJson.c_str())) continue;
+            std::string json = FileSystem::readTextFile(depsJson.c_str());
+            FileSystem::JsonStringPair pairs[8];
+            int n = FileSystem::parseJsonStringMap(json, pairs, 8);
+            for (int p = 0; p < n; p++) {
+                std::string ref = pairs[p].key + "/" + pairs[p].value;
+                bool dup = false;
+                for (const std::string& r : refs) {
+                    if (r == ref) { dup = true; break; }
+                }
+                if (!dup) refs.push_back(std::move(ref));
+            }
+        }
+    }
+
+    FileEntry names[16];
+    int nameCount = FileSystem::listDirectory("/local/modules", names, 16);
+    for (int i = 0; i < nameCount; i++) {
+        if (!names[i].isDir) continue;
+        FileEntry versions[12];
+        int verCount = FileSystem::listDirectory(names[i].path.c_str(), versions, 12);
+        int left = 0;
+        for (int v = 0; v < verCount; v++) {
+            if (!versions[v].isDir) continue;
+            std::string ref = names[i].name + "/" + versions[v].name;
+            bool needed = false;
+            for (const std::string& r : refs) {
+                if (r == ref) { needed = true; break; }
+            }
+            if (needed) {
+                left++;
+                continue;
+            }
+            if (FileSystem::removeTree(versions[v].path.c_str()))
+                celer_log_printf("[launcher] gc modules: %s sem referencias\n", ref.c_str());
+        }
+        if (left == 0 && verCount > 0) FileSystem::rmdir(names[i].path.c_str());
+    }
 }
 
 // ---- Acesso para o LauncherScreen (Kui) ------------------------------------

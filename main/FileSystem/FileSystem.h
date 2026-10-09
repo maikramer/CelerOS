@@ -19,6 +19,12 @@ struct FileEntry {
     bool isDir;
 };
 
+// Par "chave":"valor" de um objeto JSON flat (deps.json do app).
+struct JsonStringPair {
+    std::string key;
+    std::string value;
+};
+
 class FileSystem {
 public:
     static bool init();
@@ -39,6 +45,9 @@ public:
     static bool copyDirectory(const char* srcDir, const char* destDir, void (*progressCb)(int current, int total) = nullptr);
     static int countFilesInDir(const char* dirPath);
     static std::string parseJsonValue(const std::string& json, const char* key);
+    // Pares "chave":"valor" de um objeto FLAT (deps.json: {nome: versao}).
+    // Ignora valores nao-string e pares soltos; devolve quantos gravou.
+    static int parseJsonStringMap(const std::string& json, JsonStringPair* out, int maxPairs);
     static bool deleteFile(const char* path);
     static bool formatLittleFS();
     static bool readCalData(uint16_t* calData);

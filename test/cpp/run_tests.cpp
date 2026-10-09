@@ -329,6 +329,14 @@ static void testFsJail() {
     CHECK(!fsWriteAllowed("/local/apps/Settings/main.js"));
     CHECK(!fsWriteAllowed("/sd/apps"));
     CHECK(fsWriteAllowed("/sd/appsX/a"));
+    // modulos compartilhados (deps do hub): leitura livre (o require le),
+    // escrita/remocao so "system" — trocar a engine ali e trocar o codigo
+    // que outros apps carregam
+    CHECK(fsPathAllowed("/local/modules/celeros.engine/1.0.0/celeros.engine.js"));
+    CHECK(!fsWriteAllowed("/local/modules/celeros.engine/1.0.0/celeros.engine.js"));
+    CHECK(!fsWriteAllowed("/local/modules"));
+    CHECK(!fsTreeWriteAllowed("/local/modules/celeros.engine"));
+    CHECK(fsWriteAllowed("/local/modulesX/a"));
     // appData: so a do proprio pacote
     CHECK(fsWriteAllowed("/local/data/celeros.snake/s.txt"));
     CHECK(!fsPathAllowed("/local/data/celeros.snak/x"));
