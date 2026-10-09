@@ -1,17 +1,18 @@
-// Supernova 2.0 — atirador espacial construido sobre a game engine do SDK
-// (engine.js + physics.js), tela cheia nos PIXELS NATIVOS do vidro (API 28;
-// 480x480 no SmartDisplay 4"). A trilha chiptune segue sendo o metronomo
-// (ondas caem na batida via beat clock) e a carga dos orbes detona a
-// SUPERNOVA. Novo na 2.0: SENTINELA-MOR (chefe a cada 5 ondas, rajadas
-// radiais na batida, barra de vida), combo x2..x5 por abates em serie,
-// drones splitter, tiro triplo de premiacao e barra de chefe no HUD —
-// tudo com as cenas, gestos, camera (tremor), particulas e fisica da
-// engine. A saida e pelo menu (System.exitApp): sem topbar.
+// Supernova 2.1 — atirador espacial construido sobre a game engine do SDK,
+// tela cheia nos PIXELS NATIVOS do vidro (API 28; 480x480 no SmartDisplay
+// 4"). A trilha chiptune segue sendo o metronomo (ondas caem na batida via
+// beat clock) e a carga dos orbes detona a SUPERNOVA. Novo na 2.0:
+// SENTINELA-MOR (chefe a cada 5 ondas, rajadas radiais na batida, barra de
+// vida), combo x2..x5 por abates em serie, drones splitter, tiro triplo de
+// premiacao e barra de chefe no HUD. A saida e pelo menu (System.exitApp):
+// sem topbar.
 //
-// Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao na fisica) +
-// engine.js/physics.js vendorizados. Arte dos sprites gerada por IA.
+// Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao na fisica). A
+// engine e a fisica sao DEPS do hub (app.json "deps"; API 30): instaladas
+// pela loja no cache /local/modules, uma copia por versao no aparelho —
+// sem vendorizar dentro do jogo. Arte dos sprites gerada por IA.
 
-var E = require("engine");
+var E = require("celeros.engine");
 var jogo = require("jogo");
 
 E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120 });

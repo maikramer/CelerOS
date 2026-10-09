@@ -1,14 +1,15 @@
 // jogo.js — simulacao do combate do Supernova sobre a game engine do SDK:
-// corpos SENSOR na fisica (physics.js) fazem a deteccao de acertos (tiro x
-// inimigo, ram x nave, orbe x nave) e o movimento e roteado — cenas de acao
-// nao querem empurra-empurra. A trilha continua sendo o metronomo: cada
-// cruzamento de batida pode soltar um comboio. Novidade da 2.0: SENTINELA-
-// MOR (chefe) a cada 5 ondas, com rajadas radiais na batida e barra de
-// vida; combo x2..x5 por abates em serie; drones splitter que se dividem;
-// tiro triplo de premiacao. Coordenadas em PIXELS FISICOS (canvas nativo).
+// corpos SENSOR na fisica (celeros.physics) fazem a deteccao de acertos
+// (tiro x inimigo, ram x nave, orbe x nave) e o movimento e roteado — cenas
+// de acao nao querem empurra-empurra. A trilha continua sendo o metronomo:
+// cada cruzamento de batida pode soltar um comboio. Novidade da 2.0:
+// SENTINELA-MOR (chefe) a cada 5 ondas, com rajadas radiais na batida e
+// barra de vida; combo x2..x5 por abates em serie; drones splitter que se
+// dividem; tiro triplo de premiacao. Coordenadas em PIXELS FISICOS (canvas
+// nativo).
 
-var E = require("engine");
-var P = require("physics");
+var E = require("celeros.engine");
+var P = require("celeros.physics");
 
 // paleta do jogo (preto puro e a cor-chave dos sprites)
 var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20,
