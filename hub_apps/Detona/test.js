@@ -31,7 +31,7 @@ module.exports.wire = function (env) {
     }
 
     var macios0 = 0, bombasAtivas = 0, explodiu = false, maciosDepois = -1;
-    var meuBalao = null;
+    var meuBalao = null, viuChamas = false;
 
     // titulo -> JOGAR (botao em H*0.56 + meia altura; 480 nativo)
     at(function () {
@@ -48,10 +48,33 @@ module.exports.wire = function (env) {
         macios0 = macios();
         assert(macios0 >= 8, 'arena com macios (' + macios0 + ')');
         assert(s.tLeft > 0 && s.fim === null, 'fase rodando');
+        // solvabilidade: a saida nasce alcancavel explodindo macios
+        var fl = h.detona.GRID.flood(s.grid, 1, 1, function (ch) { return ch !== '#'; });
+        assert(fl.ok[s.exit.r][s.exit.c] === 1, 'saida alcancavel pelo flood');
         // planta a primeira bomba do canto
         bombasAtivas = a.plantar();
         assert(bombasAtivas === true, 'bomba plantada');
         assert(s.bombs.length === 1, 'bomba na lista');
+        // crava o pavio numa BATIDA INTEIRA: a explosao cai no tempo forte.
+        // O relogio virtual do harness so anda nos timers — agendo a sonda
+        // EXATAMENTE na batida alvo p/ o salto do clock cair dentro da
+        // janela do tempo forte (no device o clock e fino e isso e gratis)
+        s.bombs[0].vai = Math.floor(a.beatNow()) + 4;
+        // tira o player da propria rajada (a bomba esta no pe dele): senao
+        // o ferir() zera o combo — no jogo de verdade ninguem fica parado
+        var fugir = null;
+        for (var fc = 5; fc < 14 && !fugir; fc++)
+            if (a.em(fc, 1) === '.') fugir = { c: fc, r: 1 };
+        for (var fr = 3; fr < 12 && !fugir; fr++)
+            if (a.em(1, fr) === '.') fugir = { c: 1, r: fr };
+        assert(fugir, 'celula de fuga livre');
+        s.player.x = (fugir.c + 0.5) * s.cell;
+        s.player.y = (fugir.r + 0.5) * s.cell;
+        var faltaMs = Math.round((s.bombs[0].vai - a.beatNow()) * (60000 / 128));
+        at(function () {
+            var st2 = h.detona.arena.state();
+            if (st2 && st2.flames.length > 0) viuChamas = true;
+        }, Math.max(60, faltaMs + 40));
     }, 1200);
 
     // ~3 batidas depois: bomba ainda viva, piscando
@@ -60,16 +83,20 @@ module.exports.wire = function (env) {
         assert(s.bombs.length === 1, 'pavio de 4 batidas ainda queimando');
     }, 2200);
 
-    // depois do pavio (4 beats @128bpm = ~1.9s): explodiu, abriu macio
-    // (labareda vive 0.6 beat ~ 280 ms — janela justa)
+    // depois do pavio cravado na batida inteira: explodiu, abriu macio,
+    // labareda (0.6 beat ~ 280 ms — a origem do beat varia com o enter,
+    // entao sondo dois instantes) e o COMBO do tempo forte
     at(function () {
         var a = h.detona.arena, s = a.state();
         assert(s.bombs.length === 0, 'bomba explodiu no fim do pavio');
+        if (s.flames.length > 0) viuChamas = true;
         maciosDepois = macios();
         assert(maciosDepois < macios0, 'explosao abriu macio (' + macios0 + ' -> ' + maciosDepois + ')');
-        assert(s.flames.length > 0, 'labaredas ativas');
+        assert(viuChamas, 'labaredas vistas na janela (sonda 2800/3000)');
+        assert(s.combo >= 1 && s.mult >= 2, 'explosao no tempo forte encadeou combo (' +
+               s.combo + 'x, mult ' + s.mult + ')');
         explodiu = true;
-    }, 3220);
+    }, 3000);
 
     // morte deterministica: player em cima da labareda da proxima bomba
     at(function () {

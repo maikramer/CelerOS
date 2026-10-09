@@ -6,6 +6,8 @@
 // mundo*100 + nivel — deterministica (testes e, no futuro, o versus
 // pela malha gera a mesma arena nos dois aparelhos).
 
+var GRID = require("celeros.grid");
+
 var COLS = 15, ROWS = 13;
 var NIVEIS_POR_MUNDO = 8;
 
@@ -187,34 +189,20 @@ function params(mundo, nivel) {
 function gerar(mundo, nivel, opts) {
     opts = opts || {};
     var p = params(mundo, nivel);
-    var r = opts.sobrevivencia ? rng(9090) : rng(mundo * 100 + nivel);
+    var r = GRID.rng(opts.sobrevivencia ? 9090 : mundo * 100 + nivel);
     var dens = opts.sobrevivencia ? 0.45 : p.dens;
-    var grid = [], macios = [];
-    for (var row = 0; row < ROWS; row++) {
-        var linha = [];
-        for (var col = 0; col < COLS; col++) {
-            var ch = '.';
-            if (row === 0 || row === ROWS - 1 || col === 0 || col === COLS - 1) ch = '#';
-            else if (row % 2 === 0 && col % 2 === 0) ch = '#';
-            linha.push(ch);
-        }
-        grid.push(linha);
-    }
-    // macios (pilares e borda intocaveis); spawn (1,1) respira
-    for (var rr = 1; rr < ROWS - 1; rr++) {
-        for (var cc = 1; cc < COLS - 1; cc++) {
-            if (grid[rr][cc] !== '.') continue;
-            if ((cc <= 2 && rr <= 2)) continue;   // canto do spawn
-            if (r() < dens) { grid[rr][cc] = '%'; macios.push([cc, rr]); }
-        }
-    }
+    // arena classica da dep celeros.grid: borda + pilares pares + macios
+    // por densidade, canto do spawn (1,1) respirando
+    var arena_ = GRID.classica(COLS, ROWS, r, { dens: dens });
+    var grid = arena_.grid;
+    var macios = arena_.macios;
     // garante macios minimos p/ saida + powerups
     while (macios.length < 8) {
         var cc2 = 1 + Math.floor(r() * (COLS - 2));
         var rr2 = 1 + Math.floor(r() * (ROWS - 2));
         if (grid[rr2][cc2] === '.') {
             grid[rr2][cc2] = '%';
-            macios.push([cc2, rr2]);
+            macios.push({ c: cc2, r: rr2 });
         }
     }
     // chefe no fim do mundo: a area 2x2 de spawn dele respira (e sai da
@@ -225,17 +213,20 @@ function gerar(mundo, nivel, opts) {
                 grid[br][bc] = '.';
         var vivos = [];
         for (var mf = 0; mf < macios.length; mf++)
-            if (grid[macios[mf][1]][macios[mf][0]] === '%') vivos.push(macios[mf]);
+            if (grid[macios[mf].r][macios[mf].c] === '%') vivos.push(macios[mf]);
         macios = vivos;
     }
-    // saida sob um macio longe do spawn (sobrevivencia nao tem saida)
+    // saida sob um macio longe do spawn (sobrevivencia nao tem saida);
+    // escolheAlcancavel (flood tratando macio como passavel) garante que
+    // da pra chegar explodindo — nunca nasce em bolso cercado por parede
     var exit = { c: -1, r: -1 };
-    for (var tries = 0; tries < 60 && !opts.sobrevivencia; tries++) {
-        var m = macios[Math.floor(r() * macios.length)];
-        if (m[0] + m[1] > 12) { exit = { c: m[0], r: m[1] }; break; }
+    if (!opts.sobrevivencia) {
+        var longe = [];
+        for (var lf = 0; lf < macios.length; lf++)
+            if (macios[lf].c + macios[lf].r > 12) longe.push(macios[lf]);
+        var escolhido = GRID.escolheAlcancavel(grid, longe.length ? longe : macios, 1, 1);
+        if (escolhido) exit = { c: escolhido.c, r: escolhido.r };
     }
-    if (!opts.sobrevivencia && exit.c < 0)
-        exit = { c: macios[macios.length - 1][0], r: macios[macios.length - 1][1] };
     // powerups sob macios distintos da saida (kinds basicos aqui; o
     // restante do catalogo entra conforme o mundo avanca)
     var catalogo = ['B', 'C', 'V'];
@@ -247,9 +238,9 @@ function gerar(mundo, nivel, opts) {
     for (var i = 0; i < nPow && macios.length; i++) {
         for (var t2 = 0; t2 < 40; t2++) {
             var m2 = macios[Math.floor(r() * macios.length)];
-            var key = m2[0] + ',' + m2[1];
-            if (grid[m2[1]][m2[0]] !== '%') continue;
-            if (m2[0] === exit.c && m2[1] === exit.r) continue;
+            var key = m2.c + ',' + m2.r;
+            if (grid[m2.r][m2.c] !== '%') continue;
+            if (m2.c === exit.c && m2.r === exit.r) continue;
             if (powerups[key]) continue;
             powerups[key] = catalogo[Math.floor(r() * catalogo.length)];
             break;

@@ -14,6 +14,7 @@ var E = require("celeros.engine");
 var arena = require("arena");
 var P = require("celeros.physics");
 var NV = require("niveis");
+var GRID = require("celeros.grid");
 var S = System;
 
 var PERFIS = {
@@ -212,20 +213,21 @@ function ferirNa(c, r) {
             e.hp--;
             e.flash = 0.25;
             st.onSfx('hit');
-            if (e.hp <= 0) matar(e);
+            if (e.hp <= 0) matar(e, true);
         } else {
             matar(e);
         }
     }
 }
 
-function matar(e) {
+function matar(e, chefe) {
     var st = arena.state();
     e.morto = true;
-    st.score += e.pontos;
-    var pf = { x: e.fx * st.cell, y: e.fy * st.cell, kind: e.kind, pontos: e.pontos };
+    st.score += e.pontos * st.mult;
+    var pf = { x: e.fx * st.cell, y: e.fy * st.cell, kind: e.kind,
+               pontos: e.pontos * st.mult };
     st.onFx('bicho', pf);
-    st.onSfx('bicho');
+    st.onSfx(chefe ? 'boomBoss' : 'bicho');
 }
 
 // SOBREVIVENCIA: onda nova (chamada pelo main na batida ou quando a arena
@@ -242,13 +244,10 @@ function onda() {
             : ['balao', 'fantasma', 'cacador'];
     var cel = arena.celulaPlayer();
     for (var i = 0; i < n; i++) {
-        for (var t = 0; t < 80; t++) {
-            var c = 1 + Math.floor(R() * 14), r = 1 + Math.floor(R() * 12);
-            if (arena.em(c, r) !== '.') continue;
-            if (Math.abs(c - cel.c) + Math.abs(r - cel.r) < 6) continue;
-            colocar(mix[Math.floor(R() * mix.length)], c, r);
-            break;
-        }
+        var celula = GRID.celulaLivre(st.grid, R, function (c, r, ch) {
+            return ch === '.' && Math.abs(c - cel.c) + Math.abs(r - cel.r) >= 6;
+        });
+        if (celula) colocar(mix[Math.floor(R() * mix.length)], celula.c, celula.r);
     }
     return st.onda;
 }

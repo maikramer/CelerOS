@@ -47,6 +47,7 @@ function iniciar(mundo, nivel, plano) {
         grid: plano.grid, exit: { c: plano.exit.c, r: plano.exit.r, achada: false, aberta: false },
         powerups: plano.powerups, spawns: plano.spawns || [],
         sobrevivencia: !!plano.sobrevivencia, onda: 0, ondaAte: 4,
+        combo: 0, comboAte: 0, mult: 1, alertou30: false,
         world: P.world({ gravity: { x: 0, y: 0 }, maxSub: 4 }),
         tiles: null, variacao: [],
         player: null, bombs: [], flames: [], enemies: [],
@@ -163,11 +164,17 @@ function update(dt) {
     if (!st.sobrevivencia) {
         st.tLeft -= dt;
         if (st.tLeft <= 0) { matar('tempo'); return; }
+        if (st.tLeft < 30 && !st.alertou30) {
+            st.alertou30 = true;
+            st.onSfx('alerta');
+        }
     } else if (st.ondaAte > 0) {
         st.ondaAte -= dt;   // relogio da proxima onda (main cria os bichos)
     }
 
     var b = beatNow();
+    // janela do combo fechou: multiplicador volta a 1
+    if (st.combo > 0 && b >= st.comboAte) { st.combo = 0; st.mult = 1; }
     // bombas: pavio no beat + deslizamento do chute
     for (var i = st.bombs.length - 1; i >= 0; i--) {
         var bo = st.bombs[i];
@@ -185,7 +192,14 @@ function update(dt) {
     // inimigos (ia.js instala e roda o proprio update por aqui)
     if (st._ia) st._ia(dt, beatNow());
     // porta abre com a arena limpa (a achada + sem bichos vivos)
-    st.exit.aberta = st.exit.achada && st.enemies.length === 0;
+    var abriu = st.exit.achada && st.enemies.length === 0;
+    if (abriu && !st.exit.aberta) {
+        st.exit.aberta = true;
+        st.onSfx('ok');
+        st.onFx('saida', { c: st.exit.c, r: st.exit.r });
+    } else {
+        st.exit.aberta = abriu;
+    }
 
     var cel2 = celulaPlayer();
     // powerup na celula
@@ -256,13 +270,22 @@ function explodir(bo) {
         st.flames.push({ c: cells[j].c, r: cells[j].r, tipo: cells[j].tipo,
                          de: b, ate: ate, dx: cells[j].dx || 0, dy: cells[j].dy || 0 });
     }
+    // COMBO: explosao que cai NO TEMPO FORTE (batida inteira) encadeia o
+    // multiplicador — plantar no compasso vale pontos
+    var frac = b - Math.floor(b);
+    if (frac < 0.2 || frac > 0.85) {
+        st.combo++;
+        st.comboAte = b + 16;
+        st.mult = Math.min(5, 1 + st.combo);
+        if (st.combo >= 2) st.onFx('combo', { c: bc, r: br, mult: st.mult });
+    }
     st.onFx('bum', { c: bc, r: br }, cells);
-    st.onSfx('bum');
+    st.onSfx('bum', cells.length);
 }
 
 function destruirMacio(c, r) {
     st.grid[r][c] = '.';
-    st.score += 10;
+    st.score += 10 * st.mult;
     var key = c + ',' + r;
     if (c === st.exit.c && r === st.exit.r) st.exit.achada = true;
     st.onFx('macio', { c: c, r: r }, st.powerups[key] || null);
@@ -270,6 +293,7 @@ function destruirMacio(c, r) {
 
 function ferir() {
     if (st.stats.inv > 0 || st.fim) return;
+    st.combo = 0; st.mult = 1;   // levou dano: combo vai por agua abaixo
     if (st.stats.shield) {
         st.stats.shield = false;
         st.stats.inv = 2;
@@ -299,8 +323,8 @@ function matar(motivo) {
 function vencer() {
     if (st.fim) return;
     st.fim = 'win';
-    st.score += Math.floor(st.tLeft) * 10 + 100;
-    st.onSfx('venceu');
+    st.score += Math.floor(st.tLeft) * 10 * st.mult + 100;
+    st.onSfx('vitoria');
     st.onFim('win');
 }
 
@@ -313,8 +337,8 @@ function pegar(kind) {
     else if (kind === 'R') s.remote = true;
     else if (kind === 'E') s.shield = true;
     else if (kind === 'X') s.vidas = Math.min(s.vidas + 1, 5);
-    st.score += 50;
-    st.onSfx('power');
+    st.score += 50 * st.mult;
+    st.onSfx(kind === 'X' ? 'vida' : 'power');
     st.onFx('power', kind);
 }
 

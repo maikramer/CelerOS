@@ -9,7 +9,8 @@
 // Pega de teste (so existe no harness): o test.js dirige a sim.
 if (typeof __harness !== "undefined") {
     __harness.detona = { arena: require("arena"), niveis: require("niveis"),
-                         ia: require("ia"), E: null };   // E entra depois do require abaixo
+                         ia: require("ia"), GRID: require("celeros.grid"),
+                         E: null };   // E entra depois do require abaixo
 }
 
 var E = require("celeros.engine");
@@ -115,15 +116,9 @@ var SPR = E.spr.load([
 ]);
 
 // ---------------------------------------------------------------- sons ---
-E.audio.sfxTable.planta = [700, 35];
-E.audio.sfxTable.bum = [[100, 70], [60, 150], [40, 120]];
-E.audio.sfxTable.power = E.audio.sfxTable.coin;
-E.audio.sfxTable.escudo = [[1200, 40], [900, 60]];
-E.audio.sfxTable.morte = [[300, 90], [220, 90], [140, 220]];
-E.audio.sfxTable.venceu = [[523, 90], [659, 90], [784, 160]];
-E.audio.sfxTable.bicho = [[520, 40], [390, 70]];
-E.audio.sfxTable.hit = [220, 50];
-E.audio.sfxTable.chute = [[440, 30], [660, 40]];
+// efeitos pela dep celeros.sfx (boom com DUCK da trilha, variando com o
+// tamanho da explosao; jingles de fim; variantes por oitava)
+var SFX = require("celeros.sfx");
 
 // ---------------------------------------------------------------- cenas --
 var RECT_JOGAR, RECT_SOBRE;   // botoes: hit no update, desenho no draw
@@ -293,9 +288,14 @@ E.run({
 
 function wireArena() {
     var s = arena.state();
-    s.onSfx = function (nome) {
-        if (nome === 'bum') E.audio.duck(650);
-        E.audio.sfx(nome);
+    s.onSfx = function (nome, tam) {
+        if (nome === 'bum') {
+            SFX.via(E.audio, tam >= 7 ? 'boomGra' : 'boomPeq', { duck: 650 });
+        } else if (nome === 'bicho') {
+            SFX.via(E.audio, 'bicho', { oitava: -1 });
+        } else {
+            SFX.via(E.audio, nome);
+        }
     };
     s.onFx = function (tipo, a, b) {
         if (tipo === 'bum') {
@@ -313,6 +313,14 @@ function wireArena() {
             var cel = arena.celulaPlayer();
             var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
             E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano });
+        } else if (tipo === 'combo') {
+            var cbx = OX + (a.c + 0.5) * CELL, cby = OY + (a.r + 0.5) * CELL;
+            E.fx.popText(cbx, cby - CELL, "COMBO x" + a.mult, { color: C.magenta });
+            E.fx.ring(cbx, cby, { speed: CELL * 12, color: C.magenta, life: 0.3 });
+        } else if (tipo === 'saida') {
+            var sx = OX + (a.c + 0.5) * CELL, sy = OY + (a.r + 0.5) * CELL;
+            E.fx.popText(sx, sy - CELL, "SAIDA!", { color: C.verde });
+            E.fx.ring(sx, sy, { speed: CELL * 8, color: C.verde, life: 0.5 });
         } else if (tipo === 'bicho') {
             // a veio em pixels do centro do bicho
             E.fx.burst(a.x, a.y, { n: 14, colors: [C.branco, C.laranja],
