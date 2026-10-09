@@ -39,6 +39,29 @@ inline bool addDevice(uint8_t addr, i2c_master_dev_handle_t* out) {
     return true;
 }
 
+/// Handle em cache por chip: no primeiro uso adiciona o device ao bus;
+/// falha nao tenta de novo (bus pode nem existir ainda no boot). Cada
+/// driver (RTC, PMU, IMU, codecs) guarda os proprios statics.
+inline i2c_master_dev_handle_t cachedDevice(uint8_t addr, i2c_master_dev_handle_t* cache,
+                                            bool* tried) {
+    if (*cache == nullptr && !*tried) {
+        *tried = true;
+        addDevice(addr, cache);
+    }
+    return *cache;
+}
+
+/// Escrita do registrador de 8 bits.
+inline bool writeReg8(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(dev, buf, 2, 20) == ESP_OK;
+}
+
+/// Leitura a partir do registrador (auto-incremento do chip).
+inline bool readRegs(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t* out, size_t len) {
+    return i2c_master_transmit_receive(dev, &reg, 1, out, len, 20) == ESP_OK;
+}
+
 }  // namespace WatchI2c
 
 #endif  // CELER_BOARDS_WAVESHARE_WATCH_I2C_H

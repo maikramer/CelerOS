@@ -47,16 +47,11 @@ static constexpr uint8_t REG_RESET  = 0x60;
 inline i2c_master_dev_handle_t dev() {
     static i2c_master_dev_handle_t s_dev = nullptr;
     static bool s_tried = false;
-    if (!s_dev && !s_tried) {
-        s_tried = true;
-        WatchI2c::addDevice(kAddr, &s_dev);
-    }
-    return s_dev;
+    return WatchI2c::cachedDevice(kAddr, &s_dev, &s_tried);
 }
 
 inline bool wr(uint8_t reg, uint8_t val) {
-    uint8_t buf[2] = {reg, val};
-    return i2c_master_transmit(dev(), buf, 2, 20) == ESP_OK;
+    return WatchI2c::writeReg8(dev(), reg, val);
 }
 
 inline bool wr16(uint8_t regLo, uint16_t v) {
@@ -65,7 +60,7 @@ inline bool wr16(uint8_t regLo, uint16_t v) {
 }
 
 inline bool rd(uint8_t reg, uint8_t* out, size_t len) {
-    return i2c_master_transmit_receive(dev(), &reg, 1, out, len, 20) == ESP_OK;
+    return WatchI2c::readRegs(dev(), reg, out, len);
 }
 
 /// Reset + validacao (WHO_AM_I). Nao configura sensores.

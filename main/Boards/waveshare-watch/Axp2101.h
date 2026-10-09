@@ -42,20 +42,15 @@ static constexpr uint8_t REG_VBAT_L    = 0x35;
 inline i2c_master_dev_handle_t rtDev() {
     static i2c_master_dev_handle_t s_dev = nullptr;
     static bool s_tried = false;
-    if (!s_dev && !s_tried) {
-        s_tried = true;
-        WatchI2c::addDevice(kAddr, &s_dev);
-    }
-    return s_dev;
+    return WatchI2c::cachedDevice(kAddr, &s_dev, &s_tried);
 }
 
 inline bool rtRd(uint8_t reg, uint8_t* val) {
-    return i2c_master_transmit_receive(rtDev(), &reg, 1, val, 1, 20) == ESP_OK;
+    return WatchI2c::readRegs(rtDev(), reg, val, 1);
 }
 
 inline bool rtWr(uint8_t reg, uint8_t val) {
-    uint8_t buf[2] = {reg, val};
-    return i2c_master_transmit(rtDev(), buf, 2, 20) == ESP_OK;
+    return WatchI2c::writeReg8(rtDev(), reg, val);
 }
 
 /// Habilita as IRQs da tecla de power (PEK) — short/long press. Sem pino INT
@@ -175,14 +170,10 @@ static bool enableDisplayRails(gpio_num_t sda, gpio_num_t scl) {
 static bool readBatteryMv(int* mv) {
     static i2c_master_dev_handle_t s_dev = nullptr;
     static bool s_tried = false;
-    if (!s_dev && !s_tried) {
-        s_tried = true;
-        WatchI2c::addDevice(kAddr, &s_dev);
-    }
-    if (!s_dev || mv == nullptr) return false;
-    uint8_t reg = REG_VBAT_H;
+    i2c_master_dev_handle_t d = WatchI2c::cachedDevice(kAddr, &s_dev, &s_tried);
+    if (d == nullptr || mv == nullptr) return false;
     uint8_t b[2] = {0, 0};
-    if (i2c_master_transmit_receive(s_dev, &reg, 1, b, 2, 20) != ESP_OK) return false;
+    if (!WatchI2c::readRegs(d, REG_VBAT_H, b, 2)) return false;
     int v = ((b[0] << 8) | b[1]) & 0x3FFF;
     if (v < 2500 || v > 5000) return false;  // fora da faixa de Li-ion: nao e leitura util
     *mv = v;
