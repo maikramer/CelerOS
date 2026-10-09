@@ -101,7 +101,7 @@ void jsLoadAppDeps(const char* appDir) {
     if (appDir == nullptr || appDir[0] == '\0') return;
     std::string json = FileSystem::readTextFile((std::string(appDir) + "/deps.json").c_str());
     if (json.empty()) return;
-    FileSystem::JsonStringPair pairs[kMaxSharedDeps];
+    JsonStringPair pairs[kMaxSharedDeps];
     int n = FileSystem::parseJsonStringMap(json, pairs, kMaxSharedDeps);
     for (int i = 0; i < n && s_sharedDepCount < kMaxSharedDeps; i++) {
         const char* nm = pairs[i].key.c_str();

@@ -356,7 +356,7 @@ void LauncherUI::gcSharedModules() {
             depsJson += "deps.json";
             if (!FileSystem::exists(depsJson.c_str())) continue;
             std::string json = FileSystem::readTextFile(depsJson.c_str());
-            FileSystem::JsonStringPair pairs[8];
+            JsonStringPair pairs[8];
             int n = FileSystem::parseJsonStringMap(json, pairs, 8);
             for (int p = 0; p < n; p++) {
                 std::string ref = pairs[p].key + "/" + pairs[p].value;
