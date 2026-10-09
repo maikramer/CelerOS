@@ -17,6 +17,7 @@
 #include "ArduinoJson.h"
 
 #include "NetworkCredentialStore.h"
+#include "CaptivePortal.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
@@ -380,25 +381,14 @@ static esp_err_t routeGuard(httpd_req_t* req) {
     return c->handler(req);
 }
 
-static std::string urlDecode(const std::string& str) {
-    std::string out;
-    out.reserve(str.length());
-    for (size_t i = 0; i < str.length(); i++) {
-        if (str[i] == '%' && i + 2 < str.length()) {
-            int v = strtol(str.substr(i + 1, 2).c_str(), nullptr, 16);
-            if (v > 0) { out += (char)v; i += 2; continue; }
-        }
-        out += (str[i] == '+') ? ' ' : str[i];
-    }
-    return out;
-}
-
+// Decodifica %XX e '+' usando a implementacao do portal de configuracao
+// (mesma semantica; era uma copia local deste arquivo).
 static bool getQueryParam(httpd_req_t* req, const char* key, std::string& out) {
     char query[512];
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) return false;
     char value[400];
     if (httpd_query_key_value(query, key, value, sizeof(value)) != ESP_OK) return false;
-    out = urlDecode(value);
+    out = CaptivePortal::urlDecode(value);
     return true;
 }
 
@@ -423,7 +413,7 @@ static bool bodyParam(const std::string& body, const char* key, std::string& out
     std::string val = body.substr(idx + needle.length());
     int amp = kstr::indexOf(val, '&');
     if (amp >= 0) val = val.substr(0, amp);
-    out = urlDecode(val);
+    out = CaptivePortal::urlDecode(val);
     return true;
 }
 
@@ -435,6 +425,15 @@ static void sendText(httpd_req_t* req, int code, const char* text) {
     httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
     addCORS(req);
     httpd_resp_send(req, text, strlen(text));
+}
+
+// Prologo comum das rotas de arquivo: normaliza e valida o segmento do
+// caminho; fora das montagens permitidas ja responde 400 e devolve false.
+static bool safePath(httpd_req_t* req, std::string& path) {
+    path = normalizePath(path);
+    if (pathAllowed(path)) return true;
+    sendText(req, 400, "Invalid storage");
+    return false;
 }
 
 // Envia arquivo em chunks (download/editor)
@@ -481,8 +480,10 @@ static esp_err_t handler_list(httpd_req_t* req) {
         sendText(req, 400, "Missing dir parameter");
         return ESP_OK;
     }
-    dirPath = normalizePath(dirPath);
-    if (!pathAllowed(dirPath) || !FileSystem::isDirectory(dirPath.c_str())) {
+    if (!safePath(req, dirPath)) {
+        return ESP_OK;
+    }
+    if (!FileSystem::isDirectory(dirPath.c_str())) {
         sendText(req, 404, "Not a directory");
         return ESP_OK;
     }
@@ -521,8 +522,10 @@ static esp_err_t handler_edit_get(httpd_req_t* req) {
         sendText(req, 400, "Missing path parameter");
         return ESP_OK;
     }
-    path = normalizePath(path);
-    if (!pathAllowed(path) || !FileSystem::exists(path.c_str())) {
+    if (!safePath(req, path)) {
+        return ESP_OK;
+    }
+    if (!FileSystem::exists(path.c_str())) {
         sendText(req, 404, "File not found");
         return ESP_OK;
     }
@@ -537,9 +540,7 @@ static esp_err_t handler_edit_post(httpd_req_t* req) {
         sendText(req, 400, "Missing parameters");
         return ESP_OK;
     }
-    path = normalizePath(path);
-    if (!pathAllowed(path)) {
-        sendText(req, 400, "Invalid storage");
+    if (!safePath(req, path)) {
         return ESP_OK;
     }
     bool ok = FileSystem::writeTextFile(path.c_str(), content.c_str());
@@ -553,8 +554,10 @@ static esp_err_t handler_download(httpd_req_t* req) {
         sendText(req, 400, "Missing path parameter");
         return ESP_OK;
     }
-    path = normalizePath(path);
-    if (!pathAllowed(path) || !FileSystem::exists(path.c_str())) {
+    if (!safePath(req, path)) {
+        return ESP_OK;
+    }
+    if (!FileSystem::exists(path.c_str())) {
         sendText(req, 404, "File not found");
         return ESP_OK;
     }
@@ -568,9 +571,7 @@ static esp_err_t handler_delete(httpd_req_t* req) {
         sendText(req, 400, "Missing path parameter");
         return ESP_OK;
     }
-    path = normalizePath(path);
-    if (!pathAllowed(path)) {
-        sendText(req, 400, "Invalid storage");
+    if (!safePath(req, path)) {
         return ESP_OK;
     }
 
@@ -591,9 +592,7 @@ static esp_err_t handler_create(httpd_req_t* req) {
         sendText(req, 400, "Missing parameters");
         return ESP_OK;
     }
-    path = normalizePath(path);
-    if (!pathAllowed(path)) {
-        sendText(req, 400, "Invalid storage");
+    if (!safePath(req, path)) {
         return ESP_OK;
     }
 
@@ -614,10 +613,7 @@ static esp_err_t handler_rename(httpd_req_t* req) {
         sendText(req, 400, "Missing parameters");
         return ESP_OK;
     }
-    oldPath = normalizePath(oldPath);
-    newPath = normalizePath(newPath);
-    if (!pathAllowed(oldPath) || !pathAllowed(newPath)) {
-        sendText(req, 400, "Invalid storage");
+    if (!safePath(req, oldPath) || !safePath(req, newPath)) {
         return ESP_OK;
     }
 
