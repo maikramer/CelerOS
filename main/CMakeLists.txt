@@ -43,6 +43,7 @@ set(CELEROS_SRCS
     "Runtime/JsSystemApps.cpp"
     "Runtime/JsTimers.cpp"
     "Runtime/JsModules.cpp"
+    "Runtime/JsPhysics.cpp"
     "Runtime/JsStorage.cpp"
     "Runtime/JsSensors.cpp"
     "Settings/TouchCalibrator.cpp"
@@ -249,7 +250,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.8.1"
-    CELEROS_API_LEVEL=30
+    CELEROS_API_LEVEL=31
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

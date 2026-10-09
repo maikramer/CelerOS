@@ -18,7 +18,7 @@
 // other, info{nx,ny,overlap}) e grounded (apoiado). Top-down: gravity 0 +
 // addTiles (P.flow faz o campo de perseguicao). Veja o guia.
 
-var P = { version: '1.1.0' };
+var P = { version: '1.2.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 function halfW(b) { return isCircle(b) ? b.r : b.w / 2; }
@@ -481,6 +481,54 @@ P.verlet = function (opts) {
                 if (p.y < B2.y) { var vy2 = p.y - p.py; p.y = B2.y; p.py = p.y + vy2 * bb; }
                 if (p.y > B2.y + B2.h) { var vy3 = p.y - p.py; p.y = B2.y + B2.h; p.py = p.y + vy3 * bb; }
             }
+        }
+    };
+    return v;
+};
+
+// P.verletFast — o mesmo verlet, acelerado: quando o firmware tem o step
+// nativo (API 31, System.verletNew — JsPhysics.cpp, mundo em buffer C++ em
+// float), a integracao/relaxacao/bounds roda fora do interpretador; sem o
+// binding (firmware antigo, harness Node), cai para o P.verlet JS com a
+// MESMA cara de uso — so que acessando por indice (xy()[2i], xy()[2i+1])
+// em vez de array de objetos.
+//
+//   var v = P.verletFast({ iterations: 4 });
+//   var a = v.add(20, 20), b = v.add(20, 80);
+//   v.stick(a, b);            // len = distancia atual
+//   v.pin(a);
+//   v.step(1/60, { gravity: {x:0, y:900}, damp: 1,
+//                  bounds: {x:0, y:0, w:240, h:320}, bounce: 0.5 });
+//   var xy = v.xy();          // [xa, ya, xb, yb, ...] plano
+//   var st = v.sticks();      // [a0, b0, a1, b1, ...]
+//   v.set(b, 60, 40);         // move (o dedo puxando)
+//   v.free();                 // devolve o mundo (Limpar/Refazer)
+P.verletFast = function (opts) {
+    opts = opts || {};
+    if (typeof System === "undefined" || !System.verletNew) return P.verlet(opts);
+    var id = System.verletNew(opts.iterations || 4);
+    var v = {
+        native: true, id: id,
+        step: function (dt, o) {
+            o = o || {};
+            var g = o.gravity || { x: 0, y: 900 };
+            var b = o.bounds;
+            System.verletStep(id, dt, g.x || 0, g.y || 0,
+                              o.damp === undefined ? 1 : o.damp,
+                              b ? b.x : 0, b ? b.y : 0,
+                              b ? b.x + b.w : 0, b ? b.y + b.h : 0,
+                              o.bounce === undefined ? 0.5 : o.bounce);
+        },
+        xy: function () { return System.verletXY(id); },
+        sticks: function () { return System.verletSticks(id); },
+        add: function (x, y) { return System.verletAddPoint(id, x, y); },
+        stick: function (a, b, len) { System.verletStick(id, a, b, len); },
+        pin: function (i, on) { System.verletPin(id, i, on === undefined ? true : !!on); },
+        set: function (i, x, y) { System.verletSet(id, i, x, y); },
+        count: function () { return System.verletCount(id); },
+        free: function () {
+            if (id > 0) System.verletFree(id);
+            id = -1;
         }
     };
     return v;

@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 30
+### API Level: 31
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2241,3 +2241,46 @@ free) — a regular app cannot swap the code other apps load.
 The `celer.js new --game` scaffold generates the `app.json` with the engine
 deps; in the emulator/harness `require` resolves deps from the
 `tools/sdk/engine` tree (see the Game Engine Guide).
+
+
+## 36. API Level 31 — Native verlet: `System.verlet*`
+
+The heavy verlet step — integration, stick relaxation and bounds with
+bounce — runs in **C++ float** (the S3's single-precision FPU; double is
+soft-fp and costs 5-10×): points live in a native malloc'ed buffer (PSRAM
+when the board has it; ~10 KB of internal RAM otherwise), outside the
+Duktape heap, and JS creates, pins and draws by index. Up to 4 concurrent
+worlds, 256 points and 640 sticks each; all are torn down when the next
+app starts. The recommended entry point is the dep: `P.verletFast`
+(celeros.physics 1.2.0) feature-detects and falls back to the interpreted
+JS verlet on firmware without API 31 — the raw API:
+
+#### `System.verletNew([iterations])` → Integer (API 31)
+Creates a verlet world (relaxation iterations per step, default 4, max 16). Returns the id (1..4) or -1.
+
+#### `System.verletFree(id)` (API 31)
+Releases the world (malloc included). Worlds are also torn down when the app exits.
+
+#### `System.verletAddPoint(id, x, y)` → Integer (API 31)
+Adds a point at rest at (x, y); returns the index (0..) or -1 (world full).
+
+#### `System.verletStick(id, a, b[, len])` → Boolean (API 31)
+Stick between points a and b; omitted `len` = current distance.
+
+#### `System.verletPin(id, idx[, on])` → Boolean (API 31)
+Pins/releases the point (omitted on = pin).
+
+#### `System.verletSet(id, idx, x, y)` → Boolean (API 31)
+Moves a point WITHOUT touching its previous position — implicit velocity comes from the difference (the finger dragging).
+
+#### `System.verletStep(id, dt, gx, gy[, damp, minX, minY, maxX, maxY, bounce])` → Boolean (API 31)
+One full step: integration (gravity in px/s², `dt²` like `P.verlet`), iteration relaxation and optional bounds (active when `maxX > minX`) with bounce. Pure scalars: zero heap objects.
+
+#### `System.verletXY(id)` → Array (API 31)
+`[x0, y0, x1, y1, ...]` — one allocation per frame for the drawing loop.
+
+#### `System.verletSticks(id)` → Array (API 31)
+`[a0, b0, a1, b1, ...]` — point indices of each stick.
+
+#### `System.verletCount(id)` → Integer (API 31)
+How many points the world has.

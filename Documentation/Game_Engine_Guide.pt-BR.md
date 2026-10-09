@@ -273,7 +273,12 @@ if (E.save.best("recorde", pontos)) { /* novo recorde! */ }
 
 ## 15. Física (`celeros.physics`, opcional)
 
-`require("celeros.physics")` — matemática pura, nenhuma chamada a `System`, então testa unitariamente em qualquer lugar. Coordenadas: y cresce para **baixo** (tela); o `x, y` do corpo é o **centro**; corpo circular tem `r`, caixa `w/h`.
+`require("celeros.physics")` — matemática pura. O `P.verlet` ganhou um irmão
+acelerado: `P.verletFast` usa o verlet nativo do firmware (API 31,
+`System.verlet*` — integração/relaxação em C++ float, pontos fora do heap
+Duktape) e cai sozinho para o verlet JS em firmware antigo; cordas/panos com
+muitos nós ficam de graça. Acesso por índice (`v.xy()` devolve
+`[x0, y0, x1, ...]` plano). Nenhuma chamada a `System`, então testa unitariamente em qualquer lugar. Coordenadas: y cresce para **baixo** (tela); o `x, y` do corpo é o **centro**; corpo circular tem `r`, caixa `w/h`.
 
 ```js
 var P = require("celeros.physics");

@@ -56,6 +56,20 @@ private:
     static void deleteAllSprites();                    // reset por app
     static bool useSprite;
 
+    // Verlet nativo (API 31, JsPhysics.cpp): mundos em buffer C++ (malloc,
+    // PSRAM quando tem), step/integracao em float. O JS cria/pinta por
+    // indice — sem objetos no heap Duktape. Reset por app: jsPhysicsReset.
+    static duk_ret_t js_verletNew(duk_context *ctx);
+    static duk_ret_t js_verletFree(duk_context *ctx);
+    static duk_ret_t js_verletAddPoint(duk_context *ctx);
+    static duk_ret_t js_verletStick(duk_context *ctx);
+    static duk_ret_t js_verletPin(duk_context *ctx);
+    static duk_ret_t js_verletSet(duk_context *ctx);
+    static duk_ret_t js_verletStep(duk_context *ctx);
+    static duk_ret_t js_verletXY(duk_context *ctx);
+    static duk_ret_t js_verletSticks(duk_context *ctx);
+    static duk_ret_t js_verletCount(duk_context *ctx);
+
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);
     static duk_ret_t js_setInterval(duk_context *ctx);

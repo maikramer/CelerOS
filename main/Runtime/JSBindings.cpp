@@ -840,6 +840,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // sem deleteSprite) vazavam e ainda capturavam o desenho do proximo.
     deleteAllSprites();
     timersResetAll();
+    jsPhysicsReset();  // mundos verlet nativos (malloc incluso)
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
@@ -954,6 +955,18 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"bindSprite", js_bindSprite, 1},
         {"useSprite", js_useSprite, 1},
         {"spriteSlots", js_spriteSlots, 0},  // limite do pool (API 29)
+        // Verlet nativo (API 31): a dep celeros.physics feature-detecta e
+        // expoe P.verletFast; em firmware velho o P.verlet JS segue valendo
+        {"verletNew", js_verletNew, 0},
+        {"verletFree", js_verletFree, 1},
+        {"verletAddPoint", js_verletAddPoint, 3},
+        {"verletStick", js_verletStick, 3},
+        {"verletPin", js_verletPin, 2},
+        {"verletSet", js_verletSet, 4},
+        {"verletStep", js_verletStep, 10},
+        {"verletXY", js_verletXY, 1},
+        {"verletSticks", js_verletSticks, 1},
+        {"verletCount", js_verletCount, 1},
         {"drawFastVLine", js_drawFastVLine, 4},
         {"drawFastHLine", js_drawFastHLine, 4},
     };

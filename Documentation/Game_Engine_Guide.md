@@ -273,7 +273,12 @@ if (E.save.best("recorde", score)) { /* new record! */ }
 
 ## 15. Physics (`celeros.physics`, optional)
 
-`require("celeros.physics")` — pure math, no `System` calls, so it unit-tests anywhere. Coordinates: y grows **down** (screen); body `x, y` is the **center**; circle bodies have `r`, boxes `w/h`.
+`require("celeros.physics")` — pure math. `P.verlet` got an accelerated
+sibling: `P.verletFast` uses the firmware's native verlet (API 31,
+`System.verlet*` — integration/relaxation in C++ float, points outside the
+Duktape heap) and falls back to the JS verlet on old firmware by itself;
+ropes/cloths with many nodes become free. Index-based access (`v.xy()`
+returns a flat `[x0, y0, x1, ...]`). No `System` calls, so it unit-tests anywhere. Coordinates: y grows **down** (screen); body `x, y` is the **center**; circle bodies have `r`, boxes `w/h`.
 
 ```js
 var P = require("celeros.physics");

@@ -36,6 +36,9 @@ extern std::string s_appDir;
 // RESOLVIDAS no install): require() cai p/ /local/modules/<nome>/<versao>/
 // quando o modulo nao esta na pasta do app. Tambem alimentada no runFile.
 void jsLoadAppDeps(const char* appDir);
+// Verlet nativo (API 31, JsPhysics.cpp): mundos do app anterior saem no
+// init do proximo (malloc incluso). Chamado pelo JSBindings::init.
+void jsPhysicsReset();
 inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 // Saida limpa de app (F2): erro MARCADO com a propriedade celerExit — o

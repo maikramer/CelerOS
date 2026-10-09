@@ -831,6 +831,60 @@ function check(name, ok, detail) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------------------------------- verlet nativo --
+(function () {
+    console.log('SDK verletFast (celeros.physics x System.verlet*, API 31):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-vf-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.physics': '^1.2.0' } }));
+
+    // caminho nativo: o stub do harness espelha o binding C++ (JsPhysics.cpp)
+    var env = harness.makeEnv();
+    var P = harness.makeRequire(tmp, env)('celeros.physics');
+    check('physics 1.2.0 exporta verletFast', typeof P.verletFast === 'function');
+    var v = P.verletFast({ iterations: 4 });
+    check('verletFast usa o nativo quando existe (stub do harness)', v.native === true);
+    var a = v.add(120, 10), b = v.add(120, 40);
+    check('add devolve indices crescentes', a === 0 && b === 1);
+    v.stick(a, b);                    // len = distancia atual (30)
+    v.pin(a);
+    check('count conta os pontos', v.count() === 2);
+    var st = v.sticks();
+    check('sticks() devolve pares planos', st.length === 2 && st[0] === a && st[1] === b);
+    for (var i = 0; i < 240; i++) v.step(1 / 60, { gravity: { x: 0, y: 900 } });
+    var xy = v.xy();
+    var len = Math.sqrt((xy[2] - xy[0]) * (xy[2] - xy[0]) + (xy[3] - xy[1]) * (xy[3] - xy[1]));
+    check('corda pende no nativo: b desceu e o vinculo sobrevive',
+          xy[3] > 35 && Math.abs(len - 30) < 1,
+          'b.y=' + xy[3].toFixed(1) + ' len=' + len.toFixed(2));
+    var v2 = P.verletFast({});
+    var c = v2.add(120, 20);
+    for (var k = 0; k < 400; k++) v2.step(1 / 60, { gravity: { x: 0, y: 900 },
+                                                    bounds: { x: 0, y: 0, w: 240, h: 50 } });
+    check('bounds do nativo seguram no chao', v2.xy()[1] <= 50.01,
+          'y=' + v2.xy()[1].toFixed(2));
+    v2.set(c, 30, 10);
+    check('set reposiciona o ponto', v2.xy()[0] === 30 && v2.xy()[1] === 10);
+    v2.free();
+    v.free();
+    check('free devolve o mundo (count 0)', v2.count() === 0);
+
+    // fallback: firmware sem o binding — verletFast cai para o verlet JS
+    var env2 = harness.makeEnv();
+    delete env2.System.verletNew;
+    var P2 = harness.makeRequire(tmp, env2)('celeros.physics');
+    var v3 = P2.verletFast({ iterations: 4 });
+    check('sem System.verletNew: cai para o verlet JS (API classica)',
+          v3.native !== true && v3.points && typeof v3.step === 'function');
+    var x0 = v3.add ? null : v3.points.push({ x: 120, y: 10, pin: true });
+    v3.pin(0);
+    for (var n = 0; n < 120; n++) v3.step(1 / 60, { gravity: { x: 0, y: 900 } });
+    check('fallback pende igual (points API do P.verlet)', v3.points[0].x === 120);
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // -------------------------------------------------------- scaffold --game --
 (function () {
     console.log('SDK scaffold --game (engine + physics):');

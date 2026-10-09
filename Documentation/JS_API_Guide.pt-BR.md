@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 30
+### Nível de API: 31
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2514,3 +2514,45 @@ comum não troca o código que os outros carregam.
 O scaffold `celer.js new --game` gera o `app.json` já com as deps da engine;
 no emulador/harness o `require` resolve as deps da árvore `tools/sdk/engine`
 (veja o Game Engine Guide).
+
+
+## 36. Nível de API 31 — Verlet nativo: `System.verlet*`
+
+O step pesado do verlet — integração, relaxação de vínculos e bounds com
+bounce — roda em **C++ float** (FPU single do S3; double é soft-fp e custa
+5-10×): os pontos vivem num buffer nativo malloc'ado (PSRAM quando a placa
+tem; ~10 KB na RAM interna senão), fora do heap Duktape, e o JS cria, pinta
+e desenha por índice. Até 4 mundos simultâneos, 256 pontos e 640 vínculos
+cada; todos saem no início do próximo app. O jeito recomendado de usar é a
+dep: `P.verletFast` (celeros.physics 1.2.0) faz o feature-detect e cai
+para o verlet JS interpretado em firmware sem API 31 — a API crua:
+
+#### `System.verletNew([iterations])` → Inteiro (API 31)
+Cria um mundo verlet (iterations de relaxação por step, default 4, máx 16). Devolve o id (1..4) ou -1.
+
+#### `System.verletFree(id)` (API 31)
+Devolve o mundo (malloc incluso). Os mundos também saem sozinhos no fim do app.
+
+#### `System.verletAddPoint(id, x, y)` → Inteiro (API 31)
+Adiciona um ponto parado em (x, y); devolve o índice (0..) ou -1 (mundo cheio).
+
+#### `System.verletStick(id, a, b[, len])` → Boolean (API 31)
+Vínculo entre os pontos a e b; `len` ausente = distância atual.
+
+#### `System.verletPin(id, idx[, on])` → Boolean (API 31)
+Prena/solta o ponto (on ausente = prender).
+
+#### `System.verletSet(id, idx, x, y)` → Boolean (API 31)
+Move um ponto SEM tocar na posição anterior — a velocidade implícita nasce da diferença (o dedo puxando).
+
+#### `System.verletStep(id, dt, gx, gy[, damp, minX, minY, maxX, maxY, bounce])` → Boolean (API 31)
+Um step completo: integração (gravidade em px/s², `dt²` como no `P.verlet`), relaxação das iterations e bounds opcionais (ativos quando `maxX > minX`) com rebote. Escalares puros: zero objetos no heap.
+
+#### `System.verletXY(id)` → Array (API 31)
+`[x0, y0, x1, y1, ...]` — uma alocação por frame para o desenho iterar.
+
+#### `System.verletSticks(id)` → Array (API 31)
+`[a0, b0, a1, b1, ...]` — índices dos pontos de cada vínculo.
+
+#### `System.verletCount(id)` → Inteiro (API 31)
+Quantos pontos o mundo tem.

@@ -257,284 +257,406 @@ function makeEnv() {
     var kbBuffer = '';
     var kbOpen = false;
 
+        var verletStub = (function () {
+        var worlds = [null, null, null, null];
+        function at(id) { return id >= 1 && id <= 4 ? worlds[id - 1] : null; }
+        var api = {
+            verletNew: function (iterations) {
+                for (var i = 0; i < 4; i++) {
+                    if (!worlds[i]) {
+                        worlds[i] = { pts: [], sticks: [],
+                                      iters: Math.max(1, Math.min(16, iterations || 4)) };
+                        return i + 1;
+                    }
+                }
+                return -1;
+            },
+            verletFree: function (id) {
+                var w = at(id);
+                if (w) worlds[id - 1] = null;
+            },
+            verletAddPoint: function (id, x, y) {
+                var w = at(id);
+                if (!w || w.pts.length >= 256) return -1;
+                w.pts.push({ x: x, y: y, px: x, py: y, pin: false });
+                return w.pts.length - 1;
+            },
+            verletStick: function (id, a, b, len) {
+                var w = at(id);
+                if (!w || a < 0 || b < 0 || a >= w.pts.length || b >= w.pts.length) return false;
+                if (len === undefined) {
+                    var dx = w.pts[b].x - w.pts[a].x, dy = w.pts[b].y - w.pts[a].y;
+                    len = Math.sqrt(dx * dx + dy * dy);
+                }
+                w.sticks.push({ a: a, b: b, len: len });
+                return true;
+            },
+            verletPin: function (id, idx, on) {
+                var w = at(id);
+                if (!w || idx < 0 || idx >= w.pts.length) return false;
+                w.pts[idx].pin = on === undefined ? true : !!on;
+                return true;
+            },
+            verletSet: function (id, idx, x, y) {
+                var w = at(id);
+                if (!w || idx < 0 || idx >= w.pts.length) return false;
+                w.pts[idx].x = x;
+                w.pts[idx].y = y;
+                return true;
+            },
+            verletStep: function (id, dt, gx, gy, damp, minx, miny, maxx, maxy, bounce) {
+                var w = at(id);
+                if (!w) return false;
+                var g = { x: gx || 0, y: gy || 0 };
+                damp = damp === undefined ? 1 : damp;
+                bounce = bounce === undefined ? 0.5 : bounce;
+                var dt2 = dt * dt, i, k, p;
+                for (i = 0; i < w.pts.length; i++) {
+                    p = w.pts[i];
+                    if (p.pin) { p.px = p.x; p.py = p.y; continue; }
+                    var vx = (p.x - p.px) * damp, vy = (p.y - p.py) * damp;
+                    p.px = p.x; p.py = p.y;
+                    p.x += vx + g.x * dt2;
+                    p.y += vy + g.y * dt2;
+                }
+                for (k = 0; k < w.iters; k++) {
+                    for (i = 0; i < w.sticks.length; i++) {
+                        var s = w.sticks[i];
+                        var A = w.pts[s.a], B = w.pts[s.b];
+                        var dx = B.x - A.x, dy = B.y - A.y;
+                        var d = Math.sqrt(dx * dx + dy * dy);
+                        if (d < 1e-6) continue;
+                        var ma = A.pin ? 0 : 1, mb = B.pin ? 0 : 1;
+                        if (!ma && !mb) continue;
+                        var f = (d - s.len) / d / (ma + mb);
+                        A.x += dx * f * ma; A.y += dy * f * ma;
+                        B.x -= dx * f * mb; B.y -= dy * f * mb;
+                    }
+                }
+                if (maxx > minx) {
+                    for (i = 0; i < w.pts.length; i++) {
+                        p = w.pts[i];
+                        if (p.pin) continue;
+                        if (p.x < minx) { var vx2 = p.x - p.px; p.x = minx; p.px = p.x + vx2 * bounce; }
+                        if (p.x > maxx) { var vx3 = p.x - p.px; p.x = maxx; p.px = p.x + vx3 * bounce; }
+                        if (p.y < miny) { var vy2 = p.y - p.py; p.y = miny; p.py = p.y + vy2 * bounce; }
+                        if (p.y > maxy) { var vy3 = p.y - p.py; p.y = maxy; p.py = p.y + vy3 * bounce; }
+                    }
+                }
+                return true;
+            },
+            verletXY: function (id) {
+                var w = at(id), out = [];
+                if (w) for (var i = 0; i < w.pts.length; i++) {
+                    out.push(w.pts[i].x, w.pts[i].y);
+                }
+                return out;
+            },
+            verletSticks: function (id) {
+                var w = at(id), out = [];
+                if (w) for (var i = 0; i < w.sticks.length; i++) {
+                    out.push(w.sticks[i].a, w.sticks[i].b);
+                }
+                return out;
+            },
+            verletCount: function (id) {
+                var w = at(id);
+                return w ? w.pts.length : 0;
+            },
+        };
+        return api;
+    })();
+
     env.System = {
-        theme: function() { return JSON.parse(JSON.stringify(theme)); },
-        color: function(r, g, b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); },
-        screenWidth: function() { return env.__nativeCanvas ? 480 : 240; },
-        screenHeight: function() { return env.__nativeCanvas ? 480 : 320; },
-        // API 28: canvas nativo (pixels fisicos). O harness nao desenha nada;
-        // so reflecte o estado em screenWidth/Height para os testes.
-        setNativeCanvas: function(on) { env.__nativeCanvas = !!on; return true; },
-        fillScreen: function() {},
-        fillRect: function() {},
-        drawRect: function() {},
-        drawLine: function() {},
-        drawPixel: function() {},
-        drawCircle: function() {},
-        fillCircle: function() {},
-        drawTriangle: function() {},
-        fillTriangle: function() {},
-        drawRoundRect: function() {},
-        fillRoundRect: function() {},
-        // API 22: AA, gradiente, arco (no-op no host) e mistura de cor (real)
-        fillGradient: function() {},
-        fillArc: function() {},
-        fillSmoothCircle: function() {},
-        fillSmoothRoundRect: function() {},
-        drawWideLine: function() {},
-        mixColor: function(a, b, p) {
-            p = Math.max(0, Math.min(100, p | 0));
-            function ch(sh, m) {
-                var ca = (a >> sh) & m, cb = (b >> sh) & m;
-                return ((ca + Math.trunc((cb - ca) * p / 100)) & m) << sh;
-            }
-            return ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F);
-        },
-        drawFastVLine: function() {},
-        drawFastHLine: function() {},
-        drawBMP: function() { return true; },
-        drawPNG: function() { return true; },
-        drawIcon: function() {},
-        setTextColor: function() {},
-        setTextSize: function() {},
-        drawString: function(s) { log.push(String(s)); },
-        textWidth: function(s, font) {
-            s = String(s);
-            var per = font === 1 ? 6 : font === 4 ? 14 : 8;
-            return s.length * per;
-        },
-        // altura da fonte no espaco virtual (mesma metrica do renderer do
-        // emulador: glifo 8x8, dobro no tamanho 4)
-        fontHeight: function(font) {
-            return font === 4 ? 16 : 8;
-        },
-        millis: function() { return clock; },
-        micros: function() { return clock * 1000; },
-        delay: function(ms) {
-            fireTimers();
-            clock += ms || 0;
-            if (++iters > LIMIT) throw { harnessStop: true };
-        },
-        delayMicroseconds: function() {},
-        getTouch: function() {
-            fireTimers();
-            if (touchQ.length) return touchQ.shift();
-            return { x: 0, y: 0, touched: 0 };
-        },
-        // API 17: botao fisico como input (placas buttonToApp). O host nao
-        // tem botao: fila injetavel por testes (buttonQ) ou sempre 0.
-        button: function() {
-            fireTimers();
-            if (buttonQ.length) return buttonQ.shift();
-            return 0;
-        },
-        keypadOpen: function() { kbOpen = true; kbBuffer = ''; return true; },
-        keypadPoll: function() {
-            if (kbEvents.length) {
-                var ev = kbEvents.shift();
-                if (ev && ev.type === 'enter') kbBuffer = '';
-                if (ev && ev.type === 'cancel') kbOpen = false;
-                return ev;
-            }
-            return null;
-        },
-        keypadText: function() { return kbBuffer; },
-        keypadRect: function() { return { x: 0, y: 186, w: 240, h: 134 }; },
-        keypadDraw: function() {},
-        keypadClose: function() { kbOpen = false; },
-        topbarText: function() {},
-        topbarButtons: function() { return 0; },
-        topbarPop: function() { return null; },
-        prompt: function() { return ''; },
-        print: function(s) { log.push('[serial] ' + String(s)); },
-        exitApp: function() { throw 'OS_EXIT'; },
-        // API 16: pedido ao launcher + saida limpa (igual ao firmware)
-        launchApp: function(pkg) { log.push('[launch] ' + pkg); throw 'OS_EXIT'; },
-        restart: function() { throw 'OS_EXIT'; },
-        getOSVersion: function() { return fwMeta().version; },
-        getAPILevel: function() { return fwMeta().api; },
-        getInfo: function() {
-            return {
-                totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
-                totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
-                chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
-                macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
-            };
-        },
-        // derivados do relogio de parede (wall): formatos identicos aos do
-        // TimeManager (getTime "HH:MM", getDate "DD/MM/YYYY", month 1-12,
-        // weekday 0=domingo, getSeconds = segundos do MINUTO)
-        getTime: function() { var w = wall(); return pad2(w.getUTCHours()) + ':' + pad2(w.getUTCMinutes()); },
-        getSeconds: function() { return wall().getUTCSeconds(); },
-        getDate: function() {
-            var w = wall();
-            return pad2(w.getUTCDate()) + '/' + pad2(w.getUTCMonth() + 1) + '/' + w.getUTCFullYear();
-        },
-        getYear: function() { return wall().getUTCFullYear(); },
-        getMonth: function() { return wall().getUTCMonth() + 1; },
-        getDay: function() { return wall().getUTCDate(); },
-        getWeekday: function() { return wall().getUTCDay(); },   // API 13 (domingo=0)
-        keepAwake: function() {},               // API 13 (no-op no host)
-        setVolume: function() {},               // API 13 (audio)
-        getVolume: function() { return 100; },
-        getTimezone: function() { return 'UTC'; },
-        wifiStatus: function() { return { connected: false, ip: '', webServer: false, savedNetworks: 0 }; },
-        getIPAddress: function() { return ''; },
-        isWiFiActive: function() { return false; },
-        rescanApps: function() {},
-        setBrightness: function() {}, getBrightness: function() { return 200; },
-        backlightSupported: function() { return true; },
-        led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
-        gpio: {
-            servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
-            servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; },
-            pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
-            analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
-        },
-        lightLevel: function() { return 80; },
-        // temperatura do chip: 30C com sensor presente (o firmware considera
-        // 53.33 = sensor ausente — hasTemperatureSensor acompanha o valor)
-        getTemperature: function() { return 30; },
-        hasTemperatureSensor: function() { return true; },
-        beep: function() { return true; },
-        relay: function() { return true; },
-        relayState: function() { return 0; },
-        relayCount: function() { return 0; },
-        battery: function() { return 4100; },
-        setClip: function() {},
-        clearClip: function() {},
-        batteryInfo: function() { return { mv: 4100, pct: 85, charging: false, usb: false, full: false }; },
-        micLevel: function() { return 12; },
-        touchPad: function() { return 0; },
-        print: function(s) { log.push('[print] ' + s); },
-        neopixel: function(s, px) {
-            log.push('[neopixel] ' + s + ' ' + (px || []).join(','));
-            return true;
-        },
-        getAutoBrightness: function() { return env.__autoBri; },
-        setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
-        present: function() { fireTimers(); }, isBuffered: function() { return false; },
-        useSprite: function() { return true; },
-        setTextDatum: function() {},
-        createSprite: function() { return 1; },
-        deleteSprite: function() {},
-        pushSprite: function() {},
-        bindSprite: function() { return true; },
-        spriteSlots: function() { return 4; },
-        // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
-        setPin: function() { return true; },
-        verifyPin: function() { return true; },
-        pinClear: function() { log.push('[pin] clear'); return true; },
-        pinState: function() { return 0; },
-        md5: function() { return 'd41d8cd98f00b204e9800998ecf8427e'; },
-        setting: function() { return ''; },
-        toast: function(s) { log.push('[toast] ' + String(s)); },
-        openWifiSetup: function() { log.push('[wifi] setup'); return true; },
-        factoryReset: function(m) { log.push('[factoryReset] ' + m); return true; },
-        otaCheck: function() {
-            return { fetchFailed: true, available: false, hasFirmware: false,
-                     version: '', url: '', changelog: '', guide: '', type: '' };
-        },
-        otaStart: function() { return false; },
-        webActive: function() { return true; },
-        webSetActive: function() {},
-        webAuthInfo: function() { return { user: 'admin', pass: 'senha-web' }; },
-        webAuthSetPass: function() { return true; },
-        setManualTime: function() { log.push('[time] manual'); return true; },
-        setTimezone: function() { return true; },
-        set24hFormat: function() {},
-        get24hFormat: function() { return 1; },
-        setNtpEnabled: function() {},
-        getNtpEnabled: function() { return 1; },
-        // Energia/alarme (API 12)
-        setScreenTimeout: function(ms) { env.__scrTmo = ms | 0; },
-        screenTimeout: function() { return env.__scrTmo || 0; },
-        deepSleep: function() { log.push('[deepSleep] ' + arguments[0] + 'ms'); throw 'OS_EXIT'; },
-        setAlarm: function(h, m, msg) {
-            if (h < 0 || h > 23 || m < 0 || m > 59) return false;
-            env.__alarm = { armed: true, hour: h, minute: m, msg: msg || '' };
-            return true;
-        },
-        clearAlarm: function() { env.__alarm = null; },
-        getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; },
-        // API 15: agendador com 8 slots + timer (estado no env para os testes)
-        alarms: function() {
-            var out = [];
-            for (var i = 0; i < 8; i++) {
-                var a = env.__alarms[i];
-                if (a) out.push({ id: i, hour: a.hour, minute: a.minute, days: a.days || 0,
-                                  enabled: a.enabled !== false, label: a.label || '', next: 0 });
-            }
-            return out;
-        },
-        addAlarm: function(a) {
-            if (!a || a.hour < 0 || a.hour > 23 || a.minute < 0 || a.minute > 59) return -1;
-            for (var i = 1; i <= 8; i++) {
-                var id = i % 8;
-                if (!env.__alarms[id]) { env.__alarms[id] = JSON.parse(JSON.stringify(a)); return id; }
-            }
-            return -1;
-        },
-        updateAlarm: function(id, a) {
-            if (id < 0 || id > 7 || !a || a.hour < 0 || a.hour > 23) return false;
-            env.__alarms[id] = JSON.parse(JSON.stringify(a));
-            return true;
-        },
-        removeAlarm: function(id) { if (!env.__alarms[id]) return false; env.__alarms[id] = null; return true; },
-        setTimer: function(sec, label) {
-            if (!(sec > 0 && sec <= 86400)) return false;
-            env.__timer = { remaining: sec, label: label || '' };
-            return true;
-        },
-        getTimer: function() { return env.__timer ? { remaining: env.__timer.remaining, label: env.__timer.label } : null; },
-        cancelTimer: function() { env.__timer = null; },
-        unreadNotifications: function() { return 0; },
-        // Onda 5: melodia + notificacoes
-        playWav: function(p) { log.push('[wav] ' + p); return true; },
-        playTone: function(seq) {
-            log.push('[tone] ' + (seq && seq.length ? seq.length : 0) + ' notas');
-            return seq ? Math.floor(seq.length / (seq.length > 0 && seq[0].length !== undefined ? 1 : 2)) : 0;
-        },
-        // Musica (API 25): chiptune N trilhas — duracao REAL do song (mesma
-        // conta do MusicEngine: trilha mais longa em semicolcheias x bpm);
-        // __harness.music expoe o estado p/ assercoes
-        playMusic: function(song) {
-            if (!song || !song.tracks || !song.tracks.length) return false;
-            var beatMs = 60000 / (song.bpm || 120);
-            var longest = 0;
-            for (var i = 0; i < song.tracks.length; i++) {
-                var sum = 0;
-                var ns = song.tracks[i].notes || [];
-                for (var k = 0; k < ns.length; k++) sum += (ns[k] && ns[k][1]) || 0;
-                if (sum > longest) longest = sum;
-            }
-            musicState.playing = true;
-            musicState.startAt = clock;
-            musicState.totalMs = Math.round(longest * beatMs / 4 * (song.loops || 1));
-            musicState.songs.push(JSON.stringify(song));
-            log.push('[music] ' + musicState.totalMs + ' ms');
-            return true;
-        },
-        musicStop: function() {
-            var had = musicState.playing;
-            musicState.playing = false;
-            log.push('[music] stop');
-            return had;
-        },
-        musicPlaying: function() {
-            if (musicState.playing && clock - musicState.startAt >= musicState.totalMs)
-                musicState.playing = false;   // task do synth acabou
-            return musicState.playing;
-        },
-        musicPos: function() {
-            if (!musicState.playing) return -1;
-            var el = clock - musicState.startAt;
-            if (el >= musicState.totalMs) { musicState.playing = false; return -1; }
-            return el;
-        },
-        notify: function(t, m) { log.push('[notify] ' + t + '|' + (m || '')); },
-        notifications: function() { return env.__notifs || []; },
-        notificationsClear: function() { env.__notifs = []; }
+    theme: function() { return JSON.parse(JSON.stringify(theme)); },
+    color: function(r, g, b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); },
+    screenWidth: function() { return env.__nativeCanvas ? 480 : 240; },
+    screenHeight: function() { return env.__nativeCanvas ? 480 : 320; },
+    // API 28: canvas nativo (pixels fisicos). O harness nao desenha nada;
+    // so reflecte o estado em screenWidth/Height para os testes.
+    setNativeCanvas: function(on) { env.__nativeCanvas = !!on; return true; },
+    fillScreen: function() {},
+    fillRect: function() {},
+    drawRect: function() {},
+    drawLine: function() {},
+    drawPixel: function() {},
+    drawCircle: function() {},
+    fillCircle: function() {},
+    drawTriangle: function() {},
+    fillTriangle: function() {},
+    drawRoundRect: function() {},
+    fillRoundRect: function() {},
+    // API 22: AA, gradiente, arco (no-op no host) e mistura de cor (real)
+    fillGradient: function() {},
+    fillArc: function() {},
+    fillSmoothCircle: function() {},
+    fillSmoothRoundRect: function() {},
+    drawWideLine: function() {},
+    mixColor: function(a, b, p) {
+        p = Math.max(0, Math.min(100, p | 0));
+        function ch(sh, m) {
+            var ca = (a >> sh) & m, cb = (b >> sh) & m;
+            return ((ca + Math.trunc((cb - ca) * p / 100)) & m) << sh;
+        }
+        return ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F);
+    },
+    drawFastVLine: function() {},
+    drawFastHLine: function() {},
+    drawBMP: function() { return true; },
+    drawPNG: function() { return true; },
+    drawIcon: function() {},
+    setTextColor: function() {},
+    setTextSize: function() {},
+    drawString: function(s) { log.push(String(s)); },
+    textWidth: function(s, font) {
+        s = String(s);
+        var per = font === 1 ? 6 : font === 4 ? 14 : 8;
+        return s.length * per;
+    },
+    // altura da fonte no espaco virtual (mesma metrica do renderer do
+    // emulador: glifo 8x8, dobro no tamanho 4)
+    fontHeight: function(font) {
+        return font === 4 ? 16 : 8;
+    },
+    millis: function() { return clock; },
+    micros: function() { return clock * 1000; },
+    delay: function(ms) {
+        fireTimers();
+        clock += ms || 0;
+        if (++iters > LIMIT) throw { harnessStop: true };
+    },
+    delayMicroseconds: function() {},
+    getTouch: function() {
+        fireTimers();
+        if (touchQ.length) return touchQ.shift();
+        return { x: 0, y: 0, touched: 0 };
+    },
+    // API 17: botao fisico como input (placas buttonToApp). O host nao
+    // tem botao: fila injetavel por testes (buttonQ) ou sempre 0.
+    button: function() {
+        fireTimers();
+        if (buttonQ.length) return buttonQ.shift();
+        return 0;
+    },
+    keypadOpen: function() { kbOpen = true; kbBuffer = ''; return true; },
+    keypadPoll: function() {
+        if (kbEvents.length) {
+            var ev = kbEvents.shift();
+            if (ev && ev.type === 'enter') kbBuffer = '';
+            if (ev && ev.type === 'cancel') kbOpen = false;
+            return ev;
+        }
+        return null;
+    },
+    keypadText: function() { return kbBuffer; },
+    keypadRect: function() { return { x: 0, y: 186, w: 240, h: 134 }; },
+    keypadDraw: function() {},
+    keypadClose: function() { kbOpen = false; },
+    topbarText: function() {},
+    topbarButtons: function() { return 0; },
+    topbarPop: function() { return null; },
+    prompt: function() { return ''; },
+    print: function(s) { log.push('[serial] ' + String(s)); },
+    exitApp: function() { throw 'OS_EXIT'; },
+    // API 16: pedido ao launcher + saida limpa (igual ao firmware)
+    launchApp: function(pkg) { log.push('[launch] ' + pkg); throw 'OS_EXIT'; },
+    restart: function() { throw 'OS_EXIT'; },
+    getOSVersion: function() { return fwMeta().version; },
+    getAPILevel: function() { return fwMeta().api; },
+    getInfo: function() {
+        return {
+            totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
+            totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
+            chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
+            macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
+        };
+    },
+    // derivados do relogio de parede (wall): formatos identicos aos do
+    // TimeManager (getTime "HH:MM", getDate "DD/MM/YYYY", month 1-12,
+    // weekday 0=domingo, getSeconds = segundos do MINUTO)
+    getTime: function() { var w = wall(); return pad2(w.getUTCHours()) + ':' + pad2(w.getUTCMinutes()); },
+    getSeconds: function() { return wall().getUTCSeconds(); },
+    getDate: function() {
+        var w = wall();
+        return pad2(w.getUTCDate()) + '/' + pad2(w.getUTCMonth() + 1) + '/' + w.getUTCFullYear();
+    },
+    getYear: function() { return wall().getUTCFullYear(); },
+    getMonth: function() { return wall().getUTCMonth() + 1; },
+    getDay: function() { return wall().getUTCDate(); },
+    getWeekday: function() { return wall().getUTCDay(); },   // API 13 (domingo=0)
+    keepAwake: function() {},               // API 13 (no-op no host)
+    setVolume: function() {},               // API 13 (audio)
+    getVolume: function() { return 100; },
+    getTimezone: function() { return 'UTC'; },
+    wifiStatus: function() { return { connected: false, ip: '', webServer: false, savedNetworks: 0 }; },
+    getIPAddress: function() { return ''; },
+    isWiFiActive: function() { return false; },
+    rescanApps: function() {},
+    setBrightness: function() {}, getBrightness: function() { return 200; },
+    backlightSupported: function() { return true; },
+    led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
+    gpio: {
+        servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
+        servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; },
+        pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
+        analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
+    },
+    lightLevel: function() { return 80; },
+    // temperatura do chip: 30C com sensor presente (o firmware considera
+    // 53.33 = sensor ausente — hasTemperatureSensor acompanha o valor)
+    getTemperature: function() { return 30; },
+    hasTemperatureSensor: function() { return true; },
+    beep: function() { return true; },
+    relay: function() { return true; },
+    relayState: function() { return 0; },
+    relayCount: function() { return 0; },
+    battery: function() { return 4100; },
+    setClip: function() {},
+    clearClip: function() {},
+    batteryInfo: function() { return { mv: 4100, pct: 85, charging: false, usb: false, full: false }; },
+    micLevel: function() { return 12; },
+    touchPad: function() { return 0; },
+    print: function(s) { log.push('[print] ' + s); },
+    neopixel: function(s, px) {
+        log.push('[neopixel] ' + s + ' ' + (px || []).join(','));
+        return true;
+    },
+    getAutoBrightness: function() { return env.__autoBri; },
+    setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
+    present: function() { fireTimers(); }, isBuffered: function() { return false; },
+    useSprite: function() { return true; },
+    setTextDatum: function() {},
+    createSprite: function() { return 1; },
+    deleteSprite: function() {},
+    pushSprite: function() {},
+    bindSprite: function() { return true; },
+    spriteSlots: function() { return 4; },
+    // Verlet nativo (API 31): espelho JS do binding C++ (verletStub
+    // abaixo, mesmo contrato/aritmetica)
+    verletNew: verletStub.verletNew,
+    verletFree: verletStub.verletFree,
+    verletAddPoint: verletStub.verletAddPoint,
+    verletStick: verletStub.verletStick,
+    verletPin: verletStub.verletPin,
+    verletSet: verletStub.verletSet,
+    verletStep: verletStub.verletStep,
+    verletXY: verletStub.verletXY,
+    verletSticks: verletStub.verletSticks,
+    verletCount: verletStub.verletCount,
+    // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
+    setPin: function() { return true; },
+    verifyPin: function() { return true; },
+    pinClear: function() { log.push('[pin] clear'); return true; },
+    pinState: function() { return 0; },
+    md5: function() { return 'd41d8cd98f00b204e9800998ecf8427e'; },
+    setting: function() { return ''; },
+    toast: function(s) { log.push('[toast] ' + String(s)); },
+    openWifiSetup: function() { log.push('[wifi] setup'); return true; },
+    factoryReset: function(m) { log.push('[factoryReset] ' + m); return true; },
+    otaCheck: function() {
+        return { fetchFailed: true, available: false, hasFirmware: false,
+                 version: '', url: '', changelog: '', guide: '', type: '' };
+    },
+    otaStart: function() { return false; },
+    webActive: function() { return true; },
+    webSetActive: function() {},
+    webAuthInfo: function() { return { user: 'admin', pass: 'senha-web' }; },
+    webAuthSetPass: function() { return true; },
+    setManualTime: function() { log.push('[time] manual'); return true; },
+    setTimezone: function() { return true; },
+    set24hFormat: function() {},
+    get24hFormat: function() { return 1; },
+    setNtpEnabled: function() {},
+    getNtpEnabled: function() { return 1; },
+    // Energia/alarme (API 12)
+    setScreenTimeout: function(ms) { env.__scrTmo = ms | 0; },
+    screenTimeout: function() { return env.__scrTmo || 0; },
+    deepSleep: function() { log.push('[deepSleep] ' + arguments[0] + 'ms'); throw 'OS_EXIT'; },
+    setAlarm: function(h, m, msg) {
+        if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+        env.__alarm = { armed: true, hour: h, minute: m, msg: msg || '' };
+        return true;
+    },
+    clearAlarm: function() { env.__alarm = null; },
+    getAlarm: function() { return env.__alarm ? JSON.parse(JSON.stringify(env.__alarm)) : null; },
+    // API 15: agendador com 8 slots + timer (estado no env para os testes)
+    alarms: function() {
+        var out = [];
+        for (var i = 0; i < 8; i++) {
+            var a = env.__alarms[i];
+            if (a) out.push({ id: i, hour: a.hour, minute: a.minute, days: a.days || 0,
+                              enabled: a.enabled !== false, label: a.label || '', next: 0 });
+        }
+        return out;
+    },
+    addAlarm: function(a) {
+        if (!a || a.hour < 0 || a.hour > 23 || a.minute < 0 || a.minute > 59) return -1;
+        for (var i = 1; i <= 8; i++) {
+            var id = i % 8;
+            if (!env.__alarms[id]) { env.__alarms[id] = JSON.parse(JSON.stringify(a)); return id; }
+        }
+        return -1;
+    },
+    updateAlarm: function(id, a) {
+        if (id < 0 || id > 7 || !a || a.hour < 0 || a.hour > 23) return false;
+        env.__alarms[id] = JSON.parse(JSON.stringify(a));
+        return true;
+    },
+    removeAlarm: function(id) { if (!env.__alarms[id]) return false; env.__alarms[id] = null; return true; },
+    setTimer: function(sec, label) {
+        if (!(sec > 0 && sec <= 86400)) return false;
+        env.__timer = { remaining: sec, label: label || '' };
+        return true;
+    },
+    getTimer: function() { return env.__timer ? { remaining: env.__timer.remaining, label: env.__timer.label } : null; },
+    cancelTimer: function() { env.__timer = null; },
+    unreadNotifications: function() { return 0; },
+    // Onda 5: melodia + notificacoes
+    playWav: function(p) { log.push('[wav] ' + p); return true; },
+    playTone: function(seq) {
+        log.push('[tone] ' + (seq && seq.length ? seq.length : 0) + ' notas');
+        return seq ? Math.floor(seq.length / (seq.length > 0 && seq[0].length !== undefined ? 1 : 2)) : 0;
+    },
+    // Musica (API 25): chiptune N trilhas — duracao REAL do song (mesma
+    // conta do MusicEngine: trilha mais longa em semicolcheias x bpm);
+    // __harness.music expoe o estado p/ assercoes
+    playMusic: function(song) {
+        if (!song || !song.tracks || !song.tracks.length) return false;
+        var beatMs = 60000 / (song.bpm || 120);
+        var longest = 0;
+        for (var i = 0; i < song.tracks.length; i++) {
+            var sum = 0;
+            var ns = song.tracks[i].notes || [];
+            for (var k = 0; k < ns.length; k++) sum += (ns[k] && ns[k][1]) || 0;
+            if (sum > longest) longest = sum;
+        }
+        musicState.playing = true;
+        musicState.startAt = clock;
+        musicState.totalMs = Math.round(longest * beatMs / 4 * (song.loops || 1));
+        musicState.songs.push(JSON.stringify(song));
+        log.push('[music] ' + musicState.totalMs + ' ms');
+        return true;
+    },
+    musicStop: function() {
+        var had = musicState.playing;
+        musicState.playing = false;
+        log.push('[music] stop');
+        return had;
+    },
+    musicPlaying: function() {
+        if (musicState.playing && clock - musicState.startAt >= musicState.totalMs)
+            musicState.playing = false;   // task do synth acabou
+        return musicState.playing;
+    },
+    musicPos: function() {
+        if (!musicState.playing) return -1;
+        var el = clock - musicState.startAt;
+        if (el >= musicState.totalMs) { musicState.playing = false; return -1; }
+        return el;
+    },
+    notify: function(t, m) { log.push('[notify] ' + t + '|' + (m || '')); },
+    notifications: function() { return env.__notifs || []; },
+    notificationsClear: function() { env.__notifs = []; }
     };
 
     env.FS = FS;
@@ -548,56 +670,56 @@ function makeEnv() {
     var netSlots = [null, null];
     var netQueue = [];
     function netQueued(h) {
-        for (var i = 0; i < netQueue.length; i++) {
-            if (netQueue[i].h === h) return netQueue.splice(i, 1)[0].resp;
-        }
-        return null;
+    for (var i = 0; i < netQueue.length; i++) {
+        if (netQueue[i].h === h) return netQueue.splice(i, 1)[0].resp;
+    }
+    return null;
     }
     env.Net = {
-        get: function() { return null; },
-        getJSON: function() { return null; },
-        post: function() { return null; },
-        download: function() { return false; },  // streaming p/ arquivo (API 6)
-        isConnected: function() { return false; },
-        beginGet: function(url) {
-            for (var i = 0; i < netSlots.length; i++) {
-                if (netSlots[i]) continue;
-                netSlots[i] = { url: String(url), done: false };
-                (function(slot, h) {
-                    env.setTimeout(function() {
-                        if (slot.done || netSlots[h] !== slot) return;
-                        slot.done = true;
-                        slot.resp = netQueued(h) ||
-                            { done: true, ok: false, status: 0, body: '', error: 'sem rede no harness' };
-                    }, 0);
-                })(netSlots[i], i);
-                return i;
-            }
-            return -1;
-        },
-        pollGet: function(h) {
-            var s = netSlots[h];
-            if (!s) return { done: true, ok: false, status: 0, body: '', error: 'handle invalido' };
-            if (!s.done) {
-                var r = netQueued(h);
-                if (r) { s.done = true; s.resp = r; }
-            }
-            if (!s.done) return null;
-            var out = s.resp;
-            netSlots[h] = null;
-            return out;
-        },
-        cancelGet: function(h) {
-            var s = netSlots[h];
-            if (!s) return;
-            s.done = true;
-            s.resp = { done: true, ok: false, status: 0, body: '', error: 'cancelado' };
-        },
-        wifiScan: function() {
-            return [{ ssid: 'CasaNet', rssi: -50, secure: 1 }, { ssid: 'Vizinho', rssi: -70, secure: 0 }];
-        },
-        wifiConnect: function() { return false; },
-        wifiDisconnect: function() {}
+    get: function() { return null; },
+    getJSON: function() { return null; },
+    post: function() { return null; },
+    download: function() { return false; },  // streaming p/ arquivo (API 6)
+    isConnected: function() { return false; },
+    beginGet: function(url) {
+        for (var i = 0; i < netSlots.length; i++) {
+            if (netSlots[i]) continue;
+            netSlots[i] = { url: String(url), done: false };
+            (function(slot, h) {
+                env.setTimeout(function() {
+                    if (slot.done || netSlots[h] !== slot) return;
+                    slot.done = true;
+                    slot.resp = netQueued(h) ||
+                        { done: true, ok: false, status: 0, body: '', error: 'sem rede no harness' };
+                }, 0);
+            })(netSlots[i], i);
+            return i;
+        }
+        return -1;
+    },
+    pollGet: function(h) {
+        var s = netSlots[h];
+        if (!s) return { done: true, ok: false, status: 0, body: '', error: 'handle invalido' };
+        if (!s.done) {
+            var r = netQueued(h);
+            if (r) { s.done = true; s.resp = r; }
+        }
+        if (!s.done) return null;
+        var out = s.resp;
+        netSlots[h] = null;
+        return out;
+    },
+    cancelGet: function(h) {
+        var s = netSlots[h];
+        if (!s) return;
+        s.done = true;
+        s.resp = { done: true, ok: false, status: 0, body: '', error: 'cancelado' };
+    },
+    wifiScan: function() {
+        return [{ ssid: 'CasaNet', rssi: -50, secure: 1 }, { ssid: 'Vizinho', rssi: -70, secure: 0 }];
+    },
+    wifiConnect: function() { return false; },
+    wifiDisconnect: function() {}
     };
 
     // AI (API 18+): DeepSeek/OpenRouter com callback. __harness.setAiResponse(fn|obj)
@@ -612,64 +734,64 @@ function makeEnv() {
     var aiSpeaks = [];
     var AI_MODELS = { deepseek: 'deepseek-flash', openrouter: 'qwen/qwen3.8-omni-flash' };
     env.AI = {
-        chat: function(opts, cb) {
-            // mesmos defaults do JsAi.cpp: o app pode confiar neles (o
-            // provider e consumido aqui e sai do payload, como no firmware)
-            var prov = opts.provider || 'deepseek';
-            delete opts.provider;
-            if (!opts.model) opts.model = AI_MODELS[prov] || AI_MODELS.deepseek;
-            if (!opts.max_tokens) opts.max_tokens = 1024;
-            opts.stream = false;
-            aiChats.push(JSON.stringify(opts));
-            if (typeof cb !== 'function') return false;
-            aiCb = cb;
-            // timer do harness (NAO o setTimeout do Node): dispara num yield
-            // do app, o mesmo contrato do aiTick no present() do firmware
-            env.setTimeout(function() {
-                var f = aiCb;
-                aiCb = null;
-                if (!f) return;
-                var r = typeof aiResponse === 'function' ? aiResponse(opts) : aiResponse;
-                f(r || { ok: false, status: 0, error: 'sem resposta no harness', raw: '', content: null });
-            }, 0);
-            return true;
-        },
-        speak: function(opts, cb) {
-            if (!opts || typeof opts.text !== 'string' || !opts.text.length) {
-                throw new TypeError('AI.speak: opts.text (string) e obrigatorio');
-            }
-            if (opts.text.length > 300) {
-                throw new Error('AI.speak: texto passa o teto de 300 chars');
-            }
-            aiSpeaks.push(JSON.stringify(opts));
-            if (typeof cb !== 'function') return false;
-            if (aiCb !== null) return false;  // slot serial (mesma regra do firmware)
-            aiCb = cb;
-            env.setTimeout(function() {
-                var f = aiCb;
-                aiCb = null;
-                if (!f) return;
-                var r = typeof aiSpeakResult === 'function' ? aiSpeakResult(opts) : aiSpeakResult;
-                // path so vem quando ha .wav salvo (save:true ou play:false)
-                var saved = opts.save === true || opts.play === false;
-                f(r || { ok: true, status: 200,
-                         path: saved ? (opts.path || '/local/data/test/tts.wav') : '',
-                         bytes: 48000, played: opts.play !== false });
-            }, 0);
-            return true;
-        },
-        configured: function(p) {
-            if (env.__aiConfigured === false) return false;
-            var keys = env.__aiKeys || {};
-            return keys[p || 'deepseek'] !== false;
-        },
-        cancel: function() { var had = aiCb !== null; aiCb = null; return had; },
-        // AI.warm (API 24): melhor esforco, sem callback nem slot
-        warm: function(p) {
-            if (env.__aiConfigured === false) return false;
-            var keys = env.__aiKeys || {};
-            return keys[p || 'deepseek'] !== false && aiCb === null;
+    chat: function(opts, cb) {
+        // mesmos defaults do JsAi.cpp: o app pode confiar neles (o
+        // provider e consumido aqui e sai do payload, como no firmware)
+        var prov = opts.provider || 'deepseek';
+        delete opts.provider;
+        if (!opts.model) opts.model = AI_MODELS[prov] || AI_MODELS.deepseek;
+        if (!opts.max_tokens) opts.max_tokens = 1024;
+        opts.stream = false;
+        aiChats.push(JSON.stringify(opts));
+        if (typeof cb !== 'function') return false;
+        aiCb = cb;
+        // timer do harness (NAO o setTimeout do Node): dispara num yield
+        // do app, o mesmo contrato do aiTick no present() do firmware
+        env.setTimeout(function() {
+            var f = aiCb;
+            aiCb = null;
+            if (!f) return;
+            var r = typeof aiResponse === 'function' ? aiResponse(opts) : aiResponse;
+            f(r || { ok: false, status: 0, error: 'sem resposta no harness', raw: '', content: null });
+        }, 0);
+        return true;
+    },
+    speak: function(opts, cb) {
+        if (!opts || typeof opts.text !== 'string' || !opts.text.length) {
+            throw new TypeError('AI.speak: opts.text (string) e obrigatorio');
         }
+        if (opts.text.length > 300) {
+            throw new Error('AI.speak: texto passa o teto de 300 chars');
+        }
+        aiSpeaks.push(JSON.stringify(opts));
+        if (typeof cb !== 'function') return false;
+        if (aiCb !== null) return false;  // slot serial (mesma regra do firmware)
+        aiCb = cb;
+        env.setTimeout(function() {
+            var f = aiCb;
+            aiCb = null;
+            if (!f) return;
+            var r = typeof aiSpeakResult === 'function' ? aiSpeakResult(opts) : aiSpeakResult;
+            // path so vem quando ha .wav salvo (save:true ou play:false)
+            var saved = opts.save === true || opts.play === false;
+            f(r || { ok: true, status: 200,
+                     path: saved ? (opts.path || '/local/data/test/tts.wav') : '',
+                     bytes: 48000, played: opts.play !== false });
+        }, 0);
+        return true;
+    },
+    configured: function(p) {
+        if (env.__aiConfigured === false) return false;
+        var keys = env.__aiKeys || {};
+        return keys[p || 'deepseek'] !== false;
+    },
+    cancel: function() { var had = aiCb !== null; aiCb = null; return had; },
+    // AI.warm (API 24): melhor esforco, sem callback nem slot
+    warm: function(p) {
+        if (env.__aiConfigured === false) return false;
+        var keys = env.__aiKeys || {};
+        return keys[p || 'deepseek'] !== false && aiCb === null;
+    }
     };
 
     // Mic (API 19): gravacao simulada (o firmware grava em task propria).
@@ -678,19 +800,19 @@ function makeEnv() {
     var micB64 = 'UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
     var micState = { on: false, level: 20, ms: 0 };
     env.Mic = {
-        start: function(o) {
-            if (micState.on) return false;
-            micState.on = true;
-            micState.ms = (o && o.ms) || 6000;
-            return true;
-        },
-        stop: function(o) {
-            if (!micState.on) return null;
-            micState.on = false;
-            return micB64;  // stub: mesmo conteudo cru e codificado
-        },
-        recording: function() { return micState.on; },
-        level: function() { return micState.on ? micState.level : -1; }
+    start: function(o) {
+        if (micState.on) return false;
+        micState.on = true;
+        micState.ms = (o && o.ms) || 6000;
+        return true;
+    },
+    stop: function(o) {
+        if (!micState.on) return null;
+        micState.on = false;
+        return micB64;  // stub: mesmo conteudo cru e codificado
+    },
+    recording: function() { return micState.on; },
+    level: function() { return micState.on ? micState.level : -1; }
     };
 
     // WakeWord (API 20): deteccao "hi celer" simulada — __harness.wake()
@@ -699,11 +821,11 @@ function makeEnv() {
     var wakeQueue = [];
     var wakeState = { on: false };
     env.WakeWord = {
-        start: function() { wakeState.on = true; return true; },
-        stop: function() { wakeState.on = false; },
-        poll: function() { return wakeQueue.length ? wakeQueue.shift() : false; },
-        level: function() { return wakeState.on ? 12 : -1; },
-        running: function() { return wakeState.on; }
+    start: function() { wakeState.on = true; return true; },
+    stop: function() { wakeState.on = false; },
+    poll: function() { return wakeQueue.length ? wakeQueue.shift() : false; },
+    level: function() { return wakeState.on ? 12 : -1; },
+    running: function() { return wakeState.on; }
     };
 
 
@@ -715,36 +837,36 @@ function makeEnv() {
     var linkSealedRx = [];  // API 21: mensagens seladas que "autenticaram"
     var linkConn = false, linkPairing = false, linkPairCode = '123456';
     env.CelerLink = {
-        start: function(name, opts) {
-            log.push('[link] adv ' + (name || 'Celer-TEST') + (opts && opts.pairing ? ' +pairing' : ''));
-            return true;
-        },
-        stop: function() { return true; },
-        scan: function() {
-            return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55 }];
-        },
-        connect: function(id) { return String(id).indexOf('AA:BB') >= 0; },
-        disconnect: function() { return true; },
-        send: function(m) {
-            log.push('[link] tx ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
-            return true;
-        },
-        poll: function() { return linkRx.length ? linkRx.shift() : null; },
-        // API 21: selo AES-GCM com o bond — no host so registra/entrega
-        sendSealed: function(m) {
-            log.push('[link] txs ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
-            return true;
-        },
-        pollSealed: function() { return linkSealedRx.length ? linkSealedRx.shift() : null; },
-        verify: function(code) { log.push('[link] verify ' + code); return linkPairing && code === linkPairCode; },
-        unpair: function() { log.push('[link] unpair'); return true; },
-        status: function() {
-            return { connected: linkConn && !linkPairing, peer: linkConn ? 'AA:BB:CC:DD:EE:FF' : '',
-                     listening: false, role: linkConn ? 'central' : '', name: 'Celer-TEST',
-                     pairing: linkPairing, verified: !linkPairing,
-                     code: linkPairing ? linkPairCode : '',
-                     mtu: 0, rssi: 0, pending: linkRx.length, dropped: 0 };
-        }
+    start: function(name, opts) {
+        log.push('[link] adv ' + (name || 'Celer-TEST') + (opts && opts.pairing ? ' +pairing' : ''));
+        return true;
+    },
+    stop: function() { return true; },
+    scan: function() {
+        return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55 }];
+    },
+    connect: function(id) { return String(id).indexOf('AA:BB') >= 0; },
+    disconnect: function() { return true; },
+    send: function(m) {
+        log.push('[link] tx ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+        return true;
+    },
+    poll: function() { return linkRx.length ? linkRx.shift() : null; },
+    // API 21: selo AES-GCM com o bond — no host so registra/entrega
+    sendSealed: function(m) {
+        log.push('[link] txs ' + (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+        return true;
+    },
+    pollSealed: function() { return linkSealedRx.length ? linkSealedRx.shift() : null; },
+    verify: function(code) { log.push('[link] verify ' + code); return linkPairing && code === linkPairCode; },
+    unpair: function() { log.push('[link] unpair'); return true; },
+    status: function() {
+        return { connected: linkConn && !linkPairing, peer: linkConn ? 'AA:BB:CC:DD:EE:FF' : '',
+                 listening: false, role: linkConn ? 'central' : '', name: 'Celer-TEST',
+                 pairing: linkPairing, verified: !linkPairing,
+                 code: linkPairing ? linkPairCode : '',
+                 mtu: 0, rssi: 0, pending: linkRx.length, dropped: 0 };
+    }
     };
 
     // CelerNet (malha BLE por flood de advertising, API 26; send/caps na
@@ -756,127 +878,127 @@ function makeEnv() {
     var meshOn = false;
     var meshSent = [];
     env.CelerNet = {
-        start: function(opts) {
-            meshOn = true;
-            log.push('[mesh] on' + (opts && opts.name ? ' ' + opts.name : '') +
-                     (opts && opts.relay === false ? ' so-escuta' : ''));
-            return true;
-        },
-        stop: function() { meshOn = false; return true; },
-        broadcast: function(m, ttl) {
-            log.push('[mesh] tx' + (ttl ? ' ttl' + ttl : '') + ' ' +
-                     (typeof m === 'object' ? JSON.stringify(m) : String(m)));
-            return meshOn;
-        },
-        send: function(to, m, opts) {
-            if (!meshOn) return false;
-            var known = meshNodes.some(function(n) {
-                return n.id === to || n.name === to;
-            });
-            if (!known && !/^[0-9A-Fa-f]{4}$/.test(to)) return false;
-            meshSent.push({ to: to, msg: m, opts: opts || {} });
-            return true;
-        },
-        poll: function() { return meshRx.length ? meshRx.shift() : null; },
-        nodes: function() { return meshNodes.slice(0); },
-        status: function() {
-            return { active: meshOn, relay: true, node: 'A1B2', name: 'Celer-TEST',
-                     net: 'celer', txQueued: 0, txDropped: 0, rxDropped: 0,
-                     relayed: 0, heard: meshNodes.length };
-        }
+    start: function(opts) {
+        meshOn = true;
+        log.push('[mesh] on' + (opts && opts.name ? ' ' + opts.name : '') +
+                 (opts && opts.relay === false ? ' so-escuta' : ''));
+        return true;
+    },
+    stop: function() { meshOn = false; return true; },
+    broadcast: function(m, ttl) {
+        log.push('[mesh] tx' + (ttl ? ' ttl' + ttl : '') + ' ' +
+                 (typeof m === 'object' ? JSON.stringify(m) : String(m)));
+        return meshOn;
+    },
+    send: function(to, m, opts) {
+        if (!meshOn) return false;
+        var known = meshNodes.some(function(n) {
+            return n.id === to || n.name === to;
+        });
+        if (!known && !/^[0-9A-Fa-f]{4}$/.test(to)) return false;
+        meshSent.push({ to: to, msg: m, opts: opts || {} });
+        return true;
+    },
+    poll: function() { return meshRx.length ? meshRx.shift() : null; },
+    nodes: function() { return meshNodes.slice(0); },
+    status: function() {
+        return { active: meshOn, relay: true, node: 'A1B2', name: 'Celer-TEST',
+                 net: 'celer', txQueued: 0, txDropped: 0, rxDropped: 0,
+                 relayed: 0, heard: meshNodes.length };
+    }
     };
 
     // Pack (matilha, API 27): membros com papel, envelopes custom e o
     // handoff de musica — espelho do firmware (dedup/tamanhos ficam la).
     var packRx = [];
     var packCaps = { speaker: true, mic: false, display: true, motors: false,
-                     leds: false, hub: false };
+                 leds: false, hub: false };
     env.Pack = {
-        me: function() {
-            return { id: 'A1B2', name: 'Celer-TEST', caps: packCaps,
-                     meshActive: meshOn };
-        },
-        members: function() { return meshNodes.slice(0); },
-        send: function(to, m, opts) {
-            if (!meshOn) return false;
-            meshSent.push({ pack: true, to: to, msg: m, opts: opts || {} });
-            return true;
-        },
-        poll: function() { return packRx.length ? packRx.shift() : null; },
-        handoffMusic: function(to) {
-            if (!meshOn || !musicState.playing) return false;
-            log.push('[pack] handoff' + (to ? ' -> ' + to : ' -> melhor-speaker') +
-                     ' @' + (clock - musicState.startAt) + 'ms');
-            return true;
-        }
+    me: function() {
+        return { id: 'A1B2', name: 'Celer-TEST', caps: packCaps,
+                 meshActive: meshOn };
+    },
+    members: function() { return meshNodes.slice(0); },
+    send: function(to, m, opts) {
+        if (!meshOn) return false;
+        meshSent.push({ pack: true, to: to, msg: m, opts: opts || {} });
+        return true;
+    },
+    poll: function() { return packRx.length ? packRx.shift() : null; },
+    handoffMusic: function(to) {
+        if (!meshOn || !musicState.playing) return false;
+        log.push('[pack] handoff' + (to ? ' -> ' + to : ' -> melhor-speaker') +
+                 ' @' + (clock - musicState.startAt) + 'ms');
+        return true;
+    }
     };
 
     env.__harness = {
-        log: log,
-        setAiResponse: function(r) { aiResponse = r; },
-        aiChats: aiChats,
-        setAiSpeakResult: function(r) { aiSpeakResult = r; },
-        aiSpeaks: aiSpeaks,
-        setMicB64: function(s) { micB64 = s; },
-        mic: micState,
-        music: musicState,
-        wake: function() { wakeQueue.push(true); },
-        wakeState: wakeState,
-        setLink: function(st) {
-            if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
-            if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
-            if (st.hasOwnProperty('code')) linkPairCode = String(st.code);
-        },
-        pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
-        pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
-        pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
-        pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
-        pushMesh: function(list) { meshRx = meshRx.concat(list); },
-        pushMeshNodes: function(list) { meshNodes = list; },
-        pushPack: function(list) { packRx = packRx.concat(list); },
-        meshSent: meshSent,
-        pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
-        typeLine: function(text) {
-            // simula digitacao: 1 change por char + enter com o texto completo
-            kbBuffer = '';
-            for (var i = 0; i < text.length; i++) {
-                kbBuffer += text.charAt(i);
-                kbEvents.push({ type: 'change' });
-            }
-            kbEvents.push({ type: 'enter', text: text });
-        },
-        tap: function(x, y) {
-            touchQ = touchQ.concat([{ x: x, y: y, touched: 1 }, { x: x, y: y, touched: 0 }]);
-        },
-        swipe: function(x0, y0, x1, y1) {
-            touchQ = touchQ.concat([
-                { x: x0, y: y0, touched: 1 },
-                { x: (x0 + x1) / 2, y: (y0 + y1) / 2, touched: 1 },
-                { x: x1, y: y1, touched: 1 },
-                { x: 0, y: 0, touched: 0 }
-            ]);
-        },
-        iters: function() { return iters; },
-        System: env.System
+    log: log,
+    setAiResponse: function(r) { aiResponse = r; },
+    aiChats: aiChats,
+    setAiSpeakResult: function(r) { aiSpeakResult = r; },
+    aiSpeaks: aiSpeaks,
+    setMicB64: function(s) { micB64 = s; },
+    mic: micState,
+    music: musicState,
+    wake: function() { wakeQueue.push(true); },
+    wakeState: wakeState,
+    setLink: function(st) {
+        if (st.hasOwnProperty('conn')) linkConn = !!st.conn;
+        if (st.hasOwnProperty('pairing')) linkPairing = !!st.pairing;
+        if (st.hasOwnProperty('code')) linkPairCode = String(st.code);
+    },
+    pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
+    pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
+    pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
+    pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
+    pushMesh: function(list) { meshRx = meshRx.concat(list); },
+    pushMeshNodes: function(list) { meshNodes = list; },
+    pushPack: function(list) { packRx = packRx.concat(list); },
+    meshSent: meshSent,
+    pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
+    typeLine: function(text) {
+        // simula digitacao: 1 change por char + enter com o texto completo
+        kbBuffer = '';
+        for (var i = 0; i < text.length; i++) {
+            kbBuffer += text.charAt(i);
+            kbEvents.push({ type: 'change' });
+        }
+        kbEvents.push({ type: 'enter', text: text });
+    },
+    tap: function(x, y) {
+        touchQ = touchQ.concat([{ x: x, y: y, touched: 1 }, { x: x, y: y, touched: 0 }]);
+    },
+    swipe: function(x0, y0, x1, y1) {
+        touchQ = touchQ.concat([
+            { x: x0, y: y0, touched: 1 },
+            { x: (x0 + x1) / 2, y: (y0 + y1) / 2, touched: 1 },
+            { x: x1, y: y1, touched: 1 },
+            { x: 0, y: 0, touched: 0 }
+        ]);
+    },
+    iters: function() { return iters; },
+    System: env.System
     };
     env.Storage = {
-        get: function(k, def) { return storageMap.hasOwnProperty(k) ? storageMap[k] : def; },
-        set: function(k, v) {
-            v = v === undefined ? '' : String(v);
-            if (v.length > 4096) return false;
-            storageMap[k] = v;
-            return true;
-        },
-        remove: function(k) { delete storageMap[k]; },
-        clear: function() { storageMap = {}; return true; },
-        clearFor: function() { return true; }
+    get: function(k, def) { return storageMap.hasOwnProperty(k) ? storageMap[k] : def; },
+    set: function(k, v) {
+        v = v === undefined ? '' : String(v);
+        if (v.length > 4096) return false;
+        storageMap[k] = v;
+        return true;
+    },
+    remove: function(k) { delete storageMap[k]; },
+    clear: function() { storageMap = {}; return true; },
+    clearFor: function() { return true; }
     };
     // Sensors (API 13): IMU da placa — no host simula parado (gravidade em z)
     env.Sensors = {
-        accel: function() { return { x: 0, y: 0, z: 1 }; },
-        steps: function() { return 0; },
-        temp: function() { return 30; },
-        stepHistory: function() { return [{ date: 20261001, steps: 6543 }]; }
+    accel: function() { return { x: 0, y: 0, z: 1 }; },
+    steps: function() { return 0; },
+    temp: function() { return 30; },
+    stepHistory: function() { return [{ date: 20261001, steps: 6543 }]; }
     };
     // UI (API 22): espelho JS do JsUi.cpp sobre as primitivas acima (o
     // renderer do emulador sobrepoe as primitivas e o UI pinta de verdade)
@@ -886,13 +1008,13 @@ function makeEnv() {
     // Phone (API 15): celular do Gadgetbridge — host simula pareado
     env.__phoneSent = [];
     env.Phone = {
-        status: function() { return { enabled: true, connected: true, passkey: 0, name: 'Bangle.js ee0e' }; },
-        setEnabled: function() {},
-        forget: function() { env.__phoneSent.push('forget'); },
-        music: function(cmd) { env.__phoneSent.push('music:' + cmd); return true; },
-        musicInfo: function() { return { artist: 'Artista', track: 'Faixa', album: 'Disco', state: 'play' }; },
-        weather: function() { return { temp: 24.4, hum: 60, txt: 'Nublado', loc: 'Curitiba', age: 120 }; },
-        find: function(on) { env.__phoneSent.push('find:' + on); return true; }
+    status: function() { return { enabled: true, connected: true, passkey: 0, name: 'Bangle.js ee0e' }; },
+    setEnabled: function() {},
+    forget: function() { env.__phoneSent.push('forget'); },
+    music: function(cmd) { env.__phoneSent.push('music:' + cmd); return true; },
+    musicInfo: function() { return { artist: 'Artista', track: 'Faixa', album: 'Disco', state: 'play' }; },
+    weather: function() { return { temp: 24.4, hum: 60, txt: 'Nublado', loc: 'Curitiba', age: 120 }; },
+    find: function(on) { env.__phoneSent.push('find:' + on); return true; }
     };
     env.__timer = null;
     env.setTimeout = function (fn, ms) { return timerAdd(fn, ms, false); };
@@ -933,46 +1055,46 @@ function resolveSharedDep(appDir, name, env) {
     if (!fs.existsSync(local)) return null;
     var m = fs.readFileSync(local, 'utf8').match(/version:\s*'([^']+)'/);
     if (m && !satisfiesRange(range, m[1]) && env && env.__harness && env.__harness.log) {
-        env.__harness.log.push('[harness] aviso: dep ' + name + ' local v' + m[1] +
-                               ' nao satisfaz "' + range + '" do app.json');
+    env.__harness.log.push('[harness] aviso: dep ' + name + ' local v' + m[1] +
+                           ' nao satisfaz "' + range + '" do app.json');
     }
     return local;
 }
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
-                    'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-                    'UI', 'require', 'CelerNet', 'Pack'];
+                'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+                'UI', 'require', 'CelerNet', 'Pack'];
 // Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
 // (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
 // wrapper, senao o ultimo sombreia o primeiro.
 function globalValues(env, req) {
     var mesh = !!env.__exposeMesh;
     return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
-            env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
-            env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined];
+        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
+        env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined];
 }
 function makeRequire(appDir, env) {
     var cache = {};
     function req(name) {
-        if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
-        var base = String(name).length > 3 && String(name).slice(-3) === '.js'
-            ? String(name).slice(0, -3) : String(name);
-        if (!/^[A-Za-z0-9_.-]{1,63}$/.test(base) || !/[A-Za-z0-9]/.test(base))
-            throw new Error('require: nome de modulo invalido (use [A-Za-z0-9_.-])');
-        if (Object.prototype.hasOwnProperty.call(cache, base)) return cache[base];
-        var mod = { exports: {} };
-        cache[base] = mod.exports;   // parcial: ciclo pega o que ja foi exportado
-        var srcPath = path.join(appDir, base + '.js');
-        if (!fs.existsSync(srcPath)) {
-            var shared = resolveSharedDep(appDir, base, env);
-            if (!shared) throw new Error('require: modulo nao encontrado: ' + base + '.js');
-            srcPath = shared;
-        }
-        var src = fs.readFileSync(srcPath, 'utf8');
-        var fn = Function.apply(null, ['module', 'exports'].concat(GLOBAL_NAMES).concat([src]));
-        fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
-        cache[base] = mod.exports;
-        return mod.exports;
+    if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
+    var base = String(name).length > 3 && String(name).slice(-3) === '.js'
+        ? String(name).slice(0, -3) : String(name);
+    if (!/^[A-Za-z0-9_.-]{1,63}$/.test(base) || !/[A-Za-z0-9]/.test(base))
+        throw new Error('require: nome de modulo invalido (use [A-Za-z0-9_.-])');
+    if (Object.prototype.hasOwnProperty.call(cache, base)) return cache[base];
+    var mod = { exports: {} };
+    cache[base] = mod.exports;   // parcial: ciclo pega o que ja foi exportado
+    var srcPath = path.join(appDir, base + '.js');
+    if (!fs.existsSync(srcPath)) {
+        var shared = resolveSharedDep(appDir, base, env);
+        if (!shared) throw new Error('require: modulo nao encontrado: ' + base + '.js');
+        srcPath = shared;
+    }
+    var src = fs.readFileSync(srcPath, 'utf8');
+    var fn = Function.apply(null, ['module', 'exports'].concat(GLOBAL_NAMES).concat([src]));
+    fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
+    cache[base] = mod.exports;
+    return mod.exports;
     }
     return req;
 }
@@ -983,18 +1105,18 @@ function runApp(relPath, wire) {
     // packageName do app.json ao lado do main.js (FS.appData e Storage por pkg)
     var appDir = path.dirname(path.join(ROOT, relPath));
     try {
-        var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
-        if (mf && mf.packageName) env.__pkg = mf.packageName;
+    var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
+    if (mf && mf.packageName) env.__pkg = mf.packageName;
     } catch (e) { /* .js avulso: sem pkg */ }
     wire && wire(env);
     // CelerNet/Pack (API 26/27) so existem com env.__exposeMesh: os apps
     // antigos seguem vendo typeof CelerNet === "undefined" (placa sem BT)
     try {
-        var fn = Function.apply(null, GLOBAL_NAMES.concat([(env.__prelude || '') + '\n' + src]));
-        fn.apply(null, globalValues(env, makeRequire(appDir, env)));
+    var fn = Function.apply(null, GLOBAL_NAMES.concat([(env.__prelude || '') + '\n' + src]));
+    fn.apply(null, globalValues(env, makeRequire(appDir, env)));
     } catch (e) {
-        if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
-        return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
+    if (e === 'OS_EXIT' || (e && e.harnessStop)) return { log: env.__harness.log, err: null, env: env };
+    return { log: env.__harness.log, err: e && (e.stack || String(e)) || String(e), env: env };
     }
     return { log: env.__harness.log, err: null, env: env };
 }
@@ -1009,10 +1131,10 @@ if (require.main !== module) return;
 var failures = 0;
 function check(name, cond, extra) {
     if (cond) {
-        console.log('  PASS  ' + name);
+    console.log('  PASS  ' + name);
     } else {
-        failures++;
-        console.log('  FAIL  ' + name + (extra ? '  [' + extra + ']' : ''));
+    failures++;
+    console.log('  FAIL  ' + name + (extra ? '  [' + extra + ']' : ''));
     }
 }
 
@@ -1021,8 +1143,8 @@ function joinLog(log) { return log.join('\n'); }
 // Testes inline: monta o Function com o mesmo prelude/parametros do runApp
 function runInline(src, env) {
     var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
-                          'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
-                          (env.__prelude || '') + '\n' + src);
+                      'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
+                      (env.__prelude || '') + '\n' + src);
     fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
        env.__require || makeRequire(null));
@@ -1032,12 +1154,12 @@ function runInline(src, env) {
 (function() {
     console.log('Terminal:');
     var cmds = ['help', 'pwd', 'ls', 'js 2+2', 'echo oi mundo > /local/x.txt',
-                'cat /local/x.txt', 'mkdir /local/tmpd', 'cd /local/tmpd', 'cd ..',
-                'rmdir /local/tmpd', 'neofetch', 'uname -a', 'df', 'free', 'date',
-                'whoami', 'history', 'naoexiste', 'echo "aspas duplas" fim', 'exit'];
+            'cat /local/x.txt', 'mkdir /local/tmpd', 'cd /local/tmpd', 'cd ..',
+            'rmdir /local/tmpd', 'neofetch', 'uname -a', 'df', 'free', 'date',
+            'whoami', 'history', 'naoexiste', 'echo "aspas duplas" fim', 'exit'];
     var r = runApp('data/apps/Terminal/main.js', function(env) {
-        // enfileira a digitacao de todos os comandos de uma vez
-        for (var i = 0; i < cmds.length; i++) env.__harness.typeLine(cmds[i]);
+    // enfileira a digitacao de todos os comandos de uma vez
+    for (var i = 0; i < cmds.length; i++) env.__harness.typeLine(cmds[i]);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
