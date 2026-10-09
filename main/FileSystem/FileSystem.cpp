@@ -170,6 +170,11 @@ bool FileSystem::mountSD() {
         return false;
     }
     ESP_LOGI(FS_TAG, "SD montado em /sd (%s)", s_sd_card->cid.name);
+    // Layout padrao do cartao, o mesmo trato do mkdir("/local/apps"): o
+    // launcher, Installer, App Store e o celerctl (apps list) escaneiam
+    // /sd/apps. Sem a pasta, um cartao de dados puro (gcode, wallpaper)
+    // montava numa boa mas o celerctl rotulava "sd: sem cartao".
+    mkdir("/sd/apps");  // ignora EEXIST
     return true;
 #else
     return false;
