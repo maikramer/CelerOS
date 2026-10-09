@@ -2124,3 +2124,53 @@ while ((e = Pack.poll()) !== null) {
     System.notify(e.fromName, e.data);
 }
 ```
+
+## 33. API Level 28 — Native canvas: pixels of the glass
+
+Every JS app draws on a virtual 240x320 canvas that the firmware scales
+to the physical display — one code base, any board. The **native canvas**
+is the opt-out for apps that want the real pixels instead: a fullscreen
+game on the 4" SmartDisplay (480x480) draws crisp 1:1 pixels on a square
+glass, with no 2.0/1.5 aspect stretch and touch at physical precision.
+
+#### `System.pushSprite(x, y[, transparent])` (3rd argument in API 28)
+With the optional `transparent` color (RGB565), sprite pixels matching
+that color are **not** transferred — a chroma-key blit, so a sprite with
+a solid background (e.g. black) composes over the scene without a square
+around it. Keep interior darks away from the key color (master the asset
+to a near-black that differs in the lowest bit). Without the argument the
+blit is opaque, as always.
+
+#### `System.setNativeCanvas(enable)` → Boolean (API 28)
+`true` switches **every** subsequent `System.*` draw/sprite/touch call to
+physical pixels: coordinates are used as-is (`System.screenWidth()`/
+`screenHeight()` report the glass — 480/480 on the SmartDisplay),
+`createSprite` sizes are physical, `drawPNG`/`drawBMP` keep their native
+pixel size (no virtual scaling) and `System.getTouch()` returns physical
+coordinates. Returns `true` when applied; `false` (and nothing changes)
+when the app runs with the **fixed topbar** — the mode requires a
+fullscreen app (`"topbar": false` in `app.json`), which then owns its own
+exit gesture (`System.exitApp()`).
+
+`false` returns to the virtual 240x320 canvas — the switch is per-draw,
+so an app can keep its `UI.*` menus virtual (the toolkit always reasons
+in virtual coordinates; do not mix `UI.*` widgets with the native mode in
+the same frame) and enter native mode only for gameplay. Toggling marks
+the frame for a full repaint: redraw the whole screen right after
+switching. The mode is reset when the app exits.
+
+### Example — fullscreen game on the square glass
+
+```javascript
+// app.json: "topbar": false
+if (System.setNativeCanvas(true)) {
+    var W = System.screenWidth(), H = System.screenHeight();  // 480, 480
+    System.fillRect(0, 0, W, H, 0x0000);
+    var t;
+    while (true) {
+        t = System.getTouch();
+        if (t.touched) System.fillCircle(t.x, t.y, 24, 0x07FF);  // physical px
+        System.delay(10);
+    }
+}
+```

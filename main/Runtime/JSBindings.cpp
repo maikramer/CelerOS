@@ -401,6 +401,8 @@ bool JSBindings::useSprite = false;
 duk_context* JSBindings::s_jsCtx = nullptr;  // heap do app corrente (timers)
 
 int JSBindings::mapY(int v) {
+    // Nativo: y JA e fisico; topbar fixa nao existe (setNativeCanvas recusa)
+    if (s_nativeCanvas) return v;
     return (useSprite && tftSprite) ? appSh(v)
                                     : (s_topbarFixed ? UI::topbarH() : 0) + appSh(v);
 }
@@ -705,7 +707,7 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
     }
     CelerFileWrapper file;
     duk_push_boolean(ctx, gfx()->drawPngFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
-                                            (float)UI::W / 240.0f,
+                                            s_nativeCanvas ? 1.0f : (float)UI::W / 240.0f,
                                             appScaleY()));
     return 1;
 }
@@ -827,6 +829,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_perms = perms;
     s_appExitPending = false;
     s_hwTouched = false;
+    s_nativeCanvas = false;  // app anterior pode ter saido no modo nativo
     s_launchBright = Backlight::get();
     s_launchAuto = Backlight::isAuto();
     s_launchIdle = Backlight::idleTimeout();
@@ -947,7 +950,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     static const JsFn kFns2[] = {
         {"createSprite", js_createSprite, 2},
         {"deleteSprite", js_deleteSprite, 1},
-        {"pushSprite", js_pushSprite, 2},
+        {"pushSprite", js_pushSprite, 3},  // 3o = cor-chave (API 28)
         {"bindSprite", js_bindSprite, 1},
         {"useSprite", js_useSprite, 1},
         {"drawFastVLine", js_drawFastVLine, 4},
@@ -1088,6 +1091,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"launchApp", js_launchApp, 1},  // API 16: abre outro app e sai
         {"setClip", js_setClip, 4},
         {"clearClip", js_clearClip, 0},
+        {"setNativeCanvas", js_setNativeCanvas, 1},  // API 28: pixels fisicos
         {"present", js_present, 0},
         {"isBuffered", js_isBuffered, 0},
         {"wifiStatus", js_wifiStatus, 0},

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 27 — 269 funcoes.
+// API level 28 — 270 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -36,7 +36,7 @@ declare const System: {
     /** destrói o Sprite instantaneamente e libera a RAM. Você DEVE chamar isso ao terminar para evitar vazamentos severos de memória! */
     deleteSprite(arg0?: number): void;
     /** empurra todo o buffer oculto para a tela física instantaneamente via DMA. O buffer permanece na RAM e pode ser modificado */
-    pushSprite(x: number, y: number): void;
+    pushSprite(x: number, y: number, arg2?: number): void;
     /** se true, TODAS as chamadas System.draw... e `System.fill...` subsequentes são interceptadas e desenhadas */
     bindSprite(enabled: boolean): void;
     useSprite(arg0: number): any;
@@ -158,6 +158,7 @@ declare const System: {
     launchApp(packageName: number): void;
     setClip(x: number, y: number, w: number, h: number): void;
     clearClip(): void;
+    setNativeCanvas(enable: number): any;
     present(): void;
     isBuffered(): any;
     wifiStatus(): any;

@@ -145,6 +145,7 @@ private:
     static duk_ret_t js_color(duk_context *ctx);
     static duk_ret_t js_screenWidth(duk_context *ctx);
     static duk_ret_t js_screenHeight(duk_context *ctx);
+    static duk_ret_t js_setNativeCanvas(duk_context *ctx);  // API 28
 
     // Touch Input
     static duk_ret_t js_getTouch(duk_context *ctx);

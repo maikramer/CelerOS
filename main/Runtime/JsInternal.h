@@ -14,6 +14,11 @@
 
 extern CelerDisplay* s_jsTft;
 extern bool s_topbarFixed;
+// Canvas nativo (API 28): o app abriu mao do canvas virtual 240x320 e desenha
+// em pixels FISICOS do vidro (480x480 na 4848). Todos os conversores abaixo
+// viram identidade; o touch e screenWidth/Height passam a fisicos. Exigido
+// app sem topbar fixa (System.setNativeCanvas recusa e devolve false).
+extern bool s_nativeCanvas;
 extern FrameSprite* s_frame;
 // Pedido de push do quadro INTEIRO: o vidro foi sujado por fora do quadro
 // (teclado do prompt). Desenho normal no quadro dispensa: a caixa suja do
@@ -114,11 +119,13 @@ inline const lgfx::IFont* jsFont(int f) {
     if (f < 1 || f > 8) f = 2;
     return CelerFont(UI::font(f));
 }
-inline int jsx(int v) { return UI::sx(v); }
+inline int jsx(int v) { return s_nativeCanvas ? v : UI::sx(v); }
 inline int appSh(int v) {
+    if (s_nativeCanvas) return v;
     return s_topbarFixed ? (v * (UI::H - UI::topbarH()) / 320) : v * UI::H / 320;
 }
 inline float appScaleY() {
+    if (s_nativeCanvas) return 1.0f;
     return (float)(s_topbarFixed ? (UI::H - UI::topbarH()) : UI::H) / 320.0f;
 }
 // Raio "uniforme": MINIMO das duas escalas. O circulo desenhado no vidro tem

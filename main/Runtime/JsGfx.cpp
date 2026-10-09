@@ -37,6 +37,10 @@ CelerSprite* s_spritePool[4] = {};  // nullptr = livre
 int spriteCap() { return Board::profile().hasPsram ? 4 : 1; }
 }  // namespace
 
+// Canvas nativo (API 28): definido aqui (dominio grafico), lido pelos
+// conversores de JsInternal.h e pelo touch (JsSystem.cpp). Zerado no init().
+bool s_nativeCanvas = false;
+
 // Reset por app (JSBindings::init): app que saiu sem deleteSprite nao vaza
 void JSBindings::deleteAllSprites() {
     for (CelerSprite*& s : s_spritePool) {
@@ -141,11 +145,20 @@ duk_ret_t JSBindings::js_pushSprite(duk_context *ctx) {
     if (!tftInstance || !tftSprite) return 0;
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
+    // API 28: 3o arg = cor-chave de transparencia (RGB565). Pixels do sprite
+    // com essa cor NAO sao transferidos — sprites com fundo preto blitam
+    // sobre a cena (estrelas, glow) sem o quadrado. Sem o arg (undefined no
+    // stack fixo de nargs=3), mantem o blit opaco dos apps antigos.
+    uint32_t key = 0;
+    bool chroma = !duk_is_null_or_undefined(ctx, 2);
+    if (chroma) key = duk_require_uint(ctx, 2);
     // Destino (quadro/display): origem do app (abaixo da topbar no fixo)
     if (s_frame != nullptr) {
-        tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y));  // caixa suja do quadro marca
+        if (chroma) tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y), jsc(key));
+        else tftSprite->pushSprite(s_frame, jsx(x), JSBindings::mapY(y));  // caixa suja do quadro marca
     } else {
-        tftSprite->pushSprite(jsx(x), JSBindings::mapY(y));
+        if (chroma) tftSprite->pushSprite(jsx(x), JSBindings::mapY(y), jsc(key));
+        else tftSprite->pushSprite(jsx(x), JSBindings::mapY(y));
     }
     return 0;
 }
@@ -339,7 +352,7 @@ duk_ret_t JSBindings::js_drawBMP(duk_context *ctx) {
     }
     CelerFileWrapper file;
     bool ok = gfx()->drawBmpFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
-                                 (float)UI::W / 240.0f,
+                                 s_nativeCanvas ? 1.0f : (float)UI::W / 240.0f,
                                  appScaleY());
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
@@ -418,14 +431,35 @@ duk_ret_t JSBindings::js_color(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_screenWidth(duk_context *ctx) {
-    // Canvas virtual: os apps veem o tamanho de projeto (240)
-    duk_push_int(ctx, 240);
+    // Canvas virtual: os apps veem o tamanho de projeto (240); no nativo,
+    // pixels fisicos do vidro (480 na 4848)
+    duk_push_int(ctx, (s_nativeCanvas && tftInstance) ? tftInstance->width() : 240);
     return 1;
 }
 
 duk_ret_t JSBindings::js_screenHeight(duk_context *ctx) {
-    // Canvas virtual: os apps veem o tamanho de projeto (320)
-    duk_push_int(ctx, 320);
+    // Canvas virtual: os apps veem o tamanho de projeto (320); no nativo,
+    // pixels fisicos do vidro
+    duk_push_int(ctx, (s_nativeCanvas && tftInstance) ? tftInstance->height() : 320);
+    return 1;
+}
+
+// API 28: canvas nativo. true = desenho, sprites e touch em pixels FISICOS
+// do vidro (sem a escala 240x320 -> tela). Exige app SEM topbar fixa (o X
+// de sair teria os pixels contados de outra forma); devolve false e nao muda
+// nada quando o app tem a faixa. Reversivel no mesmo app (menus no canvas
+// virtual com UI.*, jogo no nativo) — quem alterna repinta a tela inteira.
+duk_ret_t JSBindings::js_setNativeCanvas(duk_context *ctx) {
+    bool enable = duk_require_boolean(ctx, 0);
+    if (enable && s_topbarFixed) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    s_nativeCanvas = enable;
+    // A mudanca de escala vale do proximo draw em diante; o quadro atual
+    // misturaria as duas resolucoes — pede push integral (o app repinta).
+    if (s_frame != nullptr) s_frame->markAllDirty();
+    duk_push_boolean(ctx, 1);
     return 1;
 }
 

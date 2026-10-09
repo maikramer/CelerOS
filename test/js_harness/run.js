@@ -260,8 +260,11 @@ function makeEnv() {
     env.System = {
         theme: function() { return JSON.parse(JSON.stringify(theme)); },
         color: function(r, g, b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); },
-        screenWidth: function() { return 240; },
-        screenHeight: function() { return 320; },
+        screenWidth: function() { return env.__nativeCanvas ? 480 : 240; },
+        screenHeight: function() { return env.__nativeCanvas ? 480 : 320; },
+        // API 28: canvas nativo (pixels fisicos). O harness nao desenha nada;
+        // so reflecte o estado em screenWidth/Height para os testes.
+        setNativeCanvas: function(on) { env.__nativeCanvas = !!on; return true; },
         fillScreen: function() {},
         fillRect: function() {},
         drawRect: function() {},

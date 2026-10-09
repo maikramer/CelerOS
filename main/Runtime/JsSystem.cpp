@@ -56,6 +56,14 @@ bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     }
     if (!touched) return false;
 
+    // Canvas nativo (API 28): toque em pixels fisicos (sem topbar — o modo
+    // recusa app com faixa fixa)
+    if (s_nativeCanvas) {
+        *jx = (int)tx;
+        *jy = (int)ty;
+        return true;
+    }
+
     // Coordenadas no espaco de projeto 240x320 (hit-zones dos apps batem);
     // fixo: vertical desconta a topbar; retratil: tela cheia 1:1
     *jx = (int)tx * 240 / tftInstance->width();

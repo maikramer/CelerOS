@@ -2399,3 +2399,54 @@ while ((e = Pack.poll()) !== null) {
     System.notify(e.fromName, e.data);
 }
 ```
+
+## 33. Nível de API 28 — Canvas nativo: os pixels do vidro
+
+Todo app JS desenha num canvas virtual 240x320 que o firmware escala para
+o display físico — uma base de código, qualquer placa. O **canvas
+nativo** é a saída para apps que querem os pixels de verdade: um jogo em
+tela cheia no SmartDisplay 4" (480x480) desenha 1:1, sem a esticada de
+proporção 2.0/1.5, com toque na precisão física.
+
+#### `System.pushSprite(x, y[, transparente])` (3º argumento na API 28)
+Com a cor opcional `transparente` (RGB565), os pixels do sprite com essa
+cor **não** são transferidos — blit com croma-chave: um sprite com fundo
+sólido (ex.: preto) compõe sobre a cena sem o quadrado em volta. Deixe os
+escuros internos longe da cor-chave (mestre o asset para um quase-preto
+que difere no bit menos significativo). Sem o argumento o blit é opaco,
+como sempre.
+
+#### `System.setNativeCanvas(enable)` → Booleano (API 28)
+`true` passa **todas** as chamadas de desenho/sprite/toque seguintes para
+pixels físicos: as coordenadas são usadas como chegam
+(`System.screenWidth()`/`screenHeight()` passam a informar o vidro —
+480/480 no SmartDisplay), `createSprite` cria no tamanho físico,
+`drawPNG`/`drawBMP` mantêm o tamanho nativo (sem escala do canvas
+virtual) e `System.getTouch()` devolve coordenadas físicas. Retorna
+`true` quando aplicado; `false` (e nada muda) quando o app roda com a
+**topbar fixa** — o modo exige app em tela cheia (`"topbar": false` no
+`app.json`), que passa a cuidar do próprio gesto de saída
+(`System.exitApp()`).
+
+`false` volta ao canvas virtual 240x320 — a troca vale por chamada de
+desenho, então um app pode manter os menus no `UI.*` virtual (o toolkit
+sempre raciocina em coordenadas virtuais; não misture widgets `UI.*`
+com o modo nativo no mesmo quadro) e só entrar no nativo para jogar.
+Alternar marca o quadro para repintura total: redesenhe a tela inteira
+logo depois de trocar. O modo é zerado na saída do app.
+
+### Exemplo — jogo em tela cheia no vidro quadrado
+
+```javascript
+// app.json: "topbar": false
+if (System.setNativeCanvas(true)) {
+    var W = System.screenWidth(), H = System.screenHeight();  // 480, 480
+    System.fillRect(0, 0, W, H, 0x0000);
+    var t;
+    while (true) {
+        t = System.getTouch();
+        if (t.touched) System.fillCircle(t.x, t.y, 24, 0x07FF);  // px físico
+        System.delay(10);
+    }
+}
+```
