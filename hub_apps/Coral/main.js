@@ -11,7 +11,7 @@
 //   cg<sessão>.<ms>              já! a música começa daqui a <ms> (2 vias)
 //   cx<sessão>                   parar
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var mesh = require("celeros.mesh");
 var T = System.theme();
 var LEAD = 3500;                 // contagem até a entrada
 // latência estimada por salto de 1 quadro (fila + jitter do relay); calibre
@@ -151,19 +151,13 @@ function onMsg(m, now) {
 while (true) {
     var full = UI.begin();
     if (UI.header("Coral", { back: true })) { if (playing) System.musicStop(); System.exitApp(); }
-    if (!hasMesh || !CelerNet.status().active) {
-        UI.card(10, 56, 220, 100);
-        UI.text(hasMesh ? "Ligue a malha (app Matilha) para tocar junto com os aparelhos ao redor."
-                        : "Esta placa não tem Bluetooth no firmware.", 22, 70, { w: 196, lines: 4 });
-        UI.cardEnd();
-        if (hasMesh && UI.button("Ligar a malha", 10, 168, 220, 36)) CelerNet.start({});
+    if (!mesh.gate("Ligue a malha (app Matilha) para tocar junto com os aparelhos ao redor.")) {
         UI.end();
         continue;
     }
-    if (!me) me = Pack.me();
+    me = mesh.me();
     var now = System.millis();
-    var m;
-    while ((m = CelerNet.poll()) !== null) onMsg(m, now);
+    mesh.each(onMsg, now);
     if (now - helloAt > 3000) {
         helloAt = now;
         CelerNet.broadcast("ch" + (me.caps.speaker ? "1" : "0"), 8);

@@ -12,7 +12,7 @@
 //   s?<seq>               ping (unicast)        -> s!<seq> (unicast)
 //   s*<nonce>             censo (broadcast)     -> s=<nonce>|<bat%>|<min ligado>
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var mesh = require("celeros.mesh");
 var T = System.theme();
 
 var tab = 0;
@@ -170,28 +170,15 @@ function nodeItems() {
     return items;
 }
 
-function gateScreen(full) {
-    if (!hasMesh) {
-        UI.card(10, 56, 220, 90);
-        UI.text("Esta placa não tem Bluetooth no firmware.", 22, 70, { w: 196, lines: 3 });
-        UI.cardEnd();
-        return;
-    }
-    UI.card(10, 56, 220, 110);
-    UI.text("A malha está desligada.", 22, 70, { w: 196 });
-    UI.text("O Sonar mede a malha CelerNet: ligue para ouvir os vizinhos.", 22, 94,
-            { role: "caption", w: 196, lines: 3, color: T.textDim });
-    UI.cardEnd();
-    if (UI.button("Ligar a malha", 10, 176, 220, 36)) {
-        if (!CelerNet.start({})) UI.toast("Sem RAM para o rádio agora");
-    }
+function gateScreen() {
+    // portao padrao da dep celeros.mesh: card + "Ligar a malha"
+    return mesh.gate("O Sonar mede a malha CelerNet: ligue para ouvir os vizinhos.");
 }
 
 while (true) {
     var full = UI.begin();
-    if (UI.header("Sonar", { back: true, sub: hasMesh ? CelerNet.status().name : "" })) System.exitApp();
-    if (!hasMesh || !CelerNet.status().active) {
-        gateScreen(full);
+    if (UI.header("Sonar", { back: true, sub: mesh.available() ? CelerNet.status().name : "" })) System.exitApp();
+    if (!gateScreen()) {
         UI.end();
         continue;
     }

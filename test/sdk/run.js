@@ -776,6 +776,61 @@ function check(name, ok, detail) {
           JSON.stringify(r.grabbed.backed));
 })();
 
+// ------------------------------------------------------------------ mesh --
+(function () {
+    console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-mesh-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.mesh': '^1.0.0' } }));
+
+    // placa sem BT: os globais CelerNet/Pack nem existem — o modulo tem que
+    // nascer nesse mundo (o typeof do escopo e fixo por execucao, como no
+    // heap do device)
+    var env = harness.makeEnv();
+    var mesh = harness.makeRequire(tmp, env)('celeros.mesh');
+    check('exporta version', typeof mesh.version === 'string');
+    check('available/active false sem CelerNet (placa sem BT)',
+          mesh.available() === false && mesh.active() === false);
+
+    // com a malha exposta (meshsim): gate desenha o portao quando desligada
+    // e libera o frame quando ativa; me() e o drain da fila
+    var env2 = harness.makeEnv();
+    env2.__exposeMesh = true;
+    var req2 = harness.makeRequire(tmp, env2);
+    var mesh2 = req2('celeros.mesh');
+    check('available true com CelerNet+Pack', mesh2.available() === true);
+    var out = { closed: -1 };
+    try {
+        var fn = new Function('UI', 'System', '__harness', 'require',
+            'var mesh = require("celeros.mesh");' +
+            'var closed = 0;' +
+            'UI.begin();' +
+            'if (!mesh.gate("ligue a malha")) closed = 1;' +
+            'UI.end();' +
+            '__harness.grab("closed", closed);');
+        env2.__harness.grab = function (k, v) { out[k] = v; };
+        fn(env2.UI, env2.System, env2.__harness, req2);
+    } catch (e) { out.closed = 'erro: ' + e; }
+    check('gate devolve false com a malha desligada (portao desenhado)',
+          out.closed === 1, String(out.closed));
+    env2.CelerNet.start({});
+    check('active true apos CelerNet.start', mesh2.active() === true);
+    var gateOk = false;
+    try { gateOk = mesh2.gate('x') === true; } catch (e) { gateOk = false; }
+    check('gate devolve true com a malha ativa', gateOk);
+    var me = mesh2.me();
+    check('me() devolve o papel do Pack', !!(me && (me.name || me.caps)));
+    var got = [];
+    env2.__harness.pushMesh([{ from: 'a1', msg: 'm1' }, { from: 'b2', msg: 'm2' }]);
+    var n = mesh2.each(function (m) { got.push(m.msg); }, 0);
+    check('each drena a fila (2 quadros) e esvazia',
+          n === 2 && got[0] === 'm1' && got[1] === 'm2' &&
+          mesh2.each(function () {}, 0) === 0);
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // -------------------------------------------------------- scaffold --game --
 (function () {
     console.log('SDK scaffold --game (engine + physics):');

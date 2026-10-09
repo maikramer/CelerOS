@@ -17,7 +17,7 @@
 //                            p pânico, v<id> vigia sumiu (ttl 8, 2 vezes)
 //   a-<hash do PIN>          desarmar tudo (ttl 8)
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var mesh = require("celeros.mesh");
 var hasImu = typeof Sensors !== "undefined" && Sensors.accel() !== null;
 var hasMic = System.micLevel() >= 0;
 var T = System.theme();
@@ -188,18 +188,12 @@ while (true) {
     var flash = phase >= 0 && phase % 2 === 0;
     var full = UI.begin(ringing ? (flash ? T.err : T.bg) : T.bg);
     if (UI.header("Sentinela", { back: true })) { led(0, 0, 0); System.exitApp(); }
-    if (!hasMesh || !CelerNet.status().active) {
-        UI.card(10, 56, 220, 100);
-        UI.text(hasMesh ? "Ligue a malha (app Matilha): a Sentinela fala pela CelerNet."
-                        : "Esta placa não tem Bluetooth no firmware.", 22, 70, { w: 196, lines: 4 });
-        UI.cardEnd();
-        if (hasMesh && UI.button("Ligar a malha", 10, 168, 220, 36)) CelerNet.start({});
+    if (!mesh.gate("Ligue a malha (app Matilha): a Sentinela fala pela CelerNet.")) {
         UI.end();
         continue;
     }
-    if (!me) me = Pack.me();
-    var m;
-    while ((m = CelerNet.poll()) !== null) onMsg(m, now);
+    me = mesh.me();
+    mesh.each(onMsg, now);
     for (var r = 0; r < resend.length; r++) {
         if (now >= resend[r].at) { CelerNet.broadcast(resend[r].msg, 8); resend.splice(r--, 1); }
     }

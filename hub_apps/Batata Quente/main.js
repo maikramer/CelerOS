@@ -14,7 +14,7 @@
 // Sem ACK no rádio, o próprio "bk" é o ACK do passe: sem ele em 3,5 s o
 // passe é reenviado; 3 tentativas sem resposta e a batata volta.
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var mesh = require("celeros.mesh");
 var T = System.theme();
 // LED da placa: System.led so existe com a permissao "gpio" (o app nao pede
 // consentimento de hardware por causa de um enfeite) — sem ela, nada acende
@@ -222,19 +222,13 @@ function scoreItems() {
 while (true) {
     var full = UI.begin(state === GAME && holding ? T.raised : T.bg);
     if (UI.header("Batata Quente", { back: true })) { led(0, 0, 0); System.exitApp(); }
-    if (!hasMesh || !CelerNet.status().active) {
-        UI.card(10, 56, 220, 100);
-        UI.text(hasMesh ? "Ligue a malha (app Matilha) para jogar com os aparelhos ao redor."
-                        : "Esta placa não tem Bluetooth no firmware.", 22, 70, { w: 196, lines: 4 });
-        UI.cardEnd();
-        if (hasMesh && UI.button("Ligar a malha", 10, 168, 220, 36)) CelerNet.start({});
+    if (!mesh.gate("Ligue a malha (app Matilha) para jogar com os aparelhos ao redor.")) {
         UI.end();
         continue;
     }
-    if (!me) me = Pack.me();
+    me = mesh.me();
     var now = System.millis();
-    var m;
-    while ((m = CelerNet.poll()) !== null) onMsg(m, now);
+    mesh.each(onMsg, now);
     tick(now);
 
     if (state === LOBBY) {

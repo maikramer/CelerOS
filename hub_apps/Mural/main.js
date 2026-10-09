@@ -10,7 +10,7 @@
 //   m+<id>|<autor>|<texto>   recado (novo: ttl 4; refofocado: ttl 1)
 //   m#<qtd>.<hash>           resumo do mural (ttl 1, só vizinhos diretos)
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var mesh = require("celeros.mesh");
 var T = System.theme();
 var MAX_POSTS = 24, MAX_TXT = 48;
 var IMIN = 4000, IMAX = 32000;
@@ -156,19 +156,13 @@ newInterval(System.millis(), IMIN);
 while (true) {
     var full = UI.begin();
     if (UI.header("Mural", { back: true })) System.exitApp();
-    if (!hasMesh || !CelerNet.status().active) {
-        UI.card(10, 56, 220, 100);
-        UI.text(hasMesh ? "Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor."
-                        : "Esta placa não tem Bluetooth no firmware.", 22, 70, { w: 196, lines: 4 });
-        UI.cardEnd();
-        if (hasMesh && UI.button("Ligar a malha", 10, 168, 220, 36)) CelerNet.start({});
+    if (!mesh.gate("Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor.")) {
         UI.end();
         continue;
     }
-    if (!me) me = Pack.me();
+    me = mesh.me();
     var now = System.millis();
-    var m;
-    while ((m = CelerNet.poll()) !== null) onMsg(m, now);
+    mesh.each(onMsg, now);
     trickle(now);
 
     // quantos vizinhos (ouvidos nos últimos 70 s) concordam com o nosso resumo
