@@ -15,9 +15,10 @@
 // (0..1/s), mass (1; static vale infinito), static, sensor (so evento),
 // group/mask (bitmask: colide se a.mask&b.group E b.mask&a.group),
 // tiles (false ignora tilemap), drop (atravessa one-way), onCollide(me,
-// other, info{nx,ny,overlap}) e grounded (apoiado). Veja o guia.
+// other, info{nx,ny,overlap}) e grounded (apoiado). Top-down: gravity 0 +
+// addTiles (P.flow faz o campo de perseguicao). Veja o guia.
 
-var P = { version: '1.0.0' };
+var P = { version: '1.1.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 function halfW(b) { return isCircle(b) ? b.r : b.w / 2; }
@@ -344,6 +345,68 @@ P.tiles = function (grid, tw, th, opts) {
         setTile: function (c, r, v) {
             if (r < 0 || r >= rows || c < 0 || c >= grid[r].length) return;
             grid[r][c] = v;
+        }
+    };
+};
+
+// campo de fluxo (BFS 4-direcoes) a partir da celula (cx, cy) — o alvo e
+// tipicamente o jogador: perseguidores descem o gradiente com next() sem
+// A* por corpo. Custo O(celulas) por computo; o retorno e um retrato do
+// grid — recompute quando o labirinto mudar (setTile) ou de meio em meio
+// segundo, nunca por frame. opts.passable(ch) troca o criterio de celula
+// livre (default: nao solida do tilemap — um fantasma que atravessa bloco
+// macio passa o proprio passable).
+P.flow = function (t, cx, cy, opts) {
+    opts = opts || {};
+    var passCh = opts.passable || null;
+    var rows = t.rows, cols = t.cols;
+    var INF = Infinity;
+    var dist = new Array(rows * cols);
+    for (var i = 0; i < dist.length; i++) dist[i] = INF;
+
+    function chAt(c, r) {
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return null;
+        return t.grid[r][c];
+    }
+    function walkable(c, r) {
+        if (passCh) { var v = chAt(c, r); return v != null && passCh(v); }
+        return !t.solidAt(c, r);
+    }
+    function distAt(c, r) {
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return INF;
+        return dist[r * cols + c];
+    }
+
+    var q = [], head = 0;
+    if (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+        dist[cy * cols + cx] = 0;
+        q.push(cy * cols + cx);
+    }
+    while (head < q.length) {
+        var at = q[head++];
+        var c = at % cols;
+        var r = (at - c) / cols;
+        var d = dist[at] + 1;
+        // ordem fixa (dir, esq, baixo, cima): next() e deterministico
+        if (c + 1 < cols && dist[at + 1] === INF && walkable(c + 1, r)) { dist[at + 1] = d; q.push(at + 1); }
+        if (c - 1 >= 0 && dist[at - 1] === INF && walkable(c - 1, r)) { dist[at - 1] = d; q.push(at - 1); }
+        if (r + 1 < rows && dist[at + cols] === INF && walkable(c, r + 1)) { dist[at + cols] = d; q.push(at + cols); }
+        if (r - 1 >= 0 && dist[at - cols] === INF && walkable(c, r - 1)) { dist[at - cols] = d; q.push(at - cols); }
+    }
+
+    return {
+        cols: cols, rows: rows,
+        dist: distAt,
+        // vizinho um passo mais perto do alvo (null na origem, em parede
+        // ou quando nao ha caminho)
+        next: function (c, r) {
+            var d = distAt(c, r);
+            if (d === INF || d === 0) return null;
+            if (distAt(c + 1, r) === d - 1) return { c: c + 1, r: r };
+            if (distAt(c - 1, r) === d - 1) return { c: c - 1, r: r };
+            if (distAt(c, r + 1) === d - 1) return { c: c, r: r + 1 };
+            if (distAt(c, r - 1) === d - 1) return { c: c, r: r - 1 };
+            return null;
         }
     };
 };

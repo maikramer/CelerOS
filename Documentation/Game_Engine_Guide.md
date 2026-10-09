@@ -296,6 +296,32 @@ tiles.tileAt(px, py); tiles.setTile(col, row, "#");
 
 Per-axis resolution, `grounded` on landing, one-way platforms only catch you falling from above (`body.drop = true` to fall through on purpose).
 
+### Grid games (top-down)
+
+The same tilemap drives Bomberman/Zelda-style movement: `gravity: {x:0, y:0}` and the per-axis resolution stops the body at walls in all four directions while letting it slide along the free axis.
+
+```js
+var w = P.world({ gravity: {x:0, y:0} });
+w.addTiles(P.tiles(grid, 32, 32, {
+  solid: function (ch) { return ch === "#" || ch === "%" || ch === "B"; }
+}));
+var hero = w.add({ x: 48, y: 48, r: 11 });   // r ~ 1/3 of the cell slides well
+hero.vx = 90; hero.vy = 0;                   // set from input each frame
+```
+
+Set `vx/vy` from the input every frame; `bounce` 0 (default) stops dead at walls. The classic corner "lane assist" (nudging into the open corridor when clipping a corner) is game-side: when blocked on the moving axis and offset by less than ~40% of a cell on the other axis, steer toward that lane's center.
+
+### Flow fields (chase AI)
+
+`P.flow(tiles, cx, cy, opts)` floods a BFS distance field from a source cell (usually the player's). Chasers read `next()` and walk the gradient down — no per-body A*.
+
+```js
+var flow = P.flow(tiles, playerCol, playerRow);   // recompute on maze change or ~2x/s
+var step = flow.next(enemyCol, enemyRow);         // {c, r} one cell closer, or null
+```
+
+`opts.passable(ch)` overrides walkability (a ghost that crosses soft blocks passes its own predicate); unreachable cells read `Infinity`. Cost is O(cells) per recompute, order-independent and deterministic.
+
 ### Rope / cloth / softbody (Verlet)
 
 ```js
@@ -310,6 +336,7 @@ rope.step(dt);       // opts: gravity, damp, bounds, bounce
 - **Platformer:** hero = AABB body (`friction` 1, `bounce` 0); move by setting `vx`; jump when `grounded`; camera `follow`s hero.
 - **Breakout:** paddle = `static` body you reposition; ball = circle with `bounce: 1`; bricks = dynamic-mass boxes you `remove()` on hit (or a tilemap + `setTile`).
 - **Top-down shooter:** `gravity: {x:0, y:0}`, `drag` for friction feel; enemies/bullets in pools; `sensor` bodies for pickups.
+- **Bomberman:** top-down + tiles with a custom `solid` (soft blocks and live bombs included); bombs, blasts and exits are grid state, not bodies; chasers follow a `P.flow` field; explosions walk the grid outward from the blast center, one soft block deep.
 
 ## 16. Native canvas (fullscreen, API 28)
 

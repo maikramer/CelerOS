@@ -296,6 +296,32 @@ tiles.tileAt(px, py); tiles.setTile(col, row, "#");
 
 Resolução por eixo, `grounded` no pouso, plataforma one-way só pega quem cai de cima (`body.drop = true` para atravessar de propósito).
 
+### Jogos de grade (top-down)
+
+O mesmo tilemap conduz movimento estilo Bomberman/Zelda: `gravity: {x:0, y:0}` e a resolução por eixo para o corpo nas paredes nas quatro direções, deslizando no eixo livre.
+
+```js
+var w = P.world({ gravity: {x:0, y:0} });
+w.addTiles(P.tiles(grid, 32, 32, {
+  solid: function (ch) { return ch === "#" || ch === "%" || ch === "B"; }
+}));
+var heroi = w.add({ x: 48, y: 48, r: 11 });  // r ~ 1/3 da célula desliza bem
+heroi.vx = 90; heroi.vy = 0;                 // sete pelo input a cada frame
+```
+
+Sete `vx/vy` pelo input a cada frame; `bounce` 0 (default) para seco na parede. A "ajuda de canto" clássica (conduzir para o corredor aberto quando raspar numa quina) fica no jogo: bloqueado no eixo do movimento e desalinhado menos que ~40% da célula no outro eixo, esterça para o centro da lane.
+
+### Campos de fluxo (IA de perseguição)
+
+`P.flow(tiles, cx, cy, opts)` inunda um campo de distância BFS a partir de uma célula (tipicamente a do jogador). Perseguidores leem `next()` e descem o gradiente — sem A* por corpo.
+
+```js
+var flow = P.flow(tiles, colDoJogador, linhaDoJogador);  // recompute ao mudar o labirinto ou ~2x/s
+var passo = flow.next(colDoInimigo, linhaDoInimigo);     // {c, r} uma célula mais perto, ou null
+```
+
+`opts.passable(ch)` troca a andabilidade (um fantasma que atravessa bloco macio passa o próprio predicado); células inalcançáveis leem `Infinity`. Custo O(células) por recompute, determinístico e independente de ordem.
+
 ### Corda / pano / softbody (Verlet)
 
 ```js
@@ -310,6 +336,7 @@ corda.step(dt);      // opts: gravity, damp, bounds, bounce
 - **Platformer:** herói = corpo AABB (`friction` 1, `bounce` 0); mova setando `vx`; pule quando `grounded`; a câmera dá `follow` no herói.
 - **Breakout:** raquete = corpo `static` que você reposiciona; bola = círculo com `bounce: 1`; tijolos = caixas que você `remove()` ao acertar (ou tilemap + `setTile`).
 - **Shooter top-down:** `gravity: {x:0, y:0}`, `drag` para dar atrito; inimigos/balas em pools; corpos `sensor` para pickups.
+- **Bomberman:** top-down + tiles com `solid` custom (bloco macio e bomba viva inclusos); bombas, labaredas e saída são estado da grade, não corpos; perseguidores seguem um campo `P.flow`; a explosão anda pela grade para fora a partir do centro, um bloco macio de profundidade.
 
 ## 16. Canvas nativo (tela cheia, API 28)
 

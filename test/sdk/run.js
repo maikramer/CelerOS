@@ -145,8 +145,8 @@ function check(name, ok, detail) {
 
 // ---------------------------------------------------------------- physics --
 (function () {
-    console.log('SDK physics (tools/sdk/engine/physics.js):');
-    var P = require('../../tools/sdk/engine/physics.js');
+    console.log('SDK physics (tools/sdk/engine/celeros.physics.js):');
+    var P = require('../../tools/sdk/engine/celeros.physics.js');
 
     check('exporta version', typeof P.version === 'string' && !!P.version);
 
@@ -265,6 +265,95 @@ function check(name, ok, detail) {
     check('one-way deixa passar subindo', riseMin < 30, 'minY=' + riseMin.toFixed(1));
     check('tileAt le o grid', wt2.tiles.tileAt(40, 56) === '#' &&
           wt2.tiles.tileAt(40, 26) === '=' && wt2.tiles.tileAt(200, 8) === null);
+
+    // top-down (gravity 0 + tiles): para na parede nas 4 direcoes e desliza
+    // no eixo livre — a receita bomberman/zelda do guia
+    var TD = [
+        '#######',
+        '#.....#',
+        '#.##..#',
+        '#.....#',
+        '#..#..#',
+        '#######'
+    ];
+    var wt3 = P.world({ gravity: { x: 0, y: 0 }, maxSub: 4 });
+    wt3.addTiles(P.tiles(TD, 16, 16));
+    var walker = wt3.add({ x: 24, y: 24, r: 5 });   // celula (1,1), livre
+    // baixo: corredor da col 1 livre ate a borda (linha 5) — desliza reto
+    for (var t1 = 0; t1 < 90; t1++) { walker.vy = 60; wt3.step(1 / 60); }
+    check('top-down desce o corredor ate a parede de baixo',
+          walker.y > 70 && walker.y < 78 && walker.x < 32,
+          'x=' + walker.x.toFixed(1) + ' y=' + walker.y.toFixed(1));
+    // direita: da celula (1,4) ate o pilar da col 3 (linha 4)
+    walker.vy = 0;
+    for (var t2 = 0; t2 < 60; t2++) { walker.vx = 80; wt3.step(1 / 60); }
+    check('top-down para na parede a direita', walker.x > 40 && walker.x < 47,
+          'x=' + walker.x.toFixed(1));
+    // esquerda: ate a borda da col 0
+    for (var t3 = 0; t3 < 60; t3++) { walker.vx = -80; wt3.step(1 / 60); }
+    check('top-down para na borda a esquerda', walker.x > 18 && walker.x <= 21.01,
+          'x=' + walker.x.toFixed(1));
+
+    // P.flow: campo BFS do alvo — distancias contornam parede, next desce o
+    // gradiente, barreira total fica inalcancavel, passable customiza
+    var FL = [
+        '#####',
+        '#...#',
+        '#.#.#',
+        '#...#',
+        '#####'
+    ];
+    var fl = P.tiles(FL, 16, 16);
+    var flow = P.flow(fl, 1, 1);                    // alvo na celula (1,1)
+    check('flow: origem dist 0', flow.dist(1, 1) === 0);
+    check('flow: vizinha imediata dist 1', flow.dist(2, 1) === 1);
+    // (3,3) -> (1,1): pela direita sao 4 passos contornando o pilar (2,2)
+    check('flow: contorna o pilar (dist 4)', flow.dist(3, 3) === 4,
+          'dist=' + flow.dist(3, 3));
+    check('flow: parede e inalcancavel', flow.dist(2, 2) === Infinity);
+    var n1 = flow.next(3, 3);
+    check('flow: next desce o gradiente', n1 && flow.dist(n1.c, n1.r) === 3,
+          n1 ? '-> (' + n1.c + ',' + n1.r + ')' : 'null');
+    check('flow: next na origem e null', flow.next(1, 1) === null);
+    check('flow: next fora do grid e null', flow.next(9, 9) === null);
+    // seguindo next() chega ao alvo em dist passos
+    var c = 3, r = 3, steps = 0, ok = true;
+    while (steps < 20) {
+        var st = flow.next(c, r);
+        if (!st) break;
+        c = st.c; r = st.r; steps++;
+    }
+    check('flow: trilha de next chega na origem', c === 1 && r === 1 && steps === 4,
+          'fim (' + c + ',' + r + ') em ' + steps + ' passos');
+    // determinismo: mesmo grid, mesmo campo
+    var flow2 = P.flow(fl, 1, 1);
+    var same = true;
+    for (var fc = 0; fc < 5 && same; fc++)
+        for (var fr = 0; fr < 5; fr++)
+            if (flow.dist(fc, fr) !== flow2.dist(fc, fr)) { same = false; break; }
+    check('flow: deterministico', same === true);
+    // barreira total: alvo murado nao alcancava nada fora do muro
+    var WALL = [
+        '#####',
+        '##.##',
+        '#####',
+        '#...#',
+        '#####'
+    ];
+    var flowW = P.flow(P.tiles(WALL, 16, 16), 2, 1);
+    check('flow: barreira total deixa inalcancavel', flowW.dist(1, 3) === Infinity);
+    // passable custom: fantasma atravessa '%' (bloco macio) — o tilemap do
+    // jogo declara '%' solido; o flow dele ignora e passa
+    var GH = [
+        '#####',
+        '#.%.#',
+        '#####'
+    ];
+    var ghT = P.tiles(GH, 16, 16, { solid: function (ch) { return ch === '#' || ch === '%'; } });
+    var flowG1 = P.flow(ghT, 1, 1);
+    check('flow: solido do tilemap vale (macio bloqueia)', flowG1.dist(3, 1) === Infinity);
+    var flowG2 = P.flow(ghT, 1, 1, { passable: function (ch) { return ch !== '#'; } });
+    check('flow: passable custom atravessa o macio (dist 2)', flowG2.dist(3, 1) === 2);
 
     // verlet: corda presa conserva o comprimento total
     var pts = [];
