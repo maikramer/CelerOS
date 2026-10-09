@@ -7,8 +7,8 @@
 // ao musicPos (com guarda monotonia no restart do loop) ou, sem musica,
 // deriva do millis — o jogo pulsa igual no emulador e no alto-falante.
 
-var E = require("engine");
-var P = require("physics");
+var E = require("celeros.engine");
+var P = require("celeros.physics");
 var NV = require("niveis");
 var S = System;
 

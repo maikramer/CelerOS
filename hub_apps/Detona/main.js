@@ -12,7 +12,7 @@ if (typeof __harness !== "undefined") {
                          ia: require("ia"), E: null };   // E entra depois do require abaixo
 }
 
-var E = require("engine");
+var E = require("celeros.engine");
 var arena = require("arena");
 var NV = require("niveis");
 var ia = require("ia");

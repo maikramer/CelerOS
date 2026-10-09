@@ -10,9 +10,9 @@
 // deterministico. Contato com o jogador = ferir(); labareda mata (o
 // arena.ferirInimigosNa chama de volta pra ca).
 
-var E = require("engine");
+var E = require("celeros.engine");
 var arena = require("arena");
-var P = require("physics");
+var P = require("celeros.physics");
 var NV = require("niveis");
 var S = System;
 
