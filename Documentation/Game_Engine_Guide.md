@@ -87,7 +87,14 @@ E.init({ dir: "MyGame",   // app folder name → asset base (/local/apps/MyGame/
 E.run(scenes, "titulo");
 ```
 
-A scene is `{ enter, update(dt), draw, exit }` — all optional. `E.goto("fim")` switches at the start of the next frame (running the old scene's `exit` first); `E.quit()` ends `E.run()`. Use `E.data` for state that must survive scene changes, and `E.sceneName`/`E.dt`/`E.fps` for introspection.
+A scene is `{ enter, update(dt), draw, exit }` — all optional. `E.goto("fim")` switches at the start of the next frame (running the old scene's `exit` first); `E.quit()` ends `E.run()`. Use `E.data` for state that must survive scene changes (it lives for the whole app), and `E.sceneName`/`E.dt`/`E.fps` for introspection. A scene may override the global frame target with `fps` (menus at 30, the action uncapped with `fps: 0`):
+
+```js
+E.run({
+  menu:    { fps: 30, update, draw },
+  jogando: { fps: 0,  update, draw },   // runs as fast as the board allows
+}, "menu");
+```
 
 Per frame the engine runs, in order: pending scene switch → dt/fps → input poll → audio keep-alive → camera → fx → timers → tweens → `update(dt)` → `draw()` → frame pacing.
 
@@ -183,7 +190,7 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = chroma 
 
 - Assets are probed in `E.spr.bases` (set by `init({dir})` to `/local/apps/<dir>/assets/` and `/sd/apps/<dir>/assets/`).
 - **Transparency convention:** masterize PNGs with a *pure black* background (the chroma key) and turn interior blacks into near-black `(0,0,8)` — same trick as Supernova. Only slot-backed sprites support the key; painter fallbacks draw whatever you draw.
-- More defs than slots → extras become painter-only automatically.
+- More defs than slots → extras become painter-only automatically. `E.spr.backed(name)` tells you whether a sprite got a real slot (fast chroma-key blit) or will draw through its painter.
 
 Flipbook animation without extra slots: frames are painter functions (or loaded sprite names):
 
@@ -197,9 +204,10 @@ var boom = E.anim([function (x, y) { ... }, function (x, y) { ... }], 12, false)
 ```js
 E.fx.burst(x, y, { n: 14, colors: [0xFFE0, 0xFD20], speed: 120, life: 0.6,
                    grav: 200, shape: "dot" });   // dot | spark | ring
+E.fx.ring(x, y, { speed: 700, color: 0xFFE0 });  // shockwave (expanding circle)
 E.fx.popText(x, y, "+10", { color: 0xFFE0 });    // floating score
 E.fx.flash(0xFFFF, 150);                         // fullscreen flash
-var stars = E.fx.stars(60);                      // parallax starfield (keep the ref)
+var stars = E.fx.stars(60, { colors: [0x39E7, 0xC5F9] });  // parallax (keep the ref)
 stars.update(E.dt); stars.draw();
 E.fx.draw();                                     // call at the END of your scene draw
 ```
@@ -334,7 +342,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 - Engine+physics+game go over 48 KB → keep `"requires": ["psram"]`. Sizes today: `engine.js` ≈ 33 KB, `physics.js` ≈ 16 KB.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses.
 - Full-screen `fillScreen` + redraw everything at 30 fps is fine on the S3 boards; for few moving objects prefer dirty-erase (erase old position, draw new).
-- `world.step` is O(n²) on body count — keep it under ~30 bodies, or split into groups with masks.
+- `world.step` is O(n²) on body count in the worst case, but a **sweep-and-prune** (bodies sorted by x each substep, early break on x distance) keeps it near-linear for spread-out scenes — shooters with ~40 bodies run comfortably.
 - `E.audio.sfx` melodies are **blocking** (`playTone`): keep them under ~300 ms.
 - Pure-JS bursts longer than ~1 s trip the firmware exec-timeout — the `E.run` loop yields every frame, so stay inside it.
 

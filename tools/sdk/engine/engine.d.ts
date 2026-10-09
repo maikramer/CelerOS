@@ -69,6 +69,7 @@ declare namespace E {
 
     // ----------------------------------------------------- cenas e loop --
     interface Scene {
+        fps?: number;        // sobrepoe o alvo global nesta cena (0 = sem teto)
         enter?: () => void;
         update?: (dt: number) => void;
         draw?: () => void;
@@ -148,6 +149,8 @@ declare namespace E {
         bases: string[];
         load(defs: SpriteDef[], opts?: { bases?: string[] }): Record<string, SpriteSlot>;
         has(name: string): boolean;
+        /** true se esta num slot real (blit com cor-chave); false = painter */
+        backed(name: string): boolean;
         blit(name: string, x: number, y: number,
              opts?: { key?: number; cx?: boolean; cy?: boolean }): void;
         free(name: string): void;
@@ -220,7 +223,14 @@ declare namespace E {
             color?: number; life?: number; font?: number; screen?: boolean;
         }): void;
         flash(color: number, ms?: number): void;
-        stars(n: number, o?: { w?: number; h?: number; vy?: number; color?: number }): {
+        /** onda de choque: anel que expande (speed px/s) e some */
+        ring(x: number, y: number, o?: {
+            r0?: number; speed?: number; color?: number; life?: number;
+        }): void;
+        stars(n: number, o?: {
+            w?: number; h?: number; vy?: number; color?: number;
+            colors?: number[];
+        }): {
             update(dt: number): void;
             draw(): void;
         };

@@ -91,11 +91,14 @@ P.world = function (opts) {
     w.step = function (dt) {
         if (dt <= 0) return;
         var i, b;
-        var minHalf = 1e9, maxDisp = 0;
+        var minHalf = 1e9, maxDisp = 0, maxExt = 0;
         for (i = 0; i < bodies.length; i++) {
             b = bodies[i];
+            var hw = halfW(b), hh = halfH(b);
+            if (hw > maxExt) maxExt = hw;
+            if (hh > maxExt) maxExt = hh;
             if (b.static) continue;
-            var h = halfW(b) < halfH(b) ? halfW(b) : halfH(b);
+            var h = hw < hh ? hw : hh;
             if (h < minHalf) minHalf = h;
             var sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
             if (sp * dt > maxDisp) maxDisp = sp * dt;
@@ -125,12 +128,27 @@ P.world = function (opts) {
             }
             if (w.tiles) tilesCollide(w, sdt);
             if (w.bounds && w.walls !== 'none') wallsCollide(w, sdt);
+            // sweep-and-prune: ordena por x (insertion; entre sub-passos o
+            // array ja esta quase ordenado = O(n)) e o loop interno corta
+            // quando a distancia em x passa de 2x a maior meia-largura
+            for (i = 1; i < bodies.length; i++) {
+                var key = bodies[i];
+                var j = i - 1;
+                while (j >= 0 && bodies[j].x > key.x) {
+                    bodies[j + 1] = bodies[j];
+                    j--;
+                }
+                bodies[j + 1] = key;
+            }
+            var cut = maxExt * 2 + 1;
             for (i = 0; i < bodies.length; i++) {
-                for (var j = i + 1; j < bodies.length; j++) {
-                    var a = bodies[i], c = bodies[j];
-                    if (a.static && c.static) continue;
-                    if (!(a.mask & c.group) || !(c.mask & a.group)) continue;
-                    resolvePair(a, c);
+                var ai = bodies[i];
+                for (var j2 = i + 1; j2 < bodies.length; j2++) {
+                    var cj = bodies[j2];
+                    if (cj.x - ai.x > cut) break;
+                    if (ai.static && cj.static) continue;
+                    if (!(ai.mask & cj.group) || !(cj.mask & ai.group)) continue;
+                    resolvePair(ai, cj);
                 }
             }
         }

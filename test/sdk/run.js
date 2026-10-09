@@ -135,6 +135,12 @@ function check(name, ok, detail) {
     for (var i = 0; i < r3.frames[0].fb.length; i++)
         if (r3.frames[0].fb[i] !== r3.frames[1].fb[i]) d01++;
     check('diff detecta o relogio andando (frame 0 -> 1100)', d01 > 0, 'pixels=' + d01);
+
+    // Supernova 2.0 (engine do SDK + fisica): roda o smoke completo dele
+    // (titulo -> morte -> fim -> de novo -> detonacao -> pausa) headless;
+    // o watchdog e do proprio test.js do app
+    var r4 = runAppFolder(path.join(ROOT, 'hub_apps', 'Supernova'));
+    check('Supernova roda limpo no harness (smoke completo)', r4.err === null, r4.err);
 })();
 
 // ---------------------------------------------------------------- physics --
@@ -297,6 +303,21 @@ function check(name, ok, detail) {
     var orb = ww.add({ x: 239, y: 100, r: 4, vx: 40 });
     for (var n10 = 0; n10 < 20; n10++) ww.step(1 / 60);
     check('walls wrap teletransporta pela borda', orb.x < 20, 'x=' + orb.x.toFixed(1));
+
+    // sweep-and-prune: sensor encontra o par isolado no meio de 20 estaticos
+    var ws = P.world({ gravity: { x: 0, y: 0 } });
+    var hits6 = 0;
+    var lone = ws.add({ x: 20, y: 200, r: 6, vx: 90, sensor: true,
+                        onCollide: function () { hits6++; } });
+    ws.add({ x: 80, y: 200, r: 6, static: true, sensor: true });
+    for (var q2 = 0; q2 < 20; q2++) {
+        ws.add({ x: 150 + (q2 % 10) * 12, y: 20 + Math.floor(q2 / 10) * 12,
+                 r: 5, static: true, sensor: true });
+    }
+    for (var n11 = 0; n11 < 60; n11++) ws.step(1 / 60);
+    check('sweep-and-prune: par isolado na multidao detecta e atravessa',
+          hits6 >= 3 && hits6 <= 20 && lone.x > 80,
+          'hits=' + hits6 + ' x=' + lone.x.toFixed(1));
 })();
 
 // ----------------------------------------------------------------- engine --
@@ -506,6 +527,37 @@ function check(name, ok, detail) {
     check('math: clamp/lerp/wrap',
           r.grabbed.math[0] === 3 && r.grabbed.math[1] === 5 && r.grabbed.math[2] === 10,
           JSON.stringify(r.grabbed.math));
+
+    // fps por cena: cena com fps 10 avanca o relogio ~100 ms por frame
+    r = runEngine(
+        'var E = require("engine"); E.init({ fps: 60 });' +
+        'var frames = 0;' +
+        'E.run({ lento: { fps: 10, update: function () {' +
+        '  frames++; if (frames >= 6) E.quit(); } } }, "lento");' +
+        '__harness.grab("ms", System.millis());');
+    check('scene.fps sobrepoe o alvo global (5 frames a 10 fps ~ +500 ms)',
+          r.grabbed.ms >= 1480 && r.grabbed.ms <= 1650, 'ms=' + r.grabbed.ms);
+
+    // E.fx.ring: onda de choque com expansao propria
+    r = runEngine(
+        'var E = require("engine"); E.init({});' +
+        'E.fx.ring(100, 100, { speed: 500, color: 0xFFE0, life: 0.5 });' +
+        'var p = null;' +
+        'for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) p = E.fx._parts[i];' +
+        '__harness.grab("ring", [p && p.shape, p && p.grow]);');
+    check('fx.ring cria onda com grow configurado',
+          r.grabbed.ring[0] === 'ring' && r.grabbed.ring[1] === 500,
+          JSON.stringify(r.grabbed.ring));
+
+    // spr.backed: sem createSprite o sprite existe, mas nao tem slot real
+    r = runEngine(
+        'var E = require("engine"); E.init({});' +
+        'E.spr.load([{ name: "x", file: "x", w: 4, h: 4, paint: function () {} }]);' +
+        '__harness.grab("backed", [E.spr.has("x"), E.spr.backed("x")]);',
+        function (env) { delete env.System.createSprite; delete env.System.drawPNG; });
+    check('spr.backed distingue slot real de painter',
+          r.grabbed.backed[0] === true && r.grabbed.backed[1] === false,
+          JSON.stringify(r.grabbed.backed));
 })();
 
 // -------------------------------------------------------- scaffold --game --

@@ -233,9 +233,7 @@ E.run = function (scenes, first) {
     E._scenes = scenes;
     E._quit = false;
     E._next = null;
-    E.data = {};
     var cur = null;
-    var frameMin = E.fpsTarget > 0 ? Math.floor(1000 / E.fpsTarget) : 0;
 
     function enter(name) {
         cur = scenes[name];
@@ -277,6 +275,9 @@ E.run = function (scenes, first) {
         if (cur && cur.update) cur.update(dt);
         if (E._quit) break;
         if (cur && cur.draw) cur.draw();
+        // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto)
+        var fps = cur && cur.fps !== undefined ? cur.fps : E.fpsTarget;
+        var frameMin = fps > 0 ? Math.floor(1000 / fps) : 0;
         var spent = S.millis() - now;
         S.delay(spent < frameMin ? frameMin - spent : 1);
     }
@@ -480,6 +481,13 @@ E.spr = {
     },
 
     has: function (name) { return !!E.spr._slots[name]; },
+
+    // true se o sprite esta num slot real (blit com cor-chave rapido);
+    // false = o blit vai cair no painter procedural
+    backed: function (name) {
+        var s = E.spr._slots[name];
+        return !!(s && s.id);
+    },
 
     // opts: { key: cor-chave (default preto), cx/cy: centralizar }
     blit: function (name, x, y, opts) {
@@ -742,7 +750,7 @@ E.fx = {
         for (var i = 0; i < max; i++) {
             this._parts.push({ dead: true, x: 0, y: 0, vx: 0, vy: 0, t: 0,
                                life: 1, size: 2, color: 0xFFFF, grav: 0,
-                               drag: 0, shape: 'dot' });
+                               drag: 0, shape: 'dot', grow: 30 });
         }
         this._floaters = [];
         this._flashT = 0;
@@ -778,6 +786,25 @@ E.fx = {
         }
     },
 
+    // onda de choque: anel que expande (speed px/s) e some
+    ring: function (x, y, o) {
+        o = o || {};
+        var p = this._spawn();
+        if (!p) return;
+        p.x = x;
+        p.y = y;
+        p.vx = 0;
+        p.vy = 0;
+        p.t = 0;
+        p.life = o.life || 0.55;
+        p.size = o.r0 === undefined ? 6 : o.r0;
+        p.grav = 0;
+        p.drag = 0;
+        p.color = o.color === undefined ? 0xFFFF : o.color;
+        p.shape = 'ring';
+        p.grow = o.speed === undefined ? 300 : o.speed;
+    },
+
     // texto flutuante (score, dano) que sobe e some
     popText: function (x, y, str, o) {
         o = o || {};
@@ -795,7 +822,8 @@ E.fx = {
         this._flashT = this._flashDur;
     },
 
-    // campo de estrelas parallax (2 camadas): guardado pelo chamador
+    // campo de estrelas parallax (2 camadas): guardado pelo chamador;
+    // opts {w, h, vy, color} ou {colors: [perto, longe]}
     stars: function (n, o) {
         o = o || {};
         var w = o.w || E.W, h = o.h || E.H;
@@ -804,7 +832,8 @@ E.fx = {
             pts.push({
                 x: Math.random() * w, y: Math.random() * h,
                 layer: i % 2 ? 1 : 0.45,
-                color: o.color || 0x7BEF
+                color: o.colors ? o.colors[i % 2] :
+                       (o.color === undefined ? 0x7BEF : o.color)
             });
         }
         return {
@@ -876,7 +905,7 @@ E.fx = {
             if (p.shape === 'spark') {
                 E.gfx.line(p.x, p.y, p.x - p.vx * 0.05, p.y - p.vy * 0.05, col);
             } else if (p.shape === 'ring') {
-                S.drawCircle(x, y, Math.round(p.size + p.t * 30), col);
+                S.drawCircle(x, y, Math.round(p.size + p.t * p.grow), col);
             } else {
                 S.fillCircle(x, y, Math.max(1, Math.round(p.size * k)), col);
             }
@@ -891,8 +920,10 @@ E.fx = {
         }
         if (this._flashT > 0) {
             var q = Math.round(100 * (1 - this._flashT / this._flashDur));
-            var c = E.caps.wide ? S.mixColor(this._flashColor, 0x0000, q) : this._flashColor;
-            S.fillRect(0, 0, E.W, E.H, c);
+            if (q < 70) {   // some antes de virar veu cinza: flash e curto
+                var c = E.caps.wide ? S.mixColor(this._flashColor, 0x0000, q) : this._flashColor;
+                S.fillRect(0, 0, E.W, E.H, c);
+            }
         }
     }
 };
