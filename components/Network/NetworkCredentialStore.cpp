@@ -1,8 +1,8 @@
 #include "NetworkCredentialStore.h"
+#include "NetworkClock.h"
 #include "NVS.h"
 #include "CommonErrorCodes.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
@@ -70,7 +70,7 @@ ErrorCode NetworkCredentialStore::saveNetwork(const KnownNetwork& network) {
         
         // Add new network
         _networks.push_back(network);
-        ESP_LOGI(TAG, "Added new network: %s", network.ssid);
+        ESP_LOGI(TAG, "Added network: %s", network.ssid);
     }
 
     // Persist to NVS
@@ -87,22 +87,21 @@ ErrorCode NetworkCredentialStore::saveNetwork(const KnownNetwork& network) {
 }
 
 ErrorCode NetworkCredentialStore::removeNetwork(const std::string& ssid) {
-    if (!_initialized) {
-        return CommonErrorCodes::NotInitialized;
+    ErrorCode err = CommonErrorCodes::None;
+    KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        if (err == CommonErrorCodes::FileNotFound) {
+            ESP_LOGW(TAG, "Network not found: %s", ssid.c_str());
+        }
+        return err;
     }
 
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        ESP_LOGW(TAG, "Network not found: %s", ssid.c_str());
-        return CommonErrorCodes::FileNotFound;
-    }
-
-    // Remove from memory
-    _networks.erase(_networks.begin() + index);
+    // Remove from memory (indice no cache via aritmetica de ponteiro)
+    _networks.erase(_networks.begin() + (net - _networks.data()));
     ESP_LOGI(TAG, "Removed network: %s", ssid.c_str());
 
     // Persist to NVS
-    ErrorCode err = saveToNvs();
+    err = saveToNvs();
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description().c_str());
         return err;
@@ -151,12 +150,13 @@ std::vector<KnownNetwork> NetworkCredentialStore::getKnownNetworks() const {
 }
 
 ErrorCode NetworkCredentialStore::getNetwork(const std::string& ssid, KnownNetwork& network) const {
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        return CommonErrorCodes::FileNotFound;
+    ErrorCode err = CommonErrorCodes::None;
+    const KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        return err;
     }
 
-    network = _networks[index];
+    network = *net;
     return CommonErrorCodes::None;
 }
 
@@ -165,18 +165,15 @@ bool NetworkCredentialStore::isKnownNetwork(const std::string& ssid) const {
 }
 
 ErrorCode NetworkCredentialStore::setNetworkPriority(const std::string& ssid, int8_t priority) {
-    if (!_initialized) {
-        return CommonErrorCodes::NotInitialized;
-    }
-
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        return CommonErrorCodes::FileNotFound;
+    ErrorCode err = CommonErrorCodes::None;
+    KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        return err;
     }
 
     // Clamp priority to valid range
     priority = std::max<int8_t>(0, std::min<int8_t>(100, priority));
-    _networks[index].priority = priority;
+    net->priority = priority;
 
     ESP_LOGI(TAG, "Set priority for %s to %d", ssid.c_str(), priority);
 
@@ -184,21 +181,18 @@ ErrorCode NetworkCredentialStore::setNetworkPriority(const std::string& ssid, in
 }
 
 ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, uint32_t timestamp) {
-    if (!_initialized) {
-        return CommonErrorCodes::NotInitialized;
-    }
-
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        return CommonErrorCodes::FileNotFound;
+    ErrorCode err = CommonErrorCodes::None;
+    KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        return err;
     }
 
     // Use current time if timestamp is 0
     if (timestamp == 0) {
-        timestamp = static_cast<uint32_t>(esp_timer_get_time() / 1000000);  // Convert to seconds
+        timestamp = nowSeconds();  // Convert to seconds
     }
 
-    _networks[index].lastConnected = timestamp;
+    net->lastConnected = timestamp;
     ESP_LOGD(TAG, "Updated lastConnected for %s to %lu", ssid.c_str(), 
              static_cast<unsigned long>(timestamp));
 
@@ -211,32 +205,26 @@ ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, u
 }
 
 ErrorCode NetworkCredentialStore::updateLastRssi(const std::string& ssid, int8_t rssi) {
-    if (!_initialized) {
-        return CommonErrorCodes::NotInitialized;
+    ErrorCode err = CommonErrorCodes::None;
+    KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        return err;
     }
 
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        return CommonErrorCodes::FileNotFound;
-    }
+    net->lastRssi = rssi;
 
-    _networks[index].lastRssi = rssi;
-    
     // Don't save to NVS for RSSI updates (too frequent)
     return CommonErrorCodes::None;
 }
 
 ErrorCode NetworkCredentialStore::setAutoConnect(const std::string& ssid, bool autoConnect) {
-    if (!_initialized) {
-        return CommonErrorCodes::NotInitialized;
+    ErrorCode err = CommonErrorCodes::None;
+    KnownNetwork* net = findNetwork(ssid, err);
+    if (net == nullptr) {
+        return err;
     }
 
-    int index = findNetworkIndex(ssid);
-    if (index < 0) {
-        return CommonErrorCodes::FileNotFound;
-    }
-
-    _networks[index].autoConnect = autoConnect;
+    net->autoConnect = autoConnect;
     ESP_LOGI(TAG, "Set autoConnect for %s to %s", ssid.c_str(), autoConnect ? "true" : "false");
 
     return saveToNvs();
@@ -497,6 +485,29 @@ int NetworkCredentialStore::findNetworkIndex(const std::string& ssid) const {
         }
     }
     return -1;
+}
+
+// Guarda compartilhada dos metodos que operam numa rede conhecida: valida o
+// init e resolve o SSID para o registro no cache (nullptr = err diz o que
+// houve: NotInitialized/FileNotFound). Substituia o par
+// "if (!_initialized)... findNetworkIndex < 0..." repetido em 7 metodos.
+KnownNetwork* NetworkCredentialStore::findNetwork(const std::string& ssid, ErrorCode& err) {
+    if (!_initialized) {
+        err = CommonErrorCodes::NotInitialized;
+        return nullptr;
+    }
+    int index = findNetworkIndex(ssid);
+    if (index < 0) {
+        err = CommonErrorCodes::FileNotFound;
+        return nullptr;
+    }
+    err = CommonErrorCodes::None;
+    return &_networks[static_cast<size_t>(index)];
+}
+
+const KnownNetwork* NetworkCredentialStore::findNetwork(const std::string& ssid, ErrorCode& err) const {
+    // delega ao nao-const: nenhum caminho muta o cache aqui
+    return const_cast<NetworkCredentialStore*>(this)->findNetwork(ssid, err);
 }
 
 std::string NetworkCredentialStore::getNetworkKey(size_t index) {

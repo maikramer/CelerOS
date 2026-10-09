@@ -1,5 +1,6 @@
 #include "NetworkManager.h"
 #include "WifiConnection.h"
+#include "NetworkClock.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -174,7 +175,7 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
 
     if (err == CommonErrorCodes::None) {
         _stats.totalConnections++;
-        _connectionStartTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        _connectionStartTime = nowSeconds();
 
         // Save credentials if requested
         if (saveOnSuccess) {
@@ -261,7 +262,7 @@ ErrorCode NetworkManager::disconnect() {
 
     // Update uptime stats
     if (_connectionStartTime > 0) {
-        uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        uint32_t now = nowSeconds();
         _stats.uptimeSeconds += (now - _connectionStartTime);
         _connectionStartTime = 0;
     }
@@ -313,6 +314,26 @@ bool NetworkManager::isKnownNetwork(const std::string& ssid) const {
 
 // ========== Scanning ==========
 
+// Absorve o resultado de um scan para _lastScan marcando isKnownNetwork
+// (loop identico nos caminhos bloqueante, background e evento async).
+void NetworkManager::absorbScanResults(const wifi_ap_record_t* ap_list, int count) {
+    _lastScan.clear();
+    for (int i = 0; i < count; i++) {
+        ScannedNetwork net(ap_list[i]);
+        net.isKnown = isKnownNetwork(net.ssid);
+        _lastScan.push_back(net);
+    }
+}
+
+void NetworkManager::absorbScanResults(const std::vector<ScannedNetwork>& networks) {
+    _lastScan.clear();
+    for (const auto& net : networks) {
+        ScannedNetwork scanned = net;
+        scanned.isKnown = isKnownNetwork(scanned.ssid);
+        _lastScan.push_back(scanned);
+    }
+}
+
 ErrorCode NetworkManager::startScan(bool blocking) {
     if (!_initialized) {
         return CommonErrorCodes::NotInitialized;
@@ -324,23 +345,18 @@ ErrorCode NetworkManager::startScan(bool blocking) {
     if (blocking) {
         wifi_ap_record_t ap_list[20];
         int count = _wifiConnection->scan(ap_list, 20);
-        
+
         if (count < 0) {
             setState(_wifiConnection->isConnected() ? NetworkState::Connected : NetworkState::Disconnected);
             return CommonErrorCodes::WifiScanFailed;
         }
 
-        _lastScan.clear();
-        for (int i = 0; i < count; i++) {
-            ScannedNetwork net(ap_list[i]);
-            net.isKnown = isKnownNetwork(net.ssid);
-            _lastScan.push_back(net);
-        }
+        absorbScanResults(ap_list, count);
 
         setState(_wifiConnection->isConnected() ? NetworkState::Connected : NetworkState::Disconnected);
-        _lastScanTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        _lastScanTime = nowSeconds();
         onScanCompleted.trigger(_lastScan);
-        
+
         return CommonErrorCodes::None;
     } else {
         return _wifiConnection->startScanAsync();
@@ -384,7 +400,7 @@ NetworkManagerStats NetworkManager::getStats() const {
     
     // Update uptime if currently connected
     if (_connectionStartTime > 0) {
-        uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        uint32_t now = nowSeconds();
         stats.uptimeSeconds += (now - _connectionStartTime);
     }
     
@@ -503,7 +519,7 @@ void NetworkManager::backgroundTaskFunc(void* param) {
     const uint32_t MAX_BACKOFF_SECONDS = 60;  // Max wait time between retries
 
     while (self->_backgroundTaskRunning) {
-        uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        uint32_t now = nowSeconds();
         uint32_t timeSinceLastScan = now - self->_lastScanTime;
 
         // Don't do anything if we're currently in the middle of scanning or connecting
@@ -576,12 +592,12 @@ void NetworkManager::performBackgroundScan() {
         return;
     }
 
-    _lastScanTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+    _lastScanTime = nowSeconds();
 
     // Perform scan without changing state if connected
     wifi_ap_record_t ap_list[20];
     int count = _wifiConnection->scan(ap_list, 20);
-    
+
     if (count < 0) {
         ESP_LOGW(TAG, "Background scan failed");
         return;
@@ -590,12 +606,7 @@ void NetworkManager::performBackgroundScan() {
     _stats.scanCount++;
 
     // Update scan results
-    _lastScan.clear();
-    for (int i = 0; i < count; i++) {
-        ScannedNetwork net(ap_list[i]);
-        net.isKnown = isKnownNetwork(net.ssid);
-        _lastScan.push_back(net);
-    }
+    absorbScanResults(ap_list, count);
 
     // Check for better network if roaming is enabled
     if (_config.enableRoaming && isConnected()) {
@@ -712,7 +723,7 @@ void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionE
              event.ssid.c_str(), event.ip.toString().c_str(), event.rssi);
 
     _activeNetwork = _wifiConnection->getNetworkInfo();
-    _connectionStartTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+    _connectionStartTime = nowSeconds();
 
     // Update credential store
     NetworkCredentialStore::instance().updateLastConnected(event.ssid);
@@ -730,7 +741,7 @@ void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnecti
 
     // Update uptime stats
     if (_connectionStartTime > 0) {
-        uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+        uint32_t now = nowSeconds();
         _stats.uptimeSeconds += (now - _connectionStartTime);
         _connectionStartTime = 0;
     }
@@ -745,14 +756,9 @@ void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnecti
 void NetworkManager::onWifiScanCompleted(WifiConnection* conn, const WiFiScanResult& result) {
     ESP_LOGI(TAG, "WiFi scan completed: %d networks found", result.count);
 
-    _lastScan.clear();
-    for (const auto& net : result.networks) {
-        ScannedNetwork scanned = net;
-        scanned.isKnown = isKnownNetwork(scanned.ssid);
-        _lastScan.push_back(scanned);
-    }
+    absorbScanResults(result.networks);
 
-    _lastScanTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+    _lastScanTime = nowSeconds();
     
     // Restore proper state after scan
     if (_wifiConnection->isConnected()) {

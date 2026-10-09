@@ -114,9 +114,22 @@ inline const char* networkTypeToString(NetworkType type) {
 }
 
 /**
+ * @brief Copia uma string C com truncagem segura: copia ate dstSize-1 bytes
+ *        e garante o '\0' final (campos char[N] das structs daqui e do
+ *        NetworkCredentialStore).
+ * @param dst Buffer destino.
+ * @param src String origem.
+ * @param dstSize Tamanho TOTAL do destino.
+ */
+inline void copyTrunc(char* dst, const char* src, size_t dstSize) {
+    strncpy(dst, src, dstSize - 1);
+    dst[dstSize - 1] = '\0';
+}
+
+/**
  * @struct KnownNetwork
  * @brief Represents a saved/known network with credentials and preferences.
- * 
+ *
  * This structure is used to persist network configurations in NVS.
  */
 struct KnownNetwork {
@@ -144,14 +157,12 @@ struct KnownNetwork {
      * @param priority Connection priority (default 50).
      * @param autoConnect Whether to auto-connect (default true).
      */
-    KnownNetwork(const char* ssid, const char* password, 
+    KnownNetwork(const char* ssid, const char* password,
                  int8_t priority = 50, bool autoConnect = true)
-        : priority(priority), lastRssi(0), lastConnected(0), 
+        : priority(priority), lastRssi(0), lastConnected(0),
           autoConnect(autoConnect), authMode(WiFiAuthMode::WPA2) {
-        strncpy(this->ssid, ssid, sizeof(this->ssid) - 1);
-        this->ssid[sizeof(this->ssid) - 1] = '\0';
-        strncpy(this->password, password, sizeof(this->password) - 1);
-        this->password[sizeof(this->password) - 1] = '\0';
+        copyTrunc(this->ssid, ssid, sizeof(this->ssid));
+        copyTrunc(this->password, password, sizeof(this->password));
     }
     
     /**

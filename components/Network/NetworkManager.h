@@ -414,6 +414,13 @@ private:
      */
     void tryReconnect();
 
+    /**
+     * @brief Absorve o resultado de um scan para _lastScan marcando quais
+     *        redes sao conhecidas (mesmo loop nos tres caminhos de scan).
+     */
+    void absorbScanResults(const wifi_ap_record_t* ap_list, int count);
+    void absorbScanResults(const std::vector<ScannedNetwork>& networks);
+
     WifiConnection* _wifiConnection;        /**< WiFi connection handler (heap allocated) */
     NetworkConfig _config;                   /**< Configuration */
     NetworkState _state;                     /**< Current state */

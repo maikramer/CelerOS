@@ -207,6 +207,17 @@ private:
     int findNetworkIndex(const std::string& ssid) const;
 
     /**
+     * @brief Guarda compartilhada dos metodos por SSID: store inicializado +
+     *        rede presente no cache.
+     * @param ssid SSID procurado.
+     * @param err Recebe NotInitialized ou FileNotFound quando devolve nullptr
+     *            (None quando devolve ponteiro).
+     * @return Ponteiro para a rede em _networks, ou nullptr (com 'err').
+     */
+    KnownNetwork* findNetwork(const std::string& ssid, ErrorCode& err);
+    const KnownNetwork* findNetwork(const std::string& ssid, ErrorCode& err) const;
+
+    /**
      * @brief Generate NVS key for a network index.
      * @param index The network index.
      * @return The NVS key string.

@@ -46,20 +46,28 @@ ErrorCode WifiConnection::init() {
 
     setState(WiFiConnectionState::Initializing);
 
+    // Ladder de init: ESP_ERR_INVALID_STATE = subsistema ja inicializado por
+    // outro dono (netif/event loop/radio) e NAO e erro aqui. Log, estado e
+    // retorno sao identicos em todos os degraus.
+    auto ok = [this](esp_err_t r, bool toleraInitState, const char* what) -> bool {
+        if (r == ESP_OK || (toleraInitState && r == ESP_ERR_INVALID_STATE)) {
+            return true;
+        }
+        ESP_LOGE(TAG, "%s: %s", what, esp_err_to_name(r));
+        setState(WiFiConnectionState::Error);
+        return false;
+    };
+
     // Initialize NVS Flash (required for WiFi)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ret = nvs_flash_erase();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Erro ao apagar NVS: %s", esp_err_to_name(ret));
-            setState(WiFiConnectionState::Error);
+        if (!ok(ret, false, "Erro ao apagar NVS")) {
             return CommonErrorCodes::WifiInitFailed;
         }
         ret = nvs_flash_init();
     }
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Erro ao inicializar NVS: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, true, "Erro ao inicializar NVS")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
@@ -75,17 +83,13 @@ ErrorCode WifiConnection::init() {
 
     // Initialize netif
     ret = esp_netif_init();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Erro ao inicializar netif: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, true, "Erro ao inicializar netif")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
     // Create event loop
     ret = esp_event_loop_create_default();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Erro ao criar event loop: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, true, "Erro ao criar event loop")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
@@ -103,9 +107,7 @@ ErrorCode WifiConnection::init() {
     // Initialize WiFi
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ret = esp_wifi_init(&cfg);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Erro ao inicializar WiFi: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, true, "Erro ao inicializar WiFi")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
@@ -119,9 +121,7 @@ ErrorCode WifiConnection::init() {
                                                   &eventHandler,
                                                   this,
                                                   &instance_any_id);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Erro ao registrar handler WIFI_EVENT: %s", esp_err_to_name(ret));
-            setState(WiFiConnectionState::Error);
+        if (!ok(ret, false, "Erro ao registrar handler WIFI_EVENT")) {
             return CommonErrorCodes::WifiInitFailed;
         }
     }
@@ -132,26 +132,20 @@ ErrorCode WifiConnection::init() {
                                                   &eventHandler,
                                                   this,
                                                   &instance_got_ip);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Erro ao registrar handler IP_EVENT: %s", esp_err_to_name(ret));
-            setState(WiFiConnectionState::Error);
+        if (!ok(ret, false, "Erro ao registrar handler IP_EVENT")) {
             return CommonErrorCodes::WifiInitFailed;
         }
     }
 
     // Set WiFi mode
     ret = esp_wifi_set_mode(WIFI_MODE_STA);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao configurar modo WiFi: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, false, "Erro ao configurar modo WiFi")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
     // Start WiFi
     ret = esp_wifi_start();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Erro ao iniciar WiFi: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Error);
+    if (!ok(ret, true, "Erro ao iniciar WiFi")) {
         return CommonErrorCodes::WifiInitFailed;
     }
 
@@ -252,11 +246,7 @@ void WifiConnection::disconnect() {
     setState(WiFiConnectionState::Disconnecting);
 
     if (isConnected()) {
-        WiFiConnectionEvent event;
-        event.ssid = _ssid;
-        event.rssi = _rssi;
-        event.ip = _ipAddress;
-        event.error = CommonErrorCodes::None;
+        WiFiConnectionEvent event = makeEvent(CommonErrorCodes::None);
 
         esp_wifi_disconnect();
         
@@ -357,6 +347,76 @@ void WifiConnection::setConnectionTimeout(uint32_t timeoutMs) {
     _connectionTimeout = timeoutMs;
 }
 
+// Guarda de concorrencia compartilhada pelos caminhos de scan (async e
+// bloqueante): null-check do mutex, take com 100 ms e flag _scanInProgress.
+// Em Ok o mutex fica TOMADO — o chamador o devolve com unlockScan().
+WifiConnection::ScanLock WifiConnection::lockScan(bool async) {
+    if (_scanMutex == nullptr) {
+        ESP_LOGE(TAG, "Scan mutex not initialized");
+        return ScanLock::NoMutex;
+    }
+
+    // Try to acquire mutex with timeout
+    if (xSemaphoreTake(_scanMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "%s", async ? "Scan already in progress, skipping async scan..."
+                                  : "Scan already in progress, skipping...");
+        return ScanLock::Busy;
+    }
+
+    // Check if another scan is still running
+    if (_scanInProgress) {
+        ESP_LOGW(TAG, "%s", async ? "Scan already running, aborting async scan..."
+                                  : "Scan already running, aborting...");
+        xSemaphoreGive(_scanMutex);
+        return ScanLock::Busy;
+    }
+
+    return ScanLock::Ok;
+}
+
+// Fim de scan (sucesso ou falha): estado Idle, flags zeradas e mutex devolvido.
+void WifiConnection::unlockScan(bool blocking) {
+    setState(WiFiConnectionState::Idle);
+    _scanInProgress = false;
+    if (blocking) {
+        _blockingScan = false;
+    }
+    xSemaphoreGive(_scanMutex);
+}
+
+// Config de scan dos dois caminhos: todos os canais, ocultas inclusas, ativa
+// com 120..300 ms por canal (timing para melhor deteccao).
+wifi_scan_config_t WifiConnection::defaultScanConfig() {
+    wifi_scan_config_t scan_config = {};
+    scan_config.ssid = nullptr;
+    scan_config.bssid = nullptr;
+    scan_config.channel = 0;  // Scan all channels
+    scan_config.show_hidden = true;  // Also show hidden networks
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_config.scan_time.active.min = 120;  // Min 120ms per channel
+    scan_config.scan_time.active.max = 300;  // Max 300ms per channel
+    return scan_config;
+}
+
+WiFiScanResult WifiConnection::failScanResult() {
+    WiFiScanResult result;
+    result.success = false;
+    result.error = CommonErrorCodes::WifiScanFailed;
+    result.count = 0;
+    return result;
+}
+
+// Evento de conexao montado do estado atual (campos identicos nos sitios que
+// disparam onConnected/onDisconnected).
+WiFiConnectionEvent WifiConnection::makeEvent(const ErrorCode& error) const {
+    WiFiConnectionEvent event;
+    event.ssid = _ssid;
+    event.rssi = _rssi;
+    event.ip = _ipAddress;
+    event.error = error;
+    return event;
+}
+
 ErrorCode WifiConnection::startScanAsync() {
     ErrorCode err = ensureInitialized();
     if (err != CommonErrorCodes::None) {
@@ -364,21 +424,13 @@ ErrorCode WifiConnection::startScanAsync() {
     }
 
     // Protect against concurrent scans
-    if (_scanMutex == nullptr) {
-        ESP_LOGE(TAG, "Scan mutex not initialized");
-        return CommonErrorCodes::NotInitialized;
-    }
-
-    // Try to acquire mutex with timeout
-    if (xSemaphoreTake(_scanMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "Scan already in progress, skipping async scan...");
-        return CommonErrorCodes::WifiScanFailed;
-    }
-
-    if (_scanInProgress) {
-        ESP_LOGW(TAG, "Scan already running, aborting async scan...");
-        xSemaphoreGive(_scanMutex);
-        return CommonErrorCodes::WifiScanFailed;
+    switch (lockScan(true)) {
+        case ScanLock::Ok:
+            break;
+        case ScanLock::NoMutex:
+            return CommonErrorCodes::NotInitialized;
+        default:
+            return CommonErrorCodes::WifiScanFailed;
     }
 
     _scanInProgress = true;
@@ -390,36 +442,20 @@ ErrorCode WifiConnection::startScanAsync() {
     // Stop any pending scan first
     esp_wifi_scan_stop();
 
-    wifi_scan_config_t scan_config = {};
-    scan_config.ssid = nullptr;
-    scan_config.bssid = nullptr;
-    scan_config.channel = 0;  // Scan all channels
-    scan_config.show_hidden = true;  // Also show hidden networks
-    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 120;  // Min 120ms per channel
-    scan_config.scan_time.active.max = 300;  // Max 300ms per channel
-
     // Start non-blocking scan
+    wifi_scan_config_t scan_config = defaultScanConfig();
     esp_err_t ret = esp_wifi_scan_start(&scan_config, false);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erro ao iniciar scan: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Idle);
-        _scanInProgress = false;
-        xSemaphoreGive(_scanMutex);
-        
-        WiFiScanResult result;
-        result.success = false;
-        result.error = CommonErrorCodes::WifiScanFailed;
-        result.count = 0;
-        onScanCompleted.trigger(this, result);
-        
+        unlockScan(false);
+        onScanCompleted.trigger(this, failScanResult());
         return CommonErrorCodes::WifiScanFailed;
     }
 
     // Note: mutex will be released when scan completes (in event handler)
     // For now, release it as we're in async mode
     xSemaphoreGive(_scanMutex);
-    
+
     return CommonErrorCodes::None;
 }
 
@@ -435,21 +471,7 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     }
 
     // Protect against concurrent scans
-    if (_scanMutex == nullptr) {
-        ESP_LOGE(TAG, "Scan mutex not initialized");
-        return -1;
-    }
-
-    // Try to acquire mutex with timeout
-    if (xSemaphoreTake(_scanMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "Scan already in progress, skipping...");
-        return -1;
-    }
-
-    // Check if another scan is still running
-    if (_scanInProgress) {
-        ESP_LOGW(TAG, "Scan already running, aborting...");
-        xSemaphoreGive(_scanMutex);
+    if (lockScan(false) != ScanLock::Ok) {
         return -1;
     }
 
@@ -463,31 +485,13 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     // Stop any pending scan first
     esp_wifi_scan_stop();
 
-    // Configure scan with proper timing for better detection
-    wifi_scan_config_t scan_config = {};
-    scan_config.ssid = nullptr;
-    scan_config.bssid = nullptr;
-    scan_config.channel = 0;  // Scan all channels
-    scan_config.show_hidden = true;  // Also show hidden networks
-    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 120;  // Min 120ms per channel
-    scan_config.scan_time.active.max = 300;  // Max 300ms per channel
-
     // Start blocking scan
+    wifi_scan_config_t scan_config = defaultScanConfig();
     esp_err_t ret = esp_wifi_scan_start(&scan_config, true);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erro ao iniciar scan: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Idle);
-        _scanInProgress = false;
-        _blockingScan = false;
-        xSemaphoreGive(_scanMutex);
-        
-        WiFiScanResult result;
-        result.success = false;
-        result.error = CommonErrorCodes::WifiScanFailed;
-        result.count = 0;
-        onScanCompleted.trigger(this, result);
-        
+        unlockScan(true);
+        onScanCompleted.trigger(this, failScanResult());
         return -1;
     }
 
@@ -496,10 +500,7 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     ret = esp_wifi_scan_get_ap_num(&ap_count);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erro ao obter número de APs: %s", esp_err_to_name(ret));
-        setState(WiFiConnectionState::Idle);
-        _scanInProgress = false;
-        _blockingScan = false;
-        xSemaphoreGive(_scanMutex);
+        unlockScan(true);
         return -1;
     }
 
@@ -513,10 +514,7 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
         ret = esp_wifi_scan_get_ap_records(&ap_count, ap_list);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Erro ao obter lista de APs: %s", esp_err_to_name(ret));
-            setState(WiFiConnectionState::Idle);
-            _scanInProgress = false;
-            _blockingScan = false;
-            xSemaphoreGive(_scanMutex);
+            unlockScan(true);
             return -1;
         }
     }
@@ -534,11 +532,8 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     // Sort by RSSI
     std::sort(_lastScanResult.networks.begin(), _lastScanResult.networks.end(), compareByRssi);
 
-    setState(WiFiConnectionState::Idle);
-    _scanInProgress = false;
-    _blockingScan = false;
-    xSemaphoreGive(_scanMutex);
-    
+    unlockScan(true);
+
     onScanCompleted.trigger(this, _lastScanResult);
 
     ESP_LOGI(TAG, "Scan concluído, retornando %d redes", ap_count);
@@ -647,12 +642,8 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                     }
                 } else if (wasConnected) {
                     // Was connected, now disconnected
-                    WiFiConnectionEvent event;
-                    event.ssid = self->_ssid;
-                    event.rssi = self->_rssi;
-                    event.ip = self->_ipAddress;
-                    event.error = CommonErrorCodes::WifiConnectionFailed;
-                    
+                    WiFiConnectionEvent event = self->makeEvent(CommonErrorCodes::WifiConnectionFailed);
+
                     self->setState(WiFiConnectionState::Idle);
                     self->onDisconnected.trigger(self, event);
                 }
@@ -700,11 +691,7 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
         xEventGroupSetBits(_wifiEventGroup, WIFI_CONNECTED_BIT);
 
         // Trigger new event
-        WiFiConnectionEvent connEvent;
-        connEvent.ssid = self->_ssid;
-        connEvent.rssi = self->_rssi;
-        connEvent.ip = self->_ipAddress;
-        connEvent.error = CommonErrorCodes::None;
+        WiFiConnectionEvent connEvent = self->makeEvent(CommonErrorCodes::None);
         connEvent.retryCount = self->_retryNum;
         self->onConnected.trigger(self, connEvent);
 

@@ -278,6 +278,48 @@ private:
      */
     void processScanResults(WiFiScanResult& result);
 
+    /** @brief Resultado da guarda de concorrencia de scan (lockScan). */
+    enum class ScanLock {
+        Ok,         /**< Mutex tomado, scan pode comecar */
+        NoMutex,    /**< Mutex inexistente (construtor falhou) */
+        Busy        /**< Outro scan em curso */
+    };
+
+    /**
+     * @brief Guarda compartilhada dos dois caminhos de scan (async e
+     *        bloqueante): null-check do mutex, take com 100 ms e flag
+     *        _scanInProgress. Em Ok o mutex fica TOMADO — o chamador o
+     *        devolve com unlockScan().
+     * @param async true ajusta as mensagens de log ao fluxo async.
+     */
+    ScanLock lockScan(bool async);
+
+    /**
+     * @brief Fim de scan (sucesso ou falha): estado Idle, flags zeradas e
+     *        mutex devolvido.
+     * @param blocking true quando o scan bloqueante zera tambem
+     *        _blockingScan.
+     */
+    void unlockScan(bool blocking);
+
+    /**
+     * @brief Config de scan dos dois caminhos: todos os canais, ocultas
+     *        inclusas, ativa com 120..300 ms por canal.
+     */
+    static wifi_scan_config_t defaultScanConfig();
+
+    /**
+     * @brief Resultado de falha disparado no onScanCompleted.
+     */
+    static WiFiScanResult failScanResult();
+
+    /**
+     * @brief Evento de conexao montado a partir do estado atual
+     *        (ssid/rssi/ip); o sítio que dispara completa o que falta.
+     * @param error Codigo de erro transportado no evento.
+     */
+    WiFiConnectionEvent makeEvent(const ErrorCode& error) const;
+
     static EventGroupHandle_t _wifiEventGroup; /**< Event group for WiFi events. */
     static const int WIFI_CONNECTED_BIT = BIT0; /**< Event bit for successful connection. */
     static const int WIFI_FAIL_BIT = BIT1; /**< Event bit for connection failure. */

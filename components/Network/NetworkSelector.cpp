@@ -1,6 +1,6 @@
 #include "NetworkSelector.h"
+#include "NetworkClock.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include <algorithm>
 #include <cmath>
 
@@ -232,7 +232,7 @@ int NetworkSelector::calculateHistoryScore(uint32_t lastConnected) const {
         return 0;  // Never connected
     }
 
-    uint32_t currentTime = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+    uint32_t currentTime = nowSeconds();
     
     if (lastConnected > currentTime) {
         return 50;  // Invalid timestamp, give neutral score
