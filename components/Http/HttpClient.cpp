@@ -155,6 +155,53 @@ HttpResponse HttpClient::request(HttpMethod method,
 
 // ========== Internal ==========
 
+// Config base do esp_http_client compartilhada por performRequest e
+// downloadToFile: url/event_handler/user_data + timeout/buffers/redirects/
+// keep-alive + TLS (cert_pem ou bundle para https) + basic auth. So o
+// event_handler muda entre os dois fluxos.
+esp_http_client_config_t HttpClient::baseConfig(const std::string& url,
+                                                http_event_handle_cb handler) {
+    esp_http_client_config_t config = {};
+    config.url = url.c_str();
+    config.event_handler = handler;
+    config.user_data = this;
+    config.timeout_ms = static_cast<int>(_config.timeoutMs);
+    config.buffer_size = static_cast<int>(_config.bufferSize);
+    config.buffer_size_tx = static_cast<int>(_config.bufferSizeTx);
+    config.disable_auto_redirect = !_config.followRedirects;
+    config.max_redirection_count = _config.maxRedirects;
+    config.keep_alive_enable = _config.keepAlive;
+
+    // TLS configuration
+    if (!_certPem.empty()) {
+        config.cert_pem = _certPem.c_str();
+        config.cert_len = _certPem.length() + 1;
+    } else if (url.find("https://") == 0) {
+        // Use bundle for HTTPS if no specific cert provided
+        config.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+
+    // Skip verification if explicitly disabled (not recommended)
+    if (_config.disableSslVerify) {
+        config.skip_cert_common_name_check = true;
+    }
+
+    // Basic auth
+    if (!_username.empty()) {
+        config.username = _username.c_str();
+        config.password = _password.c_str();
+        config.auth_type = HTTP_AUTH_TYPE_BASIC;
+    }
+
+    return config;
+}
+
+void HttpClient::applyContentLength(HttpClient* self, const char* key, const char* value) {
+    if (self != nullptr && strcasecmp(key, "Content-Length") == 0) {
+        self->_contentLength = strtoll(value, nullptr, 10);
+    }
+}
+
 bool HttpClient::interimResponse(esp_http_client_handle_t client) const {
     // O esp_http_client_perform le o corpo da resposta 3xx/401 inteiro (e o
     // entrega em ON_DATA) ANTES de refazer a requisicao: sem este filtro o
@@ -193,9 +240,7 @@ int HttpClient::eventHandler(esp_http_client_event_t* event) {
                 self->_firstByteMs = (uint32_t)((esp_timer_get_time() - self->_t0) / 1000);
             }
             // tamanho conhecido: o corpo cresce uma vez so (sem dobrar)
-            if (self != nullptr && strcasecmp(event->header_key, "Content-Length") == 0) {
-                self->_contentLength = strtoll(event->header_value, nullptr, 10);
-            }
+            applyContentLength(self, event->header_key, event->header_value);
             break;
 
         case HTTP_EVENT_ON_DATA:
@@ -314,37 +359,7 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     _t0 = (int64_t)startTime;
 
     // Configure HTTP client
-    esp_http_client_config_t config = {};
-    config.url = url.c_str();
-    config.event_handler = eventHandler;
-    config.user_data = this;
-    config.timeout_ms = static_cast<int>(_config.timeoutMs);
-    config.buffer_size = static_cast<int>(_config.bufferSize);
-    config.buffer_size_tx = static_cast<int>(_config.bufferSizeTx);
-    config.disable_auto_redirect = !_config.followRedirects;
-    config.max_redirection_count = _config.maxRedirects;
-    config.keep_alive_enable = _config.keepAlive;
-
-    // TLS configuration
-    if (!_certPem.empty()) {
-        config.cert_pem = _certPem.c_str();
-        config.cert_len = _certPem.length() + 1;
-    } else if (url.find("https://") == 0) {
-        // Use bundle for HTTPS if no specific cert provided
-        config.crt_bundle_attach = esp_crt_bundle_attach;
-    }
-
-    // Skip verification if explicitly disabled (not recommended)
-    if (_config.disableSslVerify) {
-        config.skip_cert_common_name_check = true;
-    }
-
-    // Basic auth
-    if (!_username.empty()) {
-        config.username = _username.c_str();
-        config.password = _password.c_str();
-        config.auth_type = HTTP_AUTH_TYPE_BASIC;
-    }
+    esp_http_client_config_t config = baseConfig(url, eventHandler);
 
     // Handle persistente (setKeepHandle): pedidos em serie no mesmo host
     // pulam DNS+TCP+TLS (segundos de handshake neste chip). Host diferente
@@ -449,9 +464,7 @@ int HttpClient::dlFileEventHandler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_ON_HEADER:
             // total para o progresso (antes ficava sempre -1); um redirect
             // reescreve com o Content-Length da resposta final
-            if (strcasecmp(evt->header_key, "Content-Length") == 0) {
-                self->_contentLength = strtoll(evt->header_value, nullptr, 10);
-            }
+            applyContentLength(self, evt->header_key, evt->header_value);
             break;
         case HTTP_EVENT_ON_DATA: {
             if (self->interimResponse(evt->client)) break;  // corpo do 3xx/401
@@ -491,31 +504,7 @@ HttpResponse HttpClient::downloadToFile(const std::string& url, const std::strin
     }
     _dlFile = f;
 
-    esp_http_client_config_t config = {};
-    config.url = url.c_str();
-    config.event_handler = dlFileEventHandler;
-    config.user_data = this;
-    config.timeout_ms = static_cast<int>(_config.timeoutMs);
-    config.buffer_size = static_cast<int>(_config.bufferSize);
-    config.buffer_size_tx = static_cast<int>(_config.bufferSizeTx);
-    config.disable_auto_redirect = !_config.followRedirects;
-    config.max_redirection_count = _config.maxRedirects;
-    config.keep_alive_enable = _config.keepAlive;
-
-    if (!_certPem.empty()) {
-        config.cert_pem = _certPem.c_str();
-        config.cert_len = _certPem.length() + 1;
-    } else if (url.find("https://") == 0) {
-        config.crt_bundle_attach = esp_crt_bundle_attach;
-    }
-    if (_config.disableSslVerify) {
-        config.skip_cert_common_name_check = true;
-    }
-    if (!_username.empty()) {
-        config.username = _username.c_str();
-        config.password = _password.c_str();
-        config.auth_type = HTTP_AUTH_TYPE_BASIC;
-    }
+    esp_http_client_config_t config = baseConfig(url, dlFileEventHandler);
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_err_t err = (client != nullptr) ? esp_http_client_perform(client) : ESP_FAIL;

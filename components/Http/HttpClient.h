@@ -357,6 +357,21 @@ private:
     static int dlFileEventHandler(esp_http_client_event_t* evt);
 
     /**
+     * @brief Config base do esp_http_client comum a performRequest e
+     *        downloadToFile (timeout, buffers, redirects, keep-alive, TLS e
+     *        basic auth); so o event_handler muda entre os dois fluxos.
+     */
+    esp_http_client_config_t baseConfig(const std::string& url,
+                                        http_event_handle_cb handler);
+
+    /**
+     * @brief Header Content-Length -> _contentLength: tamanho conhecido, o
+     *        corpo cresce uma vez so; um redirect reescreve com o valor da
+     *        resposta final.
+     */
+    static void applyContentLength(HttpClient* self, const char* key, const char* value);
+
+    /**
      * @brief Resposta intermediaria que o esp_http_client_perform descarta
      * (redirect seguido, 401 com retry de auth): o corpo dela tambem chega
      * em HTTP_EVENT_ON_DATA e nao pode ir para o corpo/arquivo final.
