@@ -1,10 +1,12 @@
 #include "WatchPanels.h"
+#include "AlarmScreen.h"
 #include "LauncherUI.h"
 #include "../Boards/Board.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenPower.h"
 #include "../Display/Theme.h"
 #include "../Hardware/BoardIO.h"
+#include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
 #include "../Kernel/TimeManager.h"
 #include "../WebManager/WebManager.h"
@@ -444,6 +446,12 @@ void request(Panel p, bool returnHome) {
 
 void service() {
     if (s_req == Panel::None) return;
+    // Alarme tocando no topo: painel de borda NAO cobre a tela do alarme. O
+    // pedido NAO e consumido — fica pendente e sobe no tick seguinte ao fim
+    // do alarme (gestos de borda ja sao bloqueados pelo allowsBackGesture
+    // da tela do alarme; aqui e o caminho programatico, ex.: "toque:
+    // central" do alerta).
+    if (Alarms::ringing() && AlarmScreen::onTop()) return;
     portENTER_CRITICAL(&s_reqMux);
     Panel p = s_req;
     bool home = s_reqHome;

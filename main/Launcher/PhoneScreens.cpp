@@ -1,9 +1,11 @@
 #include "PhoneScreens.h"
+#include "AlarmScreen.h"
 #include "../Bluetooth/PhoneLink.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenPower.h"
 #include "../Display/Theme.h"
 #include "../Hardware/BoardIO.h"
+#include "../Kernel/Alarms.h"
 #include "../UI/Kui.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -11,12 +13,25 @@
 
 namespace {
 
+// Telas na pilha (topo OU cobertas): o service nao re-empilha as instancias
+// estaticas. Zeradas no onExit (saida de verdade — pop/home/remove); ser
+// coberta NAO passa por ali (Navigator chama onCovered, no-op). Mesma guarda
+// do AlarmScreen: com o antigo "top() == &s_x" um alerta cobrindo a tela
+// fazia o service re-empilhar POR CIMA do alerta e congelar o onTick dele.
+bool s_callPushed = false;
+bool s_pairPushed = false;
+
 // Digitos grandes: fonte 8 (7-seg 75 px) no vidro grande; 4 nos pequenos
 uint8_t bigDigitsFont() { return UI::W >= 400 ? 8 : 4; }
 
 class PairScreen : public kui::Screen {
 public:
     void onEnter() override { Backlight::noteActivity(); }
+    void onExit() override {
+        // Saiu de VERDADE da pilha (pop/home/remove): solta a guarda do
+        // service (ser coberta NAO passa por aqui)
+        s_pairPushed = false;
+    }
     void draw(kui::Canvas& c) override {
         c.fill(THEME_BG);
         char b[12];
@@ -49,6 +64,8 @@ public:
     void onExit() override {
         // saiu sem escolher (BOOT/home): so para de tocar aqui
         m_done = true;
+        // e solta a guarda do service (saida de verdade da pilha)
+        s_callPushed = false;
     }
     void draw(kui::Canvas& c) override {
         c.fill(THEME_BG);
@@ -122,13 +139,26 @@ namespace PhoneScreens {
 
 void service(bool inApp) {
     if (inApp) return;  // empurrar tela sobre app aberto e papel do PhoneLink::tick
-    kui::Screen* top = kui::Navigator::top();
+    // Alarme tocando no topo: chamada/pareamento NAO cobrem a tela do alarme.
+    // O service roda todo tick: encerrado o alarme (Parar/Soneca/2 min), a
+    // chamada ainda ativa ou o codigo ainda valido sobem aqui mesmo.
+    if (Alarms::ringing() && AlarmScreen::onTop()) return;
+    // Guarda pelas FLAGS (nao pelo topo), como o AlarmScreen::service: um
+    // alerta de notificacao cobrindo a chamada faria o service re-empilhar
+    // a tela POR CIMA do alerta (onTick do alerta congelado). O service roda
+    // so na task da UI (LOOP), dona da pilha.
     std::string n, num;
     if (PhoneLink::callInfo(n, num)) {
-        if (top != &s_call) kui::Navigator::push(&s_call);
+        if (!s_callPushed) {
+            s_callPushed = true;
+            kui::Navigator::push(&s_call);
+        }
         return;
     }
-    if (PhoneLink::passkey() != 0 && top != &s_pair && top != &s_call) kui::Navigator::push(&s_pair);
+    if (PhoneLink::passkey() != 0 && !s_pairPushed && !s_callPushed) {
+        s_pairPushed = true;
+        kui::Navigator::push(&s_pair);
+    }
 }
 
 }  // namespace PhoneScreens

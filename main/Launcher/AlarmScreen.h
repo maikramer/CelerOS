@@ -5,6 +5,8 @@
 // Parar/Soneca (ou 2 min sem resposta = soneca automatica). Empilhada pelo
 // service() no loop da UI quando o Kernel/Alarms tem toque pendente; com app
 // aberto o present() pede a saida do app antes. BOOT/home tambem param.
+// Coberta por outra tela NAO dispensa o toque (onCovered padrao): a tela
+// segue na pilha e retoma o bip quando volta ao topo.
 
 #include "../UI/Kui.h"
 
@@ -12,6 +14,9 @@ class AlarmScreen : public kui::Screen {
 public:
     // Chamar no loop da UI: empilha a tela quando ha toque pendente.
     static void service();
+    // A tela do alarme esta no TOPO da pilha? (guarda de prioridade dos
+    // servicos que empilham overlays: nada cobre o alarme tocando)
+    static bool onTop();
 
     void onEnter() override;
     void onExit() override;

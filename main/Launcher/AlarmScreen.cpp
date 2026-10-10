@@ -9,16 +9,26 @@
 
 namespace {
 AlarmScreen s_screen;
+// Tela na pilha (topo OU coberta por outra): o service nao re-empilha a
+// instancia estatica. Zerada no onExit (saida de verdade — pop/home/remove);
+// ser coberta NAO passa por aqui (Navigator chama onCovered, no-op).
+bool s_pushed = false;
 constexpr uint32_t kBeepEveryMs = 1500;
 constexpr uint32_t kAutoSnoozeMs = 120000;  // 2 min sem resposta
 }  // namespace
 
 void AlarmScreen::service() {
     if (!Alarms::ringing()) return;
-    if (kui::Navigator::top() == &s_screen) return;
+    // Guarda pela flag (nao pelo topo): coberta por outra tela a instancia
+    // continua na pilha e o antigo "top() == &s_screen" a empilharia DUAS
+    // vezes. O service roda so na task da UI (LOOP), dona da pilha.
+    if (s_pushed) return;
     Backlight::noteActivity();  // acorda o vidro (o ScreenPower segue o edge)
+    s_pushed = true;
     kui::Navigator::push(&s_screen);
 }
+
+bool AlarmScreen::onTop() { return kui::Navigator::top() == &s_screen; }
 
 void AlarmScreen::onEnter() {
     Alarms::Ring r;
@@ -33,7 +43,9 @@ void AlarmScreen::onEnter() {
 }
 
 void AlarmScreen::onExit() {
-    // Saiu sem escolher (BOOT/home): para o toque
+    // Saiu de VERDADE da pilha (pop/home/remove — coberta nao passa aqui):
+    // solta a guarda do service e, sem escolher (BOOT/home), para o toque
+    s_pushed = false;
     if (!m_done) Alarms::dismiss();
     m_done = true;
 }

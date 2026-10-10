@@ -231,7 +231,12 @@ public:
     virtual ~Screen() = default;
 
     virtual void onEnter() {}                    // entrou na pilha
-    virtual void onExit() {}                     // saiu da pilha
+    virtual void onExit() {}                     // saiu da pilha de verdade (pop/home/remove/replace)
+    // OUTRA tela entrou por cima (Navigator::push): a tela CONTINUA na pilha,
+    // so deixou de ser o topo. onExit nao roda aqui — quem precisa pausar/
+    // parar algo ao ser coberto sobrescreve; o padrao e nao fazer nada (a
+    // tela volta ao topo pelo onEnter/onResume do pop)
+    virtual void onCovered() {}
     // voltou ao TOPO da pilha (pop/home/remove de quem estava em cima, ou
     // dialog fechou): telas com estado visual incremental usam para saber
     // que precisam redesenhar do zero (ex.: launcher limpa o fundo)

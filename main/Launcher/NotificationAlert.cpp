@@ -1,9 +1,11 @@
 #include "NotificationAlert.h"
+#include "AlarmScreen.h"
 #include "LauncherUI.h"
 #include "WatchPanels.h"
 #include "../Display/Backlight.h"
 #include "../Display/ScreenPower.h"
 #include "../Display/Theme.h"
+#include "../Kernel/Alarms.h"
 #include "../Kernel/Notifications.h"
 #include "../Kernel/TimeManager.h"
 #include "../UI/Kui.h"
@@ -197,6 +199,11 @@ void service(bool inApp) {
         LauncherUI::requestAppExit();
         return;
     }
+    // Alarme tocando no topo: o alerta NAO cobre a tela do alarme. O pedido
+    // fica pendente (o service volta aqui a cada tick): alarme atendido em
+    // ate kStaleMs, o alerta sobe; alem disso, morre pelo caminho normal de
+    // pedido velho — a notificacao segue na central.
+    if (Alarms::ringing() && AlarmScreen::onTop()) return;
     s_req = false;
     if (kui::Navigator::top() == &s_alert) {
         s_alert.refresh();

@@ -1076,7 +1076,11 @@ void Navigator::push(Screen* s) {
         xSemaphoreGive(s_pendMux);
         return;
     }
-    if (!s_stack.empty()) s_stack.back()->onExit();
+    // A tela de baixo NAO sai da pilha: onCovered (nao onExit). Com onExit
+    // aqui, qualquer overlay automatico (alerta de notificacao, chamada,
+    // painel de borda) "destruia" a tela coberta — um alarme tocando era
+    // dispensado sem ninguem tocar em Parar/Soneca
+    if (!s_stack.empty()) s_stack.back()->onCovered();
     s_stack.push_back(s);
     s->onEnter();
     s_repaint = true;
