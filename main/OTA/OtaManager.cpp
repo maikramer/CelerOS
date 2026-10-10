@@ -9,6 +9,7 @@
 #include "OtaGuard.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "HttpClient.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
@@ -69,7 +70,10 @@ bool OtaManager::checkForUpdates() {
     }
 
     HttpClient http;
-    http.setTimeout(20000);
+    // 10 s como o netFetch: o fetch roda na main task inscrita no Task
+    // Watchdog (15 s com PANIC) — timeout maior que a janela do TWDT
+    // reiniciava o aparelho antes de devolver o erro.
+    http.setTimeout(10000);
     HttpResponse resp = http.get(url);
     if (!resp.isOk()) {
         info.fetchFailed = true;
@@ -191,6 +195,16 @@ void OtaManager::evictRunningApp() {
         ESP_LOGW("celer.ota", "app nao saiu em 2 s: gravando com ele aberto");
 }
 
+// Alimenta o Task Watchdog se (e so se) a task corrente esta inscrita nele —
+// mesma guarda do AudioPlayer::feedWatchdog (o reset sem inscricao loga
+// "task not found" por chamada). O download do performUpdate roda minutos na
+// main task e antes so era alimentado nos limites de porcentagem do
+// onProgress, que ainda exigia callback E Content-Length: TWDT de 15 s com
+// PANIC reiniciava o aparelho no meio de um download lento.
+static void feedWatchdog() {
+    if (esp_task_wdt_status(nullptr) == ESP_OK) esp_task_wdt_reset();
+}
+
 // Download RETOMAVEL direto na particao OTA (bloqueante). Era um unico
 // esp_https_ota sem retentativa: ~2,5 MB pelo WiFi — que divide o radio com
 // o BLE (malha, Phone Link) — e qualquer soluco no meio jogava fora o que ja
@@ -239,13 +253,19 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
     bool done = false, fatal = false;  // fatal: flash/imagem — repetir nao ajuda
     err = ESP_FAIL;
     while (!done && !fatal && fails < kMaxFails) {
+        feedWatchdog();  // TWDT: open/fetch_headers bloqueiam por conta do timeout
         if (fails > 0) {
             ESP_LOGW("celer.ota", "retomando do byte %u (falha %d/%d)", (unsigned)written, fails, kMaxFails);
             vTaskDelay(pdMS_TO_TICKS(1000 * fails));
+            feedWatchdog();  // a espera de backoff ja passou, a tentativa comeca alimentada
         }
         esp_http_client_config_t http = {};
         http.url = firmwareUrl.c_str();
-        http.timeout_ms = 15000;
+        // 10 s (nao 15): o watchdog e alimentado por chunk, mas um unico
+        // esp_http_client_read travado bloqueia por timeout_ms — colinear
+        // com a janela do TWDT (15 s) era corrida para o PANIC. O loop de
+        // retomada Range acima torna a reconexao barata.
+        http.timeout_ms = 10000;
         http.buffer_size = 4096;
         if (kstr::startsWith(firmwareUrl, "https://")) http.crt_bundle_attach = esp_crt_bundle_attach;
         esp_http_client_handle_t cli = esp_http_client_init(&http);
@@ -273,6 +293,7 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
         }
         bool progressed = false;
         for (;;) {
+            feedWatchdog();  // read + esp_ota_write nunca deixam a task bloquear: alimenta por chunk
             int n = esp_http_client_read(cli, buf, kBuf);
             if (n < 0) { err = ESP_FAIL; break; }  // conexao caiu: retoma
             if (n == 0) {
