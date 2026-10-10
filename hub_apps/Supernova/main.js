@@ -13,9 +13,10 @@
 // so repinta quando um numero muda. No firmware de caixas sujas (API 32)
 // so essas caixas vao ao vidro: o painel RGB nao treme mais.
 //
-// Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao na fisica). A
-// engine e a fisica sao DEPS do hub (app.json "deps"; API 30). Layout em
-// unidades do projeto 240 (E.u): 2x no 480, ~1,7x no relogio.
+// Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao). A engine e DEP
+// do hub (app.json "deps"; API 30); os projeteis vivem em pools proprios
+// com colisao por distancia (sem fisica desde a 2.3). Layout em unidades do
+// projeto 240 (E.u): 2x no 480, ~1,7x no relogio.
 
 var E = require("celeros.engine");
 var jogo = require("jogo");
@@ -206,21 +207,25 @@ function drawGame(s, pulse) {
         if (all[i].cat === 'enemy') drawEnemy(all[i], shx, shy, ms);
     }
     if (!s.over || s.overT < 0.4) drawPlayer(s.player, shx, shy, ms);
+    // projeteis direto dos pools do jogo (nada de varrer world.all por cat)
+    var bp = jogo.bullets();
     var bl = Math.round(14 * K), er = Math.max(2, Math.round(4 * K));
-    for (i = 0; i < all.length; i++) {
-        b = all[i];
+    for (i = 0; i < bp.pbn; i++) {
+        b = bp.pb[i];
         bx = Math.round(b.x + shx);
         by = Math.round(b.y + shy);
-        if (b.cat === 'pbullet') {
-            System.drawFastVLine(bx, by, bl, C.ciano);
-            System.drawFastVLine(bx + 1, by + 2, bl - 4, C.cianoD);
-            System.drawPixel(bx, by + bl + 1, C.branco);
-            D.add(bx - 1, by - 1, 4, bl + 4);
-        } else if (b.cat === 'ebullet') {
-            System.fillCircle(bx, by, er, C.magenta);
-            System.drawPixel(bx, by, C.branco);
-            D.add(bx - er - 1, by - er - 1, er * 2 + 3, er * 2 + 3);
-        }
+        System.drawFastVLine(bx, by, bl, C.ciano);
+        System.drawFastVLine(bx + 1, by + 2, bl - 4, C.cianoD);
+        System.drawPixel(bx, by + bl + 1, C.branco);
+        D.add(bx - 1, by - 1, 4, bl + 4);
+    }
+    for (i = 0; i < bp.ebn; i++) {
+        b = bp.eb[i];
+        bx = Math.round(b.x + shx);
+        by = Math.round(b.y + shy);
+        System.fillCircle(bx, by, er, C.magenta);
+        System.drawPixel(bx, by, C.branco);
+        D.add(bx - er - 1, by - er - 1, er * 2 + 3, er * 2 + 3);
     }
 }
 

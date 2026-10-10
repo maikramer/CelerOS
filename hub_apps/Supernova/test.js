@@ -1,10 +1,10 @@
-// test.js — smoke do Supernova 2.2 no harness: titulo -> jogando -> arrasto
+// test.js — smoke do Supernova 2.3 no harness: titulo -> jogando -> arrasto
 // -> MORTE (hit deterministico via __harness.supernova.jogo) -> fim ->
-// de novo -> SUPERNOVA (detonacao com carga furada) -> pausa -> continuar,
-// parando no watchdog. No harness roda a via procedural (sem
-// createSprite/drawPNG) no canvas nativo do stub (480x480), provando a
-// degradacao graciosa sem assets/sprites — e a fisica da engine (corpos
-// sensor) faz a deteccao de acertos.
+// de novo -> rajada do chefe no POOL de ebullets -> SUPERNOVA (detonacao
+// com carga furada) -> pausa -> continuar, parando no watchdog. No harness
+// roda a via procedural (sem createSprite/drawPNG) no canvas nativo do stub
+// (480x480), provando a degradacao graciosa sem assets/sprites — e os
+// acertos sao por distancia nos pools (sem fisica desde a 2.3).
 //
 // ATENCAO: os agendamentos usam env.setTimeout (relogio virtual do harness,
 // disparado no delay/getTouch) — o setTimeout do Node nunca rodaria: a
@@ -63,10 +63,17 @@ module.exports.wire = function (env) {
         h.pushTouch([{ x: 240, y: 343, touched: 1 }, { x: 240, y: 343, touched: 0 }]);
     }, 3600);
 
-    // carrega e detona a supernova (toque no medidor do canto inferior esquerdo)
+    // carrega, solta o anel do chefe no POOL e detona a supernova (toque no
+    // medidor do canto inferior esquerdo). Tudo num timer so: o harness so
+    // tem 8 timers e o smoke ja usa todos.
     at(function () {
         var m = h.supernova;
-        if (m) m.jogo.state().charge = 100;
+        if (!m) return;
+        m.jogo.state().charge = 100;
+        m.jogo.debugRing(240, 200);
+        if (m.jogo.bullets().ebn < 10) {
+            throw new Error('Supernova: anel nao povoou o pool de ebullets');
+        }
     }, 4600);
     at(function () {
         h.pushTouch([{ x: 60, y: 420, touched: 1 }, { x: 60, y: 420, touched: 0 }]);

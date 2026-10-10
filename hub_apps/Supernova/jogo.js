@@ -1,24 +1,25 @@
-// jogo.js — simulacao do combate do Supernova sobre a game engine do SDK:
-// corpos SENSOR na fisica (celeros.physics) fazem a deteccao de acertos
-// (tiro x inimigo, ram x nave, orbe x nave) e o movimento e roteado — cenas
-// de acao nao querem empurra-empurra. A trilha continua sendo o metronomo:
-// cada cruzamento de batida pode soltar um comboio. Novidade da 2.0:
-// SENTINELA-MOR (chefe) a cada 5 ondas, com rajadas radiais na batida e
-// barra de vida; combo x2..x5 por abates em serie; drones splitter que se
-// dividem; tiro triplo de premiacao. Coordenadas em PIXELS FISICOS (canvas
-// nativo); medidas e velocidades nasceram no 480 e escalam por K = E.U / 2
-// (1 no SmartDisplay, ~0,85 no relogio de 410).
+// jogo.js — simulacao do combate do Supernova sobre a game engine do SDK.
+// Desde a 2.3 os PROJETEIS nao sao mais corpos da fisica: vivem em POOLS
+// pre-alocados e colidem por distancia (bala x inimigo, bala x nucleo da
+// nave), e o pouco que sobrou (ram de inimigo, orbe) e checado no proprio
+// roteamento — a dep celeros.physics saiu do app. Motivo: no pico do chefe
+// viviam ~85 corpos sensor no sweep-and-prune da fisica, rodando 2x por
+// quadro (os sub-passos eram empurrados pelas balas de 620 px/s), e cada
+// rajada alocava ~30 objetos (closure de onCollide inclusa) — engasgo de GC
+// no Duktape e, em cascata (fps cai, dt cresce, mais balas vivas), RangeError
+// "execution timeout". Vazamento consertado junto: as balas do chefe que
+// subiam nunca eram varridas (o cull antigo nao tinha o teto y < -24K) e
+// acumulavam como fantasmas no mundo para sempre. A trilha continua sendo
+// o metronomo: cada cruzamento de batida pode soltar um comboio (ou a
+// rajada do chefe). Coordenadas em PIXELS FISICOS (canvas nativo); medidas
+// e velocidades nasceram no 480 e escalam por K = E.U / 2 (1 no
+// SmartDisplay, ~0,85 no relogio de 410).
 
 var E = require("celeros.engine");
-var P = require("celeros.physics");
 
 // paleta do jogo (preto puro e a cor-chave dos sprites)
 var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20,
     OURO = 0xFFE0, BRANCO = 0xFFFF, VERDE = 0x07E0;
-
-// grupos/mascaras de colisao (bitmask): tiro<->inimigo, inimigo/tiro<->nave,
-// orbe<->nave; pares fora das mascaras nem entram no narrow phase
-var G_PLAYER = 1, G_PBULLET = 2, G_ENEMY = 4, G_EBULLET = 8, G_ORB = 16;
 
 var BPM = 132;
 
@@ -68,9 +69,32 @@ var SONG = {
 };
 
 var W = 0, H = 0, K = 1;
-var world = null;
 var S = null;
 var lastBeatInt = -1;
+
+// Contêiner simples de corpos (mesma forma de sempre: world.all alimenta o
+// desenho, o sweep e a supernova). Nao ha mais broadphase: as unicas
+// colisoes entre corpos (ram de inimigo, orbe) sao duas distancias no
+// roteamento do update.
+var world = { all: [] };
+
+function addBody(b) {
+    world.all.push(b);
+    return b;
+}
+
+function removeAt(i) {
+    var a = world.all;
+    a[i] = a[a.length - 1];
+    a.pop();
+}
+
+// Pools de projeteis: objetos pre-alocados, reciclados por swap-pop — zero
+// alocacao por rajada (o GC do Duktape nao engasga mais no chefe). O cap e
+// teto defensivo: cheio, o tiro nasce morto.
+var PB_CAP = 24, EB_CAP = 64;
+var PB = [], PBn = 0;    // tiros da nave
+var EB = [], EBn = 0;    // tiros inimigos
 
 function clampX(x) {
     var m = 30 * K;
@@ -81,24 +105,24 @@ function reset() {
     W = E.W;
     H = E.H;
     K = E.U / 2;
-    // maxSub 2: com 6, o step do pico (combo + minis + rajada do chefe ~50
-    // corpos sensor) passava de 1 s no Duktape do device e virava RangeError
-    // "execution timeout" (lastcrash 2026-10-09). A 20-25 fps reais do jogo
-    // o sub-passo de ~25 ms mantem as balas de 620 px/s sem atravessar
-    // (janela de colisao bala 5 + inimigo 20 = 25 px)
-    world = P.world({ gravity: { x: 0, y: 0 }, maxSub: 2 });
+    world = { all: [] };
+    PBn = 0;
+    EBn = 0;
+    if (PB.length < PB_CAP) {
+        for (var i = 0; i < PB_CAP; i++) PB.push({ x: 0, y: 0, vx: 0, vy: 0 });
+    }
+    if (EB.length < EB_CAP) {
+        for (var j = 0; j < EB_CAP; j++) EB.push({ x: 0, y: 0, vx: 0, vy: 0 });
+    }
     S = {
         t: 0, world: world, player: null,
         score: 0, kills: 0, lives: 3, charge: 0,
         streak: 0, streakT: 0, mult: 1, multPulse: 0,
         wave: 0, spawns: 0, intensity: 0,
-        boss: null, bossNext: 5, triple: 0,
+        boss: null, bossNext: 5, bossAlt: 0, triple: 0,
         over: false, overT: 0, resumeAt: 0
     };
-    var p = world.add({
-        cat: 'player', group: G_PLAYER, mask: G_EBULLET | G_ENEMY,
-        x: W / 2, y: H * 0.8, r: 24 * K, sensor: true
-    });
+    var p = addBody({ cat: 'player', x: W / 2, y: H * 0.8, r: 24 * K });
     p.cool = 0;
     p.invuln = 1.2;
     S.player = p;
@@ -125,15 +149,14 @@ function spawnConvoy() {
     var n = 2 + Math.min(2, Math.floor(s.intensity / 2));
     var cx = 60 * K + Math.random() * (W - 120 * K);
     for (var i = 0; i < n; i++) {
-        var e = world.add({
-            cat: 'enemy', kind: 0, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
+        var e = addBody({
+            cat: 'enemy', kind: 0,
             x: clampX(cx + (i - (n - 1) / 2) * 78 * K), y: (-40 - i * 34) * K, r: 20 * K,
-            hp: 1, sensor: true, flashT: 0,
+            hp: 1, flashT: 0,
             ph: Math.random() * Math.PI * 2, cool: 1.4 + Math.random() * 2.2,
             vx: (26 + s.intensity * 5) * K
         });
         e.upd = updDrone;
-        e.onCollide = enemyCollide;
     }
     s.spawns++;
     s.wave = 1 + Math.floor(s.spawns / 4);
@@ -141,14 +164,13 @@ function spawnConvoy() {
 }
 
 function spawnSentinel() {
-    var e = world.add({
-        cat: 'enemy', kind: 1, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
+    var e = addBody({
+        cat: 'enemy', kind: 1,
         x: clampX(70 * K + Math.random() * (W - 140 * K)), y: -50 * K, r: 20 * K,
-        hp: 3 + Math.floor(S.intensity / 3), sensor: true, flashT: 0,
+        hp: 3 + Math.floor(S.intensity / 3), flashT: 0,
         ph: Math.random() * Math.PI * 2, cool: 1.1 + Math.random()
     });
     e.upd = updSentinel;
-    e.onCollide = enemyCollide;
     S.spawns++;
     S.wave = 1 + Math.floor(S.spawns / 4);
     if (S.wave >= S.bossNext) spawnBoss();
@@ -156,24 +178,22 @@ function spawnSentinel() {
 
 // splitter: desce rapido em senoide apertada e se divide em 2 minis
 function spawnSplitter() {
-    var e = world.add({
-        cat: 'enemy', kind: 3, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
+    var e = addBody({
+        cat: 'enemy', kind: 3,
         x: clampX(60 * K + Math.random() * (W - 120 * K)), y: -40 * K, r: 20 * K,
-        hp: 2, sensor: true, flashT: 0,
+        hp: 2, flashT: 0,
         ph: Math.random() * Math.PI * 2
     });
     e.upd = updSplitter;
-    e.onCollide = enemyCollide;
 }
 
 function spawnMini(x, ph) {
-    var e = world.add({
-        cat: 'enemy', kind: 4, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: clampX(x), y: -20 * K, r: 12 * K, hp: 1, sensor: true, flashT: 0,
+    var e = addBody({
+        cat: 'enemy', kind: 4,
+        x: clampX(x), y: -20 * K, r: 12 * K, hp: 1, flashT: 0,
         ph: ph
     });
     e.upd = updMini;
-    e.onCollide = enemyCollide;
 }
 
 function spawnMinis(e) {
@@ -182,31 +202,21 @@ function spawnMinis(e) {
 }
 
 function spawnOrb(x) {
-    var o = world.add({
-        cat: 'orb', group: G_ORB, mask: G_PLAYER,
+    var o = addBody({
+        cat: 'orb',
         x: x === undefined ? 50 * K + Math.random() * (W - 100 * K) : clampX(x),
-        y: -30 * K, r: 16 * K, sensor: true, ph: 0
+        y: -30 * K, r: 16 * K, ph: 0
     });
     o.upd = updOrb;
-    o.onCollide = function (me, other) {
-        if (me.dead || other.cat !== 'player') return;
-        me.dead = true;
-        S.charge = Math.min(100, S.charge + 25);
-        S.score += 15;
-        E.fx.ring(me.x, me.y, { color: OURO, speed: 300 * K, life: 0.5 });
-        E.fx.popText(me.x, me.y - 14 * K, "+CARGA", { color: OURO, ts: 'small' });
-        E.audio.sfx(SND.orbe);
-    };
 }
 
 function spawnBoss() {
     var hp = 26 + S.wave * 3;
-    var b = world.add({
-        cat: 'enemy', kind: 2, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: W / 2, y: -90 * K, r: 46 * K, hp: hp, hpMax: hp, sensor: true, flashT: 0
+    var b = addBody({
+        cat: 'enemy', kind: 2,
+        x: W / 2, y: -90 * K, r: 46 * K, hp: hp, hpMax: hp, flashT: 0
     });
     b.upd = updBoss;
-    b.onCollide = enemyCollide;
     S.boss = b;
     E.fx.popText(W / 2, H * 0.3, "SENTINELA-MOR", { color: MAGENTA, life: 1.6, ts: 'big' });
     E.audio.sfx(SND.alerta);
@@ -265,64 +275,138 @@ function updOrb(o, dt) {
 // ------------------------------------------------------------- tiros ---
 
 function pbullet(x, y, vx, vy) {
-    var b = world.add({
-        cat: 'pbullet', group: G_PBULLET, mask: G_ENEMY,
-        x: x, y: y, r: 5 * K, vx: vx, vy: vy, sensor: true, dead: false
-    });
-    b.onCollide = function (me, other) {
-        if (me.dead || other.dead || other.killed) return;
-        if (other.cat !== 'enemy') return;
-        me.dead = true;
-        other.hp -= 1;
-        other.flashT = 0.09;
-        E.fx.burst(me.x, me.y + 6 * K, { n: 3, color: BRANCO, speed: 80 * K, life: 0.3, size: 1 });
-        if (other.hp <= 0) other.killed = true;
-    };
+    if (PBn >= PB_CAP) return null;
+    var b = PB[PBn++];
+    b.x = x; b.y = y; b.vx = vx; b.vy = vy;
     return b;
 }
 
 function ebullet(x, y, vx, vy) {
-    var b = world.add({
-        cat: 'ebullet', group: G_EBULLET, mask: G_PLAYER,
-        x: x, y: y, r: 5 * K, vx: vx, vy: vy, sensor: true, dead: false
-    });
-    b.onCollide = function (me, other) {
-        if (me.dead) return;
-        if (other.cat === 'player' && !S.over && S.player.invuln <= 0) {
-            me.dead = true;
-            hitPlayer();
-        }
-    };
+    if (EBn >= EB_CAP) return null;
+    var b = EB[EBn++];
+    b.x = x; b.y = y; b.vx = vx; b.vy = vy;
     return b;
 }
 
+// colheita do orbe pela nave
+function pickupOrb(o) {
+    o.dead = true;
+    S.charge = Math.min(100, S.charge + 25);
+    S.score += 15;
+    E.fx.ring(o.x, o.y, { color: OURO, speed: 300 * K, life: 0.5 });
+    E.fx.popText(o.x, o.y - 14 * K, "+CARGA", { color: OURO, ts: 'small' });
+    E.audio.sfx(SND.orbe);
+}
+
 // inimigo que ramming a nave: explode junto
-function enemyCollide(me, other) {
-    if (me.dead || me.killed) return;
-    if (other.cat === 'player' && !S.over && S.player.invuln <= 0) {
-        me.dead = true;
-        E.fx.burst(me.x, me.y, { n: 12, color: LARANJA, speed: 120 * K, life: 0.5 });
-        hitPlayer();
+function ramPlayer(e) {
+    e.dead = true;
+    E.fx.burst(e.x, e.y, { n: 12, color: LARANJA, speed: 120 * K, life: 0.5 });
+    hitPlayer();
+}
+
+// anel do chefe com CLAURO DE FUGA de 2 slots (~50-70 graus) centrado em
+// gapA: sempre ha um caminho legivel — o anel fechado aleatorio da 2.2
+// nascia com ~20 px entre balas contra 48 px de nave (nao havia onde passar)
+function fireRing(x, y, sp, n, gapA) {
+    var step = Math.PI * 2 / (n + 2);
+    var arc = Math.PI * 2 - 2 * step;
+    for (var i = 0; i < n; i++) {
+        var a = gapA + step + arc * i / (n - 1);
+        ebullet(x + Math.cos(a) * 44 * K, y + Math.sin(a) * 44 * K,
+                Math.cos(a) * sp, Math.sin(a) * sp);
     }
 }
 
-// rajada radial do chefe, sincronizada na batida
+// rajada do chefe, sincronizada na batida: alterna anel com clauro (virado
+// para o lado da nave) e leque mirado de 3 — pressao com metade das balas
 function bossBurst() {
     var b = S.boss;
     if (!b || b.y < 60 * K) return;
     var fast = b.hp < b.hpMax / 2;
-    var n = fast ? 14 : 9;
-    var sp = (130 + S.intensity * 8 + (fast ? 40 : 0)) * K;
-    var a0 = Math.random() * Math.PI;
-    for (var i = 0; i < n; i++) {
-        var a = a0 + i * Math.PI * 2 / n;
-        ebullet(b.x + Math.cos(a) * 44 * K, b.y + Math.sin(a) * 44 * K,
-                Math.cos(a) * sp, Math.sin(a) * sp);
-    }
     E.fx.ring(b.x, b.y, { color: MAGENTA, speed: 500 * K, life: 0.4 });
+    if (S.bossAlt++ % 2 === 1) {
+        var base = Math.atan2(S.player.y - b.y, S.player.x - b.x);
+        var fs = 230 * K;
+        for (var f = -1; f <= 1; f++) {
+            var fa = base + f * 0.22;
+            ebullet(b.x, b.y + 40 * K, Math.cos(fa) * fs, Math.sin(fa) * fs);
+        }
+    } else {
+        var sp = (110 + S.intensity * 6 + (fast ? 25 : 0)) * K;
+        var gap = Math.atan2(S.player.y - b.y, S.player.x - b.x) + (Math.random() - 0.5) * 0.6;
+        fireRing(b.x, b.y, sp, fast ? 12 : 8, gap);
+    }
 }
 
 // ----------------------------------------------------------- simulacao ---
+
+// projeteis: integracao + colisao por distancia em micro-passos curtos (a
+// bala da nave a 620 px/s nao atravessa o mini de r 12). Contra tiros
+// inimigos a nave acerta pelo NUCLEO (graze de 14 px, nao a borda de 24):
+// classico dos shmups — o vaisivel nao muda, desviar fica possivel
+function updateBullets(dt) {
+    var s = S, p = s.player;
+    var i, j, k, b, e, nsub, sdt, dx, dy, rr, dead, all;
+
+    for (i = PBn - 1; i >= 0; i--) {
+        b = PB[i];
+        nsub = Math.max(1, Math.min(4,
+              Math.ceil((Math.abs(b.vx) + Math.abs(b.vy)) * dt / (10 * K))));
+        sdt = dt / nsub;
+        dead = false;
+        all = world.all;
+        for (k = 0; k < nsub && !dead; k++) {
+            b.x += b.vx * sdt;
+            b.y += b.vy * sdt;
+            for (j = 0; j < all.length; j++) {
+                e = all[j];
+                if (e.cat !== 'enemy' || e.dead || e.killed) continue;
+                dx = b.x - e.x; dy = b.y - e.y;
+                rr = 5 * K + e.r;
+                if (dx * dx + dy * dy <= rr * rr) {
+                    dead = true;
+                    e.hp -= 1;
+                    e.flashT = 0.09;
+                    E.fx.burst(b.x, b.y + 6 * K, { n: 3, color: BRANCO, speed: 80 * K, life: 0.3, size: 1 });
+                    if (e.hp <= 0) e.killed = true;
+                    break;
+                }
+            }
+        }
+        if (dead || b.y < -24 * K) {
+            PBn--;
+            PB[i] = PB[PBn];
+            PB[PBn] = b;
+        }
+    }
+
+    var gr = (14 + 5) * K;   // nucleo da nave + raio da bala
+    for (i = EBn - 1; i >= 0; i--) {
+        b = EB[i];
+        nsub = Math.max(1, Math.min(2,
+              Math.ceil((Math.abs(b.vx) + Math.abs(b.vy)) * dt / (9 * K))));
+        sdt = dt / nsub;
+        dead = false;
+        for (k = 0; k < nsub && !dead; k++) {
+            b.x += b.vx * sdt;
+            b.y += b.vy * sdt;
+            if (!s.over && p.invuln <= 0) {
+                dx = b.x - p.x; dy = b.y - p.y;
+                if (dx * dx + dy * dy <= gr * gr) {
+                    dead = true;
+                    hitPlayer();
+                }
+            }
+        }
+        if (dead || b.y < -24 * K || b.y > H + 24 * K ||
+            b.x < -24 * K || b.x > W + 24 * K) {
+            EBn--;
+            EB[i] = EB[EBn];
+            EB[EBn] = b;
+        }
+    }
+}
 
 function update(dt) {
     var s = S;
@@ -377,15 +461,24 @@ function update(dt) {
                      angle: Math.PI / 2, spread: 0.5, life: 0.28, size: 1 });
     }
 
-    // roteia os corpos e roda a fisica (so deteccao: todos sao sensor)
+    // roteia os corpos; ram de inimigo e orbe colhem por distancia direta
+    // (nao sobrou broadphase — e so a nave contra poucos corpos)
     var all = world.all;
     for (var i = 0; i < all.length; i++) {
         var b = all[i];
         if (b.flashT > 0) b.flashT -= dt;
         if (b.upd && !b.dead && !b.killed) b.upd(b, dt);
         if (b.cat === 'enemy' && b.kind !== 2) b.x = clampX(b.x);
+        if (b.cat !== 'player' && !b.dead && !b.killed && !s.over) {
+            var dx = b.x - p.x, dy = b.y - p.y;
+            var rr = b.r + p.r;
+            if (dx * dx + dy * dy <= rr * rr) {
+                if (b.cat === 'orb') pickupOrb(b);
+                else if (p.invuln <= 0) ramPlayer(b);
+            }
+        }
     }
-    world.step(dt);
+    updateBullets(dt);
     sweep();
 
     if (s.streakT > 0) {
@@ -402,23 +495,19 @@ function update(dt) {
     }
 }
 
-// varre os corpos: mortos, marcados como abate e fora da tela
+// varre os corpos: mortos, marcados como abate e fora da tela (projeteis
+// sao varridos no proprio updateBullets — inclusive as balas que SOBEM,
+// que antigamente escapavam do cull e viravam fantasmas eternos)
 function sweep() {
     var all = world.all;
     for (var i = all.length - 1; i >= 0; i--) {
         var b = all[i];
-        if (b.cat === 'pbullet') {
-            if (b.dead || b.y < -24 * K) world.remove(b);
-        } else if (b.cat === 'ebullet') {
-            if (b.dead || b.y > H + 24 * K || b.x < -24 * K || b.x > W + 24 * K) world.remove(b);
-        } else if (b.cat === 'orb') {
-            if (b.dead || b.y > H + 30 * K) world.remove(b);
+        if (b.cat === 'orb') {
+            if (b.dead || b.y > H + 30 * K) removeAt(i);
         } else if (b.cat === 'enemy') {
-            if (b.killed) killEnemy(b);
-            else if (b.dead) {
-                explosionFx(b);
-                world.remove(b);
-            } else if (b.y > H + 60 * K) world.remove(b);
+            if (b.killed) { killEnemy(b); removeAt(i); }
+            else if (b.dead) { explosionFx(b); removeAt(i); }
+            else if (b.y > H + 60 * K) removeAt(i);
         }
     }
 }
@@ -456,7 +545,6 @@ function killEnemy(e) {
     E.fx.popText(e.x, e.y - 10 * K, "+" + tot, { color: e.kind === 1 ? MAGENTA : OURO, ts: 'small' });
     if (e.kind === 3) spawnMinis(e);
     if (e.kind === 2) bossDown(e);
-    world.remove(e);
 }
 
 function bossDown(e) {
@@ -521,11 +609,10 @@ function detonate() {
         b = all[i];
         if (b.cat === 'enemy' && b.killed) {
             if (b.kind === 2) bossDown(b);
-            world.remove(b);
-        } else if (b.cat === 'ebullet') {
-            world.remove(b);
+            removeAt(i);
         }
     }
+    EBn = 0;   // os tiros inimigos somem inteiros (pool: esvaziar e O(1))
     s.score += gained + 60;
     s.charge = 0;
     E.fx.burst(s.player.x, s.player.y - 30 * K, { n: 40, color: OURO, speed: 300 * K, life: 0.9 });
@@ -550,14 +637,25 @@ function startMusic() {
     E.audio.music(SONG);
 }
 
-// teste deterministico (harness): tiro inimigo em cima da nave
+// pools para o desenho (main.js) e para o teste
+function bullets() {
+    return { pb: PB, pbn: PBn, eb: EB, ebn: EBn };
+}
+
+// testes deterministcos (harness): tiro inimigo em cima da nave e anel do
+// chefe em ponto dado
 function debugHit() {
     var p = S.player;
     ebullet(p.x, p.y, 0, 120);
 }
 
+function debugRing(x, y) {
+    fireRing(x, y, 150 * K, 12, -Math.PI / 2);
+}
+
 module.exports = {
     reset: reset, update: update, detonate: detonate,
-    state: state, movePlayer: movePlayer,
-    SONG: SONG, startMusic: startMusic, debugHit: debugHit, BPM: BPM, SND: SND
+    state: state, movePlayer: movePlayer, bullets: bullets,
+    SONG: SONG, startMusic: startMusic, BPM: BPM, SND: SND,
+    debugHit: debugHit, debugRing: debugRing
 };
