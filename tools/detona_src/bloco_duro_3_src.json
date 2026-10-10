@@ -1,0 +1,33 @@
+{
+  "timestamp": 1791603479.00027,
+  "prompt": "seamless metal texture, brushed steel, reflective surface, industrial, seamless dark sci-fi armor plating texture, gunmetal metal panels with rivets and subtle cyan edge glow, flat even lighting, top-down, game block material",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 7433,
+    "prompt_final": "seamless metal texture, brushed steel, reflective surface, industrial, seamless dark sci-fi armor plating texture, gunmetal metal panels with rivets and subtle cyan edge glow, flat even lighting, top-down, game block material",
+    "prompt": "seamless metal texture, brushed steel, reflective surface, industrial, seamless dark sci-fi armor plating texture, gunmetal metal panels with rivets and subtle cyan edge glow, flat even lighting, top-down, game block material",
+    "negative_prompt": "soft, fabric, organic, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 8.0,
+    "num_inference_steps": 60,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 1.0,
+      "edge_mse_horizontal": 0.0,
+      "edge_mse_vertical": 0.0,
+      "max_abs_edge_diff": 0,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": true
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/detona_src/bloco_duro_3_src.png",
+  "filename": "bloco_duro_3_src.png"
+}

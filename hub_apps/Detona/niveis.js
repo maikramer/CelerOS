@@ -23,22 +23,27 @@ function rng(seed) {
     };
 }
 
-// paletas do chao procedural (lajota 2 tons + junta) por mundo
+// paletas do chao procedural (lajota 2 tons + junta) por mundo. macio/duro
+// sao os PNGs tematicos de bloco (o main recarrega os slots por fase); o
+// painter fallback tinge o bloco com o detalhe do mundo
 var TEMAS = [
     {   // 1: Jardim de Pedra
         nome: "Jardim de Pedra",
         a: 0x1820, b: 0x1008, junta: 0x0800,
-        hud: 0x0406, hudTxt: 0xC618, detalhe: 0x07E0
+        hud: 0x0406, hudTxt: 0xC618, detalhe: 0x07E0,
+        macio: "bloco_macio_1", duro: "bloco_duro_1"
     },
     {   // 2: Forno
         nome: "Forno",
         a: 0x4000, b: 0x2A00, junta: 0x1000,
-        hud: 0x2000, hudTxt: 0xFFE0, detalhe: 0xFD20
+        hud: 0x2000, hudTxt: 0xFFE0, detalhe: 0xFD20,
+        macio: "bloco_macio_2", duro: "bloco_duro_2"
     },
     {   // 3: Nucleo
         nome: "Nucleo",
         a: 0x1008, b: 0x0804, junta: 0x0000,
-        hud: 0x0204, hudTxt: 0xBDF7, detalhe: 0xF81F
+        hud: 0x0204, hudTxt: 0xBDF7, detalhe: 0xF81F,
+        macio: "bloco_macio_3", duro: "bloco_duro_3"
     }
 ];
 
@@ -200,6 +205,98 @@ function sorteiaLivre(grid, r, minDist, evita) {
     return null;
 }
 
+// conectividade: tudo que nao e '#' tem de ser alcancavel de (1,1) abrindo
+// macios (mesma nocao do GRID.escolheAlcancavel) — valida cada peca nova
+function tudoAlcancavel(grid) {
+    var f = GRID.flood(grid, 1, 1, function (ch) { return ch !== '#'; });
+    for (var r = 0; r < ROWS; r++)
+        for (var c = 0; c < COLS; c++)
+            if (grid[r][c] !== '#' && !f.ok[r][c]) return false;
+    return true;
+}
+
+// ressync da lista de macios com a grade (os padroes promovem/depõem blocos)
+function remacula(grid) {
+    var macios = [];
+    for (var r = 0; r < ROWS; r++)
+        for (var c = 0; c < COLS; c++)
+            if (grid[r][c] === '%') macios.push({ c: c, r: r });
+    return macios;
+}
+
+// PADRAO DE MAPA por mundo (a partir do 2o nivel; a 1a fase de cada mundo
+// apresenta o tema na grade classica):
+//   1 Jardim "canteiros": moitas de macio em fileiras organizadas nas
+//     linhas 3/6/9 (leitura de canteiro) no lugar do salpicado aleatorio
+//   2 Forno "veios": placas de obsidiana ('#') em diagonal com macios
+//     aglomerados em volta — cada peca nova so fica se a arena inteira
+//     continua alcancavel
+//   3 Nucleo "camaras": duas paredes atravessadas com portas de 1 celula
+//     sorteadas pela seed — tres bandas de arena, tocaia de portal
+function padronizar(mundo, nivel, grid, r) {
+    if (nivel <= 1) return;
+    var c, rr;
+    if (mundo === 1) {
+        // limpa macios das linhas de canteiro e replanta em moitas
+        for (rr = 3; rr <= 9; rr += 3) {
+            var livres = [];
+            for (c = 1; c < COLS - 1; c++) {
+                if (grid[rr][c] === '%' && c + rr >= 6) { grid[rr][c] = '.'; livres.push(c); }
+                else if (grid[rr][c] === '.' && c + rr >= 6) livres.push(c);
+            }
+            var n = Math.max(2, Math.floor(livres.length / 3));
+            for (var m = 0; m < n; m++) {
+                var ini = Math.floor(r() * livres.length);
+                var comp = 2 + Math.floor(r() * 2);   // moita de 2-3
+                for (var k = 0; k < comp; k++) {
+                    var cc = livres[(ini + k * 2) % livres.length];
+                    if (grid[rr][cc] === '.') grid[rr][cc] = '%';
+                }
+            }
+        }
+    } else if (mundo === 2) {
+        var passo = 8 + Math.floor(r() * 2);   // 8-9: 2 diagonais na arena
+        var o1 = 3 + Math.floor(r() * 4), o2 = o1 + 4 + Math.floor(r() * 2);
+        for (rr = 1; rr < ROWS - 1; rr++) {
+            for (c = 1; c < COLS - 1; c++) {
+                if (grid[rr][c] !== '.') continue;
+                var diag = (c + rr) % passo === o1 % passo ||
+                           (c + rr) % passo === o2 % passo;
+                if (!diag || (c % 2 === 0 && rr % 2 === 0)) continue;
+                if (c + rr < 6) continue;
+                grid[rr][c] = '#';
+                if (!tudoAlcancavel(grid)) { grid[rr][c] = '.'; continue; }
+                // aglomerado de macio encostado na placa nova
+                var dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+                for (var d = 0; d < 4; d++) {
+                    var nc = c + dirs[d][0], nr = rr + dirs[d][1];
+                    if (grid[nr] && grid[nr][nc] === '.' && r() < 0.5 &&
+                        nc + nr >= 6) grid[nr][nc] = '%';
+                }
+            }
+        }
+    } else if (mundo >= 3) {
+        for (rr = 4; rr <= 8; rr += 4) {
+            for (c = 1; c < COLS - 1; c++) {
+                if (grid[rr][c] !== '#') grid[rr][c] = '#';
+            }
+            var portas = 0, tenta = 0;
+            while (portas < 2 && tenta < 24) {
+                tenta++;
+                var pc = 3 + Math.floor(r() * (COLS - 6));
+                if (grid[rr][pc] !== '#') continue;
+                grid[rr][pc] = '.';
+                portas++;
+            }
+            // garantia extrema: nenhuma porta coube, abre a do meio
+            if (!tudoAlcancavel(grid)) {
+                grid[rr][COLS >> 1] = '.';
+                if (!tudoAlcancavel(grid)) grid[rr][COLS >> 1] = '#';
+            }
+        }
+    }
+}
+
 // gera {grid, exit, powerups, spawns} para mundo/nivel (1-based).
 // opts.sobrevivencia: arena fixa (seed proprio), mais vazia, sem saida,
 // sem tempo — as ondas quem comandam sao o main/ia.
@@ -229,6 +326,11 @@ function gerar(mundo, nivel, opts) {
             macios.push({ c: cc2, r: rr2 });
         }
     }
+    // padrao de mapa do mundo (campanha e duelo — tudo por seed, os dois
+    // aparelhos do versus geram a mesma arena; fase de chefe nao: o 2x2
+    // nao atravessa porta de 1 celula das camaras)
+    if (!opts.sobrevivencia && !p.chefe) padronizar(mundo, nivel, grid, r);
+    macios = remacula(grid);
     // chefe no fim do mundo: a area 2x2 de spawn dele respira (e sai da
     // lista de macios — saida/powerup nunca escondem la)
     if (p.chefe) {
@@ -272,13 +374,15 @@ function gerar(mundo, nivel, opts) {
             break;
         }
     }
-    // spawns de inimigos: celulas livres longe do canto do spawn
+    // spawns de inimigos: celulas livres longe do canto do spawn. O ladrao
+    // (rouba powerup do chao e foge) entra no Jardim, o cuspidor (cospe
+    // fogo de 1 celula quando o jogador alinha) e do Forno pra frente
     var spawns = [];
-    var kinds = opts.sobrevivencia ? ['balao', 'fantasma', 'cacador']
+    var kinds = opts.sobrevivencia ? ['balao', 'fantasma', 'cacador', 'ladrao']
               : p.abs < 3 ? ['balao']
-              : p.abs < 6 ? ['balao', 'fantasma']
-              : p.abs < 11 ? ['balao', 'fantasma', 'divisor', 'cacador']
-              : ['fantasma', 'cacador', 'divisor', 'blindado', 'balao'];
+              : p.abs < 6 ? ['balao', 'fantasma', 'ladrao']
+              : p.abs < 11 ? ['balao', 'fantasma', 'divisor', 'cacador', 'ladrao']
+              : ['fantasma', 'cacador', 'divisor', 'blindado', 'balao', 'cuspidor'];
     var ninim = opts.sobrevivencia ? 3 : p.inimigos;
     if (opts.duelo) ninim = 0;   // duelo: so os dois jogadores
     for (var e = 0; e < ninim; e++) {

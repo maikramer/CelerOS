@@ -7,6 +7,13 @@
 //   blindado  1.3 cel/s, 2 acertos (o 1o arranca a blindagem), esperto
 //             como o cacador para fugir de bomba
 //   divisor   1.9 cel/s, ao morrer se parte em 2 mini (rapidos, 1 acerto)
+//   ladrao    2.6 cel/s, ronda os POWERUPS expostos: pega o mais proximo
+//             (flow ate ele), engole e foge de quem tem bomba; ao morrer
+//             larga tudo o que carrega na celula (ou vizinha) livre
+//   cuspidor  1.0 cel/s, 2 acertos, tanque parado: quando o jogador alinha
+//             (linha/coluna limpa, ate 5 celulas) a boca acende por meio
+//             tempo e COSPE fogo na celula da frente — labareda ambiente
+//             (fere so o jogador, como os respiros do Forno)
 //   chefe     2x2 celulas, 8 acertos, anda devagar e JOGA bombas na
 //             batida forte (a cada 8 tempos) perto do jogador
 //
@@ -27,6 +34,8 @@ var PERFIS = {
     blindado: { vel: 1.3, pontos: 400, w: 1, hp: 2, esperto: true },
     divisor:  { vel: 1.9, pontos: 250, w: 1, hp: 1 },
     mini:     { vel: 3.4, pontos: 50, w: 1, hp: 1 },
+    ladrao:   { vel: 2.6, pontos: 350, w: 1, hp: 1, esperto: true },
+    cuspidor: { vel: 1.0, pontos: 500, w: 1, hp: 2 },
     chefe:    { vel: 0.9, pontos: 1500, w: 2, hp: 8 }
 };
 var INV_BEATS = 1.2;   // invencivel apos levar golpe (chefe/blindado)
@@ -63,6 +72,8 @@ function colocar(kind, c, r) {
         hp: pf.hp, hpMax: pf.hp, esperto: !!pf.esperto,
         dir: { dx: 0, dy: 0 },
         invAte: -1, flash: 0,
+        bocaAte: 0, cuspeCd: 0, cuspeDir: null,   // cuspidor
+        roubos: [],                               // ladrao
         morto: false
     };
     st.enemies.push(e);
@@ -101,6 +112,7 @@ function podeIr(e, c, r) {
 }
 
 function decide(e) {
+    var st = arena.state();
     recompute(false);
     var alvo = null;
     var dz = e.esperto ? perigo() : null;
@@ -112,7 +124,12 @@ function decide(e) {
         } else if (e.kind === 'fantasma' && flowGhost && R() < 0.7) {
             var n2 = flowGhost.next(e.c, e.r);
             if (n2) alvo = n2;
+        } else if (e.kind === 'ladrao') {
+            alvo = alvoLadrao(e, st, dz);
         }
+    } else if (e.kind === 'ladrao') {
+        // em perigo: so foge (o saquinho nao vale a vida)
+        alvo = fugaLadrao(e, dz);
     }
     if (!alvo) {
         // vagueio: segue reto quando da; dobra aleatorio no bloqueio; so re
@@ -133,7 +150,8 @@ function decide(e) {
         }
         if (dz && seguras.length) opcoes = seguras;
         var escolha = null;
-        var teimoso = e.kind === 'balao' || e.kind === 'chefe' || e.kind === 'divisor';
+        var teimoso = e.kind === 'balao' || e.kind === 'chefe' ||
+                      e.kind === 'divisor' || e.kind === 'cuspidor';
         if (opcoes.length) {
             if (teimoso && (e.dir.dx !== 0 || e.dir.dy !== 0) && R() < 0.75) {
                 for (var q = 0; q < opcoes.length; q++) {
@@ -153,6 +171,70 @@ function decide(e) {
     } else {
         e.dir = { dx: 0, dy: 0 };
     }
+}
+
+// LADRAO: powerup exposto mais proximo (manhattan) vira o alvo — flow
+// ATRE ELE (nao ate o jogador). Sem powerup no chao, mantem distancia:
+// passo que MAXIMIZA o flow.dist do jogador
+function alvoLadrao(e, st, dz) {
+    if (!flow) return null;
+    var melhor = null, melhorD = 1e9;
+    for (var key in st.powerups) {
+        var vr = key.split(',');
+        var kc = parseInt(vr[0], 10), kr = parseInt(vr[1], 10);
+        if (arena.em(kc, kr) !== '.') continue;   // ainda sob macio
+        var dd = Math.abs(kc - e.c) + Math.abs(kr - e.r);
+        if (dd < melhorD) { melhorD = dd; melhor = { c: kc, r: kr }; }
+    }
+    if (melhor) {
+        var fp = GRID.flow(st.grid, melhor.c, melhor.r, function (ch) { return ch === '.'; });
+        var np = fp.next(e.c, e.r);
+        if (np && !(dz && dz[np.c + ',' + np.r])) return np;
+        return null;   // caminho cortado (bomba no meio): espera
+    }
+    return fugaLadrao(e, dz);
+}
+
+function fugaLadrao(e, dz) {
+    if (!flow) return null;
+    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var melhorDir = null, melhorDist = -1;
+    for (var d = 0; d < 4; d++) {
+        var lc = e.c + dirs[d][0], lr = e.r + dirs[d][1];
+        if (!podeIr(e, lc, lr)) continue;
+        if (dz && dz[lc + ',' + lr]) continue;
+        var fd = flow.dist(lc, lr);
+        if (fd > melhorDist) { melhorDist = fd; melhorDir = dirs[d]; }
+    }
+    return melhorDir ? { c: e.c + melhorDir[0], r: e.r + melhorDir[1] } : null;
+}
+
+// CUSPIDOR: boca acende 0,7 batida e cospe fogo ambiente na celula da
+// frente. Alinhamento = mesma linha/coluna, corredor limpo, ate 5 celulas
+function cuspePendente(e, b, cel) {
+    var st = arena.state();
+    if (e.bocaAte > 0) {
+        if (b < e.bocaAte) return;          // ainda anunciando
+        e.bocaAte = 0;
+        e.cuspeCd = b + 6;                  // um cuspe a cada 6 tempos
+        var cc = e.c + e.cuspeDir.dx, cr = e.r + e.cuspeDir.dy;
+        if (arena.em(cc, cr) === '.') {
+            st.flames.push({ c: cc, r: cr, tipo: 'cuspe', de: b, ate: b + 0.5,
+                             dx: e.cuspeDir.dx, dy: e.cuspeDir.dy,
+                             ambiente: true, dono: 'x' });
+            st.onSfx('vento');
+        }
+        return;
+    }
+    if (b < e.cuspeCd) return;
+    var dc = cel.c - e.c, dr = cel.r - e.r, dir = null, dist = 0;
+    if (dr === 0 && dc !== 0 && Math.abs(dc) <= 5) { dir = { dx: dc > 0 ? 1 : -1, dy: 0 }; dist = Math.abs(dc); }
+    else if (dc === 0 && dr !== 0 && Math.abs(dr) <= 5) { dir = { dx: 0, dy: dr > 0 ? 1 : -1 }; dist = Math.abs(dr); }
+    if (!dir) return;
+    for (var s = 1; s < dist; s++)
+        if (arena.em(e.c + dir.dx * s, e.r + dir.dy * s) !== '.') return;
+    e.cuspeDir = dir;
+    e.bocaAte = b + 0.7;   // telegraph: a boca acende antes do fogo
 }
 
 function chefeCabe(c, r) {
@@ -195,10 +277,15 @@ function update(dt, beat) {
     }
 
     var px = st.player.x / st.cell, py = st.player.y / st.cell;   // centro em celulas
+    var celJog = arena.celulaPlayer();
+    var b = arena.beatNow();
     for (var i = 0; i < st.enemies.length; i++) {
         var e = st.enemies[i];
         if (e.morto) continue;
         if (e.flash > 0) e.flash -= dt;
+
+        // cuspidor: boca acesa -> cuspe; procura alinhamento quando em paz
+        if (e.kind === 'cuspidor') cuspePendente(e, b, celJog);
 
         // alvo virou bomba/bloco no meio do passo: volta para a celula de
         // origem (antes atravessava a bomba recem-plantada)
@@ -217,6 +304,18 @@ function update(dt, beat) {
         } else {
             e.fx += dx / dist * passo;
             e.fy += dy / dist * passo;
+        }
+
+        // LADRAO chegou numa celula com powerup exposto: engole (devolve
+        // se morrer — a arena repinta a celula pelo st.mudou)
+        if (e.kind === 'ladrao') {
+            var pk = e.c + ',' + e.r;
+            if (st.powerups[pk] && arena.em(e.c, e.r) === '.') {
+                e.roubos.push(st.powerups[pk]);
+                delete st.powerups[pk];
+                st.mudou.push(e.c, e.r);
+                st.onSfx('hit');
+            }
         }
 
         // contato com o jogador pelo tamanho do bicho (o chefe 2x2 tem
@@ -292,6 +391,24 @@ function matar(e, dono) {
         }
         if (n === 0) colocar('mini', e.c, e.r).invAte = arena.beatNow() + 1;
     }
+    if (e.kind === 'ladrao' && e.roubos.length) {
+        // caiu: o saquinho abre — cada powerup roubado volta numa celula
+        // livre (a da morte primeiro, vizinhas depois, sem empilhar)
+        var tent = [{ c: e.c, r: e.r }, { c: e.c + 1, r: e.r }, { c: e.c - 1, r: e.r },
+                    { c: e.c, r: e.r + 1 }, { c: e.c, r: e.r - 1 }];
+        for (var rb = 0; rb < e.roubos.length; rb++) {
+            for (var tt = 0; tt < tent.length; tt++) {
+                var tc2 = tent[tt].c, tr2 = tent[tt].r;
+                var tk = tc2 + ',' + tr2;
+                if (arena.em(tc2, tr2) === '.' && !st.powerups[tk]) {
+                    st.powerups[tk] = e.roubos[rb];
+                    st.mudou.push(tc2, tr2);
+                    break;
+                }
+            }
+        }
+        e.roubos.length = 0;
+    }
 }
 
 // SOBREVIVENCIA: onda nova (chamada pelo main na batida ou quando a arena
@@ -304,9 +421,9 @@ function onda() {
     st.ondaAte = 6;
     var n = Math.min(2 + Math.floor(st.onda / 3), 5);
     var mix = st.onda < 2 ? ['balao']
-            : st.onda < 4 ? ['balao', 'fantasma']
-            : st.onda < 7 ? ['balao', 'fantasma', 'cacador', 'divisor']
-            : ['fantasma', 'cacador', 'divisor', 'blindado'];
+            : st.onda < 4 ? ['balao', 'fantasma', 'ladrao']
+            : st.onda < 7 ? ['balao', 'fantasma', 'cacador', 'divisor', 'ladrao']
+            : ['fantasma', 'cacador', 'divisor', 'blindado', 'cuspidor'];
     var cel = arena.celulaPlayer();
     for (var i = 0; i < n; i++) {
         var celula = GRID.celulaLivre(st.grid, R, function (c, r, ch) {

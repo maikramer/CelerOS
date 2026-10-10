@@ -62,6 +62,9 @@ var SZ = { jogador: CELL - 2, bomba: CELL - 4, bloco: CELL };
 // PNGs sao masterizados p/ celula 32: em tela menor o blit 1:1 estoura
 // a grade — sem nativo/sem folga os painters assumem (e ganham slot)
 var USA_PNG = E.caps.native && CELL >= 28;
+// itens de powerup sao PNG 32x32 desenhados DIRETO na celula (sem slot):
+// pedem celula 32 exata — em 30px sangrariam 2px no vizinho
+var USA_ITEM = USA_PNG && CELL >= 32;
 
 var C = {
     preto: 0x0000,
@@ -342,16 +345,16 @@ function painterBomba(w, h, x, y) {
     System.fillRect(x + w / 2 - 1, y + 2, 2, Math.max(3, h * 0.2), 0x8410);
 }
 function painterMacio(w, h, x, y) {
-    System.fillRect(x + 1, y + 1, w - 2, h - 2, 0x8410);
-    System.drawLine(x + 1, y + 1, x + w - 2, y + h - 2, 0x4208);
-    System.drawLine(x + w - 2, y + 1, x + 1, y + h - 2, 0x4208);
-    System.fillRect(x + 1, y + 1, w - 2, 2, 0xA514);
+    System.fillRect(x + 1, y + 1, w - 2, h - 2, corMacio);
+    System.drawLine(x + 1, y + 1, x + w - 2, y + h - 2, corMacioLo);
+    System.drawLine(x + w - 2, y + 1, x + 1, y + h - 2, corMacioLo);
+    System.fillRect(x + 1, y + 1, w - 2, 2, corMacioHi);
 }
 function painterDuro(w, h, x, y) {
-    System.fillRect(x, y, w, h, 0x7BEF);
-    System.fillRect(x + 1, y + 1, w - 2, h - 2, 0x528A);
-    System.fillRect(x + 2, y + 2, w - 4, 3, 0x39E7);
-    System.fillRect(x + 2, y + 2, 3, h - 4, 0x39E7);
+    System.fillRect(x, y, w, h, corDuro);
+    System.fillRect(x + 1, y + 1, w - 2, h - 2, corDuroMid);
+    System.fillRect(x + 2, y + 2, w - 4, 3, corDuroLo);
+    System.fillRect(x + 2, y + 2, 3, h - 4, corDuroLo);
 }
 function painterBalao(w, h, x, y) {
     var r = w * 0.42;
@@ -398,6 +401,24 @@ function painterMini(w, h, x, y) {
     System.fillRect(x + w / 2 - 2, y + h * 0.4, 2, 2, C.preto);
     System.fillRect(x + w / 2 + 1, y + h * 0.4, 2, 2, C.preto);
 }
+function painterCuspidor(w, h, x, y) {
+    // casca de basalto com a boca de brasa acesa
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.44, 0x2945);
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.34, 0x4208);
+    System.fillRect(x + w * 0.28, y + h * 0.34, 3, 3, 0xFD20);
+    System.fillRect(x + w * 0.62, y + h * 0.34, 3, 3, 0xFD20);
+    System.fillCircle(x + w / 2, y + h * 0.68, w * 0.18, 0xFB80);
+    System.fillCircle(x + w / 2, y + h * 0.68, w * 0.1, C.branco);
+}
+function painterLadrao(w, h, x, y) {
+    // guaxinim de mascara: corpo cinza, cauda listrada e o saco beige
+    System.fillCircle(x + w * 0.45, y + h * 0.5, w * 0.3, C.cinza);
+    System.fillCircle(x + w * 0.45, y + h * 0.5, w * 0.12, 0x8410);
+    System.fillRect(x + w * 0.32, y + h * 0.32, 3, 2, C.preto);
+    System.fillRect(x + w * 0.55, y + h * 0.32, 3, 2, C.preto);
+    System.fillCircle(x + w * 0.75, y + h * 0.55, w * 0.18, 0xFDC0);
+    System.fillRect(x + w * 0.1, y + h * 0.55, w * 0.2, 3, 0xFB80);
+}
 function painterRival(w, h, x, y) {
     var r = w * 0.42;
     System.fillCircle(x + w / 2, y + h / 2, r, C.branco);
@@ -405,14 +426,21 @@ function painterRival(w, h, x, y) {
     System.fillCircle(x + w / 2, y + h * 0.4, r * 0.34, 0x001F);
     System.fillRect(x + w / 2 - r * 0.5, y + h * 0.62, w * 0.5, 2, C.vermelho);
 }
+// PNGs por TRAS dos slots: o pool de hardware tem 8 vagas e o CONTEUDO
+// delas e recarregado por fase (armarSprites): os blocos vestem o tema do
+// mundo e as vagas de bicho vao pros kinds mais frequentes da arena. O
+// que fica de fora desenha pelo painter — inclusive em tela sem nativo.
+var corMacio = 0x8410, corMacioHi = 0xA514, corMacioLo = 0x4208;
+var corDuro = 0x7BEF, corDuroMid = 0x528A, corDuroLo = 0x39E7;
+
 E.spr.load([
     { name: "jogador", file: USA_PNG ? "jogador" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
     { name: "bomba", file: USA_PNG ? "bomba" : null,
       w: SZ.bomba, h: SZ.bomba, paint: painterBomba },
-    { name: "macio", file: USA_PNG ? "bloco_macio" : null,
+    { name: "macio", file: USA_PNG ? "bloco_macio_1" : null,
       w: SZ.bloco, h: SZ.bloco, paint: painterMacio },
-    { name: "duro", file: USA_PNG ? "bloco_duro" : null,
+    { name: "duro", file: USA_PNG ? "bloco_duro_1" : null,
       w: SZ.bloco, h: SZ.bloco, paint: painterDuro },
     { name: "balao", file: USA_PNG ? "balao" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterBalao },
@@ -422,12 +450,97 @@ E.spr.load([
       w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
     { name: "chefe", file: USA_PNG ? "chefe" : null,
       w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe },
-    // bichos novos: o pool de 8 slots ja esta cheio — vao como painters
+    // painters puros: o slot deles vem por fase (ou nunca)
     { name: "blindado", w: SZ.jogador, h: SZ.jogador, paint: painterBlindado },
     { name: "divisor", w: SZ.jogador, h: SZ.jogador, paint: painterDivisor },
     { name: "mini", w: Math.round(SZ.jogador * 0.7), h: Math.round(SZ.jogador * 0.7), paint: painterMini },
+    { name: "cuspidor", file: USA_PNG ? "cuspidor" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterCuspidor },
+    { name: "ladrao", file: USA_PNG ? "ladrao" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterLadrao },
     { name: "rival", w: SZ.jogador, h: SZ.jogador, paint: painterRival }
 ]);
+
+var BICHOS_PNG = { balao: "balao", fantasma: "fantasma", cacador: "perseguidor",
+                   chefe: "chefe", cuspidor: "cuspidor", ladrao: "ladrao" };
+var PAINTERS = { balao: painterBalao, fantasma: painterFantasma,
+                 cacador: painterCacador, chefe: painterChefe,
+                 cuspidor: painterCuspidor, ladrao: painterLadrao };
+var SLOTS_BICHO = ["balao", "fantasma", "cacador", "chefe"];
+var BICHO_SLOT = {};   // kind -> slot que o desenha nesta fase
+
+// redesenha o CONTEUDO de um slot (o id permanece): PNG se existir, senao
+// o painter — 1-2 drawPNG por TROCA DE FASE, blit rapido igual
+function reloadSlot(name, file, paint) {
+    var s = E.spr._slots[name];
+    if (!s || !s.id) return;
+    System.useSprite(s.id);
+    System.fillScreen(0x0000);
+    var ok = false;
+    if (file && E.caps.png) {
+        for (var b = 0; b < E.spr.bases.length && !ok; b++) {
+            try { ok = !!System.drawPNG(E.spr.bases[b] + file + ".png", 0, 0); }
+            catch (e) { ok = false; }
+        }
+    }
+    if (!ok && paint) paint(s.w, s.h, 0, 0);
+    System.useSprite(0);
+}
+
+// por fase: blocos do tema + vagas de bicho pros kinds mais frequentes
+// (chefe incluso). Painters de tela pequena ja saem tingidos do mundo
+function armarSprites(s) {
+    var t = s.tema;
+    corMacio = System.mixColor(0x8410, t.detalhe, 16);
+    corMacioHi = System.mixColor(0xA514, t.detalhe, 16);
+    corMacioLo = System.mixColor(0x4208, t.detalhe, 16);
+    corDuro = System.mixColor(0x7BEF, t.detalhe, 14);
+    corDuroMid = System.mixColor(0x528A, t.detalhe, 14);
+    corDuroLo = System.mixColor(0x39E7, t.detalhe, 14);
+    reloadSlot("macio", USA_PNG ? t.macio : null, painterMacio);
+    reloadSlot("duro", USA_PNG ? t.duro : null, painterDuro);
+    BICHO_SLOT = {};
+    if (!USA_PNG) return;
+    var cont = {}, ordem = [];
+    for (var i = 0; i < s.spawns.length; i++) {
+        var k = s.spawns[i].kind;
+        if (!cont[k]) { cont[k] = 0; ordem.push(k); }
+        cont[k]++;
+    }
+    ordem.sort(function (a, b) { return cont[b] - cont[a]; });
+    var si = 0;
+    for (var j = 0; j < ordem.length && si < SLOTS_BICHO.length; j++) {
+        var kk = ordem[j];
+        if (!BICHOS_PNG[kk]) continue;
+        BICHO_SLOT[kk] = SLOTS_BICHO[si];
+        reloadSlot(SLOTS_BICHO[si], BICHOS_PNG[kk], PAINTERS[kk]);
+        si++;
+    }
+}
+
+// SOBREVIVENCIA: onda trouxe kind que ficou de fora dos slots — rouba uma
+// vaga cujo kind nao esta vivo (1 redraw pontual, o resto nao nota)
+function armaVivos(s) {
+    var falta = null;
+    for (var i = 0; i < s.enemies.length; i++) {
+        var e = s.enemies[i];
+        if (!e.morto && BICHOS_PNG[e.kind] && !BICHO_SLOT[e.kind]) { falta = e.kind; break; }
+    }
+    if (!falta) return;
+    var usados = {};
+    for (var v = 0; v < s.enemies.length; v++) {
+        var ev = s.enemies[v];
+        if (!ev.morto && BICHO_SLOT[ev.kind]) usados[BICHO_SLOT[ev.kind]] = 1;
+    }
+    for (var sl = 0; sl < SLOTS_BICHO.length; sl++) {
+        var nome = SLOTS_BICHO[sl];
+        if (!usados[nome]) {
+            BICHO_SLOT[falta] = nome;
+            reloadSlot(nome, BICHOS_PNG[falta], PAINTERS[falta]);
+            return;
+        }
+    }
+}
 
 // ---------------------------------------------------------------- sons ---
 // efeitos pela dep celeros.sfx: no firmware API 32 sao misturados por cima
@@ -447,6 +560,32 @@ function glifoPower(k) {
     return k === 'X' ? "+" : k;   // B C V K R E P T; vida = +
 }
 
+// arte de powerup: PNG RGBA (placa com borda na cor exata do jogo, cantos
+// com alfa — o drawPNG compoe sobre o piso). Repinta so quando um corpo
+// cruza a celula: ~9 ms pontuais no 4848, nada por quadro.
+var POWPNG = { B: "pw_bomba", C: "pw_chama", V: "pw_veloz", K: "pw_chute",
+               R: "pw_boom", E: "pw_escudo", X: "pw_vida", P: "pw_furo", T: "pw_relogio" };
+var ARQ_OK = {};   // nome -> base que abriu (-1: nao existe)
+
+// desenha <nome>.png em (x,y) pelas bases do app; cacheia a primeira
+// tentativa (arquivo ausente falha rapido, mas so uma vez)
+function drawArquivo(nome, x, y) {
+    var b = ARQ_OK[nome];
+    if (b === -1) return false;
+    if (b !== undefined) {
+        System.drawPNG(E.spr.bases[b] + nome + ".png", x, y);
+        return true;
+    }
+    for (var i = 0; i < E.spr.bases.length; i++) {
+        if (System.drawPNG(E.spr.bases[i] + nome + ".png", x, y)) {
+            ARQ_OK[nome] = i;
+            return true;
+        }
+    }
+    ARQ_OK[nome] = -1;
+    return false;
+}
+
 var PULSO = 0;   // fracao da batida do quadro (powerup/saida pulsam nela)
 
 // uma celula inteira do cenario: lajota (2 tons + junta + variacao da
@@ -459,6 +598,16 @@ function paintCell(c, r, x, y, w, h) {
     var v = s.variacao[r * NV.COLS + c];
     var base = (c + r) % 2 === 0 ? t.a : t.b;
     System.fillRect(x, y, w, h, v > 0.85 ? System.mixColor(base, t.detalhe, 8) : base);
+    // pedrinha/mancha pela seed da fase: ~15% das lajotas ganham vida
+    // (arquivo por celula custa ~9 ms no 4848 — o chao segue procedural)
+    if (v < 0.10) {
+        var px = x + 2 + Math.floor(v * 89) % Math.max(1, w - 5);
+        var py = y + 2 + Math.floor(v * 577) % Math.max(1, h - 5);
+        System.fillRect(px, py, 2, 2, System.mixColor(base, C.preto, 38));
+    } else if (v > 0.93) {
+        var qx = x + 1 + Math.floor(v * 149) % Math.max(1, w - 4);
+        System.fillRect(qx, y + h - 3, 3, 1, System.mixColor(base, t.detalhe, 30));
+    }
     System.fillRect(x, y + h - 1, w, 1, t.junta);
     System.fillRect(x + w - 1, y, 1, h, t.junta);
     var ch = s.grid[r][c];
@@ -504,11 +653,15 @@ function paintCell(c, r, x, y, w, h) {
     }
     var k = s.powerups[c + ',' + r];
     if (k && ch === '.') {
-        var kor = corPower(k), kw = w - 4;
-        System.fillRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 35));
-        System.drawRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 70));
-        E.gfx.text(glifoPower(k), x + w / 2, y + h / 2, { color: kor, px: h * 0.55,
-                   align: "center", valign: "middle", screen: true });
+        var kor = corPower(k);
+        // PNG quando ha (com cache por arquivo); quadrado com letra senao
+        if (!(USA_ITEM && POWPNG[k] && drawArquivo(POWPNG[k], x, y))) {
+            var kw = w - 4;
+            System.fillRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 35));
+            System.drawRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 70));
+            E.gfx.text(glifoPower(k), x + w / 2, y + h / 2, { color: kor, px: h * 0.55,
+                       align: "center", valign: "middle", screen: true });
+        }
     }
 }
 
@@ -547,7 +700,12 @@ function drawChama(fl, pulso) {
     var x = OX + fl.c * CELL, y = OY + fl.r * CELL;
     var meia = CELL / 2;
     var cresce = 0.55 + 0.45 * pulso;
-    if (fl.tipo === 'nucleo') {
+    if (fl.tipo === 'cuspe') {
+        // bola de fogo do cuspidor: core branco-acucar no miolo laranja
+        System.fillCircle(x + meia, y + meia, meia * (0.6 + 0.3 * cresce), C.laranja);
+        System.fillCircle(x + meia, y + meia, meia * 0.42 * cresce + 2, C.ouro);
+        System.fillCircle(x + meia, y + meia, meia * 0.2 * cresce, C.branco);
+    } else if (fl.tipo === 'nucleo') {
         E.gfx.circle(x + meia, y + meia, meia * 0.95 * cresce + 2, C.branco, { screen: true });
         System.fillCircle(x + meia, y + meia, meia * 0.7 * cresce, C.ouro);
         System.fillCircle(x + meia, y + meia, meia * 0.4 * cresce, 0xFB18);
@@ -588,6 +746,7 @@ function drawEntidades(s, beat, pulso) {
     }
     for (i = 0; i < s.flames.length; i++) drawChama(s.flames[i], pulso);
     // inimigos: bob no compasso; chefe pisca ao levar acerto
+    armaVivos(s);
     for (i = 0; i < s.enemies.length; i++) {
         var e = s.enemies[i];
         if (e.morto) continue;
@@ -601,10 +760,22 @@ function drawEntidades(s, beat, pulso) {
         } else {
             var ex0 = Math.round(cx - ew / 2);
             var ey0 = Math.round(cy - ew / 2 + Math.floor(2 * Math.sin(beat * Math.PI * 2 + i)));
-            E.spr.blit(nome, ex0, ey0);
+            E.spr.blit(BICHO_SLOT[nome] || nome, ex0, ey0);
             if (e.kind === 'blindado' && e.hp < e.hpMax) {   // blindagem rachada
                 System.drawLine(ex0 + ew * 0.3, ey0 + ew * 0.15, ex0 + ew * 0.5, ey0 + ew * 0.55, C.branco);
                 System.drawLine(ex0 + ew * 0.5, ey0 + ew * 0.55, ex0 + ew * 0.42, ey0 + ew * 0.85, C.branco);
+            }
+            // cuspidor com o cuspe armado: a boca acende avisando
+            if (e.kind === 'cuspidor' && e.bocaAte > 0) {
+                var bx2 = cx + (e.cuspeDir ? e.cuspeDir.dx * ew * 0.34 : 0);
+                var by2 = cy + (e.cuspeDir ? e.cuspeDir.dy * ew * 0.34 : 0);
+                System.fillCircle(bx2, by2, ew * (0.16 + 0.08 * pulso),
+                                  Math.floor(beat * 12) % 2 === 0 ? C.branco : C.ouro);
+            }
+            // ladrao: cada powerup engolido acende um ponto no saco
+            for (var rb2 = 0; rb2 < e.roubos.length && rb2 < 4; rb2++) {
+                System.fillCircle(ex0 + ew * (0.68 + rb2 * 0.1), ey0 + ew * 0.68,
+                                  Math.max(1, ew * 0.06), C.ouro);
             }
         }
     }
@@ -1039,6 +1210,7 @@ E.run({
             } else {
                 E.data.retomar = false;
             }
+            armarSprites(arena.state());   // blocos do tema + slots de bicho
             // fundo da camada suja = as celulas do mapa sob a caixa
             E.dirty.enable(function (x, y, w, h) { mapa.markRect(x, y, w, h); });
             E.dirty.clip(OX, OY, GW, GH);
