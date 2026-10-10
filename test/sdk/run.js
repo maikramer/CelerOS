@@ -430,232 +430,11 @@ function check(name, ok, detail) {
     check('hit circle-aabb detecta', P.hit(ball1, box2) === true);
     check('hit circle-aabb rejeita longe', P.hit({ x: 50, y: 50, r: 5 }, boxFar) === false);
 
-    // queda + repouso: bounce 0 assenta no chao com grounded e vy ~0
-    var w = P.world({ gravity: { x: 0, y: 1000 },
-                      bounds: { x: 0, y: 0, w: 240, h: 320 }, walls: 'contain' });
-    var ball = w.add({ x: 120, y: 100, r: 8 });
-    var floor = w.add({ x: 120, y: 310, w: 240, h: 20, static: true });
-    for (var i = 0; i < 240; i++) w.step(1 / 60);
-    check('corpo assenta no chao estatico', Math.abs(ball.y - 292) < 3,
-          'y=' + ball.y.toFixed(1));
-    check('grounded e vy quase nula no repouso',
-          ball.grounded === true && Math.abs(ball.vy) < 10,
-          'grounded=' + ball.grounded + ' vy=' + ball.vy.toFixed(2));
+    // 2.0: o solver arcade interpretado saiu (P.world/P.tiles/P.flow) —
+    // ficam so P.hit, verlet (JS), verletFast (nativo/fallback) e P.rigid
+    check('2.0 nao exporta mais P.world/P.tiles/P.flow',
+          P.world === undefined && P.tiles === undefined && P.flow === undefined);
 
-    // restituicao: bounce 1 conserva a energia (volta perto do topo)
-    var w2 = P.world({ gravity: { x: 0, y: 1000 },
-                       bounds: { x: 0, y: 0, w: 240, h: 320 }, walls: 'contain' });
-    var jumper = w2.add({ x: 120, y: 100, r: 8, bounce: 1 });
-    w2.add({ x: 120, y: 310, w: 240, h: 20, static: true });
-    var minY = 999;
-    for (var k = 0; k < 360; k++) {
-        w2.step(1 / 60);
-        if (jumper.y < minY) minY = jumper.y;
-        if (k === 180 && jumper.vy < 0) check('bounce=1 sobe apos o quique', true);
-    }
-    check('bounce=1 volta perto da altura inicial', minY < 130, 'minY=' + minY.toFixed(1));
-
-    // atrito: corpo deslizando no chao para
-    var w3 = P.world({ gravity: { x: 0, y: 1000 },
-                       bounds: { x: 0, y: 0, w: 240, h: 320 }, walls: 'contain' });
-    var slider = w3.add({ x: 40, y: 292, r: 8, friction: 1, vx: 150 });
-    w3.add({ x: 120, y: 310, w: 240, h: 20, static: true });
-    for (var k2 = 0; k2 < 180; k2++) w3.step(1 / 60);
-    check('atrito para o deslize (vx < 10)', Math.abs(slider.vx) < 10,
-          'vx=' + slider.vx.toFixed(2));
-
-    // anti-tunel: bala rapida nao atravessa parede fina (4px) — e atravessa
-    // se maxSub for 1 (prova que o sub-passo e quem salva)
-    function tunnelRun(maxSub) {
-        var wt = P.world({ gravity: { x: 0, y: 0 }, maxSub: maxSub });
-        var b = wt.add({ x: 20, y: 50, r: 2, vx: 1500 });
-        wt.add({ x: 120, y: 50, w: 4, h: 100, static: true });
-        for (var n = 0; n < 30; n++) wt.step(1 / 60);
-        return b.x < 118;
-    }
-    check('bala rapida nao atravessa parede fina', tunnelRun(8) === true);
-    check('sem sub-passo (maxSub=1) atravessa (sanidade)', tunnelRun(1) === false);
-
-    // sensor: conta a travessia sem alterar o movimento
-    var w4 = P.world({ gravity: { x: 0, y: 0 } });
-    var hits = 0;
-    var ghost = w4.add({ x: 50, y: 100, w: 40, h: 100, static: true, sensor: true,
-                         onCollide: function () { hits++; } });
-    var passThru = w4.add({ x: 20, y: 100, r: 4, vx: 60 });
-    for (var n2 = 0; n2 < 60; n2++) w4.step(1 / 60);
-    check('sensor dispara onCollide na travessia', hits >= 2, 'hits=' + hits);
-    check('sensor nao resolve (corpo atravessa)', passThru.x > 70, 'x=' + passThru.x.toFixed(1));
-    check('sem penetracao residual apos sensor', P.hit(ghost, passThru) === false);
-
-    // World.each (contrato do d.ts): itera os corpos vivos do mundo
-    var wEach = P.world({ gravity: { x: 0, y: 0 } });
-    var bA = wEach.add({ x: 10, y: 10, r: 2 });
-    var bB = wEach.add({ x: 30, y: 10, r: 2 });
-    var vistos = [];
-    wEach.each(function (b) { vistos.push(b); });
-    wEach.remove(bA);
-    var depois = [];
-    wEach.each(function (b) { depois.push(b); });
-    check('world.each visita os corpos vivos (e segue o remove)',
-          vistos.length === 2 && vistos.indexOf(bA) >= 0 && vistos.indexOf(bB) >= 0 &&
-          depois.length === 1 && depois[0] === bB,
-          JSON.stringify([vistos.length, depois.length]));
-
-    // onCollide 1x por PAR por step: corpo tocando dois outros no mesmo
-    // passo dispara os dois pares (a dedupe antiga, por corpo, engolia o
-    // segundo) e nenhum par repete DENTRO do mesmo step
-    var wPar = P.world({ gravity: { x: 0, y: 0 } });
-    var pares = [];
-    wPar.add({ x: 90, y: 100, r: 6, static: true, sensor: true, tag: 'esq' });
-    wPar.add({ x: 100, y: 100, r: 6, sensor: true,
-               onCollide: function (me, other) { pares.push(other.tag); } });
-    wPar.add({ x: 110, y: 100, r: 6, static: true, sensor: true, tag: 'dir' });
-    wPar.step(1 / 60);
-    check('onCollide: corpo entre dois sensores dispara os DOIS pares no step',
-          pares.indexOf('esq') >= 0 && pares.indexOf('dir') >= 0 && pares.length === 2,
-          JSON.stringify(pares));
-    wPar.step(1 / 60);
-    check('onCollide: contato continuo repete 1x por par por step (sem duplicar)',
-          pares.length === 4 && pares.indexOf('esq') >= 0 && pares.indexOf('dir') >= 0,
-          'pares=' + pares.length);
-
-    // grupos/mascaras: pares fora da mascara se atravessam
-    var w5 = P.world({ gravity: { x: 0, y: 0 } });
-    var ga = w5.add({ x: 100, y: 100, r: 10, group: 1, mask: 2 });       // so colide c/ grupo 2
-    var gb = w5.add({ x: 105, y: 100, r: 10, group: 4, mask: 4 });       // mundo do grupo 4
-    var startGap = Math.abs(ga.x - gb.x);
-    for (var n3 = 0; n3 < 30; n3++) w5.step(1 / 60);
-    check('mask/group desligado nao resolve (sobrepostos e nada acontece)',
-          Math.abs(Math.abs(ga.x - gb.x) - startGap) < 0.5);
-    var gc = w5.add({ x: 100, y: 130, r: 10, group: 2, mask: 1 });
-    w5.step(1 / 60);
-    check('mask/group ligado resolve (separam)', P.hit(ga, gc) === false ||
-          Math.abs(ga.y - 130) > 10);
-
-    // tilemap: plataforma solida e one-way
-    var GRID = [
-        '........',
-        '..==....',
-        '........',
-        '####....',
-        '........'
-    ];
-    var wt2 = P.world({ gravity: { x: 0, y: 1000 } });
-    var tw2 = 16;
-    wt2.addTiles(P.tiles(GRID, tw2, tw2));
-    var hero = wt2.add({ x: 24, y: 8, w: 10, h: 12 });   // cai sobre '#' (linha 3, y=48)
-    for (var n4 = 0; n4 < 120; n4++) wt2.step(1 / 60);
-    check('platformer assenta no tile solido', hero.grounded && Math.abs(hero.y - 42) < 2,
-          'y=' + hero.y.toFixed(1) + ' grounded=' + hero.grounded);
-    // anda e cai da borda do plato (### termina na col 4)
-    hero.vx = 60;
-    for (var n5 = 0; n5 < 120; n5++) { hero.vx = 60; wt2.step(1 / 60); }
-    check('saiu da borda do plato e caiu', hero.y > 60, 'y=' + hero.y.toFixed(1));
-    // one-way: com drop=true atravessa e vai assentar no solido de baixo
-    var drop = wt2.add({ x: 40, y: 8, w: 10, h: 12, drop: true });
-    for (var n6 = 0; n6 < 120; n6++) wt2.step(1 / 60);
-    check('drop=true atravessa o one-way (assenta no solido de baixo)',
-          drop.grounded && Math.abs(drop.y - 42) < 2 && drop.y > 32, 'y=' + drop.y.toFixed(1));
-    // one-way: subindo por baixo, passa (col 3, longe do drop assentado;
-    // registra a altura minima alcancada)
-    var riser = wt2.add({ x: 56, y: 44, w: 10, h: 12, vy: -200 });
-    var riseMin = 999;
-    for (var n7 = 0; n7 < 20; n7++) {
-        wt2.step(1 / 60);
-        if (riser.y < riseMin) riseMin = riser.y;
-    }
-    check('one-way deixa passar subindo', riseMin < 30, 'minY=' + riseMin.toFixed(1));
-    check('tileAt le o grid', wt2.tiles.tileAt(40, 56) === '#' &&
-          wt2.tiles.tileAt(40, 26) === '=' && wt2.tiles.tileAt(200, 8) === null);
-
-    // top-down (gravity 0 + tiles): para na parede nas 4 direcoes e desliza
-    // no eixo livre — a receita bomberman/zelda do guia
-    var TD = [
-        '#######',
-        '#.....#',
-        '#.##..#',
-        '#.....#',
-        '#..#..#',
-        '#######'
-    ];
-    var wt3 = P.world({ gravity: { x: 0, y: 0 }, maxSub: 4 });
-    wt3.addTiles(P.tiles(TD, 16, 16));
-    var walker = wt3.add({ x: 24, y: 24, r: 5 });   // celula (1,1), livre
-    // baixo: corredor da col 1 livre ate a borda (linha 5) — desliza reto
-    for (var t1 = 0; t1 < 90; t1++) { walker.vy = 60; wt3.step(1 / 60); }
-    check('top-down desce o corredor ate a parede de baixo',
-          walker.y > 70 && walker.y < 78 && walker.x < 32,
-          'x=' + walker.x.toFixed(1) + ' y=' + walker.y.toFixed(1));
-    // direita: da celula (1,4) ate o pilar da col 3 (linha 4)
-    walker.vy = 0;
-    for (var t2 = 0; t2 < 60; t2++) { walker.vx = 80; wt3.step(1 / 60); }
-    check('top-down para na parede a direita', walker.x > 40 && walker.x < 47,
-          'x=' + walker.x.toFixed(1));
-    // esquerda: ate a borda da col 0
-    for (var t3 = 0; t3 < 60; t3++) { walker.vx = -80; wt3.step(1 / 60); }
-    check('top-down para na borda a esquerda', walker.x > 18 && walker.x <= 21.01,
-          'x=' + walker.x.toFixed(1));
-
-    // P.flow: campo BFS do alvo — distancias contornam parede, next desce o
-    // gradiente, barreira total fica inalcancavel, passable customiza
-    var FL = [
-        '#####',
-        '#...#',
-        '#.#.#',
-        '#...#',
-        '#####'
-    ];
-    var fl = P.tiles(FL, 16, 16);
-    var flow = P.flow(fl, 1, 1);                    // alvo na celula (1,1)
-    check('flow: origem dist 0', flow.dist(1, 1) === 0);
-    check('flow: vizinha imediata dist 1', flow.dist(2, 1) === 1);
-    // (3,3) -> (1,1): pela direita sao 4 passos contornando o pilar (2,2)
-    check('flow: contorna o pilar (dist 4)', flow.dist(3, 3) === 4,
-          'dist=' + flow.dist(3, 3));
-    check('flow: parede e inalcancavel', flow.dist(2, 2) === Infinity);
-    var n1 = flow.next(3, 3);
-    check('flow: next desce o gradiente', n1 && flow.dist(n1.c, n1.r) === 3,
-          n1 ? '-> (' + n1.c + ',' + n1.r + ')' : 'null');
-    check('flow: next na origem e null', flow.next(1, 1) === null);
-    check('flow: next fora do grid e null', flow.next(9, 9) === null);
-    // seguindo next() chega ao alvo em dist passos
-    var c = 3, r = 3, steps = 0, ok = true;
-    while (steps < 20) {
-        var st = flow.next(c, r);
-        if (!st) break;
-        c = st.c; r = st.r; steps++;
-    }
-    check('flow: trilha de next chega na origem', c === 1 && r === 1 && steps === 4,
-          'fim (' + c + ',' + r + ') em ' + steps + ' passos');
-    // determinismo: mesmo grid, mesmo campo
-    var flow2 = P.flow(fl, 1, 1);
-    var same = true;
-    for (var fc = 0; fc < 5 && same; fc++)
-        for (var fr = 0; fr < 5; fr++)
-            if (flow.dist(fc, fr) !== flow2.dist(fc, fr)) { same = false; break; }
-    check('flow: deterministico', same === true);
-    // barreira total: alvo murado nao alcancava nada fora do muro
-    var WALL = [
-        '#####',
-        '##.##',
-        '#####',
-        '#...#',
-        '#####'
-    ];
-    var flowW = P.flow(P.tiles(WALL, 16, 16), 2, 1);
-    check('flow: barreira total deixa inalcancavel', flowW.dist(1, 3) === Infinity);
-    // passable custom: fantasma atravessa '%' (bloco macio) — o tilemap do
-    // jogo declara '%' solido; o flow dele ignora e passa
-    var GH = [
-        '#####',
-        '#.%.#',
-        '#####'
-    ];
-    var ghT = P.tiles(GH, 16, 16, { solid: function (ch) { return ch === '#' || ch === '%'; } });
-    var flowG1 = P.flow(ghT, 1, 1);
-    check('flow: solido do tilemap vale (macio bloqueia)', flowG1.dist(3, 1) === Infinity);
-    var flowG2 = P.flow(ghT, 1, 1, { passable: function (ch) { return ch !== '#'; } });
-    check('flow: passable custom atravessa o macio (dist 2)', flowG2.dist(3, 1) === 2);
 
     // verlet: corda presa conserva o comprimento total
     var pts = [];
@@ -676,39 +455,7 @@ function check(name, ok, detail) {
           Math.abs(len1 - len0) / len0 < 0.05, 'len ' + len0.toFixed(1) + ' -> ' + len1.toFixed(1));
     check('corda pendura abaixo do pino', rope.points[5].y > rope.points[0].y + 20);
 
-    // determinismo: mesma cena, dois mundos, resultado identico
-    function simSeed() {
-        var wd = P.world({ gravity: { x: 0, y: 900 },
-                           bounds: { x: 0, y: 0, w: 240, h: 320 }, walls: 'contain' });
-        var b1 = wd.add({ x: 30, y: 30, r: 6, vx: 120, vy: -40, bounce: 0.7 });
-        var b2 = wd.add({ x: 200, y: 60, r: 6, vx: -90, bounce: 0.5 });
-        wd.add({ x: 120, y: 310, w: 240, h: 16, static: true });
-        for (var n9 = 0; n9 < 200; n9++) wd.step(1 / 60);
-        return [b1.x, b1.y, b1.vx, b2.x, b2.y].join(',');
-    }
-    check('duas rodadas identicas = mesmo estado (determinismo)',
-          simSeed() === simSeed(), simSeed() + ' vs ' + simSeed());
 
-    // wrap: corpo que sai pela direita entra pela esquerda
-    var ww = P.world({ bounds: { x: 0, y: 0, w: 240, h: 320 }, walls: 'wrap' });
-    var orb = ww.add({ x: 239, y: 100, r: 4, vx: 40 });
-    for (var n10 = 0; n10 < 20; n10++) ww.step(1 / 60);
-    check('walls wrap teletransporta pela borda', orb.x < 20, 'x=' + orb.x.toFixed(1));
-
-    // sweep-and-prune: sensor encontra o par isolado no meio de 20 estaticos
-    var ws = P.world({ gravity: { x: 0, y: 0 } });
-    var hits6 = 0;
-    var lone = ws.add({ x: 20, y: 200, r: 6, vx: 90, sensor: true,
-                        onCollide: function () { hits6++; } });
-    ws.add({ x: 80, y: 200, r: 6, static: true, sensor: true });
-    for (var q2 = 0; q2 < 20; q2++) {
-        ws.add({ x: 150 + (q2 % 10) * 12, y: 20 + Math.floor(q2 / 10) * 12,
-                 r: 5, static: true, sensor: true });
-    }
-    for (var n11 = 0; n11 < 60; n11++) ws.step(1 / 60);
-    check('sweep-and-prune: par isolado na multidao detecta e atravessa',
-          hits6 >= 3 && hits6 <= 20 && lone.x > 80,
-          'hits=' + hits6 + ' x=' + lone.x.toFixed(1));
 })();
 
 // ------------------------------------------------------------------- deps --
@@ -1311,7 +1058,7 @@ function depSize(nome) {
 
     var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-vf-'));
     fs.writeFileSync(path.join(tmp, 'app.json'),
-                     JSON.stringify({ deps: { 'celeros.physics': '^1.2.0' } }));
+                     JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
 
     // caminho nativo: o stub do harness espelha o binding C++ (JsPhysics.cpp)
     var env = harness.makeEnv();
@@ -1365,10 +1112,10 @@ function depSize(nome) {
     var harness = require('../../test/js_harness/run.js');
     var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-rg-'));
     fs.writeFileSync(path.join(tmp, 'app.json'),
-                     JSON.stringify({ deps: { 'celeros.physics': '^1.5.0' } }));
+                     JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
     var env = harness.makeEnv();
     var P = harness.makeRequire(tmp, env)('celeros.physics');
-    check('physics 1.5.0 exporta rigid', typeof P.rigid === 'function' && P.version === '1.5.0');
+    check('physics 2.0.0 exporta rigid', typeof P.rigid === 'function' && P.version === '2.0.0');
     var w = P.rigid({ iterations: 10 });
     check('rigid usa o binding (stub do harness = espelho do Rigid2D.h)', w !== null && w.id > 0);
     var chao = w.box(160, 270, 400, 20, { static: true });
@@ -1430,7 +1177,7 @@ function depSize(nome) {
 
     var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-vf2-'));
     fs.writeFileSync(path.join(tmp, 'app.json'),
-                     JSON.stringify({ deps: { 'celeros.physics': '^1.3.0' } }));
+                     JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
     var env = harness.makeEnv();
     var P = harness.makeRequire(tmp, env)('celeros.physics');
 

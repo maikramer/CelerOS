@@ -380,14 +380,14 @@ resizes art once at load time to the board's screen. Full example:
 `P.hit(a, b)` answers "do these two circles/boxes overlap right now" (all
 combinations) — handy for pickups and UI-ish tests, no world involved.
 
-### Legacy: `P.world`, `P.tiles`, `P.flow`
+### Legacy: `P.world`, `P.tiles`, `P.flow` (removed in 2.0)
 
-The 1.x module also ships an interpreted arcade world (`P.world` +
-`P.tiles` tilemaps) and a BFS flow field (`P.flow`). They have no consumers
-in the store today and new games should not adopt them: the interpreted
-world is exactly the GC trap rung 0 avoids (its users migrated away —
-Supernova to pools, Detna to `celeros.grid`), and pursuit fields live in
-`celeros.grid`. They leave the module in 2.0.
+The 1.x module shipped an interpreted arcade world (`P.world` + `P.tiles`
+tilemaps) and a BFS flow field (`P.flow`). They left in **2.0.0**: zero
+consumers in the store, and the interpreted world was exactly the GC trap
+rung 0 avoids (its users had already migrated — Supernova to pools, Detna
+to `celeros.grid`; pursuit fields live in `celeros.grid`). Apps still on
+`^1.x` keep resolving 1.5.0 from the hub unchanged.
 
 ### Recipes
 

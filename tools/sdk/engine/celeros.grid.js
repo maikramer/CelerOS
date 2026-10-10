@@ -72,7 +72,7 @@ GRID.classica = function (cols, rows, rng, opts) {
 // flood(grid, sc, sr, passavel) — conjunto alcancavel a pe de (sc,sr):
 // passavel(ch) decide o que atravessa. Devolve {ok: matriz bool,
 // quantos: n} (aloca 1 matriz por chamada — chame quando o labirinto
-// muda, nao por frame; para perseguicao por frame use P.flow).
+// muda, nao por frame; para perseguicao por frame use GRID.flow).
 GRID.flood = function (grid, sc, sr, passavel) {
     var rows = grid.length, cols = rows ? grid[0].length : 0;
     var livre = function (c, r) {

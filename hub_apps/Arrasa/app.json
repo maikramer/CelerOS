@@ -15,6 +15,6 @@
   "changelog": "1.0.0 - jogo novo sobre o corpo rigido nativo (API 33): pecas que giram e empilham, dano por impacto, TNT e bomba com explosao radial, tripla que racha no ar, elastico que estica e afina, mira com trajetoria, rastro do voo (some ao fim do turno), pedras flecha/bumerangue/chocadeira com arte propria, 10 fases com 3 estrelas e recorde por fase, arte gerada (personagens, cenario, texturas)",
   "deps": {
     "celeros.engine": "^1.2.2",
-    "celeros.physics": "^1.5.0"
+    "celeros.physics": "^2.0.0"
   }
 }

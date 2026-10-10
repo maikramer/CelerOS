@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 31,
   "permissions": [],
-  "deps": { "celeros.physics": "^1.2.0" },
+  "deps": { "celeros.physics": "^2.0.0" },
   "author": "CelerOS",
   "type": "Utility",
   "category": "Utility",

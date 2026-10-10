@@ -381,14 +381,14 @@ completo: `hub_apps/Arrasa` (estilingue contra fortalezas de goblins).
 `P.hit(a, b)` responde "esses dois círculos/caixas se sobrepõem agora" (todas
 as combinações) — útil para pickups e testes de UI, sem mundo envolvido.
 
-### Legado: `P.world`, `P.tiles`, `P.flow`
+### Legado: `P.world`, `P.tiles`, `P.flow` (saíram na 2.0)
 
-O módulo 1.x ainda embarca um mundo arcade interpretado (`P.world` +
-tilemaps `P.tiles`) e um campo BFS (`P.flow`). Eles não têm consumidores na
-loja hoje e jogos novos não devem adotá-los: o mundo interpretado é
-exatamente a armadilha de GC que o degrau 0 evita (quem os usava migrou — o
-Supernova para pools, o Detna para o `celeros.grid`), e campo de perseguição
-mora no `celeros.grid`. Eles saem do módulo na 2.0.
+O módulo 1.x embarcava um mundo arcade interpretado (`P.world` + tilemaps
+`P.tiles`) e um campo BFS (`P.flow`). Saíram na **2.0.0**: zero consumidores
+na loja, e o mundo interpretado era exatamente a armadilha de GC que o degrau
+0 evita (quem usava já tinha migrado — o Supernova para pools, o Detna para o
+`celeros.grid`; campo de perseguição mora no `celeros.grid`). Apps em `^1.x`
+continuam resolvendo a 1.5.0 do hub como sempre.
 
 ### Receitas
 
