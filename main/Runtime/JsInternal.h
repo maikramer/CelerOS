@@ -193,33 +193,28 @@ inline void putNodeId(duk_context* ctx, const char* k, uint16_t id) {
 // String crua (bytes UTF-8) ou objeto serializado como JSON — quem le do
 // outro lado decide o formato (mesma regra do CelerLink.send). Teto com
 // RangeError pre-formatado (duk_error com %d a partir de lightfunc corrompe
-// o heap — bancada 2026-10-02) e TypeError se o valor nao serializa. O
-// caminho string devolve o ponteiro do duk (estavel enquanto o valor nao
-// sai da pilha); o JSON devolve a copia em buf (o ponteiro do encode nao
-// sobrevive a proxima chamada). "what" abre a mensagem de tamanho
+// o heap — bancada 2026-10-02) e TypeError se o valor nao serializa. Os
+// dois caminhos COPIAM para buf (>= cap bytes) e devolvem buf: os chamadores
+// de Mesh/Pack mandam buf direto (antes o caminho string devolvia o ponteiro
+// do duk e buf seguia lixo de pilha). "what" abre a mensagem de tamanho
 // ("mensagem", "mensagem selada", "envelope"...).
-inline const char* jsMsgBytes(duk_context* ctx, duk_idx_t idx, uint8_t* buf,
+inline const char* jsMsgBytes(duk_context* ctx, duk_idx_t idx, void* buf,
                               size_t cap, const char* what, size_t* len) {
+    const char* src;
     if (duk_is_object(ctx, idx) && !duk_is_callable(ctx, idx)) {
-        const char* json = duk_json_encode(ctx, idx);
-        if (json == nullptr) duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
-        size_t n = strlen(json);
-        if (n == 0 || n > cap) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "%s deve ter 1 a %d bytes", what, (int)cap);
-            duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
-        }
-        memcpy(buf, json, n);
-        *len = n;
-        return (const char*)buf;
+        src = duk_json_encode(ctx, idx);
+        if (src == nullptr) duk_error(ctx, DUK_ERR_TYPE_ERROR, "valor nao serializa como JSON");
+        *len = strlen(src);
+    } else {
+        src = duk_require_lstring(ctx, idx, len);
     }
-    const char* s = duk_require_lstring(ctx, idx, len);
     if (*len == 0 || *len > cap) {
         char msg[64];
         snprintf(msg, sizeof(msg), "%s deve ter 1 a %d bytes", what, (int)cap);
         duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
     }
-    return s;
+    memcpy(buf, src, *len);
+    return (const char*)buf;
 }
 
 // ----------------------------------------------------------- opcoes JS ----
