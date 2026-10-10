@@ -50,12 +50,34 @@ const char* boardName() {
     return Board::profile().name;
 }
 
+// Decimos de (n5 >> shift) com arredondamento HALF-EVEN — exatamente o que
+// o %.1f do snprintf faz com esses quocientes exatos por potencia de 2 (a
+// divisao de um inteiro por 2^k nao erra em double). Integer math em vez de
+// float no printf: o caminho %f puxa o conversor de doubles da libc (~KBs
+// de flash no CYD, que nao usa float em mais nada).
+// n5 = bytes*5 (o x10 ja aplicado); divisor = 2^shift.
+static unsigned tenthsHalfEven(uint64_t n5, unsigned shift) {
+    const uint64_t q = n5 >> shift;
+    const uint64_t r = n5 & ((1ULL << shift) - 1);
+    const uint64_t half = 1ULL << (shift - 1);
+    if (r > half || (r == half && (q & 1))) return (unsigned)(q + 1);
+    return (unsigned)q;
+}
+
 std::string humanSize(uint64_t bytes) {
     char buf[32];
-    if (bytes >= 1024ULL * 1024 * 1024) snprintf(buf, sizeof(buf), "%.1fG", bytes / (1024.0 * 1024.0 * 1024.0));
-    else if (bytes >= 1024 * 1024) snprintf(buf, sizeof(buf), "%.1fM", bytes / (1024.0 * 1024.0));
-    else if (bytes >= 1024) snprintf(buf, sizeof(buf), "%.1fK", bytes / 1024.0);
-    else snprintf(buf, sizeof(buf), "%uB", (unsigned)bytes);
+    if (bytes >= 1024ULL * 1024 * 1024) {
+        const unsigned t = tenthsHalfEven(bytes * 5, 29);  // G = bytes/2^30
+        snprintf(buf, sizeof(buf), "%u.%uG", t / 10, t % 10);
+    } else if (bytes >= 1024 * 1024) {
+        const unsigned t = tenthsHalfEven(bytes * 5, 19);  // M = bytes/2^20
+        snprintf(buf, sizeof(buf), "%u.%uM", t / 10, t % 10);
+    } else if (bytes >= 1024) {
+        const unsigned t = tenthsHalfEven(bytes * 5, 9);   // K = bytes/2^10
+        snprintf(buf, sizeof(buf), "%u.%uK", t / 10, t % 10);
+    } else {
+        snprintf(buf, sizeof(buf), "%uB", (unsigned)bytes);
+    }
     return buf;
 }
 

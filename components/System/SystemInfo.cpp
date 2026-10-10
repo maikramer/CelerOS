@@ -329,7 +329,16 @@ std::string SystemInfo::getSummary() const {
     ChipInfo chip = getChipInfo();
     MemoryInfo mem = getMemoryInfo();
     FlashInfo flash = getFlashInfo();
-    
+
+    // Flash em MB com 1 decimal sem float no printf: decimos =
+    // (size*5)/2^19 com arredondamento half-even — saida identica ao
+    // "%.1f" antigo (size/(1024.0f*1024.0f) e exato: divisao por potencia
+    // de 2). Evita puxar o conversor de doubles da libc so por esta linha.
+    const uint64_t mb5 = (uint64_t)flash.size * 5;  // x10 ja aplicado
+    const uint64_t mbQ = mb5 >> 19, mbR = mb5 & ((1ULL << 19) - 1);
+    const unsigned mbTenths = (unsigned)(mbQ +
+        ((mbR > (1ULL << 18) || (mbR == (1ULL << 18) && (mbQ & 1))) ? 1 : 0));
+
     char buffer[512];
     snprintf(buffer, sizeof(buffer),
         "=== System Info ===\n"
@@ -337,7 +346,7 @@ std::string SystemInfo::getSummary() const {
         "MAC: %s\n"
         "Device ID: %s\n"
         "IDF: %s\n"
-        "Flash: %.1f MB (%s @ %lu MHz)\n"
+        "Flash: %u.%u MB (%s @ %lu MHz)\n"
         "Heap: %lu KB free / %lu KB total\n"
         "Min free: %lu KB, Largest block: %lu KB\n"
         "%s"
@@ -347,16 +356,16 @@ std::string SystemInfo::getSummary() const {
         getMacAddress().c_str(),
         getDeviceId().c_str(),
         getIdfVersion().c_str(),
-        flash.size / (1024.0f * 1024.0f), flash.mode.c_str(), 
+        mbTenths / 10, mbTenths % 10, flash.mode.c_str(),
         (unsigned long)(flash.speed / 1000000),
-        (unsigned long)(mem.freeHeap / 1024), 
+        (unsigned long)(mem.freeHeap / 1024),
         (unsigned long)(mem.totalHeap / 1024),
-        (unsigned long)(mem.minFreeHeap / 1024), 
+        (unsigned long)(mem.minFreeHeap / 1024),
         (unsigned long)(mem.largestFreeBlock / 1024),
         hasPsram() ? "PSRAM: Available\n" : "",
         getFormattedUptime().c_str(),
         getResetReasonString().c_str()
     );
-    
+
     return std::string(buffer);
 }
