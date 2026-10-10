@@ -29,7 +29,7 @@ CelerOS/
 | Task | Location | Notes |
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
-| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 31) |
+| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 32) |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
 | Boards, adding a board, per-board data image | `boards/AGENTS.md` | 6 boards |
@@ -70,7 +70,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Release notes are in English** (audience: first-time flashers; the repo's public artifacts — README, wiki EN pages — are English). The annotated tag body becomes the notes' preamble, so write tag bodies in English too; the flash instructions template lives inside `release.yml` and must teach the Flasher workflow (download flasher + board zip, extract together, board -> port -> erase on first flash).
-- **Bench**: hardware validation is manual (CI has no device). Ports: `/dev/ttyUSB0` SmartDisplay, `/dev/ttyUSB1` CYD, `/dev/ttyACM0` dog or watch (flash id disambiguates: 16MB vs 32MB). The watch takes firmware over `celerctl ota push` (retry on timeout); esptool is for first load only.
+- **Bench**: hardware validation is manual (CI has no device). Ports (the two CH340 boards swap with plug order — `celerctl devices -l` names each): `/dev/ttyUSB0` SmartDisplay, `/dev/ttyUSB1` CYD, `/dev/ttyACM0` dog or watch (flash id disambiguates: 16MB vs 32MB). The watch takes firmware over `celerctl ota push` (retry on timeout); esptool is for first load only.
 
 ## CONVENTIONS
 - Board selected via CMake cache `-DCELEROS_BOARD=smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit` (default smartdisplay; any other value is FATAL_ERROR). See `boards/AGENTS.md` for the differences.
@@ -122,6 +122,7 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 ## NOTES
 - **SECURITY:** the Supabase service_role key was removed from the tree AND purged from the whole git history with `git filter-repo` + force-push (2026-10-01; every commit hash changed). ROTATION in the Supabase dashboard is STILL MANDATORY: the old history remains reachable through old clones, forks and GitHub's PR refs (`refs/pull/1/head`). Its last local copy (`extras/esp_components/config/config/supabase_config.h`, gitignored, never committed) was deleted together with the `extras/` removal (2026-10-05).
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
+- **SmartDisplay screen shaking/scrambling**: read `boards/AGENTS.md` "SMARTDISPLAY RGB PANEL" first (display init pinned to core 1, never the 64 B data cache line, `lcddma` shell diagnostic). The fix took a day of bench time.
 - CI: `build.yml` (tests above + firmware for all 6 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `python3 tools/sdkconfig_check.py` lists every bench build dir whose sdkconfig drifted from its board's defaults (in 2026-10 the watch and dog bench builds still ran a 32 KB main stack the defaults had cut to 24 KB). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.

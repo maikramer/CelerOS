@@ -165,3 +165,33 @@ Diagnostico novo: o fatal do Duktape (que reinicia sem coredump) grava o
 motivo em RAM RTC e o boot loga `reset: motivo N` + a mensagem do fatal, com
 toast. `reset: motivo 1` (POWERON) na CYD costuma ser o host mexendo nas
 linhas DTR/RTS da serial, nao crash.
+
+## Duktape no S3 com PSRAM: custo de chamada (2026-10-09)
+
+Microbenchmark no SmartDisplay (240 MHz, heap Duktape na PSRAM), antes ->
+depois das mudancas do dia:
+
+| Operacao | Antes | Depois |
+|---|---|---|
+| chamada de funcao JS | 16,7 us | 7,4 us |
+| chamada nativa (`System.millis`) | 23 us | 15 us |
+| varrer 195 celulas com `charCodeAt` | 9 ms | 4,5 ms |
+| `for-in` + `parseInt` + `slice` (2 chaves) | 1,7 ms | 0,3 ms |
+| laco `for` puro (100k) | 301 ms | 301 ms |
+
+O que mudou: `DUK_USE_CACHE_ACTIVATION`/`CATCHER` religados nas placas com
+PSRAM (`components/duktape/celeros_fixup.h`; o yaml os desliga pela RAM da
+CYD) — sem eles TODA chamada fazia malloc+free do registro de activation
+no `heap_caps` (lock TLSF) — e cache de instrucao de 32 KB no SmartDisplay
+(o executor do Duktape nao cabia em 16 KB e buscava codigo na flash pelo
+mesmo MSPI da PSRAM). Resultado no Detona: 16 -> 28 fps.
+
+Regras para codigo de jogo que saem disso: chamada (JS ou nativa) custa
+~7-15 us — orcamente por quadro em centenas, nao milhares; nada de varrer a
+grade inteira por quadro (o Detona passou a receber as celulas alteradas
+por evento: 7 ms -> 0); evite `for-in`/`parseInt`/concatenacao de string
+no caminho quente (cada string nova e alocacao + GC).
+
+Nao confundir com o tremor de imagem do SmartDisplay (era latencia da ISR
+de VSYNC no nucleo do Duktape, nao velocidade de JS): ver
+`boards/AGENTS.md` "SMARTDISPLAY RGB PANEL".

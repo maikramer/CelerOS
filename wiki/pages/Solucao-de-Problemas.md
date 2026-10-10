@@ -37,6 +37,21 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
   pouco mais forte que num celular, ou opere o aparelho pelo navegador
   ([tela ao vivo](/maikramer/CelerOS/wiki/Interface-Web)).
 
+## Tela do SmartDisplay
+
+* **A imagem inteira treme alguns pixels (só dentro de jogos/apps JS).**
+  Corrigido no firmware com nível de API 32: o painel RGB recomeça a
+  varredura a cada quadro por uma interrupção, e essa interrupção dividia
+  um núcleo da CPU com o motor JavaScript — qualquer atraso deslocava a
+  imagem (~12 px por microssegundo). Atualize o firmware (OTA ou flash).
+  Para conferir um aparelho, rode `lcddma 300 isr` no shell serial
+  (`celerctl shell "lcddma 300 isr"`): o `LCD_CAM` tem que aparecer em
+  `CPU 1`, e a contagem de underflow deve ser 0 (diferente de zero = o
+  painel está sem banda de memória).
+* **A interface inteira embaralha depois de um build próprio.** Não ligue
+  `CONFIG_ESP32S3_DATA_CACHE_LINE_64B` no SmartDisplay: o painel lê o
+  framebuffer direto da PSRAM e a linha de cache de 64 bytes o estrangula.
+
 ## Wi-Fi e relógio
 
 * **Sem credenciais salvas.** O aparelho abre o access point

@@ -29,6 +29,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "soc/gdma_struct.h"
+#include "esp_intr_alloc.h"
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
 #include "Bluetooth/PhoneLink.h"
 #endif
@@ -80,6 +84,9 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  free            heap livre\n"
         "  ps              tarefas FreeRTOS\n"
         "  top [ms]        profiling: CPU%% por task + heap/app (janela ms)\n"
+#if CONFIG_IDF_TARGET_ESP32S3
+        "  lcddma [ms]     saude do DMA do painel RGB (underflow = imagem embaralha)\n"
+#endif
         "  uptime          tempo ligado\n"
         "  info            versao/board/rede\n"
         "  reboot          reinicia o sistema\n"
@@ -269,6 +276,60 @@ int cmdPs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 // top [ms]: CPU% por task numa janela (default 300 ms) + resumo de heap e do
 // app aberto. Duas fotos do DeviceStats — a taxa e o delta de runtime por
 // task, a mesma conta que o celerctl top faz no host (la o device nao bloqueia).
+#if CONFIG_IDF_TARGET_ESP32S3
+// lcddma [ms]: saude do DMA do painel RGB (SmartDisplay). O LCD_CAM le o
+// framebuffer da PSRAM pelo GDMA; quando a PSRAM nao entrega a tempo o FIFO
+// do canal SECA (underflow) e a linha escorrega — o "embaralhamento" que a
+// captura de tela nao mostra (ela le o framebuffer pela CPU). Amostra os
+// flags latched do canal do LCD a cada 5 ms e conta as janelas com falha.
+int cmdLcdDma(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    int ms = argc > 1 ? atoi(argv[1]) : 3000;
+    if (ms < 100) ms = 100;
+    if (ms > 30000) ms = 30000;
+    int ch = -1;
+    for (int i = 0; i < 5; i++) {
+        if (GDMA.channel[i].out.peri_sel.sel == 5) { ch = i; break; }  // 5 = LCD_CAM
+    }
+    if (ch < 0) {
+        print(ctx, "lcddma: nenhum canal GDMA ligado ao LCD_CAM\r\n");
+        return 1;
+    }
+    auto& o = GDMA.channel[ch].out;
+    o.int_clr.val = o.int_raw.val;
+    int janelas = 0, l1 = 0, l3 = 0, eof = 0;
+    const int64_t fim = esp_timer_get_time() + (int64_t)ms * 1000;
+    while (esp_timer_get_time() < fim) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        const uint32_t raw = o.int_raw.val;
+        const bool u1 = o.int_raw.outfifo_udf_l1, u3 = o.int_raw.outfifo_udf_l3;
+        if (o.int_raw.out_eof) eof++;
+        if (u1 || u3) janelas++;
+        if (u1) l1++;
+        if (u3) l3++;
+        o.int_clr.val = raw;
+    }
+    print(ctx, "lcddma: canal %d, %d ms: underflow em %d janelas de 5 ms (L1 %d, L3 %d), eof %d\r\n",
+          ch, ms, janelas, l1, l3, eof);
+    if (argc > 2 && strcmp(argv[2], "isr") == 0) {
+        // tabela de interrupcoes por nucleo: confere em qual CPU esta a ISR
+        // do LCD_CAM (fonte LCD_CAM; o reinicio do quadro nao pode disputar
+        // o nucleo do Duktape)
+        char* buf = nullptr;
+        size_t len = 0;
+        FILE* f = open_memstream(&buf, &len);
+        if (f) {
+            esp_intr_dump(f);
+            fclose(f);
+            for (char* line = strtok(buf, "\n"); line; line = strtok(nullptr, "\n")) {
+                if (strstr(line, "CPU") || strstr(line, "LCD") || strstr(line, "Used")) print(ctx, "%s\r\n", line);
+            }
+            free(buf);
+        }
+    }
+    return 0;
+}
+#endif
+
 int cmdTop(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     uint32_t windowMs = 300;
     if (argc > 1) {
@@ -821,6 +882,9 @@ const ShellCmd kCommands[] = {
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"top", cmdTop},
+#if CONFIG_IDF_TARGET_ESP32S3
+    {"lcddma", cmdLcdDma},
+#endif
     {"rescan", cmdRescan}, {"apps", cmdApps}, {"stat", cmdStat},
     {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},

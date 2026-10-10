@@ -80,7 +80,11 @@ public:
             cfg.pin_vsync   = 17;
             cfg.pin_hsync   = 16;
             cfg.pin_pclk    = 21;
-            cfg.freq_write  = 12000000;  // 12 MHz (mais alto causa flicker neste painel)
+            // 12 MHz (mais alto causa flicker neste painel). A esta pclk, 1 us
+            // de atraso na ISR de VSYNC do Bus_RGB (que recomeca o DMA a cada
+            // quadro) desloca a imagem ~12 px: por isso o init roda no nucleo
+            // 1 (Board.cpp) — ver boards/AGENTS.md "SMARTDISPLAY RGB PANEL"
+            cfg.freq_write  = 12000000;
             cfg.hsync_polarity    = 1;
             cfg.hsync_front_porch = 10;
             cfg.hsync_pulse_width = 8;

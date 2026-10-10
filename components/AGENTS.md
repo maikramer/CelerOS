@@ -34,7 +34,7 @@ Everything in `components/` is built and CelerOS-owned: it descends from the old
 
 ## ANTI-PATTERNS
 - NEVER do real work inside an `Event` handler: `trigger()` holds the event mutex for the whole handler loop. Handlers set flags; the owner's loop acts.
-- NEVER hand-edit `duktape/duktape.c` or `duk_config.h`; they are generated. Change the YAML and regenerate.
+- NEVER hand-edit `duktape/duktape.c` or `duk_config.h`; they are generated. Change the YAML and regenerate. Board-dependent switches go in `duktape/celeros_fixup.h` (embedded at generation via `--fixup-header-file`); when Python 2.7 is not at hand, mirror the same block into the "Fixups" section of `duk_config.h` (that is byte-for-byte what regeneration produces) — done 2026-10-09 for `DUK_USE_CACHE_ACTIVATION`/`CATCHER` on `CONFIG_SPIRAM` boards (the YAML keeps them off for the CYD's RAM; measured on the SmartDisplay: JS call 16 -> 7 us, native call 23 -> 15 us).
 - NEVER add ES6+ builtins back to Duktape "just in case": apps are ES5 and every builtin costs flash on the CYD.
 - Do not "sync" `Network/` from upstream `esp_components` blindly: `CaptivePortal`, `WifiAP`, `WifiConnection`, `NetworkCredentialStore` carry CelerOS-only patches (see `README.md`).
 - Never reintroduce the old `esp_components` config: its `supabase_config.h` carries a leaked Supabase service_role key (see SECURITY in the root `AGENTS.md`). Secrets never live in source.

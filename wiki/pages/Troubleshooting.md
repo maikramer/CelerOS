@@ -37,6 +37,20 @@ Common problems, in rough order of "you will hit this".
   little harder than on a phone, or operate the device from the browser
   ([live screen](/maikramer/CelerOS/wiki/Web-Interface)).
 
+## SmartDisplay screen
+
+* **The whole image shakes a few pixels (only inside games/JS apps).**
+  Fixed in the firmware with API level 32: the RGB panel restarts its scan
+  every frame from an interrupt, and that interrupt shared a CPU core with
+  the JavaScript engine — any delay shifted the picture (~12 px per
+  microsecond). Update the firmware (OTA or flash). To check a unit, run
+  `lcddma 300 isr` in the serial shell (`celerctl shell "lcddma 300 isr"`):
+  `LCD_CAM` must be listed under `CPU 1`, and the underflow count should be
+  0 (non-zero means the panel is starving for memory bandwidth).
+* **The whole UI scrambles after a custom build.** Don't set
+  `CONFIG_ESP32S3_DATA_CACHE_LINE_64B` on the SmartDisplay: the panel reads
+  its framebuffer straight from PSRAM and the 64-byte cache line starves it.
+
 ## Wi-Fi and clock
 
 * **No credentials stored.** The device opens the `CelerOS-Setup-XXXX`

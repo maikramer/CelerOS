@@ -1,6 +1,10 @@
 #include "Boards/Board.h"
 #include "../../Hardware/BoardIO.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+
 // Perfil da Guition ESP32-S3-4848S040 (SmartDisplay 4").
 //
 // Material do fabricante (4.0inch_ESP32-4848S040): alto-falante via
@@ -13,6 +17,41 @@
 
 namespace {
 BoardDisplay s_display;
+
+// Init do display no NUCLEO 1. O Bus_RGB do LovyanGFX reinicia o DMA do
+// painel na interrupcao de fim de VSYNC (prioridade 1, compartilhada), e o
+// esp_intr_alloc liga a ISR ao nucleo de quem chama — era o 0, o mesmo da
+// task principal (Duktape), do WiFi e do BT. Cada secao critica do
+// heap_caps_malloc (o Duktape aloca/libera o tempo todo) atrasava o
+// reinicio do quadro, e a 12 MHz de pclk 1 us de atraso = ~12 px: a imagem
+// INTEIRA tremia so com app JS aberto, ate em menu parado (bancada
+// 2026-10-09: zero underflow de DMA, zero quadro empurrado, e o vidro
+// balancando). No nucleo 1 a ISR nao disputa com nada disso.
+SemaphoreHandle_t s_initDone = nullptr;
+
+void displayInitTask(void*) {
+    s_display.init();
+    xSemaphoreGive(s_initDone);
+    vTaskDelete(nullptr);
+}
+
+void initDisplayOnCore1() {
+#if !CONFIG_FREERTOS_UNICORE
+    s_initDone = xSemaphoreCreateBinary();
+    if (s_initDone != nullptr &&
+        xTaskCreatePinnedToCore(displayInitTask, "lcdinit", 6144, nullptr, 5, nullptr, 1) == pdPASS) {
+        xSemaphoreTake(s_initDone, portMAX_DELAY);
+        vSemaphoreDelete(s_initDone);
+        s_initDone = nullptr;
+        return;
+    }
+    if (s_initDone != nullptr) {
+        vSemaphoreDelete(s_initDone);
+        s_initDone = nullptr;
+    }
+#endif
+    s_display.init();  // fallback: sem task, no nucleo atual
+}
 }  // namespace
 
 namespace Board {
@@ -58,7 +97,7 @@ static const BoardProfile s_profile = {
 #endif
 
 void init() {
-    s_display.init();
+    initDisplayOnCore1();
     // Arrays RGB565 padrao (icones, BMPs de apps JS) e o readRect (screencap)
     // exigem a conversao de ordem de bytes: o framebuffer nativo do LCD_CAM
     // e 565 com bytes trocados (rgb565_2Byte do LovyanGFX). Sem isso o

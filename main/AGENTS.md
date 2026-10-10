@@ -47,6 +47,7 @@ Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tic
 | Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |
 
 ## CONVENTIONS
+- SmartDisplay RGB panel: `Boards/smartdisplay/Board.cpp` initializes the display from a task pinned to **core 1** so the LovyanGFX VSYNC ISR (which restarts the panel DMA every frame) does not share the Duktape/WiFi/BT core — on core 0 the whole image shook. Details and the `lcddma` shell diagnostic in `boards/AGENTS.md`.
 - Board HAL: `#include "Boards/Board.h"` / `"BoardDisplay.h"` resolve through the board dir on the PRIVATE include path. **Never add a board `#ifdef`** anywhere else. Put compile-time differences in `BoardTraits.h` (e.g. `largeUi`).
 - All UI geometry is designed at 240x320: scale it with `UI::sx()/sy()` and pick fonts with `UI::font(n)`. Don't hardcode physical pixels.
 - Modules are static classes/namespaces (`FileSystem::`, `OtaManager::`, `kui::Navigator::`). The only global instance is `Board::display()`.

@@ -61,3 +61,11 @@ CONFIG_ESP_WIFI_RX_BA_WIN=8
 # .bss marcado com EXT_RAM_BSS_ATTR (HostLink, ring de logs, buffers da
 # musica, slots da UI JS) vai para a PSRAM.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Cache de INSTRUCAO de 32 KB (16 KB padrao): o executor do Duktape e
+# grande e, com 16 KB, trocava de linha o tempo todo buscando codigo na
+# flash QIO (o mesmo MSPI da PSRAM do framebuffer). Medido 2026-10-09 no
+# SmartDisplay: laco de grade -32%, for-in -77%; custa 16 KB de SRAM
+# interna (sobra ~70 KB no pior caso). NAO mexer na linha do cache de
+# DADOS: 64 B fez a UI inteira tremer (o Panel_RGB varre a PSRAM direto).
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
