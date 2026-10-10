@@ -41,8 +41,9 @@ function usage() {
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
-    console.log('  test PASTA                                   roda o app no harness (stubs Node)');
+    console.log('  test PASTA [--ms N] [--events ARQ]           roda o app no harness (stubs Node)');
     console.log('  emu PASTA [--events ARQ] [--ms N] [--out ARQ] roda + snapshot PNG da tela (240x320)');
+    console.log('  bench PASTA [--ms N] [--events ARQ] [--vs B]  ms reais por quadro no harness (A/B com --vs)');
     console.log('  check                                        drift: codigo x docs x stubs x types x emulador');
     console.log('  publish PASTA... [--dry]                     publica na loja (celerhub)');
     console.log('  publish-dep ARQUIVO.js [--hub URL] [--force] publica dependencia no repo do hub');
@@ -291,11 +292,72 @@ function printRun(r) {
 }
 
 function cmdTest(args) {
-    const folder = args.find((a) => !a.startsWith('--'));
+    const flags = parseFlags(args);
+    const folder = flags._[0];
     if (!folder) die('test: informe a PASTA do app');
+    let events = null;
+    if (flags.events) {
+        const m = require(path.resolve(flags.events));
+        events = typeof m === 'function' ? m : m.events;
+        if (typeof events !== 'function') die(flags.events + ': exporte `events(env)`');
+    }
     try {
-        printRun(runAppFolder(folder));
+        printRun(runAppFolder(path.resolve(folder), { stopAtMs: flags.ms ? +flags.ms : undefined,
+                                                      events }));
     } catch (e) { die(e.message); }
+}
+
+// bench PASTA [--ms N] [--events ARQ] [--vs PASTA2] [--json]: ms reais por
+// quadro no harness (perfil do runner). --vs roda a segunda pasta com os
+// mesmos parametros e imprime lado a lado — comparar duas versoes do
+// mesmo app (A/B de otimizacao) vira um comando.
+function fmtProfile(p) {
+    return 'media ' + p.avgMs.toFixed(3) + ' ms  p50 ' + p.p50Ms.toFixed(3) +
+           '  p95 ' + p.p95Ms.toFixed(3) + '  max ' + p.maxMs.toFixed(1) +
+           '  (' + p.frames + ' quadros)';
+}
+
+function cmdBench(args) {
+    const flags = parseFlags(args);
+    const folder = flags._[0];
+    if (!folder) die('bench: informe a PASTA do app');
+    let events = null;
+    if (flags.events) {
+        const m = require(path.resolve(flags.events));
+        events = typeof m === 'function' ? m : m.events;
+        if (typeof events !== 'function') die(flags.events + ': exporte `events(env)`');
+    }
+    const ms = flags.ms ? +flags.ms : 5000;
+    const run = (f) => runAppFolder(path.resolve(f), { stopAtMs: ms, events, profile: true });
+    const a = run(folder);
+    if (a.err && !/harnessStop/.test(String(a.err))) {
+        console.error('erro do app:');
+        console.error(String(a.err).split('\n').slice(0, 12).join('\n'));
+        process.exit(1);
+    }
+    if (flags.vs) {
+        const b = run(flags.vs);
+        if (b.err && !/harnessStop/.test(String(b.err))) {
+            console.error('erro do app B (--vs):');
+            console.error(String(b.err).split('\n').slice(0, 12).join('\n'));
+            process.exit(1);
+        }
+        if (flags.json) {
+            console.log(JSON.stringify({ a: path.resolve(folder), b: path.resolve(flags.vs),
+                                         profA: a.profile, profB: b.profile }));
+        } else {
+            console.log('A) ' + path.resolve(folder));
+            console.log('   ' + fmtProfile(a.profile));
+            console.log('B) ' + path.resolve(flags.vs));
+            console.log('   ' + fmtProfile(b.profile));
+            const razao = b.profile.avgMs > 0 ? a.profile.avgMs / b.profile.avgMs : 0;
+            console.log('A/B: media ' + razao.toFixed(2) + 'x ' +
+                        (razao < 1 ? '(A mais leve)' : '(B mais leve)'));
+        }
+        return;
+    }
+    if (flags.json) console.log(JSON.stringify({ app: path.resolve(folder), prof: a.profile }));
+    else console.log(path.resolve(folder) + ': ' + fmtProfile(a.profile));
 }
 
 function cmdEmu(args) {
@@ -453,6 +515,7 @@ function main() {
         case 'types': return cmdTypes(rest);
         case 'test': return cmdTest(rest);
         case 'emu': return cmdEmu(rest);
+        case 'bench': return cmdBench(rest);
         case 'check': return cmdCheck();
         case 'publish': return cmdPublish(rest);
         case 'publish-dep': return cmdPublishDep(rest);

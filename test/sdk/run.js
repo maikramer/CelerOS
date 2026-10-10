@@ -147,6 +147,32 @@ function check(name, ok, detail) {
     // morte por labareda -> fim) — watchdog do proprio test.js do app
     var r5 = runAppFolder(path.join(ROOT, 'hub_apps', 'Detona'));
     check('Detona roda limpo no harness (smoke completo)', r5.err === null, r5.err);
+
+    // Ferramentas 2026-10-10: 9o timer do pool de 8 agora e VISIVEL, a
+    // retomada da musica honra startMs e o runner tem profile de quadros
+    // (a base do `celer.js bench`)
+    var r6 = runAppFolder(path.join(ROOT, 'data', 'apps', 'Snake'),
+                          { stopAtMs: 250, events: (env) => {
+        for (var i = 0; i < 9; i++) env.setTimeout(function () {}, 5000);
+    } });
+    check('harness: 9o setTimeout conta drop no __harness (antes era silencio)',
+          r6.env.__harness.timersDropped() >= 1 &&
+          r6.env.__harness.log.some((l) => /descartado/.test(l)));
+    var r7 = runAppFolder(path.join(ROOT, 'hub_apps', 'Cronometro'),
+                          { stopAtMs: 400, events: (env) => {
+        env.System.playMusic({ bpm: 120, tracks: [{ notes: [[60, 64]] }] }, { startMs: 1000 });
+    } });
+    check('harness: playMusic honra startMs (retomada nao zera o beat clock)',
+          r7.env.System.musicPos() >= 900, 'musicPos=' + r7.env.System.musicPos());
+    var r8 = runAppFolder(path.join(ROOT, 'hub_apps', 'Cronometro'),
+                          { stopAtMs: 600, profile: true });
+    check('bench: runner.profile coleta quadros com tempos reais',
+          r8.profile.frames > 10 && r8.profile.avgMs >= 0 && r8.profile.maxMs >= r8.profile.p50Ms,
+          JSON.stringify(r8.profile));
+    var { execSync } = require('child_process');
+    execSync('node tools/sdk/celer.js test hub_apps/Cronometro --ms 600',
+             { cwd: ROOT, stdio: 'pipe' });
+    check('celer.js test aceita --ms (para no marco)', true);
 })();
 
 // ------------------------------------------------------- Detona: sim ----

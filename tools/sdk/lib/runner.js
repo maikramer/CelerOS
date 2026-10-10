@@ -46,10 +46,13 @@ function runAppFolder(appDir, opts = {}) {
     const renderer = opts.render ? new Renderer() : null;
     const frames = Array.isArray(opts.frames) && opts.frames.length
         ? opts.frames.map(Number).sort((a, b) => a - b) : null;
-    // clock do harness comeca em 1000: marcos do app = base + ms pedido
+    // clock do harness comeca em 1000: marcos do app = base + ms pedido.
+    // stopAtMs entra como RELATIVO (ms de app rodado): era tratado como
+    // absoluto e qualquer --ms <= 1000 derrubava o app no primeiro quadro —
+    // o teste "passava limpo" sem ter rodado nada (mascarando regressao)
     const FR_BASE = 1000;
     const stopAtMs = frames ? FR_BASE + frames[frames.length - 1]
-        : (opts.stopAtMs != null ? opts.stopAtMs : (opts.render ? 1200 : null));
+        : (opts.stopAtMs != null ? FR_BASE + opts.stopAtMs : (opts.render ? 1200 : null));
 
     const wires = [];
     if (renderer) wires.push((env) => renderer.wire(env));
@@ -71,6 +74,24 @@ function runAppFolder(appDir, opts = {}) {
         });
     }
     if (opts.events) wires.push(opts.events);
+    if (opts.profile) {
+        // bench: ms REAIS por quadro — o delta entre entradas de
+        // System.delay engloba update+draw do app (o harness nao dorme, o
+        // relogio e virtual; sobra so o trabalho de verdade). Nasceu do
+        // comparativo do Supernova 2.3 feito em script avulso: virou flag.
+        wires.push((env) => {
+            const samples = [];
+            let last = null;
+            const orig = env.System.delay;
+            env.System.delay = function (ms) {
+                const now = process.hrtime.bigint();
+                if (last !== null) samples.push(Number(now - last) / 1e6);
+                last = now;
+                return orig(ms);
+            };
+            env.__profileSamples = samples;
+        });
+    }
     const appWire = loadAppWire(dir);
     if (appWire) wires.push(appWire);
 
@@ -82,6 +103,15 @@ function runAppFolder(appDir, opts = {}) {
     });
     r.renderer = renderer;
     r.frames = (r.env && r.env.__framesOut) || [];
+    if (opts.profile) {
+        const s = (r.env && r.env.__profileSamples || []).slice().sort((a, b) => a - b);
+        const pick = (p) => (s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0);
+        r.profile = {
+            frames: s.length,
+            avgMs: s.length ? s.reduce((a, b) => a + b, 0) / s.length : 0,
+            p50Ms: pick(0.50), p95Ms: pick(0.95), maxMs: s.length ? s[s.length - 1] : 0
+        };
+    }
     return r;
 }
 

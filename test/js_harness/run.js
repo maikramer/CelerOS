@@ -65,8 +65,20 @@ function makeEnv() {
             }
         }
     }
+    var timersDropped = 0;   // drops do pool: silenciosos no firmware, no host precisam ser visiveis
     function timerAdd(fn, ms, repeat) {
-        if (typeof fn !== 'function' || timers.length >= 8) return 0;
+        if (typeof fn !== 'function') return 0;
+        if (timers.length >= 8) {
+            // espelha o firmware (retorna 0, JsTimers.cpp) — mas aqui o
+            // silencio custa meia hora de debug: o 9o timer de um wire de
+            // teste derrubava o ultimo tap do smoke e parecia bug do app
+            timersDropped++;
+            if (timersDropped === 1)
+                log.push('[harness] setTimeout descartado: pool de 8 timers cheio '
+                       + '(app + wire de teste + stubs internos dividem o mesmo pool; '
+                       + 'o firmware tem o mesmo limite)');
+            return 0;
+        }
         var d = Math.max(10, ms | 0);
         timers.push({ id: nextTid, fn: fn, delay: d, repeat: repeat, at: clock + d });
         return nextTid++;
@@ -412,6 +424,8 @@ function makeEnv() {
         return api;
     })();
 
+    var rigidStub = require(path.join(ROOT, 'tools', 'sdk', 'lib', 'rigid2d.js')).makeStub();
+
     env.System = {
     theme: function() { return JSON.parse(JSON.stringify(theme)); },
     color: function(r, g, b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); },
@@ -591,6 +605,19 @@ function makeEnv() {
     verletDelStick: verletStub.verletDelStick,
     verletDelPoint: verletStub.verletDelPoint,
     verletPins: verletStub.verletPins,
+    // Corpo rigido nativo (API 33): espelho JS do solver de
+    // main/Utils/Rigid2D.h (tools/sdk/lib/rigid2d.js, mesma ordem de contas)
+    rigidNew: rigidStub.rigidNew,
+    rigidFree: rigidStub.rigidFree,
+    rigidBox: rigidStub.rigidBox,
+    rigidCircle: rigidStub.rigidCircle,
+    rigidRemove: rigidStub.rigidRemove,
+    rigidSet: rigidStub.rigidSet,
+    rigidImpulse: rigidStub.rigidImpulse,
+    rigidStep: rigidStub.rigidStep,
+    rigidState: rigidStub.rigidState,
+    rigidCount: rigidStub.rigidCount,
+    drawSprite: function() {},
     // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
     setPin: function() { return true; },
     verifyPin: function() { return true; },
@@ -668,7 +695,7 @@ function makeEnv() {
     // Musica (API 25): chiptune N trilhas — duracao REAL do song (mesma
     // conta do MusicEngine: trilha mais longa em semicolcheias x bpm);
     // __harness.music expoe o estado p/ assercoes
-    playMusic: function(song) {
+    playMusic: function(song, opts) {
         if (!song || !song.tracks || !song.tracks.length) return false;
         var beatMs = 60000 / (song.bpm || 120);
         var longest = 0;
@@ -681,8 +708,14 @@ function makeEnv() {
         musicState.playing = true;
         musicState.startAt = clock;
         musicState.totalMs = Math.round(longest * beatMs / 4 * (song.loops || 1));
+        // retomada: a engine passa {startMs} ao voltar da pausa — o host
+        // recomecava do 0 e o beat clock da cena andava para tras
+        var startMs = opts && opts.startMs;
+        if (typeof startMs === 'number' && startMs > 0)
+            musicState.startAt = clock - Math.min(startMs, musicState.totalMs - 1);
         musicState.songs.push(JSON.stringify(song));
-        log.push('[music] ' + musicState.totalMs + ' ms');
+        log.push('[music] ' + musicState.totalMs + ' ms'
+                 + (typeof startMs === 'number' && startMs > 0 ? ' (retoma ' + Math.round(startMs) + 'ms)' : ''));
         return true;
     },
     // API 32: efeito misturado (nao bloqueia) — log p/ assercoes
@@ -992,6 +1025,7 @@ function makeEnv() {
 
     env.__harness = {
     log: log,
+    timersDropped: function () { return timersDropped; },
     setAiResponse: function(r) { aiResponse = r; },
     aiChats: aiChats,
     setAiSpeakResult: function(r) { aiSpeakResult = r; },
@@ -1264,6 +1298,18 @@ function runInline(src, env) {
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('placar desenhado', j.indexOf('Pontos 0') >= 0);
+})();
+
+// --- Arrasa! (hub_apps): corpo rigido nativo (API 33) no espelho JS --------
+// A bateria vive no proprio app (hub_apps/Arrasa/test.js, a mesma do
+// `celer.js test`): toques reais no canvas 480, mira e lance pelo elastico,
+// vitoria com estrelas no NVS, TNT/bomba/tripla.
+(function() {
+    console.log('Arrasa!:');
+    var wire = require(path.join(ROOT, 'hub_apps', 'Arrasa', 'test.js')).wire;
+    var r = runApp('hub_apps/Arrasa/main.js', wire);
+    check('bateria do app passa (test.js)', r.err === null, r.err || '');
+    check('chegou ao fim da bateria', joinLog(r.log).indexOf('[arrasa] bateria completa') >= 0);
 })();
 
 // --- Cronometro (hub_apps) --------------------------------------------------
