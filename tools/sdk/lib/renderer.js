@@ -308,6 +308,30 @@ class Renderer {
             }
         };
         S.deleteSprite = () => { r.sprite = null; r.bound = false; };
+        // API 33: sprite girado/escalado com o centro em (x, y) — amostragem
+        // inversa por vizinho mais proximo (o emulador tem um sprite so: o id
+        // e ignorado; nao desenha o sprite sobre si mesmo)
+        S.drawSprite = (id, x, y, ang, zx, zy, key) => {   // smooth (8o arg) ignorado: preview
+            const sp = r.sprite;
+            if (!sp || r.bound) return;
+            zx = zx == null ? 1 : zx;
+            zy = zy == null ? zx : zy;
+            if (!zx || !zy) return;
+            const a = (ang || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+            const hw = sp.w / 2, hh = sp.h / 2;
+            const ext = Math.ceil(Math.hypot(hw * Math.abs(zx), hh * Math.abs(zy)));
+            for (let py = -ext; py <= ext; py++) {
+                for (let px = -ext; px <= ext; px++) {
+                    // destino -> origem: desfaz a rotacao e a escala
+                    const u = (c * px + s * py) / zx + hw, v = (-s * px + c * py) / zy + hh;
+                    const ix = Math.floor(u), iy = Math.floor(v);
+                    if (ix < 0 || iy < 0 || ix >= sp.w || iy >= sp.h) continue;
+                    const col = sp.fb[iy * sp.w + ix];
+                    if (key != null && col === (key & 0xFFFF)) continue;
+                    r.px(Math.round(x + px), Math.round(y + py), col);
+                }
+            }
+        };
         // nao renderizados no emulador (mesmo comportamento do harness + aviso)
         for (const name of ['drawPNG', 'drawBMP', 'drawIcon']) {
             const orig = S[name];
@@ -326,7 +350,7 @@ const RENDERED = [
     'setTextColor', 'setTextSize', 'setTextDatum', 'drawString', 'textWidth',
     'fontHeight', 'createSprite', 'bindSprite', 'pushSprite', 'deleteSprite',
     'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
-    'fillSmoothRoundRect', 'drawWideLine', 'mixColor',
+    'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite',
 ];
 
 module.exports = { Renderer, W, H, RENDERED };

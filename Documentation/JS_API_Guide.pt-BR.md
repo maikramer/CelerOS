@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 32
+### Nível de API: 33
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2593,3 +2593,73 @@ else System.playTone([[1200, 30], [900, 30], [600, 50]]);   // firmware antigo: 
 
 A `celeros.engine` 1.2 roteia o `E.audio.sfx` por ela automaticamente
 (`E.caps.mix`) e torna o `E.audio.duck` um no-op quando há mistura.
+
+## 38. Nível de API 33 — Corpo rígido nativo (`System.rigid*`) e `System.drawSprite`
+
+Caixas que **giram, empilham e tombam**, círculos que **rolam**, pedra
+rápida que **não atravessa** tábua fina: um solver de impulsos sequenciais
+(molde box2d-lite) em C++ float — SAT caixa-caixa com até 2 contatos,
+atrito e impulso **acumulados com warm start** (pilhas ficam em pé),
+correção de penetração por pseudo-velocidade (nada de tremor), restituição,
+**sono** por corpo (parado 0,5 s vira estático até levar pancada) e
+**sub-passos adaptativos** anti-túnel (≥ 120 Hz; nenhum corpo anda mais que
+40% da menor meia-espessura do mundo por sub-passo). Um castelo de 30 peças
+custa ~1-2 ms por quadro no S3 — no interpretado não fecharia o quadro.
+
+Só nas placas S3 (`CONFIG_CELEROS_JS_GAME_ACCEL`: SmartDisplay, relógio,
+cão); no ESP32 clássico as funções não existem — teste com `typeof`. O
+jeito recomendado é a dep: `P.rigid()` da `celeros.physics` 1.5.0 (devolve
+`null` sem o binding). Até 2 mundos de 96 corpos; saem no início do
+próximo app. Unidades livres (as do app), ângulo em **radianos**, y para
+baixo. Índices são **estáveis**: remover libera o slot e o próximo add o
+reaproveita.
+
+#### `System.rigidNew([iterations])` → Inteiro (API 33)
+Cria um mundo (iterações do solver por sub-passo, default 10, máx. 30). Devolve o id (1..2) ou -1.
+
+#### `System.rigidFree(id)` (API 33)
+Devolve o mundo (malloc incluso, ~60 KB na PSRAM).
+
+#### `System.rigidBox(id, x, y, w, h[, angle, density, friction, bounce])` → Inteiro (API 33)
+Caixa com centro em (x, y) e medidas w × h. `density` 0 = **estático** (chão, paredes); default 1. `friction` default 0,6; `bounce` (restituição 0..1) default 0,1. Devolve o índice ou -1 (mundo cheio).
+
+#### `System.rigidCircle(id, x, y, r[, density, friction, bounce])` → Inteiro (API 33)
+Círculo de raio r (mesmos defaults). Círculo encostado sofre resistência ao rolamento — a bola para.
+
+#### `System.rigidRemove(id, idx)` → Boolean (API 33)
+Remove o corpo (contatos inclusos) e **acorda o mundo** — o que estava apoiado nele cai.
+
+#### `System.rigidSet(id, idx, x, y[, angle, vx, vy, w])` → Boolean (API 33)
+Teleporte + velocidade (u/s e rad/s); acorda o corpo. O lançamento de um projétil é um `rigidSet` com a velocidade do estilingue.
+
+#### `System.rigidImpulse(id, idx, jx, jy)` → Boolean (API 33)
+Impulso no centro (Δv = j / massa); acorda o corpo. Explosões: impulso radial nos vizinhos.
+
+#### `System.rigidStep(id, dt[, gx, gy, maxSub])` → Inteiro (API 33)
+Avança `dt` segundos (clampado em 0,1) com gravidade em u/s². Devolve quantos sub-passos rodou (`maxSub` default 12, máx. 16).
+
+#### `System.rigidState(id)` → Array (API 33)
+`[x, y, angle, hit, speed, flags, ...]` — 6 números por índice (uma alocação por quadro). `hit` = maior impulso de impacto do último step (aproximação × massa efetiva: o dano do jogo sai daqui); `speed` = rapidez do ponto mais rápido do corpo; `flags`: 1 vivo, 2 acordado.
+
+#### `System.rigidCount(id)` → Inteiro (API 33)
+Slots em uso (marca d'água): o `rigidState` tem `6 × rigidCount` números.
+
+#### `System.drawSprite(id, x, y[, angle, zoomX, zoomY, key, smooth])` (API 33)
+Desenha o sprite `id` (do `createSprite`) **girado e escalado** com o centro em (x, y) no alvo corrente — o quadro, ou outro sprite selecionado por `useSprite` (não desenha um sprite sobre si mesmo). `angle` em **graus** (horário), `zoomY` default = `zoomX`, `key` = cor-chave transparente (RGB565; `null` = opaco), `smooth` = amostragem com anti-alias (reduzir/ampliar arte no load sem serrilhado; o padrão, vizinho mais próximo, é mais rápido por quadro). Peças que giram na física, e um fundo pequeno em PNG ampliado para a tela inteira dentro de um sprite.
+
+Na mesma API o pool de sprites com PSRAM dobrou para **16** (`System.spriteSlots()` informa): um jogo com arte por personagem, texturas de material e o cenário num sprite de tela cheia estourava os 8.
+
+```javascript
+var P = require("celeros.physics");          // dep ^1.5.0
+var w = P.rigid({ iterations: 10 });
+if (!w) { /* firmware sem API 33: avise o usuário */ }
+w.box(160, 270, 400, 20, { static: true });  // chão
+var tabua = w.box(200, 240, 48, 6, { density: 0.6, friction: 0.7 });
+var pedra = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+w.set(pedra, 40, 200, 0, 420, -40, 0);       // lança
+w.step(dt, { gravity: { x: 0, y: 400 } });
+var s = w.state();
+if (w.hit(tabua, s) > 900) w.remove(tabua);  // quebrou
+System.drawSprite(sprTabua, w.x(tabua, s), w.y(tabua, s),
+                  w.angle(tabua, s) * 57.2958, 1, 1, 0x0000);
+```

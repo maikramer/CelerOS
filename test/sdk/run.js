@@ -1263,6 +1263,70 @@ function depSize(nome) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// --------------------------------------------- corpo rigido (API 33) --
+(function () {
+    console.log('SDK P.rigid (celeros.physics x System.rigid*, API 33):');
+    var harness = require('../../test/js_harness/run.js');
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-rg-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.physics': '^1.5.0' } }));
+    var env = harness.makeEnv();
+    var P = harness.makeRequire(tmp, env)('celeros.physics');
+    check('physics 1.5.0 exporta rigid', typeof P.rigid === 'function' && P.version === '1.5.0');
+    var w = P.rigid({ iterations: 10 });
+    check('rigid usa o binding (stub do harness = espelho do Rigid2D.h)', w !== null && w.id > 0);
+    var chao = w.box(160, 270, 400, 20, { static: true });
+    // torre: 3 andares de pilar-pilar-tabua + bola no topo
+    var y = 260, ids = [];
+    for (var f = 0; f < 3; f++) {
+        ids.push(w.box(200, y - 15, 6, 30, { density: 1, friction: 0.7 }));
+        ids.push(w.box(236, y - 15, 6, 30, { density: 1, friction: 0.7 }));
+        ids.push(w.box(218, y - 33, 48, 6, { density: 1, friction: 0.7 }));
+        y -= 36;
+    }
+    var bola = w.circle(218, y - 7, 7, { density: 0.6 });
+    check('indices estaveis e crescentes', chao === 0 && ids[0] === 1 && bola === 10);
+    for (var t = 0; t < 120; t++) w.step(1 / 30, { gravity: { x: 0, y: 400 } });
+    var s = w.state();
+    var maxDy = 0, acordados = 0;
+    y = 260;
+    for (f = 0; f < 3; f++) {
+        maxDy = Math.max(maxDy, Math.abs(w.y(ids[f * 3], s) - (y - 15)), Math.abs(w.y(ids[f * 3 + 2], s) - (y - 33)));
+        y -= 36;
+    }
+    for (var i = 1; i <= 10; i++) if (w.awake(i, s)) acordados++;
+    check('torre fica em pe e DORME (pilha estavel)', maxDy < 1 && acordados === 0,
+          'maxDy=' + maxDy.toFixed(2) + ' acordados=' + acordados);
+    // tiro: pedra rapida derruba (sem atravessar)
+    var pedra = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+    w.set(pedra, 40, 200, 0, 420, -40, 0);
+    var hitMax = 0;
+    for (t = 0; t < 30; t++) {
+        w.step(1 / 30, { gravity: { x: 0, y: 400 } });
+        s = w.state();
+        for (i = 1; i <= 10; i++) hitMax = Math.max(hitMax, w.hit(i, s));
+    }
+    check('o impacto vira hit (impulso) nos corpos atingidos', hitMax > 1000, 'hit=' + hitMax.toFixed(0));
+    check('pedra parou no castelo (nao atravessou)', w.x(pedra, s) < 330, 'x=' + w.x(pedra, s).toFixed(1));
+    // anti-tunel: tabua fina estatica x pedra a 900 u/s
+    var w2 = P.rigid();
+    w2.box(160, 270, 400, 20, { static: true });
+    w2.box(150, 230, 5, 60, { static: true });
+    var q = w2.circle(40, 230, 5, { density: 3 });
+    w2.set(q, 40, 230, 0, 900, 0, 0);
+    for (t = 0; t < 30; t++) w2.step(1 / 30, { gravity: { x: 0, y: 400 } });
+    check('pedra a 900 u/s nao atravessa tabua de 5', w2.x(q, w2.state()) < 150);
+    check('remove libera o indice e o add reaproveita', w.remove(ids[4]) === true &&
+          w.box(100, 100, 10, 10) === ids[4]);
+    check('rigidState: 6 numeros por slot', w.state().length === w.count() * 6);
+    w.free(); w2.free();
+    var env2 = harness.makeEnv();
+    delete env2.System.rigidNew;
+    var P2 = harness.makeRequire(tmp, env2)('celeros.physics');
+    check('sem System.rigidNew: P.rigid devolve null (o app avisa)', P2.rigid() === null);
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------- verlet: manuseio + colisao --
 (function () {
     console.log('SDK verletFast manuseio (del/pins/colisao, physics 1.3.0):');

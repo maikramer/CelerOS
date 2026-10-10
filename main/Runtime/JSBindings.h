@@ -75,6 +75,21 @@ private:
     static duk_ret_t js_verletDelPoint(duk_context *ctx);
     static duk_ret_t js_verletPins(duk_context *ctx);
 
+    // Aceleradores de jogo (API 33, CONFIG_CELEROS_JS_GAME_ACCEL): corpo
+    // rigido nativo (JsRigid.cpp, solver em Utils/Rigid2D.h; reset por app:
+    // jsRigidReset) e sprite girado/escalado (JsGfx.cpp)
+    static duk_ret_t js_rigidNew(duk_context *ctx);
+    static duk_ret_t js_rigidFree(duk_context *ctx);
+    static duk_ret_t js_rigidBox(duk_context *ctx);
+    static duk_ret_t js_rigidCircle(duk_context *ctx);
+    static duk_ret_t js_rigidRemove(duk_context *ctx);
+    static duk_ret_t js_rigidSet(duk_context *ctx);
+    static duk_ret_t js_rigidImpulse(duk_context *ctx);
+    static duk_ret_t js_rigidStep(duk_context *ctx);
+    static duk_ret_t js_rigidState(duk_context *ctx);
+    static duk_ret_t js_rigidCount(duk_context *ctx);
+    static duk_ret_t js_drawSprite(duk_context *ctx);
+
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);
     static duk_ret_t js_setInterval(duk_context *ctx);

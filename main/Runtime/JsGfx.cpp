@@ -26,16 +26,18 @@
 // Double Buffering
 // =====================================================
 //
-// Sprites multiplos (API 12): pool de ate 8 (1 sem PSRAM — cada sprite
-// come RAM interna no fallback 8-bit). createSprite devolve um id 1..8
+// Sprites multiplos (API 12): pool de ate 16 com PSRAM (8 ate a API 32;
+// 1 sem PSRAM — cada sprite come RAM interna no fallback 8-bit). Jogo com
+// arte por personagem + texturas estourava 8 (Arrasa). createSprite devolve um id 1..16
 // (0 = falhou) e o sprite novo vira o CORRENTE; draw*/pushSprite seguem
 // o corrente (compat: apps antigos ignoram o retorno). useSprite(id)
-// troca o alvo: 0 = quadro/display, 1..8 = sprite existente.
+// troca o alvo: 0 = quadro/display, 1..16 = sprite existente.
 // System.spriteSlots() (API 29) informa o limite real da placa.
 
 namespace {
-CelerSprite* s_spritePool[8] = {};  // nullptr = livre
-int spriteCap() { return Board::profile().hasPsram ? 8 : 1; }
+constexpr int kSpritePool = 16;
+CelerSprite* s_spritePool[kSpritePool] = {};  // nullptr = livre
+int spriteCap() { return Board::profile().hasPsram ? kSpritePool : 1; }
 }  // namespace
 
 // Canvas nativo (API 28): definido aqui (dominio grafico), lido pelos
@@ -190,6 +192,51 @@ duk_ret_t JSBindings::js_useSprite(duk_context *ctx) {
     duk_push_boolean(ctx, 1);
     return 1;
 }
+
+#if CONFIG_CELEROS_JS_GAME_ACCEL
+// API 33: desenha o sprite `id` GIRADO/ESCALADO com o centro em (x, y) no
+// alvo corrente (quadro, display ou outro sprite do useSprite) — angulo em
+// graus (horario), zoom por eixo, cor-chave opcional e `smooth` (amostragem
+// com anti-alias: reduzir/ampliar arte no load sem serrilhado; o padrao e
+// o vizinho mais proximo, mais rapido por quadro). Pecas que giram (fisica
+// rigida) e fundo ampliado de um PNG pequeno saem daqui.
+duk_ret_t JSBindings::js_drawSprite(duk_context *ctx) {
+    if (!tftInstance) return 0;
+    int id = duk_require_int(ctx, 0);
+    if (id < 1 || id > spriteCap() || s_spritePool[id - 1] == nullptr) return 0;
+    CelerSprite* src = s_spritePool[id - 1];
+    float x = (float)duk_require_number(ctx, 1);
+    float y = (float)duk_require_number(ctx, 2);
+    float ang = duk_is_number(ctx, 3) ? (float)duk_get_number(ctx, 3) : 0.0f;
+    float zx = duk_is_number(ctx, 4) ? (float)duk_get_number(ctx, 4) : 1.0f;
+    float zy = duk_is_number(ctx, 5) ? (float)duk_get_number(ctx, 5) : zx;
+    bool chroma = !duk_is_null_or_undefined(ctx, 6);
+    uint32_t key = chroma ? duk_require_uint(ctx, 6) : 0;
+    bool smooth = duk_is_boolean(ctx, 7) && duk_get_boolean(ctx, 7);
+    lgfx::LovyanGFX* dst;
+    if (useSprite && tftSprite) {
+        if (tftSprite == src) return 0;   // nao desenha sobre si mesmo
+        dst = tftSprite;
+    } else if (s_frame != nullptr) {
+        dst = s_frame;                    // o FrameSprite marca a caixa suja
+    } else {
+        dst = tftInstance;
+    }
+    // canvas virtual: centro e zoom seguem a escala do app (o sprite ja foi
+    // alocado no tamanho fisico equivalente pelo createSprite)
+    float px = s_nativeCanvas ? x : (float)jsx(0) + x * (float)UI::sx(1000) / 1000.0f;
+    float py = s_nativeCanvas ? y : (float)JSBindings::mapY(0) + y * appScaleY();
+    if (smooth) {
+        if (chroma) src->pushRotateZoomWithAA(dst, px, py, ang, zx, zy, jsc(key));
+        else src->pushRotateZoomWithAA(dst, px, py, ang, zx, zy);
+    } else if (chroma) {
+        src->pushRotateZoom(dst, px, py, ang, zx, zy, jsc(key));
+    } else {
+        src->pushRotateZoom(dst, px, py, ang, zx, zy);
+    }
+    return 0;
+}
+#endif
 
 // API 29: o limite real do pool (8 com PSRAM, 1 sem) — engines e jogos
 // orcamentam os slots em vez de chumbar o maximo historico

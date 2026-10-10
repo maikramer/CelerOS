@@ -15,6 +15,7 @@
 #include "../../main/Display/DirtyRects.h"
 #include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
+#include "../../main/Utils/Rigid2D.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -972,6 +973,80 @@ static void testJsonMap() {
     CHECK(celer::parseJsonStringMap("{\"a\":\"1\"", p, 8) == 1);   // truncado: o que deu
 }
 
+// Corpo rigido (API 33): o mesmo header do System.rigid* — pilha estavel
+// que dorme, tiro que derruba sem atravessar, anti-tunel e indice estavel
+static void testRigid2D() {
+    using namespace celer::rigid;
+    static World W;
+    worldInit(&W, 10);
+    int chao = addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+    CHECK(chao == 0);
+    float y = 260;
+    int ids[9];
+    for (int f = 0; f < 3; f++) {
+        ids[f * 3] = addBody(&W, BOX, 200, y - 15, 3, 15, 0, 1, 0.7f, 0.1f);
+        ids[f * 3 + 1] = addBody(&W, BOX, 236, y - 15, 3, 15, 0, 1, 0.7f, 0.1f);
+        ids[f * 3 + 2] = addBody(&W, BOX, 218, y - 33, 24, 3, 0, 1, 0.7f, 0.1f);
+        y -= 36;
+    }
+    int bola = addBody(&W, CIRCLE, 218, y - 7, 7, 7, 0, 0.6f, 0.6f, 0.2f);
+    CHECK(bola == 10);
+    for (int t = 0; t < 120; t++) step(&W, 1 / 30.f, 0, 400, 12);
+    float maxDy = 0;
+    int acordados = 0;
+    y = 260;
+    for (int f = 0; f < 3; f++) {
+        float d1 = fabsf(W.bodies[ids[f * 3]].y - (y - 15));
+        float d2 = fabsf(W.bodies[ids[f * 3 + 2]].y - (y - 33));
+        if (d1 > maxDy) maxDy = d1;
+        if (d2 > maxDy) maxDy = d2;
+        y -= 36;
+    }
+    for (int i = 1; i <= 10; i++) acordados += W.bodies[i].awake;
+    CHECK(maxDy < 1.0f);          // torre de pe (compressao ~ slop)
+    CHECK(acordados == 0);        // e dormindo
+    CHECK(fabsf(W.bodies[bola].y - (y - 7)) < 1.0f);
+
+    int pedra = addBody(&W, CIRCLE, 40, 200, 6, 6, 0, 3, 0.6f, 0.3f);
+    setBody(&W, pedra, 40, 200, 0, 420, -40, 0);
+    float hitMax = 0;
+    for (int t = 0; t < 30; t++) {
+        step(&W, 1 / 30.f, 0, 400, 12);
+        for (int i = 1; i <= 10; i++) if (W.bodies[i].hit > hitMax) hitMax = W.bodies[i].hit;
+    }
+    CHECK(hitMax > 1000);         // impacto vira impulso p/ o dano
+    CHECK(W.bodies[pedra].x < 330);
+    int caidos = 0;
+    for (int i = 1; i <= 9; i++) if (fabsf(W.bodies[i].a) > 0.5f) caidos++;
+    CHECK(caidos >= 3);           // o tiro derrubou de verdade
+    for (int t = 0; t < 300; t++) step(&W, 1 / 30.f, 0, 400, 12);
+    acordados = 0;
+    for (int i = 1; i < W.nBodies; i++) acordados += W.bodies[i].awake;
+    CHECK(acordados == 0);        // escombro assenta e dorme (sem tremor eterno)
+
+    // anti-tunel: tabua estatica de 5 x pedra a 900 u/s
+    static World T;
+    worldInit(&T, 10);
+    addBody(&T, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+    addBody(&T, BOX, 150, 230, 2.5f, 30, 0, 0, 0.5f, 0);
+    int q = addBody(&T, CIRCLE, 40, 230, 5, 5, 0, 3, 0.5f, 0.2f);
+    setBody(&T, q, 40, 230, 0, 900, 0, 0);
+    int subMax = 0;
+    for (int t = 0; t < 30; t++) {
+        int sub = step(&T, 1 / 30.f, 0, 400, 12);
+        if (sub > subMax) subMax = sub;
+    }
+    CHECK(T.bodies[q].x < 150);
+    CHECK(subMax > 4);            // sub-passos subiram com a pedra rapida
+
+    // indice estavel: remover libera o slot, o add reaproveita; remover
+    // acorda o mundo (o que estava em cima cai)
+    CHECK(removeBody(&W, ids[4]));
+    CHECK(!removeBody(&W, ids[4]));
+    CHECK(addBody(&W, BOX, 10, 10, 2, 2, 0, 1, 0.5f, 0) == ids[4]);
+    CHECK(addBody(&W, BOX, 0, 0, 0, 2, 0, 1, 0.5f, 0) == -1);   // medida invalida
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -988,6 +1063,7 @@ int main() {
     testDirtyRects();
     testJsonMap();
     testNetFrame();
+    testRigid2D();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

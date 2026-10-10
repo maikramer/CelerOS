@@ -70,6 +70,11 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
+# Aceleradores de jogo (API 33): corpo rigido nativo; o drawSprite vive no
+# JsGfx.cpp atras do mesmo #if
+if(CONFIG_CELEROS_JS_GAME_ACCEL)
+    list(APPEND CELEROS_SRCS "Runtime/JsRigid.cpp")
+endif()
 # Wake word on-device "Hi Celer" (microWakeWord proprio sobre TFLite Micro):
 # detector em task propria + objeto WakeWord + o frontend de features
 # (vendored, mesma pipeline do treino). So no build da placa que ligar.
@@ -250,7 +255,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.8.2"
-    CELEROS_API_LEVEL=32
+    CELEROS_API_LEVEL=33
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

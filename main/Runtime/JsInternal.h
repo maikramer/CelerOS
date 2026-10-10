@@ -42,6 +42,10 @@ void jsLoadAppDeps(const char* appDir);
 // Verlet nativo (API 31, JsPhysics.cpp): mundos do app anterior saem no
 // init do proximo (malloc incluso). Chamado pelo JSBindings::init.
 void jsPhysicsReset();
+#if CONFIG_CELEROS_JS_GAME_ACCEL
+// Corpo rigido nativo (API 33, JsRigid.cpp): mesmo ciclo do verlet.
+void jsRigidReset();
+#endif
 inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 // Saida limpa de app (F2): erro MARCADO com a propriedade celerExit — o

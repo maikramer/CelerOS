@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 32
+### API Level: 33
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2322,3 +2322,74 @@ else System.playTone([[1200, 30], [900, 30], [600, 50]]);   // older firmware: b
 `celeros.engine` 1.2 routes `E.audio.sfx` through it automatically
 (`E.caps.mix`) and turns `E.audio.duck` into a no-op when mixing is
 available.
+
+## 38. API Level 33 — Native rigid bodies (`System.rigid*`) and `System.drawSprite`
+
+Boxes that **rotate, stack and topple**, circles that **roll**, a fast
+stone that **does not tunnel** through a thin plank: a sequential-impulse
+solver (box2d-lite style) in C++ float — box-box SAT with up to 2
+contacts, friction and impulses **accumulated with warm starting** (stacks
+stay up), penetration fixed through pseudo-velocity (no jitter),
+restitution, per-body **sleep** (still for 0.5 s turns static until hit)
+and adaptive anti-tunneling **sub-steps** (≥ 120 Hz; no body moves more
+than 40% of the world's thinnest half-extent per sub-step). A 30-piece
+castle costs ~1-2 ms per frame on the S3 — interpreted, it would not fit
+in a frame.
+
+S3 boards only (`CONFIG_CELEROS_JS_GAME_ACCEL`: SmartDisplay, watch, dog);
+on the classic ESP32 the functions do not exist — test with `typeof`. The
+recommended path is the dep: `P.rigid()` from `celeros.physics` 1.5.0
+(returns `null` without the binding). Up to 2 worlds of 96 bodies; they
+are freed when the next app starts. Free units (the app's), angle in
+**radians**, y grows downwards. Indices are **stable**: removing frees the
+slot and the next add reuses it.
+
+#### `System.rigidNew([iterations])` → Integer (API 33)
+Creates a world (solver iterations per sub-step, default 10, max 30). Returns the id (1..2) or -1.
+
+#### `System.rigidFree(id)` (API 33)
+Releases the world (its malloc, ~60 KB of PSRAM, included).
+
+#### `System.rigidBox(id, x, y, w, h[, angle, density, friction, bounce])` → Integer (API 33)
+Box centred at (x, y), sized w × h. `density` 0 = **static** (ground, walls); default 1. `friction` defaults to 0.6; `bounce` (restitution 0..1) to 0.1. Returns the index or -1 (world full).
+
+#### `System.rigidCircle(id, x, y, r[, density, friction, bounce])` → Integer (API 33)
+Circle of radius r (same defaults). A circle in contact gets rolling resistance, so a ball comes to rest.
+
+#### `System.rigidRemove(id, idx)` → Boolean (API 33)
+Removes the body (with its contacts) and **wakes the world**, so whatever rested on it falls.
+
+#### `System.rigidSet(id, idx, x, y[, angle, vx, vy, w])` → Boolean (API 33)
+Teleport + velocity (u/s and rad/s); wakes the body. Launching a projectile is a `rigidSet` with the slingshot velocity.
+
+#### `System.rigidImpulse(id, idx, jx, jy)` → Boolean (API 33)
+Impulse at the centre (Δv = j / mass); wakes the body. Explosions: a radial impulse on the neighbours.
+
+#### `System.rigidStep(id, dt[, gx, gy, maxSub])` → Integer (API 33)
+Advances `dt` seconds (clamped to 0.1) with gravity in u/s². Returns how many sub-steps ran (`maxSub` default 12, max 16).
+
+#### `System.rigidState(id)` → Array (API 33)
+`[x, y, angle, hit, speed, flags, ...]` — 6 numbers per index (one allocation per frame). `hit` = the largest impact impulse of the last step (approach × effective mass: game damage comes from here); `speed` = speed of the body's fastest point; `flags`: 1 alive, 2 awake.
+
+#### `System.rigidCount(id)` → Integer (API 33)
+Slots in use (high-water mark): `rigidState` holds `6 × rigidCount` numbers.
+
+#### `System.drawSprite(id, x, y[, angle, zoomX, zoomY, key, smooth])` (API 33)
+Draws sprite `id` (from `createSprite`) **rotated and scaled** with its centre at (x, y) on the current target — the frame, or another sprite selected with `useSprite` (a sprite is never drawn onto itself). `angle` in **degrees** (clockwise), `zoomY` defaults to `zoomX`, `key` = transparent colour key (RGB565; `null` = opaque), `smooth` = anti-aliased sampling (scale art at load time without jaggies; the default, nearest neighbour, is faster per frame). For pieces that rotate in the physics, and for a small PNG background scaled to the full screen inside a sprite.
+
+In the same API level the PSRAM sprite pool doubled to **16** (`System.spriteSlots()` reports it): a game with per-character art, material textures and the scenery in a full-screen sprite overflowed the 8 slots.
+
+```javascript
+var P = require("celeros.physics");          // dep ^1.5.0
+var w = P.rigid({ iterations: 10 });
+if (!w) { /* firmware without API 33: tell the user */ }
+w.box(160, 270, 400, 20, { static: true });  // ground
+var plank = w.box(200, 240, 48, 6, { density: 0.6, friction: 0.7 });
+var stone = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+w.set(stone, 40, 200, 0, 420, -40, 0);       // launch
+w.step(dt, { gravity: { x: 0, y: 400 } });
+var s = w.state();
+if (w.hit(plank, s) > 900) w.remove(plank);  // broke
+System.drawSprite(plankSpr, w.x(plank, s), w.y(plank, s),
+                  w.angle(plank, s) * 57.2958, 1, 1, 0x0000);
+```

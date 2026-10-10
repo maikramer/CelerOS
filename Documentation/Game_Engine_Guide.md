@@ -363,6 +363,34 @@ rope.pin(0);
 rope.step(dt);       // opts: gravity, damp, bounds, bounce
 ```
 
+### Rigid bodies: stacks that topple (`P.rigid`, API 33)
+
+`P.world` boxes never rotate. For castles of planks that tip over, wheels
+and "throw a rock at the tower" games, `P.rigid()` drives the firmware's
+native rigid-body solver (API 33, S3 boards; `System.rigid*`): rotating
+boxes and circles, friction, restitution, sleeping stacks and anti-tunnel
+sub-steps. Index-based like `verletFast`; `state()` returns 6 numbers per
+body (`x, y, angle, hit, speed, flags`) and `hit` (the impact impulse of
+the last step) is what you turn into damage. No JS fallback: it returns
+`null` on firmware without the binding — tell the player to update.
+
+```js
+var w = P.rigid({ iterations: 10 });
+w.box(160, 300, 400, 20, { static: true });                  // ground
+var plank = w.box(200, 260, 48, 6, { density: 0.6, friction: 0.7 });
+var rock = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+w.set(rock, 40, 200, 0, 420, -40, 0);                        // launch
+w.step(dt, { gravity: { x: 0, y: 400 } });
+var s = w.state();
+if (w.hit(plank, s) / plankMass > 55) w.remove(plank);       // it broke
+System.drawSprite(sprPlank, w.x(plank, s), w.y(plank, s), w.angle(plank, s) * 57.2958, 1, 1, 0);
+```
+
+`System.drawSprite` (also API 33) draws a sprite rotated and scaled around
+its centre — the natural pair for rotating bodies; with `smooth` it also
+resizes art once at load time to the board's screen. Full example:
+`hub_apps/Arrasa` (slingshot vs. goblin fortresses).
+
 ### Recipes
 
 - **Platformer:** hero = AABB body (`friction` 1, `bounce` 0); move by setting `vx`; jump when `grounded`; camera `follow`s hero.
@@ -445,6 +473,6 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + polite sfx |
 | `E.save.get/set/num/best` | NVS persistence |
 | `E.m.*`, `E.rng(seed)` | math, deterministic RNG |
-| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.hit` | arcade physics (optional module) |
+| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.rigid`, `P.hit` | arcade physics, native rigid bodies (optional module) |
 
 Editor autocomplete ships in the scaffold: `engine.d.ts` (engine + physics) alongside `celer.d.ts` (firmware API).

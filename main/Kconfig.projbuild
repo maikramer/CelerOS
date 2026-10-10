@@ -99,6 +99,17 @@ config CELEROS_JS_DEBUGGER
       propriedade por funcao do app — ligado por padrao so nas placas S3
       (PSRAM); no CYD o slot OTA e a RAM sao o limite.
 
+config CELEROS_JS_GAME_ACCEL
+    bool "Aceleradores de jogo para apps (corpo rigido nativo + drawSprite)"
+    default y if IDF_TARGET_ESP32S3
+    default n
+    help
+      API 33: System.rigid* (caixas e circulos que giram, empilham e
+      colidem com impulsos, solver em main/Utils/Rigid2D.h, ~60 KB de PSRAM
+      por mundo) e System.drawSprite (sprite girado/escalado no alvo
+      corrente). Ligado por padrao so nas placas S3; no CYD o slot OTA e o
+      limite e os jogos que usam isto exigem PSRAM de qualquer jeito.
+
 config CELEROS_JS_GPIO
     bool "API System.gpio para apps"
     default y

@@ -363,6 +363,34 @@ corda.pin(0);
 corda.step(dt);      // opts: gravity, damp, bounds, bounce
 ```
 
+### Corpo rígido: pilhas que tombam (`P.rigid`, API 33)
+
+As caixas do `P.world` nunca giram. Para castelos de tábuas que tombam,
+rodas e jogos de "jogar a pedra na torre", o `P.rigid()` usa o solver de
+corpo rígido nativo do firmware (API 33, placas S3; `System.rigid*`):
+caixas e círculos que giram, atrito, restituição, pilhas que dormem e
+sub-passos anti-túnel. Por índice como o `verletFast`; o `state()` devolve
+6 números por corpo (`x, y, angle, hit, speed, flags`) e o `hit` (impulso
+do impacto no último step) é o que vira dano. Sem fallback JS: devolve
+`null` em firmware sem o binding — avise o jogador para atualizar.
+
+```js
+var w = P.rigid({ iterations: 10 });
+w.box(160, 300, 400, 20, { static: true });                  // chão
+var tabua = w.box(200, 260, 48, 6, { density: 0.6, friction: 0.7 });
+var pedra = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+w.set(pedra, 40, 200, 0, 420, -40, 0);                       // lança
+w.step(dt, { gravity: { x: 0, y: 400 } });
+var s = w.state();
+if (w.hit(tabua, s) / massaTabua > 55) w.remove(tabua);      // quebrou
+System.drawSprite(sprTabua, w.x(tabua, s), w.y(tabua, s), w.angle(tabua, s) * 57.2958, 1, 1, 0);
+```
+
+O `System.drawSprite` (também API 33) desenha um sprite girado e escalado
+em torno do centro — o par natural dos corpos que giram; com `smooth` ele
+também redimensiona a arte uma vez no load para a tela da placa. Exemplo
+completo: `hub_apps/Arrasa` (estilingue contra fortalezas de goblins).
+
 ### Receitas
 
 - **Platformer:** herói = corpo AABB (`friction` 1, `bounce` 0); mova setando `vx`; pule quando `grounded`; a câmera dá `follow` no herói.
@@ -445,6 +473,6 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + sfx educado |
 | `E.save.get/set/num/best` | persistência NVS |
 | `E.m.*`, `E.rng(seed)` | matemática, RNG determinístico |
-| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.hit` | física arcade (módulo opcional) |
+| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.rigid`, `P.hit` | física arcade, corpo rígido nativo (módulo opcional) |
 
 O autocomplete do editor vem no scaffold: `engine.d.ts` (engine + física) junto do `celer.d.ts` (API do firmware).

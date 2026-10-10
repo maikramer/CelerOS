@@ -18,12 +18,17 @@
 // other, info{nx,ny,overlap}) e grounded (apoiado). Top-down: gravity 0 +
 // addTiles (P.flow faz o campo de perseguicao). Veja o guia.
 //
+// 1.5: P.rigid — corpo rigido NATIVO (API 33, System.rigid*): caixas que
+// giram e empilham, circulos que rolam, impulsos com atrito e sono. Sem
+// fallback JS (um castelo de 30 pecas nao fecha o quadro no interpretado):
+// em firmware sem o binding P.rigid devolve null e o app avisa.
+//
 // 1.4: o SAP do step ganhou CORTE EM Y antes do resolvePair e um
 // parBudget (testes por passo, default 3000; 0 = sem teto) — na rajada do
 // chefe do Supernova o passo passava de 1 s no Duktape e morria de
 // execution timeout; agora o excesso degrada pro proximo step.
 
-var P = { version: '1.4.0' };
+var P = { version: '1.5.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 function halfW(b) { return isCircle(b) ? b.r : b.w / 2; }
@@ -615,6 +620,75 @@ function verletFastJS(opts) {
             return out;
         },
         free: function () { v.points = []; v.sticks = []; }
+    };
+};
+
+// ------------------------------------------------------------ rigid -------
+// Corpo rigido nativo (API 33): o solver roda em C++ (main/Utils/Rigid2D.h)
+// e o JS conversa por INDICE estavel — nada de objeto por corpo no heap.
+//
+//   var w = P.rigid({ iterations: 10 });     // null sem o binding
+//   var chao = w.box(160, 270, 400, 20, { static: true });
+//   var tabua = w.box(200, 240, 48, 6, { density: 0.6, friction: 0.7 });
+//   var pedra = w.circle(40, 200, 6, { density: 3, bounce: 0.3 });
+//   w.set(pedra, 40, 200, 0, 420, -40, 0);  // teleporte + velocidade
+//   w.step(dt, { gravity: { x: 0, y: 400 } });
+//   var s = w.state();      // [x, y, ang, hit, rapidez, flags] por indice
+//   w.x(tabua, s) ...       // leitores sobre o array do quadro
+//
+// Unidades livres (as do app), angulo em radianos, y para baixo. hit = o
+// maior impulso de impacto do ultimo step (o app tira dano disso); flags:
+// 1 vivo, 2 acordado (dormindo = parado ha 0,5 s, vira estatico ate levar
+// pancada). remove() libera o indice para o proximo add.
+P.rigid = function (opts) {
+    opts = opts || {};
+    if (typeof System === "undefined" || !System.rigidNew) return null;
+    var id = System.rigidNew(opts.iterations || 10);
+    if (id < 0) return null;
+    var N = 6;
+    function o3(o) { return o || {}; }
+    return {
+        id: id,
+        N: N,
+        box: function (x, y, w, h, o) {
+            o = o3(o);
+            return System.rigidBox(id, x, y, w, h, o.angle || 0,
+                                   o.static ? 0 : (o.density === undefined ? 1 : o.density),
+                                   o.friction === undefined ? 0.6 : o.friction,
+                                   o.bounce === undefined ? 0.1 : o.bounce);
+        },
+        circle: function (x, y, r, o) {
+            o = o3(o);
+            return System.rigidCircle(id, x, y, r,
+                                      o.static ? 0 : (o.density === undefined ? 1 : o.density),
+                                      o.friction === undefined ? 0.6 : o.friction,
+                                      o.bounce === undefined ? 0.1 : o.bounce);
+        },
+        remove: function (i) { return System.rigidRemove(id, i); },
+        set: function (i, x, y, a, vx, vy, w) {
+            return System.rigidSet(id, i, x, y, a || 0, vx || 0, vy || 0, w || 0);
+        },
+        impulse: function (i, jx, jy) { return System.rigidImpulse(id, i, jx, jy); },
+        // devolve quantos sub-passos rodou (o anti-tunel sobe quando ha
+        // corpo rapido; maxSub limita o custo)
+        step: function (dt, o) {
+            o = o3(o);
+            var g = o.gravity || { x: 0, y: 400 };
+            return System.rigidStep(id, dt, g.x || 0, g.y || 0, o.maxSub || 12);
+        },
+        state: function () { return System.rigidState(id); },
+        count: function () { return System.rigidCount(id); },
+        x: function (i, s) { return s[i * N]; },
+        y: function (i, s) { return s[i * N + 1]; },
+        angle: function (i, s) { return s[i * N + 2]; },
+        hit: function (i, s) { return s[i * N + 3]; },
+        speed: function (i, s) { return s[i * N + 4]; },
+        alive: function (i, s) { return (s[i * N + 5] & 1) !== 0; },
+        awake: function (i, s) { return (s[i * N + 5] & 2) !== 0; },
+        free: function () {
+            if (id > 0) System.rigidFree(id);
+            id = -1;
+        }
     };
 };
 
