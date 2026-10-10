@@ -860,5 +860,80 @@ class TestNetBridge(unittest.TestCase):
         self.assertIsNone(C.probe(f"127.0.0.1:{br.port}", fast=True))
 
 
+class TestAppsDeps(unittest.TestCase):
+    """apps deps: o plano de GC do cache /local/modules e a listagem E2E
+    contra o FakeDevice (LS/STAT/READ/DELETE)."""
+
+    def test_gc_plan_puro(self):
+        modules = {"celeros.engine": {"1.2.1": 32000, "1.2.2": 32000},
+                   "celeros.physics": {"1.4.0": 15000}}
+        refs = {"Meu Jogo": {"celeros.engine": "1.2.1"},
+                "Fisica": {"celeros.physics": "1.4.0", "celeros.engine": "9.9.9"}}
+        orfas, ausentes, em_uso = C._gc_plan(modules, refs)
+        # 1.2.2 nao tem dono; 9.9.9 nao esta no cache
+        self.assertEqual(orfas, [("celeros.engine", "1.2.2")])
+        self.assertEqual(ausentes, [("Fisica", "celeros.engine", "9.9.9")])
+        self.assertEqual(em_uso, [("celeros.engine", "1.2.1"), ("celeros.physics", "1.4.0")])
+        # sem orfas e sem ausentes: so o em_uso
+        o2, a2, u2 = C._gc_plan({"m": {"1": 5}}, {"App": {"m": "1"}})
+        self.assertEqual((o2, a2, u2), ([], [], [("m", "1")]))
+        # app sem deps.json (refs vazio): tudo orfao
+        o3, _, _ = C._gc_plan({"m": {"1": 5}}, {})
+        self.assertEqual(o3, [("m", "1")])
+
+    def _populate(self, dev):
+        dev.dirs["/local/modules"] = ["celeros.engine"]
+        dev.dirs["/local/modules/celeros.engine"] = ["1.2.1", "1.2.2"]
+        dev.dirs["/local/apps"] = ["Meu Jogo"]
+        js = b"var E = { version: 'x' };"
+        dev.files["/local/modules/celeros.engine/1.2.1/celeros.engine.js"] = js
+        dev.files["/local/modules/celeros.engine/1.2.2/celeros.engine.js"] = js
+        dev.files["/local/apps/Meu Jogo/deps.json"] = b'{"celeros.engine": "1.2.1"}'
+
+    def test_apps_deps_lista_uso_e_orfa(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps(link, SimpleNamespace(gc=False, yes=False))
+        texto = out.getvalue()
+        self.assertIn("em uso: Meu Jogo", texto)
+        self.assertIn("1.2.2", texto)
+        self.assertIn("ORFA", texto)
+        self.assertIn("--gc --yes", texto)
+
+    def test_apps_deps_gc_remove_so_a_orfa(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps(link, SimpleNamespace(gc=True, yes=True))
+        self.assertIn("removida: celeros.engine 1.2.2", texto := out.getvalue())
+        self.assertIn("/local/modules/celeros.engine/1.2.1/celeros.engine.js", dev.files)
+        self.assertNotIn("/local/modules/celeros.engine/1.2.2/celeros.engine.js", dev.files)
+        # a pasta do nome segue (ainda tem a 1.2.1 em uso)
+        self.assertIn("/local/modules/celeros.engine", dev.dirs)
+
+    def test_apps_deps_gc_sem_yes_recusa(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        err = io.StringIO()
+        with redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                C._apps_deps(link, SimpleNamespace(gc=True, yes=False))
+        self.assertIn("--yes", err.getvalue())
+        # nada foi apagado
+        self.assertIn("/local/modules/celeros.engine/1.2.2/celeros.engine.js", dev.files)
+
+
 if __name__ == "__main__":
     unittest.main()

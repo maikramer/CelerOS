@@ -78,6 +78,9 @@ python3 tools/celerctl.py apps list             # installed apps (local + sd)
 python3 tools/celerctl.py apps install "data/apps/Web Server"  # install folder
 python3 tools/celerctl.py apps install myapp --sd              # to the SD card
 python3 tools/celerctl.py apps rm "Touch Test"                 # uninstall
+python3 tools/celerctl.py apps run "App Store"  # open an installed app (exit + run)
+python3 tools/celerctl.py apps deps             # shared deps cache: usage + orphans
+python3 tools/celerctl.py apps deps --gc --yes  # remove orphan dep versions from /local/modules
 ```
 
 ### Multiple boards on the same machine
@@ -89,6 +92,21 @@ python3 tools/celerctl.py apps rm "Touch Test"                 # uninstall
 python3 tools/celerctl.py devices          # shows serial per board
 python3 tools/celerctl.py -p K7B4 screencap dog.png
 ```
+
+With two or more boards plugged and no `-p`, the tool refuses to guess
+(listing the ports) instead of silently picking the first one.
+
+### Shared deps cache (`/local/modules`)
+
+Apps with `deps` in app.json install their dependencies in the public
+cache `/local/modules/<name>/<version>/` — shared by every app. Old
+versions accumulate forever; `apps deps` cross-references the cache with
+each installed app's `deps.json` and marks orphans (and deps an app
+expects but that are missing from the cache). Every `apps install` (and
+the `dev` reload loop) now verifies each written file — app files, hub
+deps and `deps.json` — by reading it back (crc32): a "push ghost" (old
+LittleFS inode still being served) fails right there with the recovery
+recipe instead of breaking the app at runtime.
 
 ### Iterating on the UI without touching the board
 

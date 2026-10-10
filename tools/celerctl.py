@@ -1044,6 +1044,12 @@ def open_link(args):
     else:
         devices = find_devices()
         if devices:
+            if len(devices) > 1:
+                # 2+ placas e nenhum -p: pegar a primeira calado e o erro
+                # classico de bancada (a outra placa "nao pegou a mudanca")
+                portas = ", ".join(d[0].device for d in devices)
+                die(f"{len(devices)} placas USB conectadas ({portas}); escolha "
+                    "com -p PORTA (celerctl devices -l identifica cada uma)")
             link = try_open(devices[0][0].device)
         else:
             # sem USB: 1 device na LAN serve (varios: use -p IP)
@@ -2053,10 +2059,13 @@ def _is_junk(p):
     return name.endswith(_JUNK_SUFFIX)
 
 
-def _push_app_files(link, src, dest, only=None, progress=True):
+def _push_app_files(link, src, dest, only=None, progress=True, verify=True):
     """Empurra os arquivos da pasta de app para <dest> no dispositivo.
     `only` limita aos caminhos relativos dados (reload do `dev`); None = tudo
-    (install completo, cria a arvore de diretorios)."""
+    (install completo, cria a arvore de diretorios). `verify` re-le cada
+    arquivo gravado (crc32): push fantasma no loop de dev vira "minha
+    mudanca nao pegou" — melhor falhar aqui com a receita do que depurar
+    o runtime."""
     if only is None:
         link.simple("MKDIR", dest.encode() + b"\0")
         files = [f for f in sorted(src.rglob("*"))
@@ -2069,7 +2078,10 @@ def _push_app_files(link, src, dest, only=None, progress=True):
     else:
         files = [src / rel for rel in only if (src / rel).is_file()]
     for f in files:
-        link.write_file(str(f), f"{dest}/{f.relative_to(src).as_posix()}", progress=progress)
+        dest_f = f"{dest}/{f.relative_to(src).as_posix()}"
+        link.write_file(str(f), dest_f, progress=progress)
+        if verify:
+            link.verify_file(str(f), dest_f)
     return [f.relative_to(src).as_posix() for f in files]
 
 
@@ -2159,7 +2171,7 @@ def cmd_dev(args):
                 ok = args.no_lint or _lint_app_folder(src, fatal=False)
                 if ok:
                     sent = _push_app_files(link, src, dest, only=changed or None,
-                                           progress=False)
+                                           progress=False, verify=not args.pula_verify)
                     for rp, sig in snap.items():
                         if rp in sent:
                             state[rp] = sig
@@ -2267,9 +2279,12 @@ def _install_shared_deps(link, deps, hub):
     """Deps compartilhadas (API 30): resolve os ranges contra o indice do
     hub (mesma semantica do celerhub.py), baixa cada modulo no PC e empurra
     para /local/modules/<nome>/<versao>/ — o cache publico do require.
-    Push integral (~53KB de engine a ~110KB/s pela CDC): checar existencia
-    via stat por dep nao paga o tempo que economiza. Devolve {nome: versao}
-    resolvido (o chamador grava o deps.json na pasta do app)."""
+    Pulamos o stat de existencia por dep (nao paga o tempo que economiza),
+    mas a ESCRITA e verificada por releitura (crc32): /local/modules e o
+    caminho mais historico de push fantasma (cache compartilhado entre
+    apps — um modulo servindo lixo quebra todo mundo que o require).
+    Devolve {nome: versao} resolvido (o chamador grava o deps.json na
+    pasta do app)."""
     import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
     status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
     index = (idx or {}).get("deps", {})
@@ -2295,8 +2310,155 @@ def _install_shared_deps(link, deps, hub):
             tmp = Path(td) / f"{name}.js"
             tmp.write_bytes(blob)
             link.write_file(str(tmp), f"{mod_dir}/{name}.js")
-        print(f"dep {name} {ver}: no cache do device ({len(blob)} B)")
+            link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
+        print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
     return resolved
+
+
+def _gc_plan(modules, refs):
+    """Plano de GC do cache /local/modules (logica pura, testavel no host).
+    `modules` = {nome: {versao: tamanho}} (arvore lida no device);
+    `refs` = {app: {nome: versao}} (deps.json de cada app instalado).
+    Devolve (orfas, ausentes, em_uso):
+      orfas   = [(nome, versao)] instalado sem NENHUM app apontando
+      ausentes= [(app, nome, versao)] referenciado e fora do cache
+      em_uso  = [(nome, versao)] referenciado por pelo menos um app
+    """
+    used = {}
+    for deps in refs.values():
+        for name, ver in deps.items():
+            used.setdefault(name, set()).add(ver)
+    installed = {(n, v) for n, vers in modules.items() for v in vers}
+    orfas = sorted(p for p in installed if p[1] not in used.get(p[0], set()))
+    ausentes = sorted((app, n, v) for app, deps in refs.items()
+                      for n, v in deps.items() if v not in modules.get(n, {}))
+    return orfas, ausentes, sorted(installed - set(orfas))
+
+
+def _read_remote_json(link, path):
+    """Le um JSON pequeno no device (deps.json ~dezenas de B); None se
+    ausente/invalido."""
+    try:
+        st = link.stat(path)
+    except CelerError:
+        return None
+    if st is None or st["dir"] or st["size"] > 4096:
+        return None
+    raw = b""
+    while len(raw) < st["size"]:
+        chunk = link.read_chunk(path, len(raw), min(CHUNK, st["size"] - len(raw)))
+        if not chunk:
+            return None
+        raw += chunk
+    try:
+        return json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+
+
+def _modules_tree(link):
+    """{nome: {versao: tamanho_do_js}} lido de /local/modules; {} se o cache
+    ainda nao existe (app sem deps instalado)."""
+    tree = {}
+    try:
+        names = link.ls("/local/modules")
+    except CelerError:
+        return tree
+    for n in names:
+        if not n["dir"]:
+            continue
+        try:
+            versions = link.ls(f"/local/modules/{n['name']}")
+        except CelerError:
+            continue
+        for v in versions:
+            if not v["dir"]:
+                continue
+            js = f"/local/modules/{n['name']}/{v['name']}/{n['name']}.js"
+            size = None
+            try:
+                st = link.stat(js)
+                if st is not None and not st["dir"]:
+                    size = st["size"]
+            except CelerError:
+                pass
+            tree.setdefault(n["name"], {})[v["name"]] = size
+    return tree
+
+
+def _apps_deps(link, args):
+    """apps deps: o que vive no cache publico /local/modules, quem usa e o
+    que sobrou sem dono (versoes antigas acumulam para sempre sem isso).
+    --gc --yes remove as orfas."""
+    modules = _modules_tree(link)
+    if not modules:
+        print("cache de deps vazio (nenhum app com deps instalado)")
+        return
+    refs = {}
+    for base in ("/local/apps", "/sd/apps"):
+        try:
+            apps = link.ls(base)
+        except CelerError:
+            continue
+        for a in apps:
+            if not a["dir"]:
+                continue
+            deps = _read_remote_json(link, f"{base}/{a['name']}/deps.json")
+            if isinstance(deps, dict) and deps:
+                refs[a["name"]] = {str(n): str(v) for n, v in deps.items()}
+    orfas, ausentes, em_uso = _gc_plan(modules, refs)
+    users = {}
+    for app, deps in refs.items():
+        for n, v in deps.items():
+            users.setdefault((n, v), []).append(app)
+    for name in sorted(modules):
+        for ver in sorted(modules[name]):
+            size = modules[name][ver]
+            quem = users.get((name, ver))
+            if quem:
+                print(f"{name} {ver:<10} {str(size or '?'):>8} B  em uso: {', '.join(sorted(quem))}")
+            else:
+                print(f"{name} {ver:<10} {str(size or '?'):>8} B  ORFA (nenhum app aponta)")
+    for app, n, v in ausentes:
+        print(f"! {app} quer {n} {v} e ela NAO esta no cache — reinstale o app")
+    if ausentes:
+        print("(deps ausentes voltam com `apps install` do app que as pede)")
+    if not orfas and not ausentes:
+        total = sum(s or 0 for vers in modules.values() for s in vers.values())
+        print(f"({len(em_uso)} versoes em uso, {total} B no cache — nada a fazer)")
+        return
+    if args.gc:
+        if not args.yes:
+            die("apps deps --gc remove versoes orfas do device; confirme com --yes")
+        removed = 0
+        for name, ver in orfas:
+            link.delete(f"/local/modules/{name}/{ver}", recursive=True)
+            print(f"removida: {name} {ver}")
+            removed += 1
+            # nome sem versoes sobrando: tira a pasta vazia junto
+            if set(modules.get(name, {})) == {ver}:
+                try:
+                    link.delete(f"/local/modules/{name}", recursive=True)
+                except CelerError:
+                    pass
+        print(f"gc: {removed} versao(oes) orfa(s) removida(s) de /local/modules")
+    else:
+        print(f"({len(orfas)} orfa(s); limpe com: apps deps --gc --yes)")
+
+
+def _apps_run(link, args):
+    """apps run: abre um app instalado pelo nome da pasta (exit + run; o
+    nome vai re-juntado no device, espaco nao precisa de aspas)."""
+    target = None
+    for candidate_base in ("/local/apps", "/sd/apps"):
+        st = link.stat(f"{candidate_base}/{args.name}")
+        if st is not None and st["dir"]:
+            target = f"{candidate_base}/{args.name}"
+            break
+    if target is None:
+        die(f"app '{args.name}' nao encontrado em /local/apps nem /sd/apps")
+    _relaunch(link, args.name)
+    print(f"abrindo: {target}")
 
 
 def _sd_note(montado, apps_ok):
@@ -2433,6 +2595,10 @@ def cmd_apps(args):
                     dj = Path(td) / "deps.json"
                     dj.write_text(json.dumps(resolved), encoding="utf-8")
                     link.write_file(str(dj), f"{dest}/deps.json")
+                    if not args.pula_verify:
+                        # deps.json aponta o require para o cache: se o FS
+                        # servir lixo aqui, o app nem acha a dep em runtime
+                        link.verify_file(str(dj), f"{dest}/deps.json")
             link.exec("rescan")
             nota_v = f", {verificados} verificados" if verificados else ""
             print(f"instalado: {dest} ({len(files)} arquivos{nota_v})")
@@ -2467,6 +2633,10 @@ def cmd_apps(args):
             _rm_tree(link, target)
             link.exec("rescan")
             print(f"removido: {target}")
+        elif args.action == "deps":
+            _apps_deps(link, args)
+        elif args.action == "run":
+            _apps_run(link, args)
     finally:
         link.close()
 
@@ -2641,6 +2811,8 @@ def main():
     p.add_argument("--shots", action="store_true",
                    help="salva screenshot apos cada reload em PASTA/.dev/last.png")
     p.add_argument("--no-lint", action="store_true", help="pula o lint a cada reload")
+    p.add_argument("--pula-verify", action="store_true",
+                   help="pula a releitura de verificacao (crc32) a cada push")
     p.set_defaults(func=cmd_dev)
 
     p = sub.add_parser("apps", help="gerencia apps instalados no dispositivo")
@@ -2661,6 +2833,12 @@ def main():
     a.add_argument("name", help="nome da pasta do app")
     a.add_argument("--sd", action="store_true", help="remove de /sd/apps")
     a.add_argument("--force", action="store_true", help="permite remover app de sistema")
+    a = apps_sub.add_parser("deps", help="deps compartilhadas em /local/modules: uso e orfas")
+    a.add_argument("--gc", action="store_true",
+                   help="remove as versoes orfas (exige --yes)")
+    a.add_argument("--yes", action="store_true", help="confirma o --gc")
+    a = apps_sub.add_parser("run", help="abre um app instalado (exit + run)")
+    a.add_argument("name", help="nome da pasta do app (procura /local e /sd)")
     p.set_defaults(func=cmd_apps)
 
     args = parser.parse_args()
