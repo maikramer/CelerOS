@@ -300,18 +300,32 @@ std::string Canvas::ellipsize(const std::string& s, const lgfx::IFont* font, int
 std::vector<std::string> Canvas::wrapText(const std::string& s, const lgfx::IFont* font, int maxW,
                                           int maxLines) {
     std::vector<std::string> out;
-    std::string rest = s;
-    for (int ln = 0; ln < maxLines && !rest.empty(); ln++) {
-        size_t cut = rest.size();
-        while (cut > 0 && textWidth(rest.substr(0, cut).c_str(), font) > maxW) {
-            size_t sp = rest.rfind(' ', cut - 1);
-            cut = (sp == std::string::npos || sp == 0) ? cut - 1 : sp;
+    // Mede por INDICES na string original: um substr por iteracao do
+    // encolhimento virava alocacao em cada passo — e o render em faixas da
+    // CYD repete o draw da tela ~19x por quadro (grade do launcher). Um
+    // buffer unico apoia a medida; as linhas sao construidas uma vez, no
+    // final de cada quebra.
+    std::string buf;
+    buf.reserve(s.size());
+    size_t pos = 0;  // inicio da linha corrente
+    for (int ln = 0; ln < maxLines && pos < s.size(); ln++) {
+        size_t cut = s.size() - pos;
+        while (cut > 0) {
+            buf.assign(s, pos, cut);
+            if (textWidth(buf.c_str(), font) <= maxW) break;
+            size_t sp = s.rfind(' ', pos + cut - 1);
+            cut = (sp == std::string::npos || sp < pos + 1) ? cut - 1 : sp - pos;
         }
+        // nao corta no meio de um caractere UTF-8 (byte de continuacao
+        // 10xxxxxx): mesmo recuo do ellipsize — o byte inicial sozinho
+        // virava um glifo lixo
+        while (cut > 0 && ((uint8_t)s[pos + cut] & 0xC0) == 0x80) cut--;
         if (cut == 0) cut = 1;
-        std::string line = rest.substr(0, cut);
-        rest = rest.substr(cut);
-        while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
-        if (ln == maxLines - 1 && !rest.empty()) line = ellipsize(line + " " + rest, font, maxW);
+        size_t next = pos + cut;
+        while (next < s.size() && s[next] == ' ') next++;
+        std::string line = s.substr(pos, cut);
+        pos = next;
+        if (ln == maxLines - 1 && pos < s.size()) line = ellipsize(line + " " + s.substr(pos), font, maxW);
         out.push_back(line);
     }
     return out;
@@ -800,7 +814,11 @@ bool Dialog::onTouch(const TouchEvent& ev, Rect myRect) {
 
 namespace {
 constexpr size_t INJ_CAP = 64;
-EXT_RAM_BSS_ATTR TouchInjector::Sample s_injQ[INJ_CAP];  // PSRAM quando existe
+// RAM INTERNA (sem EXT_RAM_BSS_ATTR): push/take/active rodam dentro de
+// portENTER_CRITICAL e um miss de cache na PSRAM ali no meio (erase de
+// flash no outro nucleo segura o barramento) estoura o WDT. Sao ~1,5 KB
+// (64 amostras + indices), cabem na interna de qualquer placa.
+TouchInjector::Sample s_injQ[INJ_CAP];
 size_t s_injHead = 0, s_injCount = 0;
 portMUX_TYPE s_injMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t s_injLastMs = 0;        // quando a ultima amostra virou estado
