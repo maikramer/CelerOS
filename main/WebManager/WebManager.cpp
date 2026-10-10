@@ -445,6 +445,33 @@ static bool safePath(httpd_req_t* req, std::string& path) {
     return false;
 }
 
+// Prologo das rotas de arquivo por query string: le ?<key>= (responde 400
+// "Missing <key> parameter" se ausente) e valida a montagem com safePath.
+static bool queryPath(httpd_req_t* req, const char* key, std::string& path) {
+    if (!getQueryParam(req, key, path)) {
+        sendText(req, 400, (std::string("Missing ") + key + " parameter").c_str());
+        return false;
+    }
+    return safePath(req, path);
+}
+
+// Prologo das rotas POST de arquivo (corpo urlencoded): le o body, extrai
+// "path" e o campo extra informado (400 "Missing parameters" se algo faltar)
+// e valida a montagem com safePath.
+static bool bodyPath(httpd_req_t* req, const char* extraKey, std::string& path, std::string& extra) {
+    std::string body = readBody(req);
+    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, extraKey, extra)) {
+        sendText(req, 400, "Missing parameters");
+        return false;
+    }
+    return safePath(req, path);
+}
+
+// Epilogo das mutacoes de arquivo: 200 "OK" ou 500 com a mensagem de falha
+static void replyOk(httpd_req_t* req, bool ok, const char* failMsg) {
+    sendText(req, ok ? 200 : 500, ok ? "OK" : failMsg);
+}
+
 // Envia arquivo em chunks (download/editor)
 static void sendFile(httpd_req_t* req, const std::string& path, const char* type, bool attachment) {
     FILE* f = fopen(path.c_str(), "rb");
@@ -485,11 +512,7 @@ static esp_err_t handler_index(httpd_req_t* req) {
 
 static esp_err_t handler_list(httpd_req_t* req) {
     std::string dirPath;
-    if (!getQueryParam(req, "dir", dirPath)) {
-        sendText(req, 400, "Missing dir parameter");
-        return ESP_OK;
-    }
-    if (!safePath(req, dirPath)) {
+    if (!queryPath(req, "dir", dirPath)) {
         return ESP_OK;
     }
     if (!FileSystem::isDirectory(dirPath.c_str())) {
@@ -527,11 +550,7 @@ static esp_err_t handler_list(httpd_req_t* req) {
 
 static esp_err_t handler_edit_get(httpd_req_t* req) {
     std::string path;
-    if (!getQueryParam(req, "path", path)) {
-        sendText(req, 400, "Missing path parameter");
-        return ESP_OK;
-    }
-    if (!safePath(req, path)) {
+    if (!queryPath(req, "path", path)) {
         return ESP_OK;
     }
     if (!FileSystem::exists(path.c_str())) {
@@ -543,27 +562,18 @@ static esp_err_t handler_edit_get(httpd_req_t* req) {
 }
 
 static esp_err_t handler_edit_post(httpd_req_t* req) {
-    std::string body = readBody(req);
     std::string path, content;
-    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, "content", content)) {
-        sendText(req, 400, "Missing parameters");
-        return ESP_OK;
-    }
-    if (!safePath(req, path)) {
+    if (!bodyPath(req, "content", path, content)) {
         return ESP_OK;
     }
     bool ok = FileSystem::writeTextFile(path.c_str(), content.c_str());
-    sendText(req, ok ? 200 : 500, ok ? "OK" : "Failed to write file");
+    replyOk(req, ok, "Failed to write file");
     return ESP_OK;
 }
 
 static esp_err_t handler_download(httpd_req_t* req) {
     std::string path;
-    if (!getQueryParam(req, "path", path)) {
-        sendText(req, 400, "Missing path parameter");
-        return ESP_OK;
-    }
-    if (!safePath(req, path)) {
+    if (!queryPath(req, "path", path)) {
         return ESP_OK;
     }
     if (!FileSystem::exists(path.c_str())) {
@@ -576,11 +586,7 @@ static esp_err_t handler_download(httpd_req_t* req) {
 
 static esp_err_t handler_delete(httpd_req_t* req) {
     std::string path;
-    if (!getQueryParam(req, "path", path)) {
-        sendText(req, 400, "Missing path parameter");
-        return ESP_OK;
-    }
-    if (!safePath(req, path)) {
+    if (!queryPath(req, "path", path)) {
         return ESP_OK;
     }
 
@@ -590,18 +596,13 @@ static esp_err_t handler_delete(httpd_req_t* req) {
     } else {
         ok = FileSystem::deleteFile(path.c_str());
     }
-    sendText(req, ok ? 200 : 500, ok ? "OK" : "Delete failed");
+    replyOk(req, ok, "Delete failed");
     return ESP_OK;
 }
 
 static esp_err_t handler_create(httpd_req_t* req) {
-    std::string body = readBody(req);
     std::string path, type;
-    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, "type", type)) {
-        sendText(req, 400, "Missing parameters");
-        return ESP_OK;
-    }
-    if (!safePath(req, path)) {
+    if (!bodyPath(req, "type", path, type)) {
         return ESP_OK;
     }
 
@@ -611,11 +612,13 @@ static esp_err_t handler_create(httpd_req_t* req) {
     } else {
         ok = FileSystem::writeTextFile(path.c_str(), "");
     }
-    sendText(req, ok ? 200 : 500, ok ? "OK" : "Create failed");
+    replyOk(req, ok, "Create failed");
     return ESP_OK;
 }
 
 static esp_err_t handler_rename(httpd_req_t* req) {
+    // Prologo manual (nao encaixa no bodyPath): extrai e valida DOIS
+    // caminhos — old e new
     std::string body = readBody(req);
     std::string oldPath, newPath;
     if (body.empty() || !bodyParam(body, "oldPath", oldPath) || !bodyParam(body, "newPath", newPath)) {
@@ -633,7 +636,7 @@ static esp_err_t handler_rename(httpd_req_t* req) {
         return ESP_OK;
     }
     bool ok = FileSystem::renameFile(oldPath.c_str(), newPath.c_str());
-    sendText(req, ok ? 200 : 500, ok ? "OK" : "Rename failed");
+    replyOk(req, ok, "Rename failed");
     return ESP_OK;
 }
 
@@ -977,39 +980,33 @@ void WebManager::startWebServerIfNeeded() {
         return;
     }
 
-    static const RouteCtx C_INDEX{handler_index, false};
-    static const RouteCtx C_LIST{handler_list, false};
-    static const RouteCtx C_EDIT_GET{handler_edit_get, false};
-    static const RouteCtx C_EDIT_POST{handler_edit_post, true};
-    static const RouteCtx C_DOWNLOAD{handler_download, false};
-    static const RouteCtx C_DELETE{handler_delete, true};
-    static const RouteCtx C_CREATE{handler_create, true};
-    static const RouteCtx C_RENAME{handler_rename, true};
-    static const RouteCtx C_UPLOAD{handler_upload, true};
-    static const RouteCtx C_UPDATE_GET{handler_update_get, false};
-    static const RouteCtx C_UPDATE_POST{handler_update_post, true};
-    static const RouteCtx C_SCREEN_PAGE{handler_screen_page, false};
-    static const RouteCtx C_SCREEN_FRAME{handler_screen_frame, false};
-    static const RouteCtx C_TOUCH{handler_touch, true};  // injeta toque: exige o header anti-CSRF
-
-    const httpd_uri_t routes[] = {
-        {"/",             HTTP_GET,    routeGuard, (void*)&C_INDEX},
-        {"/api/list",     HTTP_GET,    routeGuard, (void*)&C_LIST},
-        {"/api/edit",     HTTP_GET,    routeGuard, (void*)&C_EDIT_GET},
-        {"/api/edit",     HTTP_POST,   routeGuard, (void*)&C_EDIT_POST},
-        {"/api/download", HTTP_GET,    routeGuard, (void*)&C_DOWNLOAD},
-        {"/api/delete",   HTTP_DELETE, routeGuard, (void*)&C_DELETE},
-        {"/api/create",   HTTP_POST,   routeGuard, (void*)&C_CREATE},
-        {"/api/rename",   HTTP_POST,   routeGuard, (void*)&C_RENAME},
-        {"/api/upload",   HTTP_POST,   routeGuard, (void*)&C_UPLOAD},
-        {"/update",       HTTP_GET,    routeGuard, (void*)&C_UPDATE_GET},
-        {"/update",       HTTP_POST,   routeGuard, (void*)&C_UPDATE_POST},
-        {"/screen",       HTTP_GET,    routeGuard, (void*)&C_SCREEN_PAGE},
-        {"/api/screen",   HTTP_GET,    routeGuard, (void*)&C_SCREEN_FRAME},
-        {"/api/touch",    HTTP_POST,   routeGuard, (void*)&C_TOUCH},
+    // Tabela unica {uri, metodo, RouteCtx}: antes eram duas listas paralelas
+    // (14 RouteCtx nomeados + array httpd_uri_t) mantidas em sincronia a mao.
+    // O array e static const: o RouteCtx embutido vive em storage estatico —
+    // o user_ctx do esp_http_server e um ponteiro, nao uma copia.
+    static const struct RouteDef {
+        const char* uri;
+        httpd_method_t method;
+        RouteCtx ctx;
+    } kRoutes[] = {
+        {"/",             HTTP_GET,    {handler_index, false}},
+        {"/api/list",     HTTP_GET,    {handler_list, false}},
+        {"/api/edit",     HTTP_GET,    {handler_edit_get, false}},
+        {"/api/edit",     HTTP_POST,   {handler_edit_post, true}},
+        {"/api/download", HTTP_GET,    {handler_download, false}},
+        {"/api/delete",   HTTP_DELETE, {handler_delete, true}},
+        {"/api/create",   HTTP_POST,   {handler_create, true}},
+        {"/api/rename",   HTTP_POST,   {handler_rename, true}},
+        {"/api/upload",   HTTP_POST,   {handler_upload, true}},
+        {"/update",       HTTP_GET,    {handler_update_get, false}},
+        {"/update",       HTTP_POST,   {handler_update_post, true}},
+        {"/screen",       HTTP_GET,    {handler_screen_page, false}},
+        {"/api/screen",   HTTP_GET,    {handler_screen_frame, false}},
+        {"/api/touch",    HTTP_POST,   {handler_touch, true}},  // injeta toque: exige o header anti-CSRF
     };
-    for (const auto& r : routes) {
-        httpd_register_uri_handler(s_server, &r);
+    for (const auto& r : kRoutes) {
+        const httpd_uri_t uri = {r.uri, r.method, routeGuard, (void*)&r.ctx};
+        httpd_register_uri_handler(s_server, &uri);
     }
 
     celer_log_println("Web Server started on port 80 (senha: app Web Server / celerctl info)");
