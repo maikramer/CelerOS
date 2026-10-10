@@ -1,5 +1,6 @@
 #include "WebManager.h"
 #include "../USBDevice/LogSink.h"
+#include <atomic>
 #include <new>
 #include <string>
 #include <cstring>
@@ -50,7 +51,9 @@ static esp_err_t sendGzipHtml(httpd_req_t* req, const uint8_t* start, const uint
 
 static httpd_handle_t s_server = nullptr;
 static bool s_nmEventsBound = false;
-static volatile bool s_rebootPending = false;
+// atomico: com o service ALWAYS, o drain roda nos dois pumps — no build
+// padrao a mesma task, com CELEROS_APP_TASK tasks distintas
+static std::atomic_bool s_rebootPending{false};
 
 // ---------------------------------------------------------------------------
 // NetworkManager (componente Connection) glue
@@ -224,9 +227,14 @@ bool WebManager::isServerRunning() {
 void WebManager::tick() {
     // (Re)conexao e responsabilidade da background task do NetworkManager;
     // aqui so o reboot diferido do upload web de firmware.
+    //
+    // Service ALWAYS: com o app preso no foreground apos o evictRunningApp
+    // esgotar os 2 s, o pump LOOP nao volta a rodar — o reboot prometido ao
+    // navegador ficava pendente ate o app fechar. O PRESENT drena tambem; o
+    // exchange garante que so um contexto reinicia (com CELEROS_APP_TASK os
+    // pumps sao tasks distintas).
 
-    if (s_rebootPending) {
-        s_rebootPending = false;
+    if (s_rebootPending.exchange(false)) {
         celer_log_println("Rebooting after web OTA...");
         delay(500);  // da tempo para a resposta HTTP chegar ao navegador
         ESP.restart();

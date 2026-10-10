@@ -83,8 +83,14 @@ void svcAlarmsCheck(bool) {
 // acordar/abrir a tela e visto pelo PowerPolicy uma volta depois (~ms).
 const CelerServices::Service kServices[] = {
     {"navigator", svcNavigator, CelerServices::LOOP},
-    {"webmanager", svcWebManager, CelerServices::LOOP},
-    {"timemanager", svcTimeManager, CelerServices::LOOP},
+    // ALWAYS: se o evictRunningApp esgota os 2 s com o app aberto, o pump
+    // LOOP nao volta a rodar — o reboot do upload web drena tambem pelo
+    // PRESENT (o corpo do tick e so isso; ver WebManager::tick).
+    {"webmanager", svcWebManager, CelerServices::ALWAYS},
+    // ALWAYS: os deveres do TimeManager (retry de SNTP, saveEpoch, gravacao
+    // unica do RTC externo) precisam seguir vivos com app aberto — LOOP only
+    // congelava tudo (e no watch com home-app o celerLoop nem roda).
+    {"timemanager", svcTimeManager, CelerServices::ALWAYS},
     {"backlight", svcBacklight, CelerServices::ALWAYS},
     // present() chama o SEU ScreenCapture depois do corte do AOD
     // (suppressAppFrame): captura durante AOD com app aberto continua

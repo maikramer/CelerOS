@@ -9,6 +9,7 @@
 #include <esp_sntp.h>
 #include "esp_netif_sntp.h"
 #include "esp_log.h"
+#include <atomic>
 
 std::string TimeManager::currentTimezone = "UTC0";
 bool TimeManager::use24hFormat = true;
@@ -158,6 +159,14 @@ bool TimeManager::getAlarm(int& hour, int& minute, std::string& msg) {
 }
 
 void TimeManager::tick(bool networkUp) {
+    // Registro ALWAYS: roda nos DOIS pumps (celerLoop e present). No build
+    // padrao os pumps sao a mesma task, um atras do outro — sem corrida. Com
+    // CELEROS_APP_TASK o present() vem da task do app: os statics abaixo e o
+    // writeRtc unico do watch (I2C, nao reentrante) exigem UM corpo por vez.
+    // O giro simultaneo so e adiado; o proximo giro de qualquer pump segue.
+    static std::atomic_bool s_ticking{false};
+    if (s_ticking.exchange(true)) return;
+
     // Rede no ar e hora ainda invalida: insiste a cada 30 s (pacote UDP
     // perdido, DNS lento no boot...) — o intervalo normal do SNTP e 1 h.
     static uint32_t lastTryMs = 0;
@@ -192,6 +201,8 @@ void TimeManager::tick(bool networkUp) {
         s_alarmAt = millis();
         Alarms::tick();
     }
+
+    s_ticking = false;
 }
 
 bool TimeManager::setManualTime(int year, int month, int day, int hour, int minute) {
