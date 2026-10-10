@@ -23,6 +23,7 @@
 #include "../Utils/CelerSettings.h"
 #include "../Kernel/TimeManager.h"
 #include "../OTA/OtaGuard.h"
+#include "../OTA/OtaManager.h"
 #include "../Display/ScreenCapture.h"
 #include "../UI/Kui.h"
 #include "../Boards/Board.h"
@@ -662,6 +663,11 @@ struct MultipartCtx {
                 fail("another OTA write in progress (celerctl?)");
                 return;
             }
+            // O mesmo motivo do ota push: app aberto disputa flash/PSRAM com
+            // as gravacoes e derruba o upload no meio — sai dele antes do
+            // primeiro esp_ota_begin (guard ja seguro: recusado acima nao
+            // derruba o app a toa)
+            OtaManager::evictRunningApp();
             part = esp_ota_get_next_update_partition(nullptr);
             if (part == nullptr) { fail("no ota partition"); OtaGuard::release(); return; }
             esp_err_t err = esp_ota_begin(part, OTA_SIZE_UNKNOWN, &ota);

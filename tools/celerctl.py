@@ -565,6 +565,10 @@ class HostLink:
                 if ack_total > applied:
                     applied = ack_total
                     tries = 0
+                    # ruido perdoado quando o canal segue entregando: o
+                    # contador acumulava desyncs antigos e abortava pushes
+                    # longos no 50o mesmo com progresso saudavel
+                    noise = 0
                 for seq in [s for s, (st, n) in pendings.items() if st + n <= applied]:
                     del pendings[seq]
                 last_ack = time.monotonic()
@@ -778,10 +782,12 @@ class HostLink:
         return self._read_frame(timeout=timeout)
 
     def ota_write(self, local_path, progress=True):
-        # 8 s: o primeiro esp_ota_begin apos o boot (particao fria, erase
+        # 12 s: o primeiro esp_ota_begin apos o boot (particao fria, erase
         # inicial) passa com folga dos 3 s do timeout comum (bancada
-        # 2026-10-05: primeira OTA WiFi por placa falhava nele)
-        _, payload = self.xfer(KL["OTA_BEGIN"], timeout=8.0)
+        # 2026-10-05: primeira OTA WiFi por placa falhava nele) — e o begin
+        # agora pode segurar ate ~2 s extras encerrando um app aberto antes
+        # da gravacao (evictRunningApp, 2026-10-10)
+        _, payload = self.xfer(KL["OTA_BEGIN"], timeout=12.0)
         part = payload[1:].decode("utf-8", "replace")
         total = os.path.getsize(local_path)
         try:

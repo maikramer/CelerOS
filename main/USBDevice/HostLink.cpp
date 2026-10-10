@@ -26,6 +26,7 @@
 
 #include "Boards/Board.h"  // display (captura de tela) e id da placa
 #include "../OTA/OtaGuard.h"
+#include "../OTA/OtaManager.h"
 #include "DebugBridge.h"
 #include "../UI/Kui.h"     // TouchInjector (injecao de touch do celerctl)
 #include "../WebManager/WebAuth.h"  // senha do web server no `celerctl info`
@@ -748,6 +749,11 @@ void handleOtaBegin() {
         respondError(KL_OTA_BEGIN, "sem particao OTA disponivel");
         return;
     }
+    // App aberto disputa flash/PSRAM com as gravacoes e o enlace perde
+    // bytes no meio do flash: sai dele antes do primeiro esp_ota_begin
+    // (bancada 2026-10-10 — push com jogo rodando caia em "payload grande
+    // demais"). Aqui o guard ja esta seguro: recusado acima nao derruba app.
+    OtaManager::evictRunningApp();
     esp_err_t err = esp_ota_begin(s_otaPart, OTA_SIZE_UNKNOWN, &s_ota);
     if (err != ESP_OK) {
         s_ota = 0;

@@ -46,6 +46,16 @@ public:
     // falha — nesse caso o slot atual permanece intacto.
     static bool performUpdate(const std::string& firmwareUrl,
                               void (*onProgress)(int percent) = nullptr);
+
+    // Encerra o app JS aberto antes de gravar o slot OTA pelos caminhos que
+    // rodam COM app na frente (celerctl ota push, upload web /update): o app
+    // pesado disputa flash/PSRAM/CPU com as gravacoes e o enlace UART perde
+    // bytes no meio do flash (bancada 2026-10-10: push com Supernova aberto
+    // caia 100% em "payload grande demais"; no launcher, limpo). Pede a
+    // saida limpa do runtime (mesma porta do "celerctl shell exit") e espera
+    // ele ceder; o caminho do hub (System.otaStart) NAO chama — o updater
+    // e o app da vez e precisa vivo para desenhar o progresso.
+    static void evictRunningApp();
 };
 
 #endif // CELEROS_OTA_MANAGER_H

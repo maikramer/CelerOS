@@ -14,6 +14,7 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/SemVer.h"
 #include "../Boards/Board.h"
+#include "../Launcher/LauncherUI.h"
 
 OtaUpdateInfo OtaManager::info;
 std::string OtaManager::lastError;
@@ -175,6 +176,19 @@ static void setOtaError(const char* stage, esp_err_t err) {
     snprintf(msg, sizeof(msg), "OTA failed: %s (0x%X)", stage, (unsigned)err);
     OtaManager::lastError = msg;
     ESP_LOGE("celer.ota", "%s", msg);
+}
+
+// Veja OtaManager.h. O pedido (requestAppExit) vira saida limpa no proximo
+// ponto de cedida do runtime (delay/getTouch — um jogo cede a cada quadro,
+// tipicamente <100 ms); app preso numa chamada nativa longa expira o prazo
+// e a gravacao segue do jeito que esta (melhor esforco, como o shell exit).
+void OtaManager::evictRunningApp() {
+    if (!LauncherUI::appRunning()) return;
+    ESP_LOGW("celer.ota", "app aberto: encerrando antes de gravar o slot OTA");
+    LauncherUI::requestAppExit();
+    for (int i = 0; i < 20 && LauncherUI::appRunning(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+    if (LauncherUI::appRunning())
+        ESP_LOGW("celer.ota", "app nao saiu em 2 s: gravando com ele aberto");
 }
 
 // Download RETOMAVEL direto na particao OTA (bloqueante). Era um unico

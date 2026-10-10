@@ -75,6 +75,18 @@ bool s_hwTouched = false;  // JsSystemApps marca ao aplicar sem persistir
 void JSBindings::appExitCleanup() {
     ScreenPower::keepAwake(false);   // latched (keepAwake(true)) de um app
     ScreenPower::keepAwakeFor(0);    // e o prazo (Clock: 30 min depois de sair)
+    // Estado nativo do app volta ao heap na SAIDA (antes so no init do
+    // proximo app): mundos verlet/rigidos, sprites e corpos pendentes de
+    // net/AI seguravam dezenas de KB durante o intervalo no launcher — e
+    // durante um OTA push/web comecado logo apos a saida. Mesmos resets
+    // idempotentes do init; nada deles toca o heap Duktape (ainda vivo).
+    jsPhysicsReset();
+#if CONFIG_CELEROS_JS_GAME_ACCEL
+    jsRigidReset();
+#endif
+    deleteAllSprites();
+    netAsyncReset();
+    aiReset();
     if (s_hwTouched) {
         s_hwTouched = false;
         Backlight::setAuto(s_launchAuto, false);
@@ -846,6 +858,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     deleteAllSprites();
     timersResetAll();
     jsPhysicsReset();  // mundos verlet nativos (malloc incluso)
+#if CONFIG_CELEROS_JS_GAME_ACCEL
+    jsRigidReset();    // mundos rigidos nativos (API 33)
+#endif
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
     keypadCloseSession();
@@ -979,6 +994,25 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"drawFastHLine", js_drawFastHLine, 4},
     };
     putFns(ctx, kFns2);
+
+#if CONFIG_CELEROS_JS_GAME_ACCEL
+    // Aceleradores de jogo (API 33, placas S3): corpo rigido nativo (a dep
+    // celeros.physics expoe P.rigid) e sprite girado/escalado
+    static const JsFn kFnsAccel[] = {
+        {"rigidNew", js_rigidNew, 1},
+        {"rigidFree", js_rigidFree, 1},
+        {"rigidBox", js_rigidBox, 9},
+        {"rigidCircle", js_rigidCircle, 7},
+        {"rigidRemove", js_rigidRemove, 2},
+        {"rigidSet", js_rigidSet, 8},
+        {"rigidImpulse", js_rigidImpulse, 4},
+        {"rigidStep", js_rigidStep, 5},
+        {"rigidState", js_rigidState, 1},
+        {"rigidCount", js_rigidCount, 1},
+        {"drawSprite", js_drawSprite, 8},
+    };
+    putFns(ctx, kFnsAccel);
+#endif
 
     static const JsFn kFns3[] = {
         {"fillScreen", js_fillScreen, 1},
