@@ -997,7 +997,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     // Aceleradores de jogo (API 33, placas S3): corpo rigido nativo (a dep
-    // celeros.physics expoe P.rigid) e sprite girado/escalado
+    // celeros.physics expoe P.rigid), sprite girado/escalado e (API 34) o
+    // blit recortado do fundo (blitSprite: painter da camada suja)
     static const JsFn kFnsAccel[] = {
         {"rigidNew", js_rigidNew, 1},
         {"rigidFree", js_rigidFree, 1},
@@ -1007,9 +1008,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"rigidSet", js_rigidSet, 8},
         {"rigidImpulse", js_rigidImpulse, 4},
         {"rigidStep", js_rigidStep, 5},
-        {"rigidState", js_rigidState, 1},
+        {"rigidState", js_rigidState, 2},
         {"rigidCount", js_rigidCount, 1},
         {"drawSprite", js_drawSprite, 8},
+        {"blitSprite", js_blitSprite, 5},
     };
     putFns(ctx, kFnsAccel);
 #endif

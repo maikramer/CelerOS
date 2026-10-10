@@ -139,10 +139,16 @@ duk_ret_t JSBindings::js_rigidStep(duk_context* ctx) {
 }
 
 duk_ret_t JSBindings::js_rigidState(duk_context* ctx) {
-    // [x, y, angulo, hit, rapidez, flags] por slot; flags: 1 vivo, 2 acordado
+    // [x, y, angulo, hit, rapidez, flags] por slot; flags: 1 vivo, 2 acordado.
+    // 2o arg opcional: o array do quadro anterior, preenchido NO LUGAR e
+    // devolvido — um array novo de 6 x n numeros por quadro era realloc do
+    // array part + lixo para o GC do Duktape. Firmware sem o arg ignora e
+    // devolve um novo: quem usa o RETORNO funciona nos dois.
     R::World* w = rworldAt(duk_require_int(ctx, 0));
     int n = w ? w->nBodies : 0;
-    duk_push_array(ctx);
+    bool reuse = duk_is_array(ctx, 1);
+    if (reuse) duk_dup(ctx, 1);
+    else duk_push_array(ctx);
     duk_uarridx_t k = 0;
     for (int i = 0; i < n; i++) {
         const R::Body& b = w->bodies[i];
@@ -158,6 +164,12 @@ duk_ret_t JSBindings::js_rigidState(duk_context* ctx) {
         duk_put_prop_index(ctx, -2, k++);
         duk_push_int(ctx, (b.alive ? 1 : 0) | (b.alive && b.awake && b.invM > 0 ? 2 : 0));
         duk_put_prop_index(ctx, -2, k++);
+    }
+    if (reuse) {
+        // mundo encolheu (remove no fim): a cauda velha sai — slot alem da
+        // marca d'agua nao pode continuar "vivo" no array
+        duk_push_uint(ctx, k);
+        duk_put_prop_string(ctx, -2, "length");
     }
     return 1;
 }

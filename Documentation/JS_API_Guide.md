@@ -2368,8 +2368,8 @@ Impulse at the centre (Δv = j / mass); wakes the body. Explosions: a radial imp
 #### `System.rigidStep(id, dt[, gx, gy, maxSub])` → Integer (API 33)
 Advances `dt` seconds (clamped to 0.1) with gravity in u/s². Returns how many sub-steps ran (`maxSub` default 12, max 16).
 
-#### `System.rigidState(id)` → Array (API 33)
-`[x, y, angle, hit, speed, flags, ...]` — 6 numbers per index (one allocation per frame). `hit` = the largest impact impulse of the last step (approach × effective mass: game damage comes from here); `speed` = speed of the body's fastest point; `flags`: 1 alive, 2 awake.
+#### `System.rigidState(id[, buf])` → Array (API 33)
+`[x, y, angle, hit, speed, flags, ...]` — 6 numbers per index. Pass last frame's array as `buf` and it is refilled in place (its `length` follows the world) and returned — no new array per frame; firmware 1.8.0 ignores `buf` and returns a new one, so always use the return value. `hit` = the largest impact impulse of the last step (approach × effective mass: game damage comes from here); `speed` = speed of the body's fastest point; `flags`: 1 alive, 2 awake.
 
 #### `System.rigidCount(id)` → Integer (API 33)
 Slots in use (high-water mark): `rigidState` holds `6 × rigidCount` numbers.
@@ -2393,3 +2393,21 @@ if (w.hit(plank, s) > 900) w.remove(plank);  // broke
 System.drawSprite(plankSpr, w.x(plank, s), w.y(plank, s),
                   w.angle(plank, s) * 57.2958, 1, 1, 0x0000);
 ```
+
+## 39. API Level 34 — `System.blitSprite` (background restore in one call)
+
+#### `System.blitSprite(id, x, y, w, h)` (API 34)
+Copies the rectangle (x, y, w, h) of sprite `id` to the **same position** on the current target, treating the sprite as covering the canvas from (0, 0) — a full-screen background sprite. The target's clip comes back as it was. It is the dirty-layer painter of a game in one binding call: `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip` were 5 calls per dirty box, and a busy frame repaints dozens of boxes. S3 boards only (`CONFIG_CELEROS_JS_GAME_ACCEL`, like `drawSprite`): feature-detect.
+
+```javascript
+E.dirty.enable(function (x, y, w, h) {
+    if (System.blitSprite) { System.blitSprite(bgSpr, x, y, w, h); return; }
+    System.setClip(x, y, w, h);              // API 33 and older
+    System.useSprite(bgSpr);
+    System.pushSprite(0, 0);
+    System.useSprite(0);
+    System.clearClip();
+});
+```
+
+In the same level `System.rigidState(id, buf)` accepts the previous frame's array and refills it in place (see API 33); `celeros.physics` 2.1 uses it inside `state()`.

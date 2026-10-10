@@ -371,6 +371,13 @@ if (w.hit(tabua, s) / massaTabua > 55) w.remove(tabua);      // quebrou
 System.drawSprite(sprTabua, w.x(tabua, s), w.y(tabua, s), w.angle(tabua, s) * 57.2958, 1, 1, 0);
 ```
 
+O `state()` devolve o **mesmo array** a cada chamada, preenchido no lugar
+(physics 2.1: nada de 6 x n números novos por quadro para o GC); faça
+`slice()` se precisar do retrato do quadro anterior. Nos laços por corpo
+leia por índice — `s[i * w.N + 5] & 1` (vivo), `& 2` (acordado),
+`s[i * w.N]` (x) — porque `w.x(i, s)` e cia. são chamadas de função, e no
+Duktape uma chamada custa mais que o resto do corpo do laço.
+
 O `System.drawSprite` (também API 33) desenha um sprite girado e escalado
 em torno do centro — o par natural dos corpos que giram; com `smooth` ele
 também redimensiona a arte uma vez no load para a tela da placa. Exemplo

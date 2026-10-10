@@ -236,6 +236,44 @@ duk_ret_t JSBindings::js_drawSprite(duk_context *ctx) {
     }
     return 0;
 }
+
+// API 34: devolve o retangulo (x, y, w, h) do sprite `id` para a MESMA
+// posicao do alvo corrente — o sprite cobre o canvas a partir de (0, 0)
+// (fundo de tela inteira). E o painter da camada suja das engines numa
+// chamada: setClip + useSprite + pushSprite + useSprite(0) + clearClip
+// eram 5 bindings por caixa, dezenas de caixas por quadro de jogo. O
+// recorte do alvo volta ao que era (o do sistema no display direto fica).
+duk_ret_t JSBindings::js_blitSprite(duk_context *ctx) {
+    if (!tftInstance) return 0;
+    int id = duk_require_int(ctx, 0);
+    if (id < 1 || id > spriteCap() || s_spritePool[id - 1] == nullptr) return 0;
+    CelerSprite* src = s_spritePool[id - 1];
+    int x = duk_require_int(ctx, 1), y = duk_require_int(ctx, 2);
+    int w = duk_require_int(ctx, 3), h = duk_require_int(ctx, 4);
+    if (w <= 0 || h <= 0) return 0;
+    lgfx::LovyanGFX* dst;
+    if (useSprite && tftSprite) {
+        if (tftSprite == src) return 0;   // nao copia sobre si mesmo
+        dst = tftSprite;
+    } else if (s_frame != nullptr) {
+        dst = s_frame;                    // o FrameSprite marca so o recorte
+    } else {
+        dst = tftInstance;
+    }
+    // mesmo mapeamento das primitivas no alvo corrente (canvas nativo = 1:1)
+    int cx = jsx(x), cy = jsy(y);
+    int cw = jsx(x + w) - cx, ch = jsy(y + h) - cy;
+    int32_t ox, oy, ow, oh;
+    dst->getClipRect(&ox, &oy, &ow, &oh);
+    int x0 = cx > ox ? cx : ox, y0 = cy > oy ? cy : oy;
+    int x1 = cx + cw < ox + ow ? cx + cw : ox + ow;
+    int y1 = cy + ch < oy + oh ? cy + ch : oy + oh;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    dst->setClipRect(x0, y0, x1 - x0, y1 - y0);
+    src->pushSprite(dst, jsx(0), jsy(0));
+    dst->setClipRect(ox, oy, ow, oh);
+    return 0;
+}
 #endif
 
 // API 29: o limite real do pool (8 com PSRAM, 1 sem) — engines e jogos

@@ -1115,7 +1115,7 @@ function depSize(nome) {
                      JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
     var env = harness.makeEnv();
     var P = harness.makeRequire(tmp, env)('celeros.physics');
-    check('physics 2.0.0 exporta rigid', typeof P.rigid === 'function' && P.version === '2.0.0');
+    check('physics 2.1.0 exporta rigid', typeof P.rigid === 'function' && P.version === '2.1.0');
     var w = P.rigid({ iterations: 10 });
     check('rigid usa o binding (stub do harness = espelho do Rigid2D.h)', w !== null && w.id > 0);
     var chao = w.box(160, 270, 400, 20, { static: true });
@@ -1162,6 +1162,13 @@ function depSize(nome) {
     check('remove libera o indice e o add reaproveita', w.remove(ids[4]) === true &&
           w.box(100, 100, 10, 10) === ids[4]);
     check('rigidState: 6 numeros por slot', w.state().length === w.count() * 6);
+    // 2.1: state() reaproveita o array e encolhe com o mundo (slot alem da
+    // marca d'agua nao fica "vivo" no buffer)
+    var sA = w.state(), last = w.count() - 1;
+    w.remove(last);
+    var sB = w.state();
+    check('state() devolve o MESMO array, preenchido no lugar', sA === sB);
+    check('state() encolhe junto com a marca d\'agua', sB.length === w.count() * 6 && !w.alive(last, sB));
     w.free(); w2.free();
     var env2 = harness.makeEnv();
     delete env2.System.rigidNew;

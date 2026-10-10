@@ -618,6 +618,7 @@ function makeEnv() {
     rigidState: rigidStub.rigidState,
     rigidCount: rigidStub.rigidCount,
     drawSprite: function() {},
+    blitSprite: function() {},   // API 34: restaura o fundo (preview no emulador)
     // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
     setPin: function() { return true; },
     verifyPin: function() { return true; },

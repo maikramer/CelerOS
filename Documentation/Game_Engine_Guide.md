@@ -370,6 +370,13 @@ if (w.hit(plank, s) / plankMass > 55) w.remove(plank);       // it broke
 System.drawSprite(sprPlank, w.x(plank, s), w.y(plank, s), w.angle(plank, s) * 57.2958, 1, 1, 0);
 ```
 
+`state()` returns the **same array** every call, refilled in place (physics
+2.1: no 6 x n new numbers per frame for the GC); `slice()` it if you need
+last frame's snapshot. In per-body loops read it by index —
+`s[i * w.N + 5] & 1` (alive), `& 2` (awake), `s[i * w.N]` (x) — because
+`w.x(i, s)` and friends are function calls, and in Duktape a call costs
+more than the rest of the loop body.
+
 `System.drawSprite` (also API 33) draws a sprite rotated and scaled around
 its centre — the natural pair for rotating bodies; with `smooth` it also
 resizes art once at load time to the board's screen. Full example:

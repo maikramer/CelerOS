@@ -600,14 +600,18 @@ function makeStub() {
             if (dt > 0.1) dt = 0.1;
             return step(w, dt, num(gx, 0), num(gy, 0), num(maxSub, 12) | 0);
         },
-        rigidState: function (id) {
-            var w = at(id), out = [];
-            if (!w) return out;
-            for (var i = 0; i < w.nBodies; i++) {
+        // buf opcional (espelho do JsRigid.cpp): preenche no lugar, ajusta o
+        // length e devolve o mesmo array
+        rigidState: function (id, buf) {
+            var w = at(id), out = Object.prototype.toString.call(buf) === '[object Array]' ? buf : [];
+            var k = 0;
+            for (var i = 0; w && i < w.nBodies; i++) {
                 var b = w.bodies[i];
-                out.push(b.x, b.y, b.a, b.hit, b.alive ? speedOf(b) : 0,
-                         (b.alive ? 1 : 0) | (b.alive && b.awake && b.invM > 0 ? 2 : 0));
+                out[k++] = b.x; out[k++] = b.y; out[k++] = b.a; out[k++] = b.hit;
+                out[k++] = b.alive ? speedOf(b) : 0;
+                out[k++] = (b.alive ? 1 : 0) | (b.alive && b.awake && b.invM > 0 ? 2 : 0);
             }
+            out.length = k;
             return out;
         },
         rigidCount: function (id) { var w = at(id); return w ? w.nBodies : 0; }

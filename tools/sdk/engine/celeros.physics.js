@@ -14,6 +14,12 @@
 // Coordenadas: y cresce para BAIXO (tela); x,y do corpo e o CENTRO. Corpo
 // circular tem r; caixa tem w/h.
 //
+// 2.1: rigid.state() devolve SEMPRE o mesmo array, preenchido no lugar
+// (System.rigidState com o 2o arg) — 6 x n numeros novos por quadro eram
+// realloc + lixo para o GC. Firmware antigo ignora o arg e devolve um novo:
+// o wrapper guarda o retorno, entao o app nao muda nos dois casos. Quem
+// precisa de um retrato do quadro anterior copia (slice) antes do step.
+//
 // 2.0: P.world/P.tiles/P.flow SAIRAM do modulo (solver arcade interpretado,
 // zero consumidores na loja — o caminho objeto-por-corpo que vira pressao de
 // GC no Duktape; perseguicao em grade e com celeros.grid). Ficam P.hit,
@@ -24,7 +30,7 @@
 // fallback JS (um castelo de 30 pecas nao fecha o quadro no interpretado):
 // em firmware sem o binding P.rigid devolve null e o app avisa.
 
-var P = { version: '2.0.0' };
+var P = { version: '2.1.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 
@@ -242,6 +248,7 @@ function verletFastJS(opts) {
 //   w.step(dt, { gravity: { x: 0, y: 400 } });
 //   var s = w.state();      // [x, y, ang, hit, rapidez, flags] por indice
 //   w.x(tabua, s) ...       // leitores sobre o array do quadro
+//   s[i * w.N + 5] & 1      // laco quente: indexe direto (sem chamada)
 //
 // Unidades livres (as do app), angulo em radianos, y para baixo. hit = o
 // maior impulso de impacto do ultimo step (o app tira dano disso); flags:
@@ -253,6 +260,7 @@ P.rigid = function (opts) {
     var id = System.rigidNew(opts.iterations || 10);
     if (id < 0) return null;
     var N = 6;
+    var buf = [];   // o array do state(), reaproveitado (2.1)
     function o3(o) { return o || {}; }
     return {
         id: id,
@@ -283,7 +291,7 @@ P.rigid = function (opts) {
             var g = o.gravity || { x: 0, y: 400 };
             return System.rigidStep(id, dt, g.x || 0, g.y || 0, o.maxSub || 12);
         },
-        state: function () { return System.rigidState(id); },
+        state: function () { return (buf = System.rigidState(id, buf)); },
         count: function () { return System.rigidCount(id); },
         x: function (i, s) { return s[i * N]; },
         y: function (i, s) { return s[i * N + 1]; },

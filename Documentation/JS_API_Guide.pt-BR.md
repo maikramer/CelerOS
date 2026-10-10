@@ -2638,8 +2638,8 @@ Impulso no centro (Δv = j / massa); acorda o corpo. Explosões: impulso radial 
 #### `System.rigidStep(id, dt[, gx, gy, maxSub])` → Inteiro (API 33)
 Avança `dt` segundos (clampado em 0,1) com gravidade em u/s². Devolve quantos sub-passos rodou (`maxSub` default 12, máx. 16).
 
-#### `System.rigidState(id)` → Array (API 33)
-`[x, y, angle, hit, speed, flags, ...]` — 6 números por índice (uma alocação por quadro). `hit` = maior impulso de impacto do último step (aproximação × massa efetiva: o dano do jogo sai daqui); `speed` = rapidez do ponto mais rápido do corpo; `flags`: 1 vivo, 2 acordado.
+#### `System.rigidState(id[, buf])` → Array (API 33)
+`[x, y, angle, hit, speed, flags, ...]` — 6 números por índice. Passe o array do quadro anterior em `buf` e ele é preenchido no lugar (o `length` acompanha o mundo) e devolvido — nada de array novo por quadro; o firmware 1.8.0 ignora o `buf` e devolve um novo, então use sempre o retorno. `hit` = maior impulso de impacto do último step (aproximação × massa efetiva: o dano do jogo sai daqui); `speed` = rapidez do ponto mais rápido do corpo; `flags`: 1 vivo, 2 acordado.
 
 #### `System.rigidCount(id)` → Inteiro (API 33)
 Slots em uso (marca d'água): o `rigidState` tem `6 × rigidCount` números.
@@ -2663,3 +2663,21 @@ if (w.hit(tabua, s) > 900) w.remove(tabua);  // quebrou
 System.drawSprite(sprTabua, w.x(tabua, s), w.y(tabua, s),
                   w.angle(tabua, s) * 57.2958, 1, 1, 0x0000);
 ```
+
+## 39. Nível de API 34 — `System.blitSprite` (restaurar o fundo numa chamada)
+
+#### `System.blitSprite(id, x, y, w, h)` (API 34)
+Copia o retângulo (x, y, w, h) do sprite `id` para a **mesma posição** do alvo corrente, tratando o sprite como se cobrisse o canvas a partir de (0, 0) — um fundo de tela inteira. O recorte do alvo volta ao que era. É o painter da camada suja de um jogo numa chamada de binding: `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip` eram 5 chamadas por caixa suja, e um quadro movimentado repinta dezenas de caixas. Só nas placas S3 (`CONFIG_CELEROS_JS_GAME_ACCEL`, como o `drawSprite`): detecte antes de usar.
+
+```javascript
+E.dirty.enable(function (x, y, w, h) {
+    if (System.blitSprite) { System.blitSprite(sprFundo, x, y, w, h); return; }
+    System.setClip(x, y, w, h);              // API 33 e anteriores
+    System.useSprite(sprFundo);
+    System.pushSprite(0, 0);
+    System.useSprite(0);
+    System.clearClip();
+});
+```
+
+No mesmo nível o `System.rigidState(id, buf)` aceita o array do quadro anterior e o preenche no lugar (veja a API 33); a `celeros.physics` 2.1 usa isso dentro do `state()`.
