@@ -15,10 +15,17 @@ namespace MusicSynth {
 // parou no vizinho; alem do total a task encerra na hora, posMs final).
 bool play(const MusicEngine::Song& song, uint32_t startMs = 0);
 
-// Corta no proximo bloco (~15 ms). Idempotente.
+// Efeito curto (System.sfx, API 32) misturado por cima da trilha — nao
+// bloqueia; sem trilha a task abre uma sessao so para ele. Substitui o
+// efeito em curso. Devolve os tons aceitos (0 = alto-falante ocupado por
+// fala/tom/playWav, sem audio na placa ou lista vazia).
+int sfx(const MusicEngine::SfxTone* tones, int n);
+
+// Corta a trilha no proximo bloco (~6 ms); um efeito em curso termina.
+// Idempotente.
 void stop();
 
-// true enquanto a task toca (ate acabarem os loops ou chegar um stop()).
+// true enquanto a trilha toca (ate acabarem os loops ou chegar um stop()).
 bool playing();
 
 // Posicao em ms desde o inicio do audio, ou -1 se parado.

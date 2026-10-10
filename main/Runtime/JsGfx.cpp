@@ -267,7 +267,17 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
     uint32_t color = duk_require_uint(ctx, 2);
-    gfx()->drawPixel(jsx(x), jsy(y), jsc(color));
+    const int px = jsx(x), py = jsy(y);
+    // Fast path: pixel direto no buffer do quadro. Ponto ESPALHADO pelo
+    // caminho completo do LGFX custava ~0,2 ms (60 estrelas = 12 ms de
+    // quadro); aqui e escrita + caixa suja, microssegundos. A cor segue
+    // RGB565 crua (o buffer do quadro e 16 bpp; o jsc expande p/ 888 so
+    // porque o LGFX decide formato pelo tipo do argumento).
+    if (s_frame != nullptr && !useSprite && !clipActive() &&
+        s_frame->pokePixel(px, py, (uint16_t)(color & 0xFFFF))) {
+        return 0;
+    }
+    gfx()->drawPixel(px, py, jsc(color));
     return 0;
 }
 

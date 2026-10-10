@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 31
+### API Level: 32
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -156,7 +156,7 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Description:** Returns the current local month.
 
 #### `System.getDay()`
-- **Returns:** `Integer` (1-31)
+- **Returns:** `Integer` (1-32)
 - **Description:** Returns the current local day of the month.
 
 #### `System.getTimezone()`
@@ -2293,3 +2293,32 @@ Removes point `idx`: its sticks go with it and the last point inherits the index
 
 #### `System.verletPins(id)` → Array (API 31)
 Pin state per point (`[0, 1, ...]`) — for highlighting and toggling.
+
+## 37. API Level 32 — Mixed sound effects: `System.sfx`
+
+`System.playTone` is **blocking**: it holds the JS thread note by note, so
+a game loop froze for 50-600 ms on every explosion, and with music playing
+the effect could not sound at all (one speaker slot). `System.sfx` hands
+the melody to the chiptune synth task instead: the effect is **mixed on
+top of the running `playMusic` track** (the track dips to ~55% while the
+effect sounds, so it stays readable) and the call returns immediately.
+Without a track, the synth opens a short session just for the effect.
+
+Same board support as `playMusic` (I2S speaker: dog, SmartDisplay,
+watch). One effect at a time: a new `sfx` replaces the one sounding (the
+latest feedback wins, like on a console). It does not push the frame, so
+calling it from inside a draw is safe.
+
+#### `System.sfx(melody)` → Integer (API 32)
+- **Parameters:** `melody` (Array) — `[freq, ms]`, `[[freq, ms], ...]` or flat `[f, ms, f, ms, ...]`; `freq` 20..20000 Hz or **0 = rest** (advances time), `ms` 1..1000 per tone. Clamped: 24 tones, 3 s total; malformed entries are skipped.
+- **Returns:** Integer — how many tones were accepted; `0` when the speaker is busy (`playWav`, `playTone`, `AI.speak`), the board has no I2S audio or nothing was valid.
+
+```javascript
+// shot over the soundtrack, without stalling the game loop
+if (typeof System.sfx === "function") System.sfx([[1200, 30], [900, 30], [600, 50]]);
+else System.playTone([[1200, 30], [900, 30], [600, 50]]);   // older firmware: blocks
+```
+
+`celeros.engine` 1.2 routes `E.audio.sfx` through it automatically
+(`E.caps.mix`) and turns `E.audio.duck` into a no-op when mixing is
+available.

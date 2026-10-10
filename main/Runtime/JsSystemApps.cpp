@@ -803,6 +803,47 @@ duk_ret_t JSBindings::js_musicPos(duk_context *ctx) {
     return 1;
 }
 
+// System.sfx(mel) (API 32): efeito curto [[freq, ms], ...] (ou [f, ms]
+// solto, ou plano [f, ms, f, ms]) misturado pela task do sintetizador POR
+// CIMA da trilha — nao bloqueia (o playTone segura a thread JS nota a
+// nota: o loop de um jogo congelava 50-600 ms por explosao). freq 0 =
+// pausa. Sem present(): chamado de dentro do draw nao empurra quadro pela
+// metade. Devolve os tons aceitos (0 = alto-falante ocupado/sem audio).
+duk_ret_t JSBindings::js_sfx(duk_context *ctx) {
+    if (!duk_is_array(ctx, 0)) {
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "sfx: esperado array [freq,ms] ou [[freq,ms],...]");
+    }
+    MusicEngine::SfxTone tones[MusicEngine::kMaxSfxTones];
+    int n = 0;
+    const duk_size_t len = duk_get_length(ctx, 0);
+    bool flat = false;
+    if (len > 0) {
+        duk_get_prop_index(ctx, 0, 0);
+        flat = duk_is_number(ctx, -1);
+        duk_pop(ctx);
+    }
+    const int count = flat ? (int)len / 2 : (int)len;
+    for (int i = 0; i < count && n < MusicEngine::kMaxSfxTones; i++) {
+        int f, ms;
+        if (flat) {
+            duk_get_prop_index(ctx, 0, i * 2); f = duk_to_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, 0, i * 2 + 1); ms = duk_to_int(ctx, -1); duk_pop(ctx);
+        } else {
+            duk_get_prop_index(ctx, 0, i);
+            if (!duk_is_array(ctx, -1)) { duk_pop(ctx); continue; }  // efeito: tolera lixo
+            duk_get_prop_index(ctx, -1, 0); f = duk_to_int(ctx, -1); duk_pop(ctx);
+            duk_get_prop_index(ctx, -1, 1); ms = duk_to_int(ctx, -1); duk_pop(ctx);
+            duk_pop(ctx);
+        }
+        if (f < 0 || f > 20000 || ms <= 0) continue;  // o SfxVoice clampa o resto
+        tones[n].freq = (uint16_t)f;
+        tones[n].ms = (uint16_t)(ms > 1000 ? 1000 : ms);
+        n++;
+    }
+    duk_push_int(ctx, n > 0 ? MusicSynth::sfx(tones, n) : 0);
+    return 1;
+}
+
 // System.notify(titulo[, msg]): toast AGORA + registra no historico
 // (/local/notifications.txt, cap 20 — o Settings lista em Notificacoes).
 duk_ret_t JSBindings::js_notify(duk_context *ctx) {

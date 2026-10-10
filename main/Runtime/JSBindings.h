@@ -33,6 +33,8 @@ public:
     // o do app (System.setClip) intersectado com a area abaixo da topbar
     static void setAppDisplayClip(bool on, int x, int y, int w, int h);
     static void applyDisplayClip();
+    // Algum recorte ativo (fast path do drawPixel pula o LGFX so sem clipe)
+    static bool clipActive();
     // y fisico do desenho no alvo corrente (quadro/display descontam a topbar
     // do sistema; o sprite do app e canvas proprio, origem em 0)
     static int mapY(int v);
@@ -145,6 +147,7 @@ private:
     static duk_ret_t js_playWav(duk_context *ctx);   // arquivo WAV (API 13)
     static duk_ret_t js_playMusic(duk_context *ctx);   // chiptune N trilhas (API 25)
     static duk_ret_t js_musicStop(duk_context *ctx);   // corta a musica (API 25)
+    static duk_ret_t js_sfx(duk_context *ctx);         // efeito misturado, nao bloqueia (API 32)
     static duk_ret_t js_musicPlaying(duk_context *ctx);  // tocando? (API 25)
     static duk_ret_t js_musicPos(duk_context *ctx);   // ms desde o inicio (API 25)
 

@@ -451,6 +451,12 @@ void JSBindings::applyDisplayClip() {
     }
 }
 
+/// Algum recorte de sistema/app ativo no display (o fast path do
+/// drawPixel nao pode pular o LGFX com clipe ligado).
+bool JSBindings::clipActive() {
+    return s_appClipOn || s_sysClipTop > 0;
+}
+
 void JSBindings::present() {
     // Profiling (celerctl top): duracao do present e quais chamadas levaram
     // quadro ao vidro (fps real). RAII cobre os returns antecipados (sem
@@ -520,33 +526,29 @@ void JSBindings::present() {
         const bool barChanged = s_tbDirty || wantBar != s_barOnGlass ||
                                 (wantBar && (s_exitArmed != s_barHotOnGlass || s_tbHotBtn != s_tbHotOnGlass));
         if (s_frameDirty) s_frame->markAllDirty();
-        int32_t dx, dy, dw, dh;
-        bool dirty = s_frame->takeDirty(&dx, &dy, &dw, &dh);
-        if (wantBar && (barChanged || (dirty && dy < UI::topbarH()))) {
-            drawAppTopbar(*s_frame, s_exitArmed);
-            int32_t bx, by, bw, bh;
-            if (s_frame->takeDirty(&bx, &by, &bw, &bh)) {
-                if (!dirty) {
-                    dx = bx; dy = by; dw = bw; dh = bh;
-                    dirty = true;
-                } else {
-                    const int32_t r = std::max(dx + dw, bx + bw), b = std::max(dy + dh, by + bh);
-                    dx = std::min(dx, bx);
-                    dy = std::min(dy, by);
-                    dw = r - dx;
-                    dh = b - dy;
-                }
-            }
+        if (wantBar && (barChanged || s_frame->dirtyAbove(UI::topbarH()))) {
+            drawAppTopbar(*s_frame, s_exitArmed);  // entra nas caixas sujas
         }
-        if (dirty) {
-            // Recorte no destino: o pushImage do LovyanGFX so transfere a
-            // area recortada (no watch, o framebuffer do painel so faz flush
-            // dela, ja alinhada)
+        celer::DirtyRect rs[FrameSprite::kMaxDirty];
+        const int nr = s_frame->takeDirty(rs);
+        if (nr > 0) {
+            // Recorte no destino, caixa a caixa: o pushImage do LovyanGFX so
+            // transfere a area recortada (no watch, o framebuffer do painel
+            // so faz flush dela, ja alinhada). Varias caixas pequenas no
+            // lugar da uniao: 2 sprites em cantos opostos nao sujam mais o
+            // vidro inteiro (banda da PSRAM do painel RGB = sem tremor).
+            // NAO copiar direto sprite->framebuffer por memcpy aqui: uma
+            // copia de quadro inteiro satura a PSRAM, o LCD_CAM perde
+            // prazo e o painel "embaralha" linhas ate o vsync seguinte
+            // (bancada 2026-10-09); o pushSprite por pixel e mais LENTO
+            // justamente por nao afogar o barramento.
             pushedFrame = true;  // profiling: quadro que chegou ao vidro
             int32_t cx, cy, cw, ch;
             tftInstance->getClipRect(&cx, &cy, &cw, &ch);
-            tftInstance->setClipRect(dx, dy, dw, dh);
-            s_frame->pushSprite(tftInstance, 0, 0);
+            for (int i = 0; i < nr; i++) {
+                tftInstance->setClipRect(rs[i].l, rs[i].t, rs[i].r - rs[i].l + 1, rs[i].b - rs[i].t + 1);
+                s_frame->pushSprite(tftInstance, 0, 0);
+            }
             tftInstance->setClipRect(cx, cy, cw, ch);
         }
         s_frameDirty = false;
@@ -642,8 +644,11 @@ duk_ret_t JSBindings::js_textWidth(duk_context *ctx) {
     // mede no ALVO do desenho (sprite > quadro > display), onde o
     // setTextSize do app vale — o display cru ignorava o tamanho no S3
     int w = gfx()->textWidth(str, jsFont(font));
-    // devolve no espaco virtual 240x320 (inverso do jsx())
-    duk_push_int(ctx, (int)((long)w * 240 / tftInstance->width()));
+    // devolve no espaco do app: virtual 240x320 (inverso do jsx()) ou, no
+    // canvas nativo (API 28), pixels fisicos — ate a API 31 dividia sempre e
+    // no 480 nativo a largura vinha pela METADE (texto centrado na mao e a
+    // caixa suja da engine erravam meia largura)
+    duk_push_int(ctx, s_nativeCanvas ? w : (int)((long)w * 240 / tftInstance->width()));
     return 1;
 }
 
@@ -957,11 +962,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"spriteSlots", js_spriteSlots, 0},  // limite do pool (API 29)
         // Verlet nativo (API 31): a dep celeros.physics feature-detecta e
         // expoe P.verletFast; em firmware velho o P.verlet JS segue valendo
-        {"verletNew", js_verletNew, 0},
+        {"verletNew", js_verletNew, 2},
         {"verletFree", js_verletFree, 1},
         {"verletAddPoint", js_verletAddPoint, 3},
-        {"verletStick", js_verletStick, 3},
-        {"verletPin", js_verletPin, 2},
+        {"verletStick", js_verletStick, 4},
+        {"verletPin", js_verletPin, 3},
         {"verletSet", js_verletSet, 4},
         {"verletStep", js_verletStep, 10},
         {"verletXY", js_verletXY, 1},
@@ -1144,6 +1149,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"playWav", js_playWav, 1},
         {"playMusic", js_playMusic, 2},        // API 25: chiptune N trilhas; opts {startMs} na 27
         {"musicStop", js_musicStop, 0},        // API 25
+        {"sfx", js_sfx, 1},                    // API 32
         {"musicPlaying", js_musicPlaying, 0},  // API 25
         {"musicPos", js_musicPos, 0},          // API 25
         {"notify", js_notify, 2},

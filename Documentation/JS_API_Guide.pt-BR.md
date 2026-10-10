@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 31
+### Nível de API: 32
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -197,7 +197,7 @@ para o SO do ESP32.
 - **Descrição:** devolve o mês local atual.
 
 #### `System.getDay()`
-- **Retorna:** `Integer` (1-31)
+- **Retorna:** `Integer` (1-32)
 - **Descrição:** devolve o dia local atual do mês.
 
 #### `System.getTimezone()`
@@ -2565,3 +2565,31 @@ Remove o ponto `idx`: vínculos ligados a ele saem e o último ponto herda o ín
 
 #### `System.verletPins(id)` → Array (API 31)
 Estado dos pinos por ponto (`[0, 1, ...]`) — para destacar e alternar.
+
+## 37. Nível de API 32 — Efeitos misturados: `System.sfx`
+
+O `System.playTone` é **bloqueante**: segura a thread JS nota a nota — o
+loop de um jogo congelava 50-600 ms a cada explosão, e com música tocando o
+efeito nem soava (o alto-falante tem uma posse só). O `System.sfx` entrega a
+melodia à task do sintetizador chiptune: o efeito é **misturado por cima da
+trilha do `playMusic`** (a trilha abaixa para ~55% enquanto o efeito soa,
+para ele ficar legível) e a chamada volta na hora. Sem trilha, o
+sintetizador abre uma sessão curta só para o efeito.
+
+Mesmas placas do `playMusic` (alto-falante I2S: cão, SmartDisplay,
+relógio). Um efeito por vez: um `sfx` novo substitui o que está soando (o
+feedback mais recente vence, como num console). Não empurra o quadro —
+chamar de dentro do draw é seguro.
+
+#### `System.sfx(melodia)` → Inteiro (API 32)
+- **Parâmetros:** `melodia` (Array) — `[freq, ms]`, `[[freq, ms], ...]` ou plano `[f, ms, f, ms, ...]`; `freq` 20..20000 Hz ou **0 = pausa** (avança o tempo), `ms` 1..1000 por tom. Clampado: 24 tons, 3 s no total; entradas malformadas são puladas.
+- **Retorno:** Inteiro — quantos tons foram aceitos; `0` quando o alto-falante está ocupado (`playWav`, `playTone`, `AI.speak`), a placa não tem áudio I2S ou nada era válido.
+
+```javascript
+// tiro por cima da trilha, sem travar o loop do jogo
+if (typeof System.sfx === "function") System.sfx([[1200, 30], [900, 30], [600, 50]]);
+else System.playTone([[1200, 30], [900, 30], [600, 50]]);   // firmware antigo: bloqueia
+```
+
+A `celeros.engine` 1.2 roteia o `E.audio.sfx` por ela automaticamente
+(`E.caps.mix`) e torna o `E.audio.duck` um no-op quando há mistura.

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 31 — 284 funcoes.
+// API level 32 — 285 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -213,6 +213,7 @@ declare const System: {
     /** uma música por vez; um novo playMusic só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorm */
     playMusic(song?: number, opcoes?: number): any;
     musicStop(): any;
+    sfx(melodia?: number): any;
     musicPlaying(): any;
     musicPos(): any;
     notify(arg0: number, arg1?: number): void;

@@ -331,4 +331,100 @@ struct Renderer {
     }
 };
 
+// ------------------------------------------------------------------ sfx ---
+// Voz de efeito do System.sfx (API 32): melodia curta [freq Hz, ms] numa
+// onda quadrada propria, MISTURADA por cima da trilha no mesmo bloco do
+// sintetizador — o loop do jogo nao para (o playTone bloqueia a thread JS
+// por nota) e a musica nao precisa sair do ar (adeus ao "duck" que parava
+// a trilha). freq 0 = pausa que avanca o tempo. Um efeito por vez: o mais
+// novo substitui o que esta tocando (o feedback do toque mais recente
+// vence, como num console). Tudo clampado aqui: 24 tons, 1..1000 ms por
+// tom, 3 s no total, 20..20000 Hz.
+constexpr int kMaxSfxTones = 24;
+constexpr uint32_t kMaxSfxMs = 3000;
+
+struct SfxTone { uint16_t freq; uint16_t ms; };  // freq 0 = pausa
+
+struct SfxVoice {
+    SfxTone tones[kMaxSfxTones];
+    uint8_t count = 0;
+    uint8_t idx = 0;
+    uint32_t rate = 0;
+    uint32_t len = 0;    // amostras do tom corrente
+    uint32_t left = 0;   // amostras restantes dele
+    uint32_t phase = 0;  // Q32
+    uint32_t step = 0;   // 0 = pausa
+
+    bool active() const { return idx < count; }
+    void stop() { count = idx = 0; }
+
+    // Copia/clampa a melodia e comeca do 1o tom. Devolve os tons aceitos
+    // (0 = nada a tocar: lista vazia ou taxa invalida).
+    int load(const SfxTone* in, int n, uint32_t sampleRate) {
+        count = idx = 0;
+        phase = 0;
+        rate = sampleRate;
+        if (rate < 8000 || in == nullptr) return 0;
+        uint32_t total = 0;
+        for (int i = 0; i < n && count < kMaxSfxTones; i++) {
+            uint32_t f = in[i].freq, ms = in[i].ms;
+            if (f != 0 && (f < 20 || f > 20000)) continue;  // fora da faixa: pula
+            if (ms < 1) continue;
+            if (ms > 1000) ms = 1000;
+            if (total + ms > kMaxSfxMs) ms = kMaxSfxMs - total;
+            if (ms == 0) break;
+            tones[count].freq = (uint16_t)f;
+            tones[count].ms = (uint16_t)ms;
+            count++;
+            total += ms;
+        }
+        begin();
+        return count;
+    }
+
+    // Proxima amostra crua -256..256 (envelope de 1 ms de ataque e 3 ms de
+    // release por tom: sem estalo entre notas).
+    inline int32_t next() {
+        if (idx >= count) return 0;
+        int32_t s = 0;
+        if (step != 0) {
+            phase += step;
+            s = (phase & 0x80000000u) ? -256 : 256;
+            const uint32_t done = len - left;
+            const uint32_t atk = rate / 1000, rel = rate * 3 / 1000;
+            if (done < atk) s = s * (int32_t)done / (int32_t)(atk ? atk : 1);
+            else if (left < rel) s = s * (int32_t)left / (int32_t)(rel ? rel : 1);
+        }
+        if (--left == 0) {
+            idx++;
+            begin();
+        }
+        return s;
+    }
+
+    // Mistura n amostras do efeito sobre out (a trilha ja renderizada): a
+    // trilha abaixa para ~55% enquanto o efeito soa (sidechain — o efeito
+    // fica legivel sem calar a musica). master = mesmo ganho do Renderer.
+    void mix(int16_t* out, size_t n, int32_t master) {
+        for (size_t i = 0; i < n; i++) {
+            if (idx >= count) return;
+            int32_t v = (int32_t)out[i] * 140 / 256 + next() * master * 5 / 4096;
+            if (v > 24000) v = 24000;
+            if (v < -24000) v = -24000;
+            out[i] = (int16_t)v;
+        }
+    }
+
+private:
+    void begin() {
+        while (idx < count) {
+            len = (uint32_t)((uint64_t)tones[idx].ms * rate / 1000);
+            if (len == 0) { idx++; continue; }
+            left = len;
+            step = tones[idx].freq ? (uint32_t)(((uint64_t)tones[idx].freq << 32) / rate) : 0;
+            return;
+        }
+    }
+};
+
 }  // namespace MusicEngine

@@ -12,6 +12,8 @@
 #include "../../main/Utils/GbProto.h"
 #include "../../main/Kernel/DeviceStats.h"
 #include "../../main/Hardware/MusicEngine.h"
+#include "../../main/Display/DirtyRects.h"
+#include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
@@ -843,6 +845,133 @@ static void testNetFrame() {
     CHECK(done);   // mensagem nova (mesmo src/seq) recomeca limpa
 }
 
+// System.sfx (API 32): voz de efeito misturada por cima da trilha
+static void testSfxVoice() {
+    using namespace MusicEngine;
+    SfxVoice v;
+    const SfxTone mel[] = {{880, 10}, {0, 5}, {440, 10}};
+    CHECK(v.load(mel, 3, 44100) == 3);
+    CHECK(v.active());
+    // 25 ms a 44,1 kHz = 1102 amostras (441 + 220 + 441)
+    int n = 0, nonzero = 0, pauseNonzero = 0;
+    while (v.active() && n < 5000) {
+        const int32_t s = v.next();
+        if (s != 0) nonzero++;
+        if (n >= 445 && n < 657 && s != 0) pauseNonzero++;  // miolo da pausa
+        if (s > 256 || s < -256) nonzero = -100000;          // fora da faixa
+        n++;
+    }
+    CHECK(n == 441 + 220 + 441);
+    CHECK(nonzero > 800);
+    CHECK(pauseNonzero == 0);
+    CHECK(!v.active());
+    CHECK(v.next() == 0);
+
+    // clamps: freq fora da faixa pula, ms > 1000 corta, total 3 s
+    const SfxTone ruim[] = {{5, 100}, {30000, 100}, {500, 5000}, {600, 1000},
+                            {700, 1000}, {800, 1000}, {900, 50}};
+    CHECK(v.load(ruim, 7, 16000) == 3);   // 500(1000) 600(1000) 700(1000) = 3 s
+    CHECK(v.tones[0].ms == 1000);
+    CHECK(v.load(nullptr, 3, 44100) == 0);
+    CHECK(v.load(mel, 3, 1000) == 0);     // taxa absurda
+
+    // mix: trilha abaixa (sidechain) e o efeito soma; nunca estoura
+    int16_t buf[64];
+    for (int i = 0; i < 64; i++) buf[i] = 20000;
+    const SfxTone alto[] = {{1000, 100}};
+    v.load(alto, 1, 44100);
+    v.mix(buf, 64, 100 * 200);
+    bool okRange = true, ducked = false;
+    for (int i = 0; i < 64; i++) {
+        if (buf[i] > 24000 || buf[i] < -24000) okRange = false;
+        if (buf[i] < 20000) ducked = true;
+    }
+    CHECK(okRange);
+    CHECK(ducked);
+    // sem efeito ativo o mix nao toca no bloco
+    v.stop();
+    for (int i = 0; i < 64; i++) buf[i] = 1234;
+    v.mix(buf, 64, 20000);
+    CHECK(buf[0] == 1234 && buf[63] == 1234);
+}
+
+// FrameSprite: varias caixas sujas no lugar da uniao (tremor da 4848)
+static void testDirtyRects() {
+    celer::DirtyRects<8> d;
+    celer::DirtyRect out[8];
+    CHECK(d.take(out, 480, 480) == 0);
+
+    // dois sprites em cantos opostos: 2 caixas, nao o vidro inteiro
+    d.add(0, 0, 31, 31);
+    d.add(440, 440, 479, 479);
+    CHECK(d.count() == 2);
+    CHECK(d.touchesAbove(10));
+    int n = d.take(out, 480, 480);
+    CHECK(n == 2);
+    CHECK(!d.any());
+
+    // vizinhas (gap < 8) e sobrepostas fundem; contida nao cria caixa
+    d.add(100, 100, 120, 120);
+    d.add(125, 100, 140, 120);   // 4 px de folga: funde
+    d.add(105, 105, 110, 110);   // contida
+    CHECK(d.count() == 1);
+    n = d.take(out, 480, 480);
+    CHECK(n == 1 && out[0].l == 100 && out[0].r == 140);
+
+    // cascata: uma caixa que cresce engole as que passou a tocar
+    d.add(0, 0, 10, 10);
+    d.add(40, 0, 50, 10);
+    d.add(80, 0, 90, 10);
+    CHECK(d.count() == 3);
+    d.add(5, 0, 85, 10);         // ponte entre as tres
+    CHECK(d.count() == 1);
+    d.clear();
+
+    // estouro de K: funde na que menos cresce, nunca perde area
+    for (int i = 0; i < 12; i++) d.add(i * 40, i * 40, i * 40 + 4, i * 40 + 4);
+    CHECK(d.count() <= 8);
+    n = d.take(out, 480, 480);
+    bool covered = true;
+    for (int i = 0; i < 12; i++) {
+        const int x = i * 40 + 2, y = i * 40 + 2;
+        bool in = false;
+        for (int k = 0; k < n; k++)
+            if (x >= out[k].l && x <= out[k].r && y >= out[k].t && y <= out[k].b) in = true;
+        if (!in) covered = false;
+    }
+    CHECK(covered);
+
+    // recorte ao painel + caixas que ja cobrem a uniao saem como 1 push
+    d.add(-20, -20, 300, 479);
+    d.add(310, 0, 600, 479);
+    n = d.take(out, 480, 480);
+    CHECK(n == 1 && out[0].l == 0 && out[0].t == 0 && out[0].r == 479 && out[0].b == 479);
+
+    d.markAll(480, 480);
+    CHECK(d.count() == 1);
+    d.add(10, 10, 20, 20);       // caminho quente: contida na ultima
+    CHECK(d.count() == 1);
+}
+
+// deps.json (API 30): o parser antigo devolvia 0 pares para qualquer objeto
+static void testJsonMap() {
+    JsonStringPair p[8];
+    int n = celer::parseJsonStringMap("{\"celeros.engine\": \"1.2.0\", \"celeros.physics\": \"1.3.0\"}", p, 8);
+    CHECK(n == 2);
+    CHECK(p[0].key == "celeros.engine" && p[0].value == "1.2.0");
+    CHECK(p[1].key == "celeros.physics" && p[1].value == "1.3.0");
+    n = celer::parseJsonStringMap("{\"a\":\"1\",\"b\":\"2\"}", p, 8);   // compacto
+    CHECK(n == 2 && p[1].key == "b" && p[1].value == "2");
+    n = celer::parseJsonStringMap("{\n  \"a\": 3,\n  \"b\": {\"x\": 1},\n  \"c\": \"ok\"\n}", p, 8);
+    CHECK(n == 1 && p[0].key == "c" && p[0].value == "ok");   // nao-strings pulados
+    CHECK(celer::parseJsonStringMap("{}", p, 8) == 0);
+    CHECK(celer::parseJsonStringMap("", p, 8) == 0);
+    CHECK(celer::parseJsonStringMap("{\"a\":\"1\",\"b\":\"2\",\"c\":\"3\"}", p, 2) == 2);   // teto
+    n = celer::parseJsonStringMap("{\"k\\\"q\": \"v\"}", p, 8);   // aspa escapada na chave
+    CHECK(n == 1 && p[0].value == "v");
+    CHECK(celer::parseJsonStringMap("{\"a\":\"1\"", p, 8) == 1);   // truncado: o que deu
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -855,6 +984,9 @@ int main() {
     testDeviceStatsJson();
     testMusicEngine();
     testMusicHandoff();
+    testSfxVoice();
+    testDirtyRects();
+    testJsonMap();
     testNetFrame();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);

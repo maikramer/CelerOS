@@ -19,11 +19,9 @@ struct FileEntry {
     bool isDir;
 };
 
-// Par "chave":"valor" de um objeto JSON flat (deps.json do app).
-struct JsonStringPair {
-    std::string key;
-    std::string value;
-};
+// Par "chave":"valor" de um objeto JSON flat (deps.json do app): o tipo e
+// o parser vivem no header puro Utils/JsonMap.h (testado no host).
+#include "../Utils/JsonMap.h"
 
 class FileSystem {
 public:

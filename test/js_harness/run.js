@@ -685,6 +685,15 @@ function makeEnv() {
         log.push('[music] ' + musicState.totalMs + ' ms');
         return true;
     },
+    // API 32: efeito misturado (nao bloqueia) — log p/ assercoes
+    sfx: function(mel) {
+        if (!mel || !mel.length) return 0;
+        var n = typeof mel[0] === 'number' ? (mel.length > 2 ? Math.floor(mel.length / 2) : 1) : mel.length;
+        if (n > 24) n = 24;
+        musicState.sfx = (musicState.sfx || 0) + 1;
+        log.push('[sfx] ' + n + ' tons');
+        return n;
+    },
     musicStop: function() {
         var had = musicState.playing;
         musicState.playing = false;
