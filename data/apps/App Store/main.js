@@ -307,13 +307,22 @@ function countUpdates() {
 
 // atualizacoes primeiro; empate = ordem alfabetica
 function sortByUpdate() {
+    // chaves PRE-COMPUTADAS: o sort nativo do Duktape roda em preventyield
+    // (a janela do exec-timeout nao renova entre comparacoes) e o stateInfo
+    // por comparacao derrubou o app com RangeError no device com a CPU
+    // disputada (no 4848 que retransmite a malha). O delay renova a janela
+    // para o lote de stateInfo do decorate; as chaves sujam o cache mas o
+    // JSON.stringify pula undefined
+    System.delay(1);
+    for (var i = 0; i < apps.length; i++) {
+        apps[i]._u = stateInfo(apps[i]).code === "upd" ? 0 : 1;
+        apps[i]._n = (apps[i].name || "?").toLowerCase();
+    }
     apps.sort(function (a, b) {
-        var ua = stateInfo(a).code === "upd" ? 0 : 1;
-        var ub = stateInfo(b).code === "upd" ? 0 : 1;
-        if (ua !== ub) return ua - ub;
-        var x = a.name.toLowerCase(), y = b.name.toLowerCase();
-        return x < y ? -1 : (x > y ? 1 : 0);
+        if (a._u !== b._u) return a._u - b._u;
+        return a._n < b._n ? -1 : (a._n > b._n ? 1 : 0);
     });
+    for (var j = 0; j < apps.length; j++) { apps[j]._u = undefined; apps[j]._n = undefined; }
 }
 
 function refresh() {
@@ -441,6 +450,10 @@ function loadCatalog() {
         drawLoading("Baixando catálogo...", "todos os apps");
         System.delay(30);
         var all = fetchJSON(catsIdx["Todos"]);
+        // o parse do all.json (~50 KB no Duktape) conta na janela do
+        // exec-timeout: cede AQUI, antes do processamento da lista (um
+        // trecho so de parse+sort+stringify ja derrubou o app no device)
+        System.delay(1);
         if (all && all.apps) {
             gotAll = true;
             for (var pkg in all.apps) {
@@ -492,8 +505,12 @@ function loadCatalog() {
         apps.push(it);
     }
 
+    System.delay(1);   // refresh escaneia FS + ordena; cede antes do trecho
     refresh();
-    if (apps.length > 0) FS.writeTextFile(CACHE, JSON.stringify(apps));
+    if (apps.length > 0) {
+        System.delay(1);   // stringify do catalogo inteiro pro cache
+        FS.writeTextFile(CACHE, JSON.stringify(apps));
+    }
     return "list";
 }
 
@@ -504,6 +521,7 @@ function loadCache() {
     try { arr = JSON.parse(body); } catch (e) { arr = null; }
     if (!arr || !arr.length) return false;
     apps = arr;
+    System.delay(1);   // parse de ~50 KB + refresh sem yield derrubam a janela
     refresh();
     selIt = null;
     return true;
