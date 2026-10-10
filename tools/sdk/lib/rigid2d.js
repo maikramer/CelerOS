@@ -23,7 +23,7 @@ function absf(v) { return v < 0 ? -v : v; }
 function newBody() {
     return { alive: 0, shape: 0, awake: 0, touch: 0, x: 0, y: 0, a: 0, vx: 0, vy: 0, w: 0,
              hw: 0, hh: 0, invM: 0, invI: 0, mu: 0, e: 0, sleepT: 0, sx: 0, sy: 0, sa: 0,
-             hit: 0, c: 1, s: 0, bvx: 0, bvy: 0, bw: 0 };
+             hit: 0, c: 1, s: 0, ca: 0, bvx: 0, bvy: 0, bw: 0, br: 0 };
 }
 
 function newContact() {
@@ -72,6 +72,10 @@ function addBody(w, shape, x, y, hw, hh, a, density, mu, e) {
     b.hw = hw; b.hh = hh;
     b.mu = mu < 0 ? 0 : mu;
     b.e = clampf(e, 0, 1);
+    // espelho do header: raio envolvente e cos/sin em cache (o subStep so
+    // recalcula quem girou)
+    b.br = shape === CIRCLE ? hw : Math.sqrt(hw * hw + hh * hh);
+    b.c = Math.cos(a); b.s = Math.sin(a); b.ca = a;
     setMass(b, density);
     return i;
 }
@@ -286,13 +290,23 @@ function collideBoxCircle(Q, C, cs) {
 }
 
 // ------------------------------------------------------------- solver -----
-function boundR(b) { return b.shape === CIRCLE ? b.hw : Math.sqrt(b.hw * b.hw + b.hh * b.hh); }
+function boundR(b) { return b.br; }
 function moving(b) { return b.invM > 0 && b.awake; }
 function speedOf(b) { return Math.sqrt(b.vx * b.vx + b.vy * b.vy) + absf(b.w) * boundR(b); }
 
+// espelho do header: busca binaria no array de arbitros ORDENADO por
+// (a, b) — a fase larga so chama o narrow com i < j. Devolve o indice, ou
+// ~(ponto de insercao) quando nao existe
 function findArb(w, a, b) {
-    for (var k = 0; k < w.arb.length; k++) if (w.arb[k].a === a && w.arb[k].b === b) return k;
-    return -1;
+    var lo = 0, hi = w.arb.length;
+    while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        var ar = w.arb[mid];
+        if (ar.a < a || (ar.a === a && ar.b < b)) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < w.arb.length && w.arb[lo].a === a && w.arb[lo].b === b) return lo;
+    return ~lo;
 }
 
 function narrow(w, ia, ib) {
@@ -306,11 +320,11 @@ function narrow(w, ia, ib) {
         if (r) { r.nx = -r.nx; r.ny = -r.ny; }
     }
     if (!r || r.n === 0) return;
-    var k = findArb(w, ia, ib);
+    var k = findArb(w, ia, ib);  // so pares com contato pagam a busca
     if (k < 0) {
         if (w.arb.length >= K.MAX_ARB) return;
-        k = w.arb.length;
-        w.arb.push({ a: ia, b: ib, n: 0, live: 0, nx: 0, ny: 0, mu: 0, e: 0, c: [] });
+        k = ~k;  // entra ja na posicao ordenada (invariante da busca binaria)
+        w.arb.splice(k, 0, { a: ia, b: ib, n: 0, live: 0, nx: 0, ny: 0, mu: 0, e: 0, c: [] });
     }
     var ar = w.arb[k];
     for (var i = 0; i < r.n; i++) {
@@ -332,7 +346,7 @@ function subStep(w, dt, gx, gy) {
     for (i = 0; i < w.nBodies; i++) {
         b = w.bodies[i];
         if (!b.alive) continue;
-        b.c = Math.cos(b.a); b.s = Math.sin(b.a);
+        if (b.a !== b.ca) { b.c = Math.cos(b.a); b.s = Math.sin(b.a); b.ca = b.a; }
         if (!moving(b)) continue;
         if (b.shape === CIRCLE && b.touch) b.w *= 1 / (1 + dt * K.ROLL_DAMP);
         b.touch = 0;
@@ -521,6 +535,17 @@ function step(w, dt, gx, gy, maxSub) {
 function setBody(w, i, x, y, a, vx, vy, av) {
     if (i < 0 || i >= w.nBodies || !w.bodies[i].alive) return false;
     var b = w.bodies[i];
+    // acordar quem encostava no ANTIGO lugar (espelho do header): pilha
+    // dormida nao tem arbitro — a fase larga pula par todo dormindo —
+    // entao o vizinho e achado por proximidade
+    var ra = boundR(b);
+    for (var k = 0; k < w.nBodies; k++) {
+        var o = w.bodies[k];
+        if (k === i || !o.alive || o.invM <= 0) continue;
+        var rb = ra + boundR(o);
+        var dx = o.x - b.x, dy = o.y - b.y;
+        if (dx * dx + dy * dy <= rb * rb) { o.awake = 1; o.sleepT = 0; }
+    }
     b.x = x; b.y = y; b.a = a;
     b.vx = vx; b.vy = vy; b.w = av;
     b.awake = 1; b.sleepT = 0;

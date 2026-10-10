@@ -62,8 +62,10 @@ struct Body {
     float sleepT;
     float sx, sy, sa;       // ancora do sono (onde estava quando parou)
     float hit;              // maior impulso de impacto do ultimo step
-    float c, s;             // cos/sin de a (cache do sub-passo)
+    float c, s;             // cos/sin de a (cache: valem para o angulo ca)
+    float ca;
     float bvx, bvy, bw;     // pseudo-velocidade da correcao de posicao
+    float br;               // raio envolvente (fixo: a forma nao muda)
 };
 
 struct Contact {
@@ -142,6 +144,10 @@ inline int addBody(World* w, uint8_t shape, float x, float y, float hw, float hh
     b.hw = hw; b.hh = hh;
     b.mu = mu < 0 ? 0 : mu;
     b.e = clampf(e, 0, 1);
+    // fase larga, speedOf e o anti-tunel leem o raio a cada par/sub-passo:
+    // o sqrt da caixa sai uma vez aqui
+    b.br = shape == CIRCLE ? hw : sqrtf(hw * hw + hh * hh);
+    b.c = cosf(a); b.s = sinf(a); b.ca = a;
     setMass(b, density);
     return i;
 }
@@ -376,15 +382,24 @@ inline int collideBoxCircle(const Body& Q, const Body& C, Contact* cs, float* nx
 
 // ------------------------------------------------------------- solver -----
 
-inline float boundR(const Body& b) {
-    return b.shape == CIRCLE ? b.hw : sqrtf(b.hw * b.hw + b.hh * b.hh);
-}
+inline float boundR(const Body& b) { return b.br; }
 
+// busca o arbitro do par (a < b) no array ORDENADO por (a, b) — a fase
+// larga so chama o narrow com i < j do duplo laco ordenado, entao a chave
+// do par e' canonica. Devolve o indice, ou ~(ponto de insercao) quando nao
+// existe (molde do lower_bound); quem cria insere ja no lugar (narrow).
+// Antes era varredura linear por par colidente por sub-passo (~1M+ de
+// comparacoes por quadro em cena densa)
 inline int findArb(World* w, int a, int b) {
-    for (int k = 0; k < w->nArb; k++) {
-        if (w->arb[k].a == a && w->arb[k].b == b) return k;
+    int lo = 0, hi = w->nArb;
+    while (lo < hi) {
+        int mid = (lo + hi) >> 1;
+        const Arbiter& ar = w->arb[mid];
+        if (ar.a < a || (ar.a == a && ar.b < b)) lo = mid + 1;
+        else hi = mid;
     }
-    return -1;
+    if (lo < w->nArb && w->arb[lo].a == a && w->arb[lo].b == b) return lo;
+    return ~lo;
 }
 
 // colide o par (a < b) e atualiza/cria o arbitro com warm start
@@ -404,11 +419,14 @@ inline void narrow(World* w, int ia, int ib) {
         n = collideBoxCircle(B, A, cs, &nx, &ny);
         nx = -nx; ny = -ny;      // normal sempre de A para B
     }
-    int k = findArb(w, ia, ib);
     if (n == 0) return;          // arbitro velho (se existe) morre no fim do sub-passo
+    int k = findArb(w, ia, ib);  // so pares com contato pagam a busca
     if (k < 0) {
         if (w->nArb >= kMaxArbiters) return;
-        k = w->nArb++;
+        k = ~k;                  // entra ja na posicao ordenada: a ordem e
+                                 // invariante dos arbitros (busca binaria)
+        if (k < w->nArb) memmove(&w->arb[k + 1], &w->arb[k], sizeof(Arbiter) * (size_t)(w->nArb - k));
+        w->nArb++;
         Arbiter& nw = w->arb[k];
         nw.a = (int16_t)ia; nw.b = (int16_t)ib; nw.n = 0;
     }
@@ -446,7 +464,9 @@ inline void subStep(World* w, float dt, float gx, float gy) {
     for (int i = 0; i < w->nBodies; i++) {
         Body& b = w->bodies[i];
         if (!b.alive) continue;
-        b.c = cosf(b.a); b.s = sinf(b.a);
+        // so quem girou paga cos/sin (libm em software no S3; estatico e
+        // dormindo — a maior parte do castelo — nunca mudam o angulo)
+        if (b.a != b.ca) { b.c = cosf(b.a); b.s = sinf(b.a); b.ca = b.a; }
         if (!moving(b)) continue;
         // rolamento: o atrito do contato amarra v a w — frear w freia a bola
         if (b.shape == CIRCLE && b.touch) b.w *= 1.0f / (1.0f + dt * kRollDamp);
@@ -473,7 +493,8 @@ inline void subStep(World* w, float dt, float gx, float gy) {
             narrow(w, i, j);
         }
     }
-    // arbitros sem contato neste sub-passo saem
+    // arbitros sem contato neste sub-passo saem (compactacao preserva a
+    // ordem: o array e ordenado por par — ver findArb)
     int keep = 0;
     for (int k = 0; k < w->nArb; k++) {
         if (!w->arb[k].live) continue;
@@ -668,6 +689,22 @@ inline int step(World* w, float dt, float gx, float gy, int maxSub) {
 inline bool setBody(World* w, int i, float x, float y, float a, float vx, float vy, float av) {
     if (i < 0 || i >= w->nBodies || !w->bodies[i].alive) return false;
     Body& b = w->bodies[i];
+    // acordar quem encostava no ANTIGO lugar do corpo (posicao ainda nao
+    // trocada): o que estava em cima precisa cair. Nao da para acordar so
+    // os parceiros de arbitro — pilha dormida nao tem arbitro nenhum (a
+    // fase larga pula par todo dormindo e o contato morre na compactacao),
+    // entao o vizinho e' achado por proximidade (circulo envolvente, a
+    // mesma metrica da fase larga). Mais preciso que o wakeAll do
+    // removeBody: setBody roda a cada quadro de arrasto e acordar o mundo
+    // inteiro toda vez acabaria com o sono
+    float ra = boundR(b);
+    for (int k = 0; k < w->nBodies; k++) {
+        Body& o = w->bodies[k];
+        if (k == i || !o.alive || o.invM <= 0) continue;
+        float rb = ra + boundR(o);
+        float dx = o.x - b.x, dy = o.y - b.y;
+        if (dx * dx + dy * dy <= rb * rb) { o.awake = 1; o.sleepT = 0; }
+    }
     b.x = x; b.y = y; b.a = a;
     b.vx = vx; b.vy = vy; b.w = av;
     b.awake = 1; b.sleepT = 0;

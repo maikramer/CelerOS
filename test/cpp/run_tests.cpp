@@ -16,6 +16,7 @@
 #include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
 #include "../../main/Utils/Rigid2D.h"
+#include "../../main/Utils/Verlet2D.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -1045,6 +1046,91 @@ static void testRigid2D() {
     CHECK(!removeBody(&W, ids[4]));
     CHECK(addBody(&W, BOX, 10, 10, 2, 2, 0, 1, 0.5f, 0) == ids[4]);
     CHECK(addBody(&W, BOX, 0, 0, 0, 2, 0, 1, 0.5f, 0) == -1);   // medida invalida
+
+    // setBody (teleporte) acorda quem estava em cima do ANTIGO lugar: pilha
+    // dormida nao tem arbitro nenhum (a fase larga pula par todo dormindo e
+    // o contato morre na compactacao), entao acordar so os parceiros de
+    // arbitro nao pegaria o carona — o vizinho e achado por proximidade
+    static World S;
+    worldInit(&S, 10);
+    int suporte = addBody(&S, BOX, 160, 200, 40, 10, 0, 0, 0.7f, 0);
+    int carona = addBody(&S, BOX, 160, 180, 10, 10, 0, 1, 0.7f, 0);
+    for (int t = 0; t < 120; t++) step(&S, 1 / 30.f, 0, 400, 12);
+    CHECK(!S.bodies[carona].awake);      // assentou em cima do suporte e dormiu
+    CHECK(S.nArb == 0);                  // sem arbitro: o par e todo dormente
+    float ySono = S.bodies[carona].y;
+    CHECK(setBody(&S, suporte, 400, 300, 0, 0, 0, 0));  // suporte sai de baixo
+    CHECK(S.bodies[carona].awake);       // acordou na hora do teleporte
+    for (int t = 0; t < 120; t++) step(&S, 1 / 30.f, 0, 400, 12);
+    CHECK(S.bodies[carona].y > ySono + 40);   // e caiu de verdade (sem flutuar)
+
+    // cache de cos/sin (so quem girou recalcula) e do raio envolvente: o
+    // cache sempre vale para o angulo ca, parado/estatico fica no angulo
+    // atual, e o teleporte com giro novo e' visto no proximo sub-passo
+    bool cacheOk = true;
+    for (int i = 0; i < S.nBodies; i++) {
+        const Body& b = S.bodies[i];
+        if (!b.alive) continue;
+        if (b.c != cosf(b.ca) || b.s != sinf(b.ca)) cacheOk = false;
+        if (b.shape == BOX && b.br != sqrtf(b.hw * b.hw + b.hh * b.hh)) cacheOk = false;
+        if ((!b.awake || b.invM == 0) && b.ca != b.a) cacheOk = false;
+    }
+    CHECK(cacheOk);
+    CHECK(setBody(&S, suporte, 400, 300, 0.7f, 0, 0, 0));
+    step(&S, 1 / 30.f, 0, 400, 12);
+    CHECK(fabsf(S.bodies[suporte].c - cosf(S.bodies[suporte].ca)) < 1e-7f &&
+          fabsf(S.bodies[suporte].ca - 0.7f) < 0.05f);
+}
+
+// Verlet nativo (API 31): Utils/Verlet2D.h — o mesmo codigo do
+// System.verlet* (JsPhysics.cpp). O corte do vinculo (delStick) devolve a
+// colisao ao par: a bitmask de vinculados e' recompute (relinkAll); o
+// swap-remove antigo nao limpava a marca e o pedaco cortado parava de
+// colidir para sempre
+static void testVerlet2D() {
+    using namespace celer::verlet;
+    // layout do malloc do binding: VWorld + bitmask linked no mesmo buffer
+    static uint8_t mem[sizeof(VWorld) + kLinkBytes];
+    memset(mem, 0, sizeof(mem));
+    VWorld* w = (VWorld*)mem;
+    w->iterations = 4;
+    w->radius = 5;
+    w->linked = mem + sizeof(VWorld);
+    auto addPt = [&](float x, float y) {
+        VerletPoint& p = w->pts[w->nPts];
+        p.x = p.px = x; p.y = p.py = y; p.pin = false;
+        return w->nPts++;
+    };
+    int p0 = addPt(100, 100), p1 = addPt(103, 100);   // dist 3 < 2r = 10
+    int p2 = addPt(200, 100), p3 = addPt(203, 100);   // par de controle
+
+    // sem vinculo: o par se separa ate 2r (gravidade 0, pontos em repouso)
+    stepWorld(w, 1 / 30.f, 0, 0, 1, 0, 0, 0, 0, 0.5f);
+    float d01 = fabsf(w->pts[p1].x - w->pts[p0].x);
+    CHECK(d01 > 9 && d01 < 11);
+
+    // volta a sobrepor e liga os DOIS pares: vinculo suprime a colisao
+    w->pts[p0].x = w->pts[p0].px = 100; w->pts[p1].x = w->pts[p1].px = 103;
+    w->pts[p2].x = w->pts[p2].px = 200; w->pts[p3].x = w->pts[p3].px = 203;
+    w->sticks[w->nSticks++] = VerletStick{(int16_t)p0, (int16_t)p1, 3.0f};
+    w->sticks[w->nSticks++] = VerletStick{(int16_t)p2, (int16_t)p3, 3.0f};
+    linkSet(w, p0, p1); linkSet(w, p1, p0);
+    linkSet(w, p2, p3); linkSet(w, p3, p2);
+    stepWorld(w, 1 / 30.f, 0, 0, 1, 0, 0, 0, 0, 0.5f);
+    CHECK(fabsf(w->pts[p1].x - w->pts[p0].x) < 3.5f);   // colisao suprimida
+    CHECK(fabsf(w->pts[p3].x - w->pts[p2].x) < 3.5f);
+    CHECK(linked(w, p0, p1) && linked(w, p1, p0));
+
+    // corta o vinculo 0 (o swap-remove traz o ultimo p/ o lugar): o par
+    // volta a colidir, o vinculo que sobrou segue segurando o seu par
+    CHECK(delStick(w, 0));
+    CHECK(!linked(w, p0, p1) && !linked(w, p1, p0));    // bitmask limpa
+    CHECK(linked(w, p2, p3) && linked(w, p3, p2));      // a outra marca fica
+    stepWorld(w, 1 / 30.f, 0, 0, 1, 0, 0, 0, 0, 0.5f);
+    d01 = fabsf(w->pts[p1].x - w->pts[p0].x);
+    CHECK(d01 > 9 && d01 < 11);                         // colisao voltou
+    CHECK(fabsf(w->pts[p3].x - w->pts[p2].x) < 3.5f);   // o par ligado nao
+    CHECK(!delStick(w, -1) && !delStick(w, 1));         // indice invalido
 }
 
 int main() {
@@ -1064,6 +1150,7 @@ int main() {
     testJsonMap();
     testNetFrame();
     testRigid2D();
+    testVerlet2D();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;
