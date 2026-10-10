@@ -100,9 +100,9 @@ for (const c of CASES) {
   check('app.json invalido', got['erro:appjson'] === 7, 'esperado 7 erros appjson, obtido ' + fmt(got));
 }
 
-// Teto de main.js em 2 niveis (48KB geral; 128KB com "psram" em requires).
-// Fixtures gerados em tmpdir: o tamanho e so um statSync, entao um comentario
-// gigante basta — nada de blobs de padding commitados no repo.
+// Teto de main.js em 2 niveis (48KB geral; 128KB com "psram" em requires),
+// contado pelo tamanho ENXUTO (jsstrip): o padding dos fixtures e CODIGO
+// REAL (repetido), porque comentario gigante enxuga a zero e nao pesa mais.
 {
   const os = require('os');
   const tmpApp = (parent, appJson, mainBytes, mainSrc, extraFiles) => {
@@ -115,7 +115,7 @@ for (const c of CASES) {
     };
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(Object.assign(base, appJson)));
     fs.writeFileSync(path.join(dir, 'main.js'),
-      mainSrc !== undefined ? mainSrc : '/*' + 'x'.repeat(Math.max(0, mainBytes - 4)) + '*/');
+      mainSrc !== undefined ? mainSrc : 'System.delay(1);\n'.repeat(Math.ceil(mainBytes / 17)));
     for (const [n, c] of Object.entries(extraFiles || {})) {
       fs.writeFileSync(path.join(dir, n), c);
     }
@@ -138,6 +138,15 @@ for (const c of CASES) {
   got = countsOf(dir);
   check('teto: 1030KB com requires psram = erro (teto absoluto 1MB)',
     got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // main.js GORDO DE COMENTARIO (~67KB cru) enxuga a ~30B e passa limpo:
+  // e o que o publish sobe e o aparelho compila
+  dir = tmpApp(os.tmpdir(), {}, 0,
+    ('// ' + 'x'.repeat(96) + '\n').repeat(700) + 'System.delay(100);\n');
+  got = countsOf(dir);
+  check('teto: main.js de comentarios (60KB cru, ~0 enxuto) = limpo',
+    fmt(got) === '{}', fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
   dir = tmpApp(os.tmpdir(), { requires: ['psram', 'bluetooth'] }, 100);
@@ -170,14 +179,14 @@ for (const c of CASES) {
   fs.rmSync(dir, { recursive: true, force: true });
 
   dir = tmpApp(os.tmpdir(), { api: 23 }, 40 * 1024, undefined,
-    { 'mod.js': '/*' + 'y'.repeat(20 * 1024 - 4) + '*/' });
+    { 'mod.js': 'System.delay(1);\n'.repeat(Math.ceil(20 * 1024 / 17)) });
   got = countsOf(dir);
   check('modulos: soma 40+20KB sem psram = erro pela soma',
     got['erro:appjson'] === 1, fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
   dir = tmpApp(os.tmpdir(), { api: 23, requires: ['psram'] }, 40 * 1024, undefined,
-    { 'mod.js': '/*' + 'y'.repeat(20 * 1024 - 4) + '*/' });
+    { 'mod.js': 'System.delay(1);\n'.repeat(Math.ceil(20 * 1024 / 17)) });
   got = countsOf(dir);
   check('modulos: soma 60KB com psram = limpo', fmt(got) === '{}', fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });

@@ -165,7 +165,7 @@ function cmdNew(args) {
 // Versao interna de um modulo da engine (var X = { version: 'x.y.z' }).
 function engineVersion(file) {
     const m = fs.readFileSync(path.join(ENGINE_DIR, file), 'utf8')
-        .match(/version:\s*'([^']+)'/);
+        .match(/version\s*:\s*['"]([^'"]+)['"]/);
     return m ? m[1] : '0.0.0';
 }
 
@@ -195,11 +195,11 @@ function cmdDeps(args) {
     const meta = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
     const deps = meta.deps || {};
 
-    // versao local (canonica do SDK) p/ cada nome conhecido
+    // versao local (canonica do SDK) de CADA modulo da arvore — nao so
+    // engine/physics: grid/sfx/mesh existem e sao deps igualmente
     const local = {};
-    for (const n of ['celeros.engine', 'celeros.physics']) {
-        const f = path.join(ENGINE_DIR, n + '.js');
-        if (fs.existsSync(f)) local[n] = engineVersion(n + '.js');
+    for (const f of fs.readdirSync(ENGINE_DIR).filter((n) => n.endsWith('.js'))) {
+        local[f.slice(0, -3)] = engineVersion(f);
     }
 
     fetchHubDeps((hub) => {
@@ -389,6 +389,20 @@ function cmdCheck() {
     }
     for (const n of missing) {
         console.log('aviso: ' + n + ' nao renderiza no emulador (wire do renderer sem a primitiva)');
+    }
+
+    // 4) drift das deps compartilhadas repo x hub (aviso — nao trava o
+    // gate; `celerhub.py deps-status` sai 1 quando quiser travar)
+    const dep = spawnSync('python3', [path.join(ROOT, 'tools', 'celerhub.py'), 'deps-status'],
+                          { encoding: 'utf8', timeout: 90000 });
+    if (dep.status === 1) {
+        console.log('aviso: deps compartilhadas com drift repo x hub (publish-dep resolve):');
+        for (const l of String(dep.stdout || '').trim().split('\n')) console.log('      ' + l);
+    } else if (dep.status !== 0 || dep.error) {
+        console.log('deps: hub inalcancavel — drift repo x hub nao checado '
+                    + '(rode `python3 tools/celerhub.py deps-status`)');
+    } else {
+        console.log('deps: tools/sdk/engine em paridade com o hub');
     }
 
     process.exit(errors ? 1 : 0);

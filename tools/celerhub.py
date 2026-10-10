@@ -21,6 +21,7 @@ Exemplos:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -85,6 +86,69 @@ MAX_APP_DEPS = 8
 
 def vtuple(v):
     return tuple(int(p) for p in v.split("."))
+
+
+def read_dep_version(text, origin="modulo"):
+    """Versao semver declarada no modulo (`var X = { version: 'x.y.z' }`).
+    Aceita aspas simples OU dupla; versoes DISTINTAS no mesmo arquivo sao
+    ambiguidade — antes a primeira `version: '...'` vencia calada e o
+    publish subia a versao errada."""
+    found = re.findall(r"version\s*:\s*(['\"])(\d+\.\d+\.\d+)\1", text)
+    if not found:
+        die(f"{origin}: sem `version: 'x.y.z'` declarado (ou use --version)")
+    vers = sorted({v for _, v in found}, key=vtuple)
+    if len(vers) > 1:
+        die(f"{origin}: versoes distintas no arquivo ({', '.join(vers)}) — "
+            f"deixe so a do objeto exportado")
+    return vers[0]
+
+
+def local_engine_deps(engine_dir=None):
+    """{nome: (versao, Path)} de cada tools/sdk/engine/*.js — a arvore local
+    canonica das deps compartilhadas."""
+    d = Path(engine_dir) if engine_dir else \
+        Path(__file__).resolve().parent / "sdk" / "engine"
+    out = {}
+    for f in sorted(d.glob("*.js")):
+        out[f.stem] = (read_dep_version(f.read_text(encoding="utf-8"), f.name), f)
+    return out
+
+
+def deps_status_report(local, hub, divergent=None):
+    """Drift repo x hub, logica pura (testavel): devolve (linhas, drift).
+    `local` = {nome: versao}; `hub` = {nome: {versao: meta}} do indice
+    /store/deps.json; `divergent` = nomes com mesma versao no hub mas
+    conteudo diferente (md5 do enxuto, calculado pelo chamador).
+    Vereditos: REPO NAO PUBLICADO (a versao do repo nunca foi ao hub — o
+    resolve do install segue servindo a antiga), REPO ATRASADO, CONTEUDO
+    DIVERGE (edicao sem bump; so --force cobre), ok."""
+    divergent = divergent or set()
+    linhas, drift = [], 0
+    for name in sorted(local):
+        lv = local[name]
+        versions = hub.get(name) or {}
+        if not versions:
+            linhas.append(f"{name:22} {lv:8} {'-':8} NAO PUBLICADA no hub")
+            drift += 1
+            continue
+        hv = max(versions, key=vtuple)
+        if vtuple(lv) > vtuple(hv):
+            linhas.append(f"{name:22} {lv:8} {hv:8} REPO NAO PUBLICADO "
+                          f"(hub serve a {hv}): publish-dep {name}.js")
+            drift += 1
+        elif vtuple(lv) < vtuple(hv):
+            linhas.append(f"{name:22} {lv:8} {hv:8} REPO ATRASADO (hub na frente)")
+            drift += 1
+        elif name in divergent:
+            linhas.append(f"{name:22} {lv:8} {hv:8} CONTEUDO DIVERGE na mesma "
+                          f"versao (edicao sem bump): publish-dep --force")
+            drift += 1
+        else:
+            linhas.append(f"{name:22} {lv:8} {hv:8} ok")
+    for name in sorted(set(hub) - set(local)):
+        linhas.append(f"{name:22} {'-':8} {max(hub[name], key=vtuple):8} "
+                      f"sem fonte local em tools/sdk/engine")
+    return linhas, drift
 
 
 def range_satisfies(rng, version):
@@ -225,9 +289,13 @@ def package_files(folder: Path):
     return out
 
 
-def validate(folder: Path):
+def validate(folder: Path, strip=True):
     """Confere o pacote localmente; devolve (meta, avisos, size, extras).
-    Devolve erros via die."""
+    Devolve erros via die. `strip`: a soma dos .js (e os tetos de
+    stream-safe) contam o tamanho ENXUTO, como o publish sobe e o aparelho
+    compila — o cru tem comentario/indentacao e bloqueava com mensagem
+    errada ANTES do strip provar o contrario (main.js de 60KB cru que vira
+    40KB enxuto morria com "acima de 48KB")."""
     avisos = []
     meta_path, code_path, icon_path = (folder / "app.json", folder / "main.js", folder / "icon.png")
     if not meta_path.is_file() or not code_path.is_file():
@@ -261,11 +329,16 @@ def validate(folder: Path):
         die(f"{folder}: requires invalido (valores: {', '.join(VALID_REQUIRES)})")
 
     # Teto em 2 niveis pela SOMA dos .js (main.js + modulos): e a soma que
-    # ocupa a RAM de compile no device. Assets (nao-.js) tem tetos proprios.
+    # ocupa a RAM de compile no device. Contada pelo tamanho ENXUTO (como o
+    # publish sobe e o aparelho compila) — ver docstring. Assets (nao-.js)
+    # tem tetos proprios.
     extras = package_files(folder)
     if len(extras) > MAX_EXTRA_FILES:
         die(f"{folder}: {len(extras)} arquivos extras (max {MAX_EXTRA_FILES})")
-    js_sum = code_path.stat().st_size
+    js_sizes = {}
+    for f in [code_path] + [p for n, p in extras.items() if n.endswith(".js")]:
+        js_sizes[f] = len(strip_js(f)) if strip else f.stat().st_size
+    js_sum = sum(js_sizes.values())
     assets_total = 0
     for n, p in extras.items():
         if not FILE_NAME_RE.match(n) or p.suffix.lower() not in ASSET_EXTS:
@@ -275,9 +348,8 @@ def validate(folder: Path):
         if size_n > MAX_ASSET_FILE:
             die(f"{folder}: {n} tem {size_n}B (max {MAX_ASSET_FILE}B)")
         if n.endswith(".js"):
-            js_sum += size_n
-            if size_n > STREAM_SAFE_MAIN_JS and api < 6:
-                die(f"{folder}: {n} > {STREAM_SAFE_MAIN_JS}B exige api >= 6 "
+            if js_sizes[p] > STREAM_SAFE_MAIN_JS and api < 6:
+                die(f"{folder}: {n} enxuto > {STREAM_SAFE_MAIN_JS}B exige api >= 6 "
                     f"(firmware antigo trunca o download em 32KB)")
         else:
             assets_total += size_n
@@ -306,14 +378,14 @@ def validate(folder: Path):
                               f"a copia local vence no require (vendoring desnecessario)")
 
     if js_sum > MAX_MAIN_JS_PSRAM:
-        die(f"{folder}: soma dos .js ({js_sum}B) acima do teto absoluto "
+        die(f"{folder}: soma dos .js enxutos ({js_sum}B) acima do teto absoluto "
             f"({MAX_MAIN_JS_PSRAM}B)")
     if js_sum > MAX_MAIN_JS and "psram" not in requires:
-        die(f"{folder}: soma dos .js ({js_sum}B): acima de {MAX_MAIN_JS}B exige "
+        die(f"{folder}: soma dos .js enxutos ({js_sum}B): acima de {MAX_MAIN_JS}B exige "
             f"\"psram\" em requires no app.json (sem PSRAM a RAM interna "
             f"nao fecha o compile)")
-    if code_path.stat().st_size > STREAM_SAFE_MAIN_JS and api < 6:
-        die(f"{folder}: main.js > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
+    if js_sizes[code_path] > STREAM_SAFE_MAIN_JS and api < 6:
+        die(f"{folder}: main.js enxuto > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
             f"app.json (firmware antigo trunca o download em 32KB)")
     if icon_path.is_file():
         isz = icon_path.stat().st_size
@@ -322,6 +394,42 @@ def validate(folder: Path):
     else:
         avisos.append("sem icon.png (o launcher usa gradiente+inicial)")
     return meta, avisos, js_sum, extras
+
+
+# ------------------------------------------------------------- deps-status -
+def cmd_deps_status(args):
+    """Drift das deps compartilhadas: tools/sdk/engine/*.js (canonica do
+    repo) x o indice do hub. Nasceu do buraco real: engine 1.2.2 commitada
+    no repo (d4e4d53) enquanto o hub resolve ^1.2.0 para a 1.2.1 — nenhum
+    comando apontava, e a bancada testava uma engine que os devices nunca
+    recebiam. Exit 1 quando ha drift (servivel de CI/gate)."""
+    local = local_engine_deps(args.engine_dir)
+    if not local:
+        die("tools/sdk/engine sem *.js — nada a comparar")
+    if args.index:
+        idx = json.loads(Path(args.index).read_text(encoding="utf-8"))
+    else:
+        _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+    hub = idx.get("deps", {})
+    # mesma versao no hub mas bytes diferentes = edicao sem bump: o md5 do
+    # hub e do .js ENXUTO (e assim que o publish-dep sobe)
+    divergent = set()
+    for name, (lv, f) in local.items():
+        dmeta = (hub.get(name) or {}).get(lv)
+        if not dmeta or not dmeta.get("md5"):
+            continue
+        if hashlib.md5(strip_js(f)).hexdigest() != dmeta["md5"]:
+            divergent.add(name)
+    linhas, drift = deps_status_report({n: v for n, (v, _) in local.items()},
+                                       hub, divergent)
+    print(f"{'dep':22} {'local':8} {'hub':8} veredito")
+    for l in linhas:
+        print(l)
+    total = len(local)
+    if drift:
+        print(f"drift: {drift} de {total} dep(s) — publish-dep resolve")
+        sys.exit(1)
+    print(f"ok: {total} dep(s) em paridade com o hub")
 
 
 # ----------------------------------------------------------------- publish -
@@ -337,7 +445,7 @@ def cmd_publish(args):
     rc = 0
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
-        meta, avisos, js_sum, extras = validate(folder)
+        meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip)
         # .js do pacote sobem ENXUTOS (como o aparelho compila): a soma do
         # teto passa a contar o tamanho real; o fonte comentado fica no repo
         enxutos = {}
@@ -438,8 +546,9 @@ def cmd_publish_dep(args):
     preservadas (o "line N" do erro bate com o fonte do repo). O hub mede o
     .js recebido no teto de compile e o aparelho enxuga do mesmo jeito antes
     de compilar — o tamanho medido vira o custo real em RAM (a engine 1.2
-    cai de 54 KB crus para 32 KB). --sem-strip sobe o fonte como esta."""
-    tok = token_or_die(args)
+    cai de 54 KB crus para 32 KB). --sem-strip sobe o fonte como esta.
+    --dry roda offline (valida sintaxe/versao e mostra o que subiria)."""
+    tok = "" if args.dry else token_or_die(args)  # dry roda offline
     src = Path(args.file).expanduser().resolve()
     if not src.is_file():
         die(f"{src}: arquivo nao encontrado")
@@ -447,11 +556,25 @@ def cmd_publish_dep(args):
     if not DEP_NAME_RE.match(name):
         die(f"nome de dep invalido: {name} (use prefixo.nome, ex: celeros.engine)")
     text = src.read_text(encoding="utf-8")
-    m = re.search(r"version:\s*'([^']+)'", text)
-    version = args.version or (m.group(1) if m else "")
+    version = args.version or read_dep_version(text, src.name)
     if not VER_RE.match(version or ""):
         die(f"versao invalida: {version!r} (declare no modulo "
             f"version: 'x.y.z' ou use --version)")
+    # sintaxe de verdade antes de subir: dep quebrada quebra TODOS os apps
+    # que a require (cache publico compartilhado)
+    chk = subprocess.run(["node", "--check", str(src)], capture_output=True, text=True)
+    if chk.returncode != 0:
+        detalhe = (chk.stderr or chk.stdout).strip().splitlines()
+        die(f"{src.name}: sintaxe invalida no node --check: "
+            f"{detalhe[-1] if detalhe else 'sem detalhe'}")
+    # pre-flight contra o indice: mesma versao ja publicada so passa com
+    # --force explicito (antes moria no 409 do servidor, com rede, e a
+    # mensagem nao dizia o que fazer)
+    if not args.dry and not args.force:
+        _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+        if ((idx.get("deps", {}).get(name) or {}).get(version)):
+            die(f"dep {name} v{version} ja esta no hub — suba a version no "
+                f"modulo ou use --force para substituir")
     sub = {}
     for pair in args.dep or []:
         if "=" not in pair:
@@ -472,6 +595,14 @@ def cmd_publish_dep(args):
             die(f"jsstrip falhou: {out.stderr.decode('utf-8', 'replace').strip()}")
         print(f"{name}: {len(code)}B -> {len(out.stdout)}B enxuto (linhas preservadas)")
         code = out.stdout
+    md5_local = hashlib.md5(code).hexdigest()
+
+    if args.dry:
+        sub_s = json.dumps(sub) if sub else "-"
+        print(f"[dry] dep {name} v{version}: {len(code)}B, md5 {md5_local[:8]}..., "
+              f"minApi {args.min_api}, deps {sub_s}")
+        print(f"      iria para {hub_url(args)}/admin/deps (token dispensado no dry)")
+        return
 
     with tempfile.TemporaryDirectory() as td:
         zpath = Path(td) / "dep.zip"
@@ -499,6 +630,8 @@ def cmd_publish_dep(args):
                   headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
     print(f"ok: dep {out.get('dep')} v{out.get('version')} publicada "
           f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}...)")
+    if str(out.get("md5", "")) != md5_local:
+        print(f"aviso: md5 do hub diverge do enviado — republice ou investigue")
     print(f"    {out.get('url')}")
 
 
@@ -596,10 +729,19 @@ def main():
                    help="CELEROS_API_LEVEL minimo do device (default: 1)")
     p.add_argument("--dep", action="append", metavar="NOME=RANGE",
                    help="dep transitiva (repetivel)")
+    p.add_argument("--dry", action="store_true",
+                   help="mostra o que subiria (nome/versao/tamanho/md5), sem enviar")
     p.add_argument("--force", action="store_true", help="republica a versao")
     p.add_argument("--sem-strip", action="store_true", dest="no_strip",
                    help="sobe o fonte com comentarios (padrao: enxuto como o aparelho compila)")
     p.set_defaults(fn=cmd_publish_dep)
+
+    p = sub.add_parser("deps-status", help="drift tools/sdk/engine x hub (exit 1 se houver)")
+    p.add_argument("--index", default=None,
+                   help="deps.json local em vez do hub (offline/testes)")
+    p.add_argument("--engine-dir", default=None, dest="engine_dir",
+                   help="diretorio de fontes (default: tools/sdk/engine)")
+    p.set_defaults(fn=cmd_deps_status)
 
     p = sub.add_parser("list", help="lista o catalogo e compara com o repo")
     p.set_defaults(fn=cmd_list)

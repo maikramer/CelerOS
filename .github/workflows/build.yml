@@ -45,6 +45,8 @@ jobs:
         run: |
           pip install pyserial
           python3 test/test_celerctl.py
+      - name: celerhub tests (versao de dep, drift repo x hub, teto enxuto)
+        run: python3 test/test_celerhub.py
       - name: matilha tests (netframe da malha + no CelerNet + bond do link)
         run: python3 test/test_matilha.py
 

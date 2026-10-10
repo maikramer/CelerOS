@@ -886,6 +886,13 @@ function lintAppJson(dir, manifest) {
     ? d('aviso', 'appjson', msg + ' — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica')
     : d('erro', 'appjson', msg);
   const kbFmt = (b) => (b / 1024).toFixed(1) + 'KB';
+  // Teto contado pelo tamanho ENXUTO (jsstrip, o mesmo porte do firmware):
+  // e o que sobe no publish e o que o aparelho compila — um main.js de
+  // comentarios gordos nao "pesa" e nao devia barrar o install/publish
+  const { strip } = require('../sdk/lib/jsstrip.js');
+  const jsSize = (p) => {
+    try { return strip(fs.readFileSync(p)).length; } catch (e) { return 0; }
+  };
 
   // Inventario do pacote (flat, mesmo contrato do celerhub.py/servidor):
   // modulos .js SOMAM no teto de compile (e a soma que ocupa a RAM); assets
@@ -898,9 +905,10 @@ function lintAppJson(dir, manifest) {
   try { entrySt = fs.statSync(entryPath); } catch (e) { /* abaixo */ }
   if (!entrySt) d('erro', 'appjson', 'arquivo de entrada ausente: ' + entry);
   else {
-    jsSum += entrySt.size; jsCount++;
-    if (entrySt.size > STREAM_SAFE_MAIN_JS && jsApiLow)
-      d('aviso', 'appjson', entry + ' tem ' + kbFmt(entrySt.size) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+    const entryEnxuto = jsSize(entryPath);
+    jsSum += entryEnxuto; jsCount++;
+    if (entryEnxuto > STREAM_SAFE_MAIN_JS && jsApiLow)
+      d('aviso', 'appjson', entry + ' enxuto tem ' + kbFmt(entryEnxuto) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
   }
   let names = [];
   try { names = fs.readdirSync(dir).sort(); } catch (e) { /* dir listada pelo collectTargets */ }
@@ -925,9 +933,10 @@ function lintAppJson(dir, manifest) {
       continue;
     }
     if (ext === '.js') {
-      jsSum += st.size; jsCount++;
-      if (st.size > STREAM_SAFE_MAIN_JS && jsApiLow)
-        d('aviso', 'appjson', name + ' tem ' + kbFmt(st.size) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
+      const enxuto = jsSize(path.join(dir, name));
+      jsSum += enxuto; jsCount++;
+      if (enxuto > STREAM_SAFE_MAIN_JS && jsApiLow)
+        d('aviso', 'appjson', name + ' enxuto tem ' + kbFmt(enxuto) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
     } else {
       assetsTotal += st.size;
       if (st.size > MAX_ASSET_FILE) dsize(name + ' tem ' + kbFmt(st.size) + ' (max ' + (MAX_ASSET_FILE / 1024) + 'KB por arquivo)');
@@ -936,11 +945,11 @@ function lintAppJson(dir, manifest) {
   if (extras > MAX_EXTRA_FILES) dsize(extras + ' arquivos extras (max ' + MAX_EXTRA_FILES + ')');
   if (assetsTotal > MAX_ASSETS_TOTAL) dsize('assets somam ' + kbFmt(assetsTotal) + ' (max ' + (MAX_ASSETS_TOTAL / 1024) + 'KB)');
   // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish) pela
-  // SOMA dos .js: 48KB em qualquer placa; "psram" em requires sobe p/ 128KB
+  // SOMA dos .js ENXUTOS: 48KB em qualquer placa; "psram" em requires sobe
   const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;
   if (jsSum > ceiling) {
     const hint = psramDecl ? '' : ' — declare "psram" em requires para ate ' + (MAX_MAIN_JS_PSRAM / 1024) + 'KB';
-    dsize('soma dos ' + jsCount + ' arquivos .js: ' + kbFmt(jsSum) + ' acima do teto (' + (ceiling / 1024) + 'KB' + hint + ')');
+    dsize('soma enxuta dos ' + jsCount + ' arquivos .js: ' + kbFmt(jsSum) + ' acima do teto (' + (ceiling / 1024) + 'KB' + hint + ')');
   }
 
   try {
