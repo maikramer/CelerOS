@@ -311,7 +311,11 @@ static WavError playWavLocked(const char* path) {
     int16_t (*frames)[2] = (int16_t(*)[2])malloc(kFrames * 2 * sizeof(int16_t));
     const int vol = BoardIO::volumePct();
 
-    if (src != nullptr && frames != nullptr) {
+    // malloc falhou nao e sucesso silencioso: antes devolvia None e o
+    // fallback do AI.speak jurava played:true sem ter tocado nada. Mesmo
+    // WavError::NoAudio do OOM do playQoaStream.
+    const bool oom = src == nullptr || frames == nullptr;
+    if (!oom) {
         uint32_t remaining = wi.dataBytes / (2u * wi.channels);  // em frames
         while (remaining > 0) {
             if (s_stopReq) break;  // corte pedido por fora (fala do TTS)
@@ -335,7 +339,7 @@ static WavError playWavLocked(const char* path) {
 
     closeTxSink(sink);
     fclose(f);
-    return WavError::None;
+    return oom ? WavError::NoAudio : WavError::None;
 }
 
 // ---- PcmFeed: streaming ao vivo do TTS (AI.speak) --------------------------
