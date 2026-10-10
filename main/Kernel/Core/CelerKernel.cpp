@@ -368,7 +368,16 @@ static void *my_realloc(void *udata, void *ptr, duk_size_t size) {
     void *p = heap_caps_realloc(ptr, size, first);
     if (!p && second != first) p = heap_caps_realloc(ptr, size, second);
     if (!p) {
-        celer_log_println("out of memory");
+        // Mesmo rate-limit do my_alloc (1 log): o realloc e gancho do
+        // Duktape — um app em loop de OOM cuspiria "out of memory" por
+        // chamada e inundava o logcat.
+        static int oomLogs = 0;
+        if (oomLogs++ < 1) {
+            char b[80];
+            snprintf(b, sizeof(b), "[duk-oom] realloc size=%u free=%u", (unsigned)size,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+            celer_log_println(b);
+        }
     } else if (ptr == nullptr) {
         DeviceStats::noteJsAlloc();  // realloc(nullptr) = alloc novo bloco
     }
