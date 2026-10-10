@@ -24,8 +24,9 @@ class Renderer {
         this.bg = 0x0000;
         this.textSize = 1;
         this.textDatum = 0;    // TL (ancoras 0..10 do LovyanGFX)
-        this.sprite = null;     // { w, h, fb } criado por createSprite
-        this.bound = false;     // bindSprite(true): draws vao ao sprite (contrato do firmware)
+        this.sprite = null;     // sprite CORRENTE ({ w, h, fb }): createSprite/useSprite o definem
+        this.sprites = [];      // pool por id 1-based como o firmware: sprites[id-1] (null = livre)
+        this.bound = false;     // useSprite(id)/bindSprite(true): draws vao ao sprite (contrato do firmware)
         this.unsupported = new Set();
         this.clip = null;       // {x,y,w,h} de setClip (null = alvo inteiro)
     }
@@ -263,7 +264,7 @@ class Renderer {
     wire(env) {
         const r = this;
         const S = env.System;
-        S.fillScreen = (c) => { r.fb.fill((c == null ? 0 : c) & 0xFFFF); };
+        S.fillScreen = (c) => { r.target().fill((c == null ? 0 : c) & 0xFFFF); };
         S.fillRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, true);
         S.drawRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, false);
         S.drawLine = (x0, y0, x1, y1, c) => r.line(x0, y0, x1, y1, c);
@@ -291,29 +292,68 @@ class Renderer {
         S.mixColor = (a, b, p) => Renderer.mix(a, b, p);
         S.textWidth = (s, font) => String(s).length * r.glyphW(font || 1);
         S.fontHeight = (font) => r.glyphH(font || 1);
-        // sprite global (contrato do firmware: um por vez; desenho direcionado
-        // so enquanto bindSprite(true); pushSprite copia para a tela)
+        // sprites por id (contrato do firmware, JsGfx.cpp: pool de ids
+        // 1..16 — createSprite devolve o id e o novo vira o CORRENTE sem
+        // bindar; useSprite(id) seleciona E binda o alvo, useSprite(0)
+        // volta ao quadro/display; pushSprite(x, y, key?) blita o sprite
+        // corrente na TELA com cor-chave opcional)
         S.createSprite = (w, h) => {
-            r.sprite = { w: Math.max(1, w | 0), h: Math.max(1, h | 0), fb: new Uint16Array(Math.max(1, w | 0) * Math.max(1, h | 0)) };
+            w = Math.max(1, w | 0); h = Math.max(1, h | 0);
+            let slot = -1;
+            for (let i = 0; i < 16; i++) if (!r.sprites[i]) { slot = i; break; }
+            if (slot < 0) {   // pool cheio: recicla o corrente (compat do firmware)
+                for (let j = 0; j < 16; j++) if (r.sprites[j] === r.sprite) { slot = j; break; }
+                if (slot < 0) return 0;
+            }
+            const sp = { w: w, h: h, fb: new Uint16Array(w * h) };
+            r.sprites[slot] = sp;
+            r.sprite = sp;    // novo sprite vira o corrente
+            r.bound = false;  // createSprite nao binda: quem desenha chama bind/use
+            return slot + 1;
+        };
+        S.useSprite = (id) => {
+            id |= 0;
+            if (id === 0) { r.bound = false; return true; }
+            const sp = id >= 1 && id <= 16 ? r.sprites[id - 1] : null;
+            if (!sp) { r.bound = false; return false; }
+            r.sprite = sp;
+            r.bound = true;
             return true;
         };
         S.bindSprite = (enable) => { r.bound = !!enable && !!r.sprite; };
-        S.pushSprite = (x, y) => {
+        S.pushSprite = (x, y, key) => {
             const sp = r.sprite;
             if (!sp) return;
+            const chroma = key != null, kk = key & 0xFFFF;
+            const wasBound = r.bound;
+            r.bound = false;  // destino e sempre a tela (quadro/display no firmware)
             for (let j = 0; j < sp.h; j++) {
                 for (let i = 0; i < sp.w; i++) {
-                    r.px(x + i, y + j, sp.fb[j * sp.w + i]);  // px ja recusa fora do fb
+                    const col = sp.fb[j * sp.w + i];
+                    if (chroma && col === kk) continue;
+                    r.px(x + i, y + j, col);  // px ja recusa fora do fb
                 }
             }
+            r.bound = wasBound;
         };
-        S.deleteSprite = () => { r.sprite = null; r.bound = false; };
+        S.deleteSprite = (id) => {
+            let victim = r.sprite;
+            if (id != null) {   // sem arg: apaga o corrente (compat)
+                victim = (id | 0) >= 1 && (id | 0) <= 16 ? r.sprites[(id | 0) - 1] : null;
+                if (!victim) return;
+            }
+            if (!victim) { r.bound = false; return; }
+            for (let i = 0; i < r.sprites.length; i++) {
+                if (r.sprites[i] === victim) r.sprites[i] = null;
+            }
+            if (r.sprite === victim) { r.sprite = null; r.bound = false; }
+        };
         // API 33: sprite girado/escalado com o centro em (x, y) — amostragem
-        // inversa por vizinho mais proximo (o emulador tem um sprite so: o id
-        // e ignorado; nao desenha o sprite sobre si mesmo)
+        // inversa por vizinho mais proximo no alvo corrente (com useSprite
+        // pode ser outro sprite; nunca o sprite sobre si mesmo)
         S.drawSprite = (id, x, y, ang, zx, zy, key) => {   // smooth (8o arg) ignorado: preview
-            const sp = r.sprite;
-            if (!sp || r.bound) return;
+            const sp = r.sprites[(id | 0) - 1];
+            if (!sp || (r.bound && r.sprite === sp)) return;
             zx = zx == null ? 1 : zx;
             zy = zy == null ? zx : zy;
             if (!zx || !zy) return;
@@ -332,6 +372,19 @@ class Renderer {
                 }
             }
         };
+        // API 34: o retangulo (x, y, w, h) do sprite id volta a MESMA posicao
+        // do alvo corrente (sprite cobrindo o canvas a partir de 0,0); o
+        // recorte do alvo nao muda
+        S.blitSprite = (id, x, y, w, h) => {
+            const sp = r.sprites[(id | 0) - 1];
+            if (!sp || (r.bound && r.sprite === sp)) return;
+            x |= 0; y |= 0; w |= 0; h |= 0;
+            const x0 = Math.max(0, x), y0 = Math.max(0, y);
+            const x1 = Math.min(sp.w, x + w), y1 = Math.min(sp.h, y + h);
+            for (let j = y0; j < y1; j++) {
+                for (let i = x0; i < x1; i++) r.px(i, j, sp.fb[j * sp.w + i]);
+            }
+        };
         // nao renderizados no emulador (mesmo comportamento do harness + aviso)
         for (const name of ['drawPNG', 'drawBMP', 'drawIcon']) {
             const orig = S[name];
@@ -348,9 +401,9 @@ const RENDERED = [
     'drawFastHLine', 'drawFastVLine', 'drawCircle', 'fillCircle',
     'drawTriangle', 'fillTriangle', 'drawRoundRect', 'fillRoundRect',
     'setTextColor', 'setTextSize', 'setTextDatum', 'drawString', 'textWidth',
-    'fontHeight', 'createSprite', 'bindSprite', 'pushSprite', 'deleteSprite',
+    'fontHeight', 'createSprite', 'bindSprite', 'useSprite', 'pushSprite', 'deleteSprite',
     'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
-    'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite',
+    'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite', 'blitSprite',
 ];
 
 module.exports = { Renderer, W, H, RENDERED };

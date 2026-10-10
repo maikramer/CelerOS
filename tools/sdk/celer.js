@@ -439,7 +439,7 @@ function cmdCheck() {
     const { RENDERED } = require('./lib/renderer.js');
     const manifest = buildManifest();
     const KNOWN_UNRENDERED = new Set(['drawBMP', 'drawPNG', 'drawIcon']);  // por projeto (runtime avisa)
-    const isDraw = (name) => /^(fill|draw|push|create|bind)[A-Z]/.test(name) ||
+    const isDraw = (name) => /^(fill|draw|push|create|bind|use)[A-Z]/.test(name) ||
                           ['setTextColor', 'setTextSize', 'setTextDatum', 'textWidth', 'fontHeight', 'deleteSprite'].includes(name);
     const missing = [];
     for (const [objPath, obj] of Object.entries(manifest.objects)) {
