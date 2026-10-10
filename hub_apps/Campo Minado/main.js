@@ -22,12 +22,16 @@ var modeIdx = 0;
 var createBoard = require("board");
 
 var DATA = (FS.appData ? FS.appData() : "/local/");
-var hasTone = (typeof System.playTone === "function");
+// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
+// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+var somFn = typeof System.sfx === "function" ? System.sfx :
+            (typeof System.playTone === "function" ? System.playTone : null);
+var hasTone = somFn !== null;
 function tone(hz, ms) {
-    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
 }
 function tune(notes) {
-    if (hasTone) { try { System.playTone(notes); } catch (e) {} }
+    if (hasTone) { try { somFn && somFn(notes); } catch (e) {} }
 }
 
 // cores dos numeros por perigo (tema do sistema)
@@ -96,7 +100,7 @@ function drawCell(x, y) {
         System.fillSmoothCircle(px + CELL / 2 - 2, py + CELL / 2 - 2, 2, T.text);
     } else if (c.n > 0) {
         System.setTextColor(NUMCOL[c.n], wellCol);
-        System.setTextDatum(4);           // centro
+        System.setTextDatum(5);           // MC (LovyanGFX: 4 e middle-left)
         System.drawString(String(c.n), Math.floor(px + CELL / 2), Math.floor(py + CELL / 2), 2);
         System.setTextDatum(0);
     }

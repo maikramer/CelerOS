@@ -120,7 +120,7 @@ while (true) {
         // gauge: arco do nivel + arco fina do tempo
         System.fillArc(W / 2, 130, 44, 54, -120, -120 + 240 * level / 100, T.accent);
         System.fillArc(W / 2, 130, 34, 40, -120, -120 + 240 * pct / 100, T.accentD);
-        System.setTextDatum(4);
+        System.setTextDatum(5);           // MC (LovyanGFX: 4 e middle-left)
         System.setTextColor(T.text, T.bg);
         System.drawString(level + "%", W / 2, 126, 2);
         System.setTextColor(T.textDim, T.bg);

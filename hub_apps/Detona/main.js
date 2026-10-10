@@ -2,9 +2,38 @@
 // Tela cheia nos pixels nativos do vidro (API 28; 480x480 no SmartDisplay
 // 4"), trilha chiptune como relogio: o pavio das bombas e quantizado na
 // BATIDA e as correntes cascateiam de meio tempo em meio tempo — a
-// explosao cai no compasso. Modulos: main.js (cenas/visao/HUD) +
-// arena.js (simulacao) + niveis.js (geracao por seed, temas, trilhas).
-// engine.js/physics.js vendorizadas por enquanto (migram p/ deps do hub).
+// explosao cai no compasso. Modulos: main.js (cenas/visao/HUD/rede) +
+// arena.js (simulacao) + niveis.js (geracao por seed, temas, trilhas) +
+// ia.js (bichos). Engine/sfx/grid/mesh sao deps do hub (API 30).
+//
+// DUELO pela malha CelerNet (api 26+, dep celeros.mesh): o radio faz
+// ~8 quadros/s de ate 16 B sem ACK — o protocolo e de EVENTOS DISCRETOS
+// (cada msg = 1 quadro), cada jogador e a autoridade do proprio corpo
+// (posicao por mudanca de celula, a propria morte) e o mundo replica por
+// eventos idempotentes numerados (unicast de 1 quadro pode chegar 2x):
+//   dhl                      heartbeat do lobby (broadcast 3 s, expira 10 s)
+//   di / da0 / da1           convite / recusa / aceite (unicast)
+//   ds<seed>,<round>         inicio de round pelo HOST (mesma arena pela
+//                            seed; reenvia 2.2 s ate o ack) — melhor de 3
+//   dy<round>                recebi o inicio (ack)
+//   dp<seq>,<c>,<r>          estou na celula (c,r) — interpolado no outro
+//   db<seq>,<c>,<r>,<b10>,<alcance>[,p]   bomba: pavio no MEU beat (b10 =
+//                            beat mod 10 em decimos; relogios divergem <1)
+//   dd<seq>                  detonei (chip BOOM / toque longo)
+//   dg<seq>,<c>,<r>          peguei o powerup da celula
+//   dk<seq>,<c>,<r>,<dx>,<dy>  chutei a bomba da celula
+//   dm<seq>                  morri (os dois avisam = empate)
+//   dq                       desisti/sai
+// seq: contador por jogador mod 100000, janela modular de 50k (so entra
+// msg mais nova). Prefixo 'd' — nunca 'P' (o servico Pack engole).
+//
+// Render (engine 1.2): o cenario (chao + blocos + powerups + saida) e um
+// E.tilemap no quadro persistente — so as CELULAS SUJAS repintam: as que
+// ficaram sob algo que se moveu (camada E.dirty com o tilemap de fundo) e
+// as que mudaram na grade (bloco quebrado, bomba, powerup). Antes eram ~600
+// chamadas de desenho por quadro (195 lajotas x 3 + blocos) e o vidro
+// inteiro ia ao painel a cada frame. O HUD fica fora do recorte da arena e
+// so repinta quando um numero muda. Menus sao cenas `static`.
 //
 // Pega de teste (so existe no harness): o test.js dirige a sim.
 if (typeof __harness !== "undefined") {
@@ -20,14 +49,15 @@ var ia = require("ia");
 if (typeof __harness !== "undefined") __harness.detona.E = E;
 
 E.init({ dir: "Detona", fps: 30, native: true, save: "detona.", particles: 140 });
-var W = E.W, H = E.H;
+var W = E.W, H = E.H, u = E.u;
 
 // layout adaptativo: grade 15x13 + faixa de HUD; no 480 nativo da 32px
 // de celula com HUD de 64, no canvas virtual 240x320 da 16px com HUD 44
-var CELL = Math.min(Math.floor(W / NV.COLS), Math.floor((H - 44) / NV.ROWS));
-var HUD = H - CELL * NV.ROWS;
-var OX = Math.floor((W - CELL * NV.COLS) / 2);
+var CELL = Math.min(Math.floor(W / NV.COLS), Math.floor((H - u(22)) / NV.ROWS));
+var GW = CELL * NV.COLS, GH = CELL * NV.ROWS;
+var OX = Math.floor((W - GW) / 2);
 var OY = 0;
+var HUD_Y = OY + GH;
 var SZ = { jogador: CELL - 2, bomba: CELL - 4, bloco: CELL };
 // PNGs sao masterizados p/ celula 32: em tela menor o blit 1:1 estoura
 // a grade — sem nativo/sem folga os painters assumem (e ganham slot)
@@ -37,11 +67,267 @@ var C = {
     preto: 0x0000,
     branco: 0xFFFF, ouro: 0xFFE0, laranja: 0xFD20, vermelho: 0xF800,
     verde: 0x07E0, ciano: 0x07FF, magenta: 0xF81F,
-    cinza: System.mixColor(0x0000, 0xFFFF, 25)
+    cinza: System.mixColor(0x0000, 0xFFFF, 55),
+    cinzaD: System.mixColor(0x0000, 0xFFFF, 22),
+    painel: System.mixColor(0x0000, 0xFD20, 10)
 };
 
 var hi = E.save.num("hi", 0);
 var prog = { mundo: E.save.num("mundo", 1), nivel: E.save.num("nivel", 1) };
+
+// ------------------------------------------------------------------ rede --
+var mesh = require("celeros.mesh");
+
+var SEQMOD = 100000;
+var NET = {
+    fase: "off",        // off|lobby|convidei|convite|aguarda|jogando|round
+    me: null, rival: null,      // {id, nome}
+    host: false, round: 0, seed: 0,
+    ganhos: 0, perdidos: 0,     // placar (melhor de 3)
+    res: null,          // fim do round: venci|perdi|empate|saiu|desisti
+    seq: 1, lastSeq: -1, ackRound: -1,
+    hbAte: 0, vistos: {}, convide: null,
+    envioAte: 0, envioMsg: "", envioN: 0,   // reenvio (di/ds, sem ACK)
+    ultC: -1, ultR: -1, keepAte: 0, presAte: 0,
+    tx: []              // sem radio (harness): o que seria enviado
+};
+
+function logDuelo(s) { System.print("duelo: " + s); }
+
+function netRadio() {
+    return typeof CelerNet !== "undefined" && !!CelerNet.status().active;
+}
+
+// broadcast=true so no heartbeat do lobby; resto e unicast urgente ao
+// rival (2 copias pelo firmware, espacadas — da o retry gratis). 'para'
+// quando o destino ainda nao e o rival (convite)
+function netSend(msg, broadcast, para) {
+    NET.tx.push(msg);
+    if (NET.tx.length > 24) NET.tx.shift();
+    if (!netRadio()) return;
+    if (broadcast) CelerNet.broadcast(msg, 4);
+    else {
+        var dst = para || (NET.rival ? NET.rival.id : null);
+        if (dst) CelerNet.send(dst, msg, { urgent: true });
+    }
+}
+
+function netSeq() { NET.seq = (NET.seq + 1) % SEQMOD; return NET.seq; }
+
+// evento de jogo so entra se o numero de sequencia for mais novo (modular)
+function netNovo(seq) {
+    var d = (seq - NET.lastSeq + SEQMOD) % SEQMOD;
+    if (d === 0 || d >= SEQMOD / 2) return false;
+    NET.lastSeq = seq;
+    return true;
+}
+
+// beat do dono chega mod 10 em decimos: casa o multiplo mais perto do MEU
+// beat — os relogios musicais divergem <1 beat entre aparelhos
+function netBeat(dez) {
+    var b = arena.beatNow();
+    var d = (dez / 10 - (b % 10) + 10) % 10;
+    if (d > 5) d -= 10;
+    return b + d;
+}
+
+// convite a um Detona visto no lobby
+function netConvidar(id) {
+    NET.convide = { id: id, nome: (NET.vistos[id] || {}).nome || id };
+    NET.fase = "convidei";
+    NET.envioMsg = "di";
+    NET.envioAte = System.millis() + 2200;
+    NET.envioN = 1;
+    netSend("di", false, NET.convide.id);
+    logDuelo("convite para " + NET.convide.nome);
+}
+
+// resposta ao convite RECEBIDO (sim = aceite: vira convidado, host=false)
+function netAceitar(sim) {
+    if (!NET.convide) return;
+    if (sim) {
+        NET.rival = NET.convide;
+        NET.convide = null;
+        NET.host = false;
+        NET.fase = "aguarda";
+        netSend("da1");
+        logDuelo("duelo contra " + NET.rival.nome + " (convidado)");
+    } else {
+        netSend("da0");
+        NET.convide = null;
+    }
+}
+
+// host: proximo round com seed nova (a arena e identica nos dois)
+function netInicioRound() {
+    NET.round++;
+    NET.seed = 1000 + Math.floor(Math.random() * 89000);
+    NET.res = null;
+    NET.ackRound = -1;
+    NET.envioMsg = "ds" + NET.seed + "," + NET.round;
+    NET.envioAte = System.millis() + 2200;
+    NET.envioN = 1;
+    NET.fase = "jogando";
+    NET.seq = 1; NET.lastSeq = -1;
+    netSend(NET.envioMsg);
+    logDuelo("round " + NET.round + " (seed " + NET.seed + ")");
+    E.data.modo = "duelo";
+    E.data.retomar = false;
+    E.goto("jogando");
+}
+
+// encerra sessao/round: res decide o placar na cena round
+function netEncerra(res) {
+    if (NET.fase === "off") return;
+    if (!NET.res) NET.res = res;
+    NET.envioMsg = "";
+    NET.fase = "round";
+    arena.parar();
+    if (E.sceneName !== "round") E.goto("round");
+}
+
+// desistencia do proprio jogador (botao de pausa vira saida no duelo)
+function netDesistir() {
+    if (NET.rival) netSend("dq");
+    netEncerra("desisti");
+    logDuelo("desisti");
+}
+
+// sessao limpa (voltar ao menu / lobby)
+function netReset() {
+    NET.fase = "off";
+    NET.rival = null;
+    NET.convide = null;
+    NET.round = 0;
+    NET.ganhos = 0;
+    NET.perdidos = 0;
+    NET.res = null;
+    NET.envioMsg = "";
+    NET.vistos = {};
+}
+
+// maquina de estados "de fundo": heartbeat, reenvios sem ACK e presenca
+// do rival (chamado pelos updates das cenas de duelo)
+function netPump(now) {
+    if (!netRadio()) return;
+    if (NET.fase === "lobby" && now >= NET.hbAte) {
+        NET.hbAte = now + 3000;
+        netSend("dhl", true);
+    }
+    if (NET.envioMsg && now >= NET.envioAte) {
+        var done = NET.envioMsg.charAt(1) === 's' && NET.ackRound >= NET.round;
+        if (done) {
+            NET.envioMsg = "";
+        } else if (NET.envioMsg === "di" && NET.fase !== "convidei") {
+            NET.envioMsg = "";   // aceite/recusa chegou, sobrou um tick
+        } else if (++NET.envioN > 8) {
+            NET.envioMsg = "";
+            if (NET.fase === "convidei") { NET.fase = "lobby"; NET.convide = null; }
+            else netEncerra("saiu");
+        } else {
+            netSend(NET.envioMsg, false,
+                    NET.envioMsg === "di" && NET.convide ? NET.convide.id : null);
+            NET.envioAte = now + 2200;
+        }
+    }
+    if (NET.rival && (NET.fase === "jogando" || NET.fase === "round") && now >= NET.presAte) {
+        NET.presAte = now + 2500;
+        var ns = CelerNet.nodes(), vivo = false;
+        for (var i = 0; i < ns.length; i++)
+            if (ns[i].id === NET.rival.id && ns[i].lastSeen < 12) vivo = true;
+        if (!vivo) { netEncerra("saiu"); logDuelo("rival saiu (presenca)"); }
+    }
+}
+
+// uma mensagem da malha (o mesh.each entrega aqui)
+function netMsg(m) {
+    var msg = m.msg;
+    if (typeof msg !== "string" || msg.length < 2 || msg.charAt(0) !== 'd') return;
+    var op = msg.charAt(1);
+    if (op === 'h') {   // outro Detona no lobby
+        if (NET.fase === "lobby" || NET.fase === "convidei")
+            NET.vistos[m.from] = { nome: m.fromName || m.from, at: System.millis() };
+        return;
+    }
+    if (op === 'i') {   // convite (so faz sentido no lobby)
+        if (NET.fase === "lobby" && (!NET.convide || NET.convide.id !== m.from))
+            NET.convide = { id: m.from, nome: m.fromName || m.from, at: System.millis() };
+        return;
+    }
+    if (op === 'a') {   // resposta do MEU convite
+        if (NET.fase === "convidei" && NET.convide && m.from === NET.convide.id) {
+            if (msg.charAt(2) === '1') {
+                NET.rival = NET.convide;
+                NET.convide = null;
+                NET.host = true;
+                logDuelo("duelo contra " + NET.rival.nome + " (host)");
+                netInicioRound();
+            } else {
+                NET.fase = "lobby";
+                NET.convide = null;
+                E.audio.sfx("ui");
+            }
+        }
+        return;
+    }
+    if (!NET.rival || m.from !== NET.rival.id) return;
+    if (op === 'q') { netEncerra("saiu"); logDuelo("rival desistiu"); return; }
+    if (op === 's') {   // inicio de round do host
+        var vs = msg.substring(2).split(',');
+        var round = parseInt(vs[1], 10);
+        if (round > NET.round) {
+            NET.round = round;
+            NET.seed = parseInt(vs[0], 10);
+            NET.fase = "jogando";
+            netSend("dy" + round);
+            logDuelo("round " + round + " (seed " + NET.seed + ")");
+            E.data.modo = "duelo";
+            E.data.retomar = false;
+            E.goto("jogando");
+        } else {
+            netSend("dy" + round);   // reenvio perdido: re-ack
+        }
+        return;
+    }
+    if (op === 'y') { NET.ackRound = parseInt(msg.substring(2), 10); return; }
+    if (NET.fase !== "jogando" && NET.fase !== "round") return;
+    var p = msg.substring(2).split(',');
+    var seq = parseInt(p[0], 10);
+    if (op === 'm') {   // o rival morreu no aparelho DELE
+        if (!netNovo(seq)) return;
+        // eu ja tinha morrido (res 'perdi' nos 900 ms de espera ou na cena
+        // round): os dois avisam = EMPATE
+        if (NET.res === "perdi") NET.res = "empate";
+        var st = arena.state();
+        if (st && st.rival && !st.rival.morto) {
+            st.rival.morto = true;
+            E.fx.burst(OX + st.rival.x, OY + st.rival.y,
+                       { n: 22, colors: [C.branco, C.laranja], speed: CELL * 4, life: 0.6 });
+        }
+        arena.rivalMorreu();
+        logDuelo("rival morreu");
+        return;
+    }
+    if (!netNovo(seq)) return;
+    var s = arena.state();
+    if (!s || !s.duelo) return;
+    if (op === 'p') arena.rivalAlvo(parseInt(p[1], 10), parseInt(p[2], 10));
+    else if (op === 'b') {
+        if (arena.addBomba(parseInt(p[1], 10), parseInt(p[2], 10), 4,
+                           parseInt(p[4], 10), true, 'r',
+                           netBeat(parseInt(p[3], 10)),
+                           p.length > 5 && p[5] === '1'))
+            logDuelo("bomba do rival em " + p[1] + "," + p[2]);
+    }
+    else if (op === 'd') arena.detonar('r');
+    else if (op === 'g') arena.pegarRival(parseInt(p[1], 10), parseInt(p[2], 10));
+    else if (op === 'k') arena.chutar(parseInt(p[1], 10), parseInt(p[2], 10),
+                                      parseInt(p[3], 10), parseInt(p[4], 10), true);
+}
+if (typeof __harness !== "undefined" && __harness.detona) {
+    __harness.detona.net = NET;
+    __harness.detona.netIn = netMsg;   // test.js injeta mensagens da malha
+}
 
 // ------------------------------------------------------------- sprites ---
 function painterJogador(w, h, x, y) {
@@ -96,7 +382,30 @@ function painterChefe(w, h, x, y) {
     System.fillCircle(x + w * 0.38, y + h * 0.45, 4, C.vermelho);
     System.fillCircle(x + w * 0.62, y + h * 0.45, 4, C.vermelho);
 }
-var SPR = E.spr.load([
+function painterBlindado(w, h, x, y) {
+    System.fillRoundRect(x + w * 0.12, y + h * 0.12, w * 0.76, h * 0.76, Math.max(2, w * 0.18), 0x632C);
+    System.fillRect(x + w * 0.2, y + h * 0.36, w * 0.6, Math.max(2, h * 0.12), 0x07FF);
+    System.drawRoundRect(x + w * 0.12, y + h * 0.12, w * 0.76, h * 0.76, Math.max(2, w * 0.18), 0xBDF7);
+}
+function painterDivisor(w, h, x, y) {
+    System.fillCircle(x + w * 0.35, y + h / 2, w * 0.27, 0x87F0);
+    System.fillCircle(x + w * 0.65, y + h / 2, w * 0.27, 0x87F0);
+    System.fillRect(x + w * 0.3, y + h * 0.42, 2, 3, C.preto);
+    System.fillRect(x + w * 0.66, y + h * 0.42, 2, 3, C.preto);
+}
+function painterMini(w, h, x, y) {
+    System.fillCircle(x + w / 2, y + h / 2, w * 0.42, 0xAFF5);
+    System.fillRect(x + w / 2 - 2, y + h * 0.4, 2, 2, C.preto);
+    System.fillRect(x + w / 2 + 1, y + h * 0.4, 2, 2, C.preto);
+}
+function painterRival(w, h, x, y) {
+    var r = w * 0.42;
+    System.fillCircle(x + w / 2, y + h / 2, r, C.branco);
+    System.fillCircle(x + w / 2, y + h / 2, r * 0.62, C.laranja);
+    System.fillCircle(x + w / 2, y + h * 0.4, r * 0.34, 0x001F);
+    System.fillRect(x + w / 2 - r * 0.5, y + h * 0.62, w * 0.5, 2, C.vermelho);
+}
+E.spr.load([
     { name: "jogador", file: USA_PNG ? "jogador" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
     { name: "bomba", file: USA_PNG ? "bomba" : null,
@@ -112,105 +421,688 @@ var SPR = E.spr.load([
     { name: "cacador", file: USA_PNG ? "perseguidor" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
     { name: "chefe", file: USA_PNG ? "chefe" : null,
-      w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe }
+      w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe },
+    // bichos novos: o pool de 8 slots ja esta cheio — vao como painters
+    { name: "blindado", w: SZ.jogador, h: SZ.jogador, paint: painterBlindado },
+    { name: "divisor", w: SZ.jogador, h: SZ.jogador, paint: painterDivisor },
+    { name: "mini", w: Math.round(SZ.jogador * 0.7), h: Math.round(SZ.jogador * 0.7), paint: painterMini },
+    { name: "rival", w: SZ.jogador, h: SZ.jogador, paint: painterRival }
 ]);
 
 // ---------------------------------------------------------------- sons ---
-// efeitos pela dep celeros.sfx (boom com DUCK da trilha, variando com o
-// tamanho da explosao; jingles de fim; variantes por oitava)
+// efeitos pela dep celeros.sfx: no firmware API 32 sao misturados por cima
+// da trilha (o duck vira no-op e a musica nao para a cada explosao)
 var SFX = require("celeros.sfx");
 
-// ---------------------------------------------------------------- cenas --
-var RECT_JOGAR, RECT_SOBRE;   // botoes: hit no update, desenho no draw
+// ------------------------------------------------------------- cenario ---
 
-var tituloBase = false;
-function drawTituloBase() {
-    System.drawPNG(E.spr.bases[0] + "titulo.png", 0, 0);
-    tituloBase = true;
+var D = E.dirty;
+
+function corPower(k) {
+    return k === 'B' ? C.ciano : k === 'C' ? C.laranja : k === 'V' ? C.verde :
+           k === 'K' ? C.magenta : k === 'R' ? C.vermelho :
+           k === 'E' ? C.branco : k === 'P' ? 0xFC9F : k === 'T' ? 0xAFE5 : C.ouro;
+}
+function glifoPower(k) {
+    return k === 'X' ? "+" : k;   // B C V K R E P T; vida = +
 }
 
+var PULSO = 0;   // fracao da batida do quadro (powerup/saida pulsam nela)
+
+// uma celula inteira do cenario: lajota (2 tons + junta + variacao da
+// seed), bloco, saida achada e powerup exposto. Bombas, chamas e bichos
+// vao por cima, como entidades da camada suja.
+function paintCell(c, r, x, y, w, h) {
+    var s = arena.state();
+    if (!s) return;
+    var t = s.tema;
+    var v = s.variacao[r * NV.COLS + c];
+    var base = (c + r) % 2 === 0 ? t.a : t.b;
+    System.fillRect(x, y, w, h, v > 0.85 ? System.mixColor(base, t.detalhe, 8) : base);
+    System.fillRect(x, y + h - 1, w, 1, t.junta);
+    System.fillRect(x + w - 1, y, 1, h, t.junta);
+    var ch = s.grid[r][c];
+    if (ch === '#') {
+        E.spr.blit("duro", x, y);
+        if (c === NV.COLS - 1 && r === 0) {   // botao de pausa no bloco do canto
+            var bw = Math.max(2, Math.round(w * 0.14)), bh = Math.round(h * 0.46);
+            System.fillRect(x + w / 2 - bw - 2, y + (h - bh) / 2, bw, bh, C.branco);
+            System.fillRect(x + w / 2 + 2, y + (h - bh) / 2, bw, bh, C.branco);
+        }
+        return;
+    }
+    if (ch === '%') { E.spr.blit("macio", x, y); return; }
+    if (s.exit.achada && c === s.exit.c && r === s.exit.r) {
+        var brilho = s.exit.aberta ? 40 + Math.floor(40 * PULSO) : 18;
+        System.fillRect(x + 2, y + 2, w - 4, h - 4, System.mixColor(t.a, C.verde, brilho));
+        System.fillRect(x + 5, y + 4, w - 10, h - 8, System.mixColor(C.preto, C.verde, 60));
+        if (s.exit.aberta) {
+            E.gfx.text(">", x + w / 2, y + h / 2, { color: C.branco, px: h * 0.6,
+                       align: "center", valign: "middle", screen: true });
+        }
+        return;
+    }
+    var vt = ventoEm(s, c, r);
+    if (vt) {
+        // respiro do Forno: grelha; acende no tempo que antecede a erupcao
+        var quente = vt.aviso ? 55 + Math.floor(35 * PULSO) : 12;
+        System.fillRect(x + 3, y + 3, w - 6, h - 6, System.mixColor(0x2000, 0xFD20, quente));
+        System.drawRect(x + 2, y + 2, w - 4, h - 4, System.mixColor(0x2000, 0xFD20, vt.aviso ? 95 : 45));
+        for (var gl = 0; gl < 3; gl++) {
+            System.fillRect(x + 6, y + 7 + gl * Math.floor((h - 14) / 2), w - 12, 2, 0x1000);
+        }
+        return;
+    }
+    var tp = teleEm(s, c, r);
+    if (tp >= 0) {
+        // teleporte do Nucleo: pad com anel pulsando (cor por par)
+        var cor = (tp >> 1) === 0 ? C.magenta : C.ciano;
+        var cxp = x + w / 2, cyp = y + h / 2;
+        System.fillCircle(cxp, cyp, w * 0.42, System.mixColor(C.preto, cor, 22));
+        System.drawCircle(cxp, cyp, w * (0.22 + 0.18 * PULSO), cor);
+        System.drawCircle(cxp, cyp, w * 0.42, System.mixColor(C.preto, cor, 70));
+    }
+    var k = s.powerups[c + ',' + r];
+    if (k && ch === '.') {
+        var kor = corPower(k), kw = w - 4;
+        System.fillRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 35));
+        System.drawRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 70));
+        E.gfx.text(glifoPower(k), x + w / 2, y + h / 2, { color: kor, px: h * 0.55,
+                   align: "center", valign: "middle", screen: true });
+    }
+}
+
+function ventoEm(s, c, r) {
+    for (var i = 0; i < s.ventos.length; i++)
+        if (s.ventos[i].c === c && s.ventos[i].r === r) return s.ventos[i];
+    return null;
+}
+function teleEm(s, c, r) {
+    for (var i = 0; i < s.teles.length; i++)
+        if (s.teles[i].c === c && s.teles[i].r === r) return i;
+    return -1;
+}
+
+var mapa = E.tilemap({ cols: NV.COLS, rows: NV.ROWS, cell: CELL, ox: OX, oy: OY, paint: paintCell });
+
+// celulas que mudaram na grade (bloco quebrou, bomba entrou/saiu, powerup
+// pego, saida achada): a arena as lista em st.mudou — nada de varrer as
+// 195 celulas por quadro. O que pulsa na batida (saida aberta, portais,
+// respiro avisando) repinta todo quadro, poucas celulas.
+function marcaMudancas(s) {
+    var m = s.mudou;
+    for (var i = 0; i < m.length; i += 2) mapa.mark(m[i], m[i + 1]);
+    m.length = 0;
+    if (s.exit.achada) mapa.mark(s.exit.c, s.exit.r);
+    for (var t = 0; t < s.teles.length; t++) mapa.mark(s.teles[t].c, s.teles[t].r);
+    for (var vv = 0; vv < s.ventos.length; vv++) {
+        if (s.ventos[vv].aviso || s.ventos[vv].avisoAntes) mapa.mark(s.ventos[vv].c, s.ventos[vv].r);
+        s.ventos[vv].avisoAntes = s.ventos[vv].aviso;
+    }
+}
+
+// ------------------------------------------------------------- entidades ---
+
+function drawChama(fl, pulso) {
+    var x = OX + fl.c * CELL, y = OY + fl.r * CELL;
+    var meia = CELL / 2;
+    var cresce = 0.55 + 0.45 * pulso;
+    if (fl.tipo === 'nucleo') {
+        E.gfx.circle(x + meia, y + meia, meia * 0.95 * cresce + 2, C.branco, { screen: true });
+        System.fillCircle(x + meia, y + meia, meia * 0.7 * cresce, C.ouro);
+        System.fillCircle(x + meia, y + meia, meia * 0.4 * cresce, 0xFB18);
+    } else {
+        var len = CELL * cresce, esp = Math.floor(CELL * 0.7);
+        var x0 = fl.dx > 0 ? x + meia : fl.dx < 0 ? x + meia - len : x + meia - esp / 2;
+        var y0 = fl.dy > 0 ? y + meia : fl.dy < 0 ? y + meia - len : y + meia - esp / 2;
+        var w_ = fl.dy !== 0 ? esp : len;
+        var h_ = fl.dy !== 0 ? len : esp;
+        E.gfx.rect(x0, y0, w_, h_, C.laranja, { screen: true });
+        System.fillRect(x0 + (fl.dy !== 0 ? 2 : 0), y0 + (fl.dx !== 0 ? 2 : 0),
+                        fl.dy !== 0 ? esp - 4 : w_, fl.dx !== 0 ? esp - 4 : h_, C.ouro);
+        if (fl.tipo === 'ponta') {
+            System.fillCircle(x + meia + fl.dx * (meia * 0.6),
+                              y + meia + fl.dy * (meia * 0.6), 3, C.branco);
+        }
+    }
+}
+
+function drawEntidades(s, beat, pulso) {
+    var i;
+    // bombas: blit + faisca do pavio piscando na batida
+    for (i = 0; i < s.bombs.length; i++) {
+        var bo = s.bombs[i];
+        var bx = Math.round(OX + bo.fx * CELL + (CELL - SZ.bomba) / 2);
+        var by = Math.round(OY + bo.fy * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso));
+        E.spr.blit("bomba", bx, by);
+        // pavio: o fim se le de longe — avermelha e pisca no dobro do ritmo
+        var resta = Math.max(0, bo.vai - beat), tot = Math.max(0.1, bo.vai - bo.de);
+        var quente = 1 - resta / tot;
+        var pisca = resta < 1 ? Math.floor(beat * 8) % 2 === 0 : pulso < 0.5;
+        if (quente > 0.45) {
+            System.fillCircle(bx + SZ.bomba / 2, by + SZ.bomba / 2 + 2, SZ.bomba * 0.16,
+                              System.mixColor(0x4208, C.vermelho, Math.round(quente * 100)));
+        }
+        if (pisca) System.fillCircle(bx + SZ.bomba / 2, by + 1, 2, resta < 1 ? C.vermelho : C.ouro);
+        if (bo.dono === 'x') System.drawCircle(bx + SZ.bomba / 2, by + SZ.bomba / 2 + 2, SZ.bomba * 0.42, C.magenta);
+    }
+    for (i = 0; i < s.flames.length; i++) drawChama(s.flames[i], pulso);
+    // inimigos: bob no compasso; chefe pisca ao levar acerto
+    for (i = 0; i < s.enemies.length; i++) {
+        var e = s.enemies[i];
+        if (e.morto) continue;
+        var nome = e.kind;
+        var ew = e.kind === 'chefe' ? CELL * 2 - 4 :
+                 e.kind === 'mini' ? Math.round(SZ.jogador * 0.7) : SZ.jogador;
+        var eflash = e.flash > 0;   // (a ia desconta o flash)
+        var cx = OX + e.fx * CELL, cy = OY + e.fy * CELL;
+        if (eflash && Math.floor(beat * 16) % 2 === 0) {
+            E.gfx.circle(cx, cy, ew * 0.5, C.branco, { screen: true });
+        } else {
+            var ex0 = Math.round(cx - ew / 2);
+            var ey0 = Math.round(cy - ew / 2 + Math.floor(2 * Math.sin(beat * Math.PI * 2 + i)));
+            E.spr.blit(nome, ex0, ey0);
+            if (e.kind === 'blindado' && e.hp < e.hpMax) {   // blindagem rachada
+                System.drawLine(ex0 + ew * 0.3, ey0 + ew * 0.15, ex0 + ew * 0.5, ey0 + ew * 0.55, C.branco);
+                System.drawLine(ex0 + ew * 0.5, ey0 + ew * 0.55, ex0 + ew * 0.42, ey0 + ew * 0.85, C.branco);
+            }
+        }
+    }
+    // rival do duelo (bob fora de fase com o meu boneco); jogador por cima
+    if (s.duelo && s.rival && !s.rival.morto && !s.fim) {
+        var rx = OX + s.rival.x, ry = OY + s.rival.y;
+        var rbob = Math.floor(2 * Math.sin(beat * Math.PI * 2 + 1.7));
+        E.spr.blit("rival", Math.round(rx - SZ.jogador / 2),
+                   Math.round(ry - SZ.jogador / 2 + rbob));
+    }
+    // jogador (pisca invulneravel; bob no compasso)
+    var inv = s.stats.inv > 0 && Math.floor(beat * 8) % 2 === 0;
+    if (!inv && !s.fim) {
+        var px = OX + s.player.x, py = OY + s.player.y;
+        var bob = Math.floor(2 * Math.sin(beat * Math.PI * 2));
+        E.spr.blit("jogador", Math.round(px - SZ.jogador / 2), Math.round(py - SZ.jogador / 2 + bob));
+        if (s.stats.shield) E.gfx.circle(px, py, SZ.jogador * 0.62, C.ciano, { fill: false, screen: true });
+    }
+    // chefe na arena: barra de vida no topo
+    for (i = 0; i < s.enemies.length; i++) {
+        if (s.enemies[i].kind !== 'chefe' || s.enemies[i].morto) continue;
+        var bw = Math.floor(GW * 0.6);
+        E.gfx.bar(OX + (GW - bw) / 2, OY + u(3), bw, u(4), s.enemies[i].hp / s.enemies[i].hpMax,
+                  { fg: C.vermelho, bg: C.cinzaD, screen: true });
+        break;
+    }
+}
+
+// --------------------------------------------------------------- HUD ------
+
+var hudKey = "";
+function drawHUD(s, pulso, force) {
+    if (s.duelo) { drawHudDuelo(s, pulso, force); return; }
+    var seg = s.sobrevivencia ? 0 : Math.max(0, Math.ceil(s.tLeft));
+    var piscaTempo = !s.sobrevivencia && seg < 30 && pulso > 0.5;
+    var piscaBoom = s.stats.remote ? Math.floor(pulso * 3) : 0;
+    var key = s.stats.vidas + "|" + s.stats.bombs + "|" + s.stats.flame + "|" + s.stats.vel + "|" +
+              seg + "|" + s.onda + "|" + s.score + "|" + (piscaTempo ? 1 : 0) + "|" + piscaBoom +
+              "|" + (s.stats.kick ? 1 : 0) + (s.stats.shield ? 1 : 0);
+    if (!force && key === hudKey) return;
+    hudKey = key;
+    var t = s.tema, y0 = HUD_Y, hh = H - y0;
+    System.fillRect(0, y0, W, hh, t.hud);
+    System.fillRect(0, y0, W, Math.max(2, u(1)), t.detalhe);
+    var cy = Math.floor(y0 + hh / 2) + 1;
+    var pad = u(6);
+    var dim = System.mixColor(t.hudTxt, t.hud, 40);
+
+    // coluna esquerda: vidas (coracoes) em cima, poderes embaixo
+    var hr = Math.max(3, Math.round(hh * 0.08)), step = hr * 3 + u(2);
+    var hy = y0 + Math.round(hh * 0.32);
+    for (var v = 0; v <= s.stats.vidas && v < 5; v++) {
+        var hx = pad + hr + v * step;
+        System.fillCircle(hx, hy - hr * 0.3, hr, C.vermelho);
+        System.fillCircle(hx + hr * 1.4, hy - hr * 0.3, hr, C.vermelho);
+        System.fillTriangle(hx - hr, hy + hr * 0.3, hx + hr * 2.4, hy + hr * 0.3,
+                            hx + hr * 0.7, hy + hr * 2.2, C.vermelho);
+    }
+    var lbl = "B" + s.stats.bombs + " C" + s.stats.flame + " V" + s.stats.vel +
+              (s.stats.kick ? " K" : "") + (s.stats.shield ? " E" : "");
+    E.gfx.text(lbl, pad, y0 + hh - u(4), { color: t.hudTxt, ts: "small", valign: "bottom",
+               fit: Math.round(W * 0.36), screen: true });
+    // centro: fase + tempo (vermelho piscando no fim) ou onda na sobrevivencia
+    var xm = Math.round(W * 0.5);
+    E.gfx.text(s.sobrevivencia ? "ONDA" : "FASE " + s.mundo + "-" + s.nivel, xm, y0 + u(4),
+               { color: dim, ts: "tiny", align: "center", screen: true });
+    E.gfx.text(s.sobrevivencia ? String(s.onda) : String(seg), xm, cy + u(6), {
+        color: piscaTempo ? C.vermelho : t.hudTxt, ts: "label",
+        align: "center", valign: "middle", screen: true });
+    // direita: detonador remoto (chip BOOM pulsando) + pontos
+    var xr = W - pad;
+    if (s.stats.remote) {
+        var bw2 = u(34), bh = hh - u(8), bx = W - bw2 - u(4), by = y0 + u(4);
+        E.gfx.rect(bx, by, bw2, bh, System.mixColor(C.preto, C.vermelho, 25 + piscaBoom * 12),
+                   { r: u(5), screen: true });
+        E.gfx.text("BOOM", bx + bw2 / 2, by + bh / 2, { color: C.branco, ts: "small",
+                   align: "center", valign: "middle", screen: true });
+        xr = bx - u(6);
+    }
+    E.gfx.text("PONTOS", xr, y0 + u(4), { color: dim, ts: "tiny", align: "right", screen: true });
+    E.gfx.text(String(s.score), xr, cy + u(6), { color: C.ouro, ts: "label",
+               align: "right", valign: "middle", screen: true });
+}
+
+// HUD do duelo: rounds ganhos (coracoes, melhor de 3) de um lado, nome do
+// rival do outro, round e placar no centro
+function drawHudDuelo(s, pulso, force) {
+    var key = "d" + NET.ganhos + "|" + NET.perdidos + "|" + NET.round +
+              (s.stats.remote ? "r" : "") + (pulso > 0.5 ? 1 : 0);
+    if (!force && key === hudKey) return;
+    hudKey = key;
+    var t = s.tema, y0 = HUD_Y, hh = H - y0;
+    System.fillRect(0, y0, W, hh, t.hud);
+    System.fillRect(0, y0, W, Math.max(2, u(1)), t.detalhe);
+    var cy = Math.floor(y0 + hh / 2) + 1;
+    var pad = u(6);
+    var dim = System.mixColor(t.hudTxt, t.hud, 40);
+    var hr = Math.max(3, Math.round(hh * 0.08)), step = hr * 3 + u(2);
+    var hy = y0 + Math.round(hh * 0.32);
+    for (var v = 0; v < NET.ganhos && v < 2; v++) {
+        var hx = pad + hr + v * step;
+        System.fillCircle(hx, hy - hr * 0.3, hr, C.vermelho);
+        System.fillCircle(hx + hr * 1.4, hy - hr * 0.3, hr, C.vermelho);
+        System.fillTriangle(hx - hr, hy + hr * 0.3, hx + hr * 2.4, hy + hr * 0.3,
+                            hx + hr * 0.7, hy + hr * 2.2, C.vermelho);
+    }
+    var lbl = "B" + s.stats.bombs + " C" + s.stats.flame + " V" + s.stats.vel +
+              (s.stats.kick ? " K" : "") + (s.stats.shield ? " E" : "");
+    E.gfx.text(lbl, pad, y0 + hh - u(4), { color: t.hudTxt, ts: "small", valign: "bottom",
+               fit: Math.round(W * 0.36), screen: true });
+    var xm = Math.round(W * 0.5);
+    E.gfx.text("ROUND " + NET.round, xm, y0 + u(4),
+               { color: dim, ts: "tiny", align: "center", screen: true });
+    E.gfx.text(NET.ganhos + " - " + NET.perdidos, xm, cy + u(6), {
+        color: C.branco, ts: "label", align: "center", valign: "middle", screen: true });
+    var xr = W - pad;
+    var piscaBoom = s.stats.remote ? Math.floor(pulso * 3) : 0;
+    if (s.stats.remote) {
+        var bw2 = u(34), bh = hh - u(8), bx = W - bw2 - u(4), by = y0 + u(4);
+        E.gfx.rect(bx, by, bw2, bh, System.mixColor(C.preto, C.vermelho, 25 + piscaBoom * 12),
+                   { r: u(5), screen: true });
+        E.gfx.text("BOOM", bx + bw2 / 2, by + bh / 2, { color: C.branco, ts: "small",
+                   align: "center", valign: "middle", screen: true });
+        xr = bx - u(6);
+    }
+    E.gfx.text((NET.rival ? NET.rival.nome : "?").substring(0, 10), xr, y0 + u(4),
+               { color: dim, ts: "tiny", align: "right", screen: true });
+    E.gfx.text("RIVAL", xr, cy + u(6), { color: C.laranja, ts: "label",
+               align: "right", valign: "middle", screen: true });
+}
+
+// --------------------------------------------------------------- mundo ----
+
+// cartao de abertura sobre a arena (a camada suja apaga quando some)
+function drawIntro(s) {
+    var pw = Math.min(u(170), GW - u(20)), ph = u(70);
+    var px = OX + Math.round((GW - pw) / 2), py = OY + Math.round((GH - ph) / 2);
+    E.gfx.panel(px, py, pw, ph, { bg: System.mixColor(C.preto, s.tema.detalhe, 14),
+                                   stroke: s.tema.detalhe, screen: true });
+    var titulo = s.duelo ? "ROUND " + NET.round :
+                 s.sobrevivencia ? "SOBREVIVENCIA" :
+                 (s.nivel % NV.NIVEIS_POR_MUNDO === 0 ? "CHEFE " : "FASE ") + s.mundo + "-" + s.nivel;
+    E.gfx.text(titulo, px + pw / 2, py + u(20), { color: C.ouro, ts: "big", align: "center",
+               valign: "middle", fit: pw - u(12), screen: true });
+    var sub = s.duelo ? "contra " + (NET.rival ? NET.rival.nome : "?") :
+              s.sobrevivencia ? "aguente as ondas" :
+              s.tema.nome + (s.ventos.length ? " - cuidado com os respiros" :
+                             s.teles.length ? " - use os portais" : "");
+    E.gfx.text(sub, px + pw / 2, py + u(42), { color: C.cinza, ts: "small", align: "center",
+               valign: "middle", fit: pw - u(12), screen: true });
+    E.gfx.text(s.duelo ? "melhor de 3 - bombas no compasso" :
+               s.sobrevivencia ? "" : "ache a saida e limpe a arena", px + pw / 2, py + u(56),
+               { color: C.cinzaD, ts: "tiny", align: "center", valign: "middle",
+                 fit: pw - u(12), screen: true });
+}
+
+function drawMundo(force) {
+    var s = arena.state();
+    if (!s) return;
+    var beat = arena.beatNow();
+    var pulso = beat - Math.floor(beat);   // 0..1 dentro da batida
+    PULSO = pulso;
+    if (force) {
+        mapa.all();
+        s.mudou.length = 0;
+    }
+    marcaMudancas(s);
+    mapa.flush();
+    drawEntidades(s, beat, pulso);
+    E.fx.draw();
+    if (s.intro > 0) drawIntro(s);
+    E.dirty.unclip();
+    drawHUD(s, pulso, force);
+}
+
+// ------------------------------------------------------------- menus ------
+
+// botoes empilhados e centrados: devolve os hit-rects na ordem dos rotulos
+function botoes(y, rotulos, fundo) {
+    var bw = Math.min(u(150), W - u(40)), bh = u(27), gap = u(10);
+    var n = rotulos.length, x = Math.round((W - bw) / 2);
+    System.fillRect(x - 2, y - 2, bw + 4, bh * n + gap * (n - 1) + 4, fundo);
+    var out = [];
+    for (var i = 0; i < n; i++) {
+        out.push(i === 0 ?
+            E.gfx.button(rotulos[i], x, y, bw, bh, { color: C.laranja, screen: true }) :
+            E.gfx.button(rotulos[i], x, y + i * (bh + gap), bw, bh, {
+                primary: false, bg: C.painel, stroke: System.mixColor(C.laranja, C.preto, 40),
+                textColor: C.branco, screen: true }));
+    }
+    return out;
+}
+
+// joystick flutuante: a ancora nasce no toque e segue o dedo quando ele se
+// afasta demais (virar e instantaneo); toque seco planta bomba
+var JOY = { ax: 0, ay: 0, dead: u(7), raio: u(22) };
+function joystick() {
+    var i = E.input;
+    if (i.justDown) { JOY.ax = i.x; JOY.ay = i.y; }
+    if (!i.down || !i.moved) return [0, 0];
+    var dx = i.x - JOY.ax, dy = i.y - JOY.ay;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    if (d > JOY.raio) {
+        JOY.ax = i.x - dx / d * JOY.raio;
+        JOY.ay = i.y - dy / d * JOY.raio;
+    }
+    if (d < JOY.dead) return [0, 0];
+    return Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy > 0 ? 1 : -1];
+}
+
+var tituloArte = false;
 E.run({
     titulo: {
-        fps: 30,
+        static: true,
         enter: function () {
-            tituloBase = false;
+            this.first = true;
             hi = E.save.num("hi", 0);
             E.audio.music(NV.SONG_MENU);
         },
         update: function () {
-            RECT_JOGAR = { x: W / 2 - 90, y: H * 0.56, w: 180, h: 50 };
-            RECT_SOBRE = { x: W / 2 - 90, y: H * 0.56 + 62, w: 180, h: 50 };
-            if (E.hit(RECT_JOGAR)) {
+            if (!this.btn) return;
+            if (E.hit(this.btn[0])) {
+                E.audio.sfx("ok");
                 E.data.retomar = false;
                 E.data.modo = "campanha";
                 prog.mundo = E.save.num("mundo", 1);
                 prog.nivel = E.save.num("nivel", 1);
                 E.goto("jogando");
-            } else if (E.hit(RECT_SOBRE)) {
+            } else if (E.hit(this.btn[1])) {
+                E.audio.sfx("ok");
+                E.goto("duelo");
+            } else if (E.hit(this.btn[2])) {
+                E.audio.sfx("ok");
                 E.data.retomar = false;
                 E.data.modo = "sobre";
                 E.goto("jogando");
             }
         },
         draw: function () {
-            if (!tituloBase) drawTituloBase();
-            // repinta so a metade de baixo (o PNG fica; nada de decode/frame)
-            System.fillRect(0, Math.floor(H * 0.5), W, Math.ceil(H * 0.5) + 1, C.preto);
-            E.gfx.text("DETONA!", W / 2, Math.floor(H * 0.36), {
-                color: C.ouro, size: 3, align: "center", screen: true });
-            E.gfx.text("campanha " + hi + " . sobrevivencia " + E.save.num("sobre.hi", 0),
-                       W / 2, Math.floor(H * 0.47), {
-                       color: C.cinza, size: 1, align: "center", screen: true });
-            E.gfx.button("JOGAR", RECT_JOGAR.x, RECT_JOGAR.y,
-                         RECT_JOGAR.w, RECT_JOGAR.h, { primary: true });
-            E.gfx.button("SOBREVIVENCIA", RECT_SOBRE.x, RECT_SOBRE.y,
-                         RECT_SOBRE.w, RECT_SOBRE.h);
-            E.gfx.text("arraste p/ andar . toque p/ bomba", W / 2,
-                       Math.floor(H * 0.56) + 128, {
-                       color: C.cinza, size: 1, align: "center", screen: true });
+            if (this.first) {
+                this.first = false;
+                System.fillScreen(C.preto);
+                tituloArte = false;
+                if (E.caps.png && W >= 480) {
+                    try { tituloArte = !!System.drawPNG(E.spr.bases[0] + "titulo.png", Math.round((W - 480) / 2), 0); }
+                    catch (e) { tituloArte = false; }
+                }
+                // nome na placa preta da arte (y 172..225) ou centrado sem arte
+                var ty = tituloArte ? 199 : Math.round(H * 0.3);
+                E.gfx.text("DETONA!", W / 2, ty, { color: C.ouro, px: u(21), align: "center",
+                           valign: "middle", screen: true });
+                var y = tituloArte ? 230 + u(14) : ty + u(30);
+                E.gfx.text("campanha " + prog.mundo + "-" + prog.nivel + "   recorde " + hi, W / 2, y,
+                           { color: C.cinza, ts: "small", align: "center", fit: W - u(16), screen: true });
+                y += u(11);
+                E.gfx.text("sobrevivencia: recorde " + E.save.num("sobre.hi", 0), W / 2, y,
+                           { color: C.cinza, ts: "small", align: "center", fit: W - u(16), screen: true });
+                E.gfx.text("deslize para andar - toque para a bomba", W / 2, H - u(9),
+                           { color: C.cinzaD, ts: "small", align: "center", valign: "middle",
+                             fit: W - u(16), screen: true });
+            }
+            this.btn = botoes(H - u(27) * 3 - u(10) * 2 - u(20),
+                              ["JOGAR", "DUELO", "SOBREVIVENCIA"], C.preto);
+        }
+    },
+
+    // ------------------------------------------------- lobby do duelo ----
+    // Portao proprio (o mesh.gate da dep desenha com UI.* do sistema; aqui
+    // a engine manda): sem BT = carta fixa; malha off = botao LIGAR. O
+    // heartbeat 'dhl' anuncia este Detona aos outros por perto.
+    duelo: {
+        fps: 12,
+        enter: function () {
+            this.first = true;
+            this.ligaAte = 0;
+            netReset();
+            NET.fase = "lobby";
+            NET.hbAte = 0;
+            if (mesh.available()) {
+                try { NET.me = mesh.me(); } catch (e) { NET.me = null; }
+            } else NET.me = null;
+        },
+        update: function () {
+            var now = System.millis();
+            if (mesh.available() && netRadio()) {
+                mesh.each(netMsg, now);
+                netPump(now);
+            }
+            for (var k in NET.vistos)
+                if (now - NET.vistos[k].at > 10000) delete NET.vistos[k];
+            if (NET.convide && NET.fase === "lobby" && now - NET.convide.at > 12000)
+                NET.convide = null;
+            var b = this.btns;
+            if (!b) return;
+            for (var i = 0; i < b.length; i++) {
+                if (!E.hit(b[i])) continue;
+                var a = b[i]._a;
+                E.audio.sfx("ok");
+                if (a === "voltar") { netReset(); E.goto("titulo"); }
+                else if (a === "ligar" && now >= this.ligaAte) {
+                    this.ligaAte = now + 1200;
+                    CelerNet.start({});
+                }
+                else if (a === "desafiar") netConvidar(b[i]._id);
+                else if (a === "aceitar") netAceitar(true);
+                else if (a === "recusar") netAceitar(false);
+                else if (a === "cancelar") {
+                    if (NET.fase === "aguarda" && NET.rival) netSend("dq");
+                    NET.fase = "lobby";
+                    NET.convide = null;
+                    NET.rival = null;
+                    NET.envioMsg = "";
+                }
+                break;
+            }
+        },
+        draw: function () {
+            if (this.first) {
+                this.first = false;
+                System.fillScreen(C.preto);
+                E.gfx.text("DUELO", W / 2, u(16), { color: C.ouro, px: u(16),
+                           align: "center", valign: "middle", screen: true });
+                E.gfx.text("bomberman 1x1 pela malha", W / 2, u(29),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+            }
+            var yTop = u(40);
+            System.fillRect(0, yTop, W, H - yTop, C.preto);   // corpo muda por estado
+            this.btns = [];
+            var eu = this;
+            function bt(rotulo, y, acao, extra, primario) {
+                var bw = Math.min(u(150), W - u(40)), bh = u(27);
+                var r = E.gfx.button(rotulo, Math.round((W - bw) / 2), y, bw, bh,
+                                     primario === false ? { primary: false, bg: C.painel,
+                                       stroke: System.mixColor(C.laranja, C.preto, 40),
+                                       textColor: C.branco, screen: true }
+                                                        : { color: C.laranja, screen: true });
+                r._a = acao;
+                if (extra) for (var q in extra) r[q] = extra[q];
+                eu.btns.push(r);
+                return y + bh + u(8);
+            }
+            var y;
+            if (!mesh.available()) {
+                E.gfx.text("esta placa nao tem bluetooth", W / 2, u(70),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+                bt("< VOLTAR", u(110), "voltar");
+                return;
+            }
+            if (!netRadio()) {
+                E.gfx.text("ligue a malha para desafiar", W / 2, u(70),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+                y = bt("LIGAR A MALHA", u(96), "ligar");
+                bt("< VOLTAR", y + u(6), "voltar", null, false);
+                return;
+            }
+            if (NET.convide && NET.fase === "lobby") {
+                E.gfx.text((NET.convide.nome || "?") + " te desafia!", W / 2, u(62),
+                           { color: C.branco, ts: "label", align: "center", screen: true });
+                y = bt("ACEITAR", u(84), "aceitar");
+                bt("RECUSAR", y + u(6), "recusar", null, false);
+                return;
+            }
+            if (NET.fase === "convidei") {
+                E.gfx.text("convite enviado para", W / 2, u(62),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+                E.gfx.text(NET.convide ? NET.convide.nome : "?", W / 2, u(76),
+                           { color: C.branco, ts: "label", align: "center", screen: true });
+                bt("CANCELAR", u(104), "cancelar", null, false);
+                return;
+            }
+            if (NET.fase === "aguarda") {
+                E.gfx.text("duelo contra", W / 2, u(62),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+                E.gfx.text(NET.rival ? NET.rival.nome : "?", W / 2, u(76),
+                           { color: C.branco, ts: "label", align: "center", screen: true });
+                E.gfx.text("esperando o inicio...", W / 2, u(96),
+                           { color: C.cinza, ts: "small", align: "center", screen: true });
+                bt("CANCELAR", u(120), "cancelar", null, false);
+                return;
+            }
+            // lobby: Detonas vistos por perto (heartbeat dhl)
+            var ids = [];
+            for (var id in NET.vistos) ids.push(id);
+            ids.sort(function (a, b) { return NET.vistos[b].at - NET.vistos[a].at; });
+            y = u(58);
+            var n = 0;
+            for (var i = 0; i < ids.length && n < 3; i++) {
+                var nome = (NET.vistos[ids[i]].nome || ids[i]).substring(0, 12);
+                y = bt("DESAFIAR " + nome, y, "desafiar", { _id: ids[i] });
+                n++;
+            }
+            if (!n)
+                E.gfx.text("procurando Detona por perto...", W / 2, u(66),
+                           { color: C.cinzaD, ts: "small", align: "center", screen: true });
+            bt("< VOLTAR", H - u(27) - u(8), "voltar", null, false);
         }
     },
 
     jogando: {
-        fps: 0,   // sem teto: o frame vale o que a placa der
+        fps: 30,
         enter: function () {
             var sobre = E.data.modo === "sobre";
+            var duelo = E.data.modo === "duelo";
+            var mu = duelo ? 2 : prog.mundo, ni = duelo ? 4 : prog.nivel;
             if (!E.data.retomar) {
-                var plano = sobre ? NV.gerar(1, 1, { sobrevivencia: true })
-                                  : NV.gerar(prog.mundo, prog.nivel);
-                arena.iniciar(prog.mundo, prog.nivel, plano);
+                var plano;
+                if (duelo) {
+                    // arena Irma: mesma seed nos dois aparelhos (mundo 2 =
+                    // tema Forno + mix de powerups do meio da campanha)
+                    plano = NV.gerar(2, 4, { duelo: true, seed: NET.seed });
+                    plano.duelo = {
+                        id: NET.rival ? NET.rival.id : "?",
+                        nome: NET.rival ? NET.rival.nome : "?",
+                        host: NET.host
+                    };
+                } else if (sobre) {
+                    plano = NV.gerar(1, 1, { sobrevivencia: true });
+                } else {
+                    plano = NV.gerar(prog.mundo, prog.nivel);
+                }
+                arena.iniciar(mu, ni, plano);
                 arena.layout(CELL, OX, OY);
                 wireArena();
-                ia.ligar();               // bichos do plano (+ chefe no 8º)
-                if (sobre) { ia.onda(); E.data.ondaBeat = -1; }
+                if (duelo) {
+                    NET.fase = "jogando";
+                    NET.ultC = -1; NET.ultR = -1; NET.keepAte = 0;
+                    arena.state().intro = 2.4;   // countdown contra o rival
+                } else {
+                    ia.ligar();                  // bichos do plano (+ chefe no 8o)
+                    if (sobre) { ia.onda(); E.data.ondaBeat = -1; }
+                }
             } else {
                 E.data.retomar = false;
             }
-            E.audio.music(NV.musica(prog.mundo, prog.nivel, sobre));
+            // fundo da camada suja = as celulas do mapa sob a caixa
+            E.dirty.enable(function (x, y, w, h) { mapa.markRect(x, y, w, h); });
+            E.dirty.clip(OX, OY, GW, GH);
+            this.force = true;
+            hudKey = "";
+            if (E.data.musicPos !== undefined) {
+                E.audio.music(NV.musica(mu, ni, sobre), { startMs: E.data.musicPos });
+                E.data.musicPos = undefined;
+            } else {
+                E.audio.music(NV.musica(mu, ni, sobre));
+            }
         },
         update: function (dt) {
             var s = arena.state();
-            // pausa: canto superior direito
-            if (E.input.tap && E.input.tap.x > W - 48 && E.input.tap.y < 48) {
+            var tap = E.input.tap;
+            var duelo = s && s.duelo;
+            // canto superior direito: PAUSA na campanha; no duelo o mundo
+            // nao para (o rival segue) — o botao vira desistencia
+            if (tap && tap.x >= OX + (NV.COLS - 2) * CELL && tap.y < OY + CELL) {
+                if (duelo) { netDesistir(); return; }
                 E.data.retomar = true;
+                var pos = typeof System.musicPos === "function" ? System.musicPos() : -1;
+                E.data.musicPos = pos > 0 ? pos : undefined;
                 E.goto("pausa");
                 return;
             }
-            // detonador remoto: chip BOOM no canto inferior direito do HUD
-            if (s && s.stats.remote && E.input.tap &&
-                E.input.tap.x > W - 76 && E.input.tap.y > CELL * NV.ROWS) {
-                arena.detonar();
-                E.input.tap = null;
+            // detonador remoto: chip BOOM no canto direito do HUD
+            if (s && s.stats.remote && tap && tap.x > W - u(40) && tap.y > HUD_Y) {
+                if (arena.detonar() && duelo) netSend("dd" + netSeq());
+                tap = null;
             }
-            // direcao por drag (a ultima direcao persiste enquanto desliza)
-            var ax = 0, ay = 0;
-            if (E.input.down) {
-                if (Math.abs(E.input.dx) > Math.abs(E.input.dy)) ax = E.input.dx > 0 ? 1 : -1;
-                else if (E.input.dy !== 0) ay = E.input.dy > 0 ? 1 : -1;
+            // toque longo parado = detonador (quando tem)
+            if (s && s.stats.remote && E.input.longpress && arena.detonar() && duelo)
+                netSend("dd" + netSeq());
+            var dir = joystick();
+            arena.mover(dir[0], dir[1], dt);
+            if (tap && tap.y < HUD_Y && arena.plantar()) {
+                if (duelo) {
+                    var bo = s.bombs[s.bombs.length - 1];
+                    netSend("db" + netSeq() + "," + bo.fx + "," + bo.fy + "," +
+                            Math.round((bo.de % 10) * 10) + "," + bo.range +
+                            (bo.pierce ? ",1" : ""));
+                }
             }
-            arena.mover(ax, ay, dt);
-            if (E.input.tap) arena.plantar();
+            // rede: drena a fila da malha, publica a minha celula, vigia o
+            // rival (presenca) — ~3,4 msgs/s andando + keepalive de 2 s
+            if (duelo && NET.fase === "jogando") {
+                var now = System.millis();
+                if (mesh.available()) mesh.each(netMsg, now);
+                netPump(now);
+                var cel = arena.celulaPlayer();
+                if (cel.c !== NET.ultC || cel.r !== NET.ultR || now >= NET.keepAte) {
+                    NET.ultC = cel.c; NET.ultR = cel.r; NET.keepAte = now + 2000;
+                    netSend("dp" + netSeq() + "," + cel.c + "," + cel.r);
+                }
+            }
+            var antesIntro = s && s.intro > 0;
             arena.update(dt);
+            // dicas da 1a fase quando o cartao some
+            if (antesIntro && s.intro <= 0 && s.mundo === 1 && s.nivel === 1 && !s.sobrevivencia) {
+                var pcx = OX + s.player.x, pcy = OY + s.player.y;
+                E.fx.popText(pcx + CELL * 3, pcy + CELL, "deslize = andar", { color: C.branco, ts: 'label', life: 2.4 });
+                E.fx.popText(pcx + CELL * 3, pcy + CELL * 2.2, "toque = bomba", { color: C.ouro, ts: 'label', life: 2.4 });
+            }
             // sobrevivencia: onda na batida (a cada 12) ou arena vazia
             if (s && s.sobrevivencia && !s.fim) {
                 var bInt = Math.floor(arena.beatNow());
@@ -221,39 +1113,140 @@ E.run({
                 }
             }
         },
-        draw: function () { drawMundo(); }
+        draw: function () {
+            drawMundo(this.force);
+            this.force = false;
+        }
+    },
+
+    // ------------------------------------------- placar entre rounds -----
+    // Mostra o resultado do round e o placar; 1.6 s de janela para o 'dm'
+    // tardio do rival transformar derrota em EMPATE. Host comanda o
+    // proximo round ('ds'); partida acaba em 2 vitorias (ou W.O./saida).
+    round: {
+        static: true,
+        enter: function () {
+            E.audio.stop();
+            this.first = true;
+            this.t = 0;
+            this.ok = false;
+            this.prox = false;
+            this.fim = false;
+            this.btn = null;
+            hudKey = "";
+        },
+        update: function (dt) {
+            this.t += dt;
+            var now = System.millis();
+            if (mesh.available() && netRadio()) {
+                mesh.each(netMsg, now);
+                netPump(now);
+            }
+            if (!this.ok && this.t > 1.6) {
+                this.ok = true;
+                if (NET.res === "venci") NET.ganhos++;
+                else if (NET.res === "perdi") NET.perdidos++;
+                else if (NET.res === "saiu") NET.ganhos = 2;      // W.O.
+                else if (NET.res === "desisti") NET.perdidos = 2;
+                logDuelo("round " + NET.round + ": " + (NET.res || "?") +
+                         " (" + NET.ganhos + "x" + NET.perdidos + ")");
+                this.fim = NET.ganhos >= 2 || NET.perdidos >= 2;
+                E.redraw();
+            }
+            if (this.ok && this.fim) {
+                if (this.btn && this.t > 0.4 && E.hit(this.btn[0])) {
+                    E.audio.sfx("ok");
+                    netReset();
+                    E.goto("titulo");
+                }
+                return;
+            }
+            if (this.ok && NET.host && !this.prox && this.t > 2.8) {
+                this.prox = true;
+                netInicioRound();
+            }
+        },
+        draw: function () {
+            if (this.first) {
+                this.first = false;
+                System.fillScreen(C.preto);
+            }
+            var res = NET.res || "...";
+            var tit = this.fim ? (NET.ganhos >= 2 ? "VITORIA NO DUELO!" : "DERROTA") :
+                      res === "venci" ? "ROUND GANHO!" :
+                      res === "perdi" ? "ROUND PERDIDO" :
+                      res === "empate" ? "EMPATE!" :
+                      res === "saiu" ? "RIVAL SAIU" :
+                      res === "desisti" ? "VOCE SAIU" : "ROUND";
+            var y = Math.round(H * 0.16);
+            E.gfx.text(tit, W / 2, y, { color: this.fim && NET.ganhos >= 2 ? C.verde : C.ouro,
+                       px: u(18), fit: W - u(24), align: "center", valign: "middle",
+                       screen: true });
+            y += u(32);
+            E.gfx.text("voce " + NET.ganhos + " x " + NET.perdidos + " " +
+                       (NET.rival ? NET.rival.nome.substring(0, 10) : "?"),
+                       W / 2, y, { color: C.branco, ts: "label", align: "center",
+                       valign: "middle", screen: true });
+            if (!this.ok) {
+                E.gfx.text("conferindo...", W / 2, y + u(24),
+                           { color: C.cinzaD, ts: "small", align: "center", screen: true });
+            } else if (this.fim) {
+                this.btn = botoes(H - u(27) - u(10) - u(18), ["MENU"], C.preto);
+            } else {
+                E.gfx.text(NET.host ? "proximo round..." : "esperando o host...",
+                           W / 2, y + u(24), { color: C.cinza, ts: "small",
+                           align: "center", screen: true });
+            }
+        }
     },
 
     pausa: {
-        fps: 30,
+        static: true,
+        enter: function () {
+            E.audio.stop();
+            this.first = true;
+        },
         update: function () {
-            var r1 = { x: W / 2 - 100, y: H * 0.38, w: 200, h: 50 };
-            var r2 = { x: W / 2 - 100, y: H * 0.38 + 66, w: 200, h: 50 };
-            if (E.hit(r1)) { E.goto("jogando"); }          // retomar (estado vivo)
-            if (E.hit(r2)) { arena.parar(); E.goto("titulo"); }
+            if (!this.btn) return;
+            if (E.hit(this.btn[0])) { E.audio.sfx("ui"); E.goto("jogando"); }   // retomar (estado vivo)
+            else if (E.hit(this.btn[1])) { arena.parar(); E.goto("titulo"); }
         },
         draw: function () {
-            drawMundo();
-            System.fillRect(0, 0, W, H, C.preto);
-            E.gfx.text("PAUSA", W / 2, Math.floor(H * 0.26), {
-                color: C.ouro, size: 3, align: "center", screen: true });
-            E.gfx.button("CONTINUAR", W / 2 - 100, H * 0.38, 200, 50, { primary: true });
-            E.gfx.button("SAIR", W / 2 - 100, H * 0.38 + 66, 200, 50);
+            var pw = Math.min(u(180), W - u(30)), ph = u(150);
+            var px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2);
+            if (this.first) {
+                this.first = false;
+                // painel por cima da arena congelada (sem limpar a tela)
+                E.gfx.panel(px, py, pw, ph, { bg: C.painel, stroke: C.laranja, screen: true });
+                E.gfx.text("PAUSA", W / 2, py + u(26), { color: C.ouro, px: u(21),
+                           align: "center", valign: "middle", screen: true });
+            }
+            var bw = pw - u(30), bh = u(27), bx = Math.round((W - bw) / 2), by = py + u(52);
+            System.fillRect(bx - 2, by - 2, bw + 4, bh * 2 + u(10) + 4, C.painel);
+            this.btn = [
+                E.gfx.button("CONTINUAR", bx, by, bw, bh, { color: C.laranja, screen: true }),
+                E.gfx.button("MENU", bx, by + bh + u(10), bw, bh, {
+                    primary: false, bg: C.preto, stroke: C.laranja, textColor: C.branco, screen: true })
+            ];
         }
     },
 
     fim: {
-        fps: 30,
+        static: true,
         enter: function () {
             E.audio.stop();
+            this.first = true;
+            this.t = 0;
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
             E.data.novoRec = E.save.best(info.sobre ? "sobre.hi" : "hi", info.score);
+            if (E.data.novoRec) E.audio.sfx("record");
         },
-        update: function () {
+        update: function (dt) {
+            this.t += dt;
+            if (this.t < 0.4 || !this.btn) return;   // engole o tap do momento final
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
-            var r1 = { x: W / 2 - 100, y: H * 0.60, w: 200, h: 50 };
-            var r2 = { x: W / 2 - 100, y: H * 0.60 + 62, w: 200, h: 44 };
-            if (E.hit(r1)) {
+            if (E.hit(this.btn[0])) {
+                E.audio.sfx("ok");
                 E.data.retomar = false;
                 if (!info.sobre && info.fim === 'win') {
                     prog.mundo = E.save.num("mundo", 1);
@@ -261,30 +1254,50 @@ E.run({
                 }
                 E.data.modo = info.sobre ? "sobre" : "campanha";
                 E.goto("jogando");
-            } else if (E.hit(r2)) {
+            } else if (E.hit(this.btn[1])) {
+                E.audio.sfx("ui");
                 E.goto("titulo");
             }
         },
         draw: function () {
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
-            System.fillRect(0, 0, W, H, C.preto);
-            var titulo = info.sobre ? "ONDA " + info.onda :
-                         info.fim === 'win' ? "FASE LIMPA!" : "FIM DE JOGO";
-            E.gfx.text(titulo, W / 2, Math.floor(H * 0.30), {
-                        color: C.ouro, size: 3, align: "center", screen: true });
-            E.gfx.text("PONTOS " + info.score, W / 2, Math.floor(H * 0.44), {
-                        color: C.branco, size: 2, align: "center", screen: true });
-            if (E.data.novoRec) E.gfx.text("NOVO RECORDE!", W / 2, Math.floor(H * 0.52), {
-                        color: C.laranja, size: 2, align: "center", screen: true });
-            var rotulo = info.sobre ? "DE NOVO"
+            if (this.first) {
+                this.first = false;
+                System.fillScreen(C.preto);
+                var titulo = info.sobre ? "ONDA " + info.onda :
+                             info.zerou ? "CAMPANHA COMPLETA!" :
+                             info.fim === 'win' ? "FASE LIMPA!" :
+                             info.fim === 'tempo' ? "TEMPO ESGOTADO" : "FIM DE JOGO";
+                var y = Math.round(H * 0.17);
+                E.gfx.text(titulo, W / 2, y, { color: info.fim === 'win' ? C.verde : C.ouro,
+                           px: u(21), fit: W - u(24), align: "center", valign: "middle", screen: true });
+                y += u(36);
+                E.gfx.text(String(info.score), W / 2, y, { color: C.branco, px: u(30),
+                           align: "center", valign: "middle", screen: true });
+                y += u(26);
+                E.gfx.text(info.fim === 'win' && info.bonus ? "pontos (bonus de tempo +" + info.bonus + ")"
+                                                             : "pontos", W / 2, y,
+                           { color: C.cinza, ts: "small", align: "center", valign: "middle",
+                             fit: W - u(20), screen: true });
+                y += u(18);
+                if (info.zerou) {
+                    E.gfx.text("os 3 mundos cairam - recomeca do 1-1", W / 2, y - u(36) + u(54),
+                               { color: C.verde, ts: "small", align: "center", valign: "middle",
+                                 fit: W - u(20), screen: true });
+                }
+                if (E.data.novoRec) {
+                    E.gfx.text("NOVO RECORDE!", W / 2, y, { color: C.laranja, ts: "label",
+                               align: "center", valign: "middle", screen: true });
+                }
+            }
+            var rotulo = info.sobre ? "DE NOVO" : info.zerou ? "DE NOVO"
                        : info.fim === 'win' ? "PROXIMA FASE" : "TENTAR DE NOVO";
-            E.gfx.button(rotulo, W / 2 - 100, H * 0.60, 200, 50, { primary: true });
-            E.gfx.button("MENU", W / 2 - 100, H * 0.60 + 62, 200, 44);
+            this.btn = botoes(H - u(27) * 2 - u(10) - u(18), [rotulo, "MENU"], C.preto);
         }
     }
 }, "titulo");
 
-// ---------------------------------------------------------------- visao --
+// ---------------------------------------------------------------- ganchos --
 
 function wireArena() {
     var s = arena.state();
@@ -293,18 +1306,23 @@ function wireArena() {
             SFX.via(E.audio, tam >= 7 ? 'boomGra' : 'boomPeq', { duck: 650 });
         } else if (nome === 'bicho') {
             SFX.via(E.audio, 'bicho', { oitava: -1 });
+        } else if (nome === 'vento') {
+            E.audio.sfx([[90, 60], [70, 120]]);
+        } else if (nome === 'tele') {
+            E.audio.sfx([[600, 30], [900, 30], [1300, 60]]);
         } else {
             SFX.via(E.audio, nome);
         }
     };
     s.onFx = function (tipo, a, b) {
         if (tipo === 'bum') {
+            // explosao comum: anel + faiscas (sem flash/tremor a cada bomba:
+            // era o vidro "vibrando com flashes" o tempo todo)
             var cx = OX + (a.c + 0.5) * CELL, cy = OY + (a.r + 0.5) * CELL;
             E.fx.ring(cx, cy, { speed: CELL * 9, color: C.laranja, life: 0.4 });
-            E.fx.burst(cx, cy, { n: 18, colors: [C.ouro, C.laranja, C.vermelho],
-                                 speed: CELL * 5, life: 0.5 });
-            E.cam.shake(9, 0.35);
-            E.fx.flash(C.ouro, 120);
+            E.fx.burst(cx, cy, { n: 14, colors: [C.ouro, C.laranja, C.vermelho],
+                                 speed: CELL * 5, life: 0.45 });
+            if (b && b.length >= 7) E.fx.flash(C.ouro, 120);   // so a explosao grande brilha
         } else if (tipo === 'macio') {
             var mx = OX + (a.c + 0.5) * CELL, my = OY + (a.r + 0.5) * CELL;
             E.fx.burst(mx, my, { n: 8, colors: [0x8410, 0x6204, C.cinza],
@@ -312,35 +1330,85 @@ function wireArena() {
         } else if (tipo === 'power') {
             var cel = arena.celulaPlayer();
             var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
-            E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano });
+            E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano, ts: 'label' });
         } else if (tipo === 'combo') {
             var cbx = OX + (a.c + 0.5) * CELL, cby = OY + (a.r + 0.5) * CELL;
-            E.fx.popText(cbx, cby - CELL, "COMBO x" + a.mult, { color: C.magenta });
+            E.fx.popText(cbx, cby - CELL, "COMBO x" + a.mult, { color: C.magenta, ts: 'big' });
             E.fx.ring(cbx, cby, { speed: CELL * 12, color: C.magenta, life: 0.3 });
         } else if (tipo === 'saida') {
             var sx = OX + (a.c + 0.5) * CELL, sy = OY + (a.r + 0.5) * CELL;
-            E.fx.popText(sx, sy - CELL, "SAIDA!", { color: C.verde });
+            E.fx.popText(sx, sy - CELL, "SAIDA!", { color: C.verde, ts: 'label' });
             E.fx.ring(sx, sy, { speed: CELL * 8, color: C.verde, life: 0.5 });
         } else if (tipo === 'bicho') {
-            // a veio em pixels do centro do bicho
-            E.fx.burst(a.x, a.y, { n: 14, colors: [C.branco, C.laranja],
-                                   speed: CELL * 4, life: 0.5 });
-            E.fx.popText(a.x, a.y - CELL / 2, "+" + a.pontos, { color: C.ouro });
+            // a veio em pixels do centro do bicho (coordenadas da grade)
+            E.fx.burst(OX + a.x, OY + a.y, { n: 12, colors: [C.branco, C.laranja],
+                                             speed: CELL * 4, life: 0.5 });
+            E.fx.popText(OX + a.x, OY + a.y - CELL / 2, "+" + a.pontos, { color: C.ouro, ts: 'small' });
+        } else if (tipo === 'golpe') {
+            var gx = OX + a.fx * CELL, gy = OY + a.fy * CELL;
+            E.fx.burst(gx, gy, { n: 10, colors: [C.branco, 0xBDF7], speed: CELL * 4, life: 0.35 });
+            E.fx.popText(gx, gy - CELL * 0.6, a.kind === 'chefe' ? "-1" : "BLINDAGEM!", { color: C.ciano, ts: 'small' });
+        } else if (tipo === 'vento') {
+            E.fx.burst(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL,
+                       { n: 8, colors: [C.laranja, C.ouro], speed: CELL * 3, life: 0.4, grav: -CELL * 4 });
+        } else if (tipo === 'tele') {
+            E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL, { speed: CELL * 6, color: C.magenta, life: 0.35 });
+            E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 6, color: C.ciano, life: 0.45 });
+        } else if (tipo === 'escudo') {
+            E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 7, color: C.ciano, life: 0.4 });
+            E.fx.popText(OX + a.x, OY + a.y - CELL, "ESCUDO!", { color: C.ciano, ts: 'label' });
+        } else if (tipo === 'respawn') {
+            E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 5, color: C.branco, life: 0.5 });
+        } else if (tipo === 'joga') {
+            E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 4, color: C.magenta, life: 0.3 });
+        } else if (tipo === 'onda') {
+            E.fx.popText(OX + GW / 2, OY + GH * 0.4, "ONDA " + a, { color: C.laranja, ts: 'big', life: 1.4 });
         } else if (tipo === 'morte') {
-            E.fx.burst(a.x, a.y, { n: 22, colors: [C.branco, C.ciano],
-                                   speed: CELL * 4, life: 0.6 });
-            E.fx.flash(C.vermelho, 300);
-            E.cam.shake(12, 0.5);
+            E.fx.burst(OX + a.x, OY + a.y, { n: 22, colors: [C.branco, C.ciano],
+                                             speed: CELL * 4, life: 0.6 });
+            E.fx.flash(C.vermelho, 320);
+            E.cam.shake(CELL * 0.25, 0.4);
         }
+    };
+    // eventos que viram mensagem na malha (so em duelo)
+    s.onPegar = function (kind, cel) {
+        if (s.duelo) netSend("dg" + netSeq() + "," + cel.c + "," + cel.r);
+    };
+    s.onChutar = function (c, r, dx, dy) {
+        if (s.duelo) netSend("dk" + netSeq() + "," + c + "," + r + "," + dx + "," + dy);
     };
     s.onFim = function () {
         var st = arena.state();
+        if (st.duelo) {
+            // a morte e autoridade de cada um: 'dead' avisa o rival; 'rwin'
+            // veio do 'dm' dele. Os dois avisarem = empate (handler 'm')
+            if (st.fim === 'dead') {
+                netSend("dm" + netSeq());
+                if (!NET.res) NET.res = "perdi";
+            } else if (st.fim === 'rwin' && !NET.res) {
+                NET.res = "venci";
+            }
+            logDuelo("fim do round: " + st.fim);
+            E.after(900, function () {
+                arena.parar();
+                NET.fase = "round";
+                E.goto("round");
+            });
+            return;
+        }
         var sobre = !!st.sobrevivencia;
         E.data.fimInfo = { fim: st.fim, score: st.score, sobre: sobre,
-                           onda: st.onda, mundo: st.mundo, nivel: st.nivel };
+                           onda: st.onda, mundo: st.mundo, nivel: st.nivel,
+                           bonus: st.bonusTempo || 0, zerou: false };
         if (st.fim === 'win') {
             var nv = st.nivel + 1, mu = st.mundo;
             if (nv > NV.NIVEIS_POR_MUNDO) { nv = 1; mu++; }
+            if (mu > NV.MUNDOS) {
+                // fechou o chefe do ultimo mundo: campanha completa
+                E.data.fimInfo.zerou = true;
+                E.save.set("zerou", String(E.save.num("zerou", 0) + 1));
+                mu = 1; nv = 1;
+            }
             E.save.set("mundo", String(mu));
             E.save.set("nivel", String(nv));
         } else if (sobre) {
@@ -358,184 +1426,7 @@ function nomePower(k) {
     if (k === 'R') return "DETONADOR";
     if (k === 'E') return "ESCUDO";
     if (k === 'X') return "+VIDA";
+    if (k === 'P') return "PERFURANTE";
+    if (k === 'T') return "+30 S";
     return "?";
-}
-
-function drawMundo() {
-    var s = arena.state();
-    if (!s) return;
-    var t = s.tema;
-    var beat = arena.beatNow();
-    var pulso = beat - Math.floor(beat);   // 0..1 dentro da batida
-
-    // chao procedural: lajotas 2 tons por paridade + variacao por seed
-    for (var r = 0; r < NV.ROWS; r++) {
-        for (var c = 0; c < NV.COLS; c++) {
-            var x = OX + c * CELL, y = OY + r * CELL;
-            var v = s.variacao[r * NV.COLS + c];
-            var base = (c + r) % 2 === 0 ? t.a : t.b;
-            System.fillRect(x, y, CELL, CELL, v > 0.85 ?
-                            System.mixColor(base, t.detalhe, 8) : base);
-            System.fillRect(x, y + CELL - 1, CELL, 1, t.junta);
-            System.fillRect(x + CELL - 1, y, 1, CELL, t.junta);
-        }
-    }
-    // blocos
-    for (var r2 = 0; r2 < NV.ROWS; r2++) {
-        for (var c2 = 0; c2 < NV.COLS; c2++) {
-            var ch = s.grid[r2][c2];
-            if (ch === '#') E.spr.blit("duro", OX + c2 * CELL, OY + r2 * CELL);
-            else if (ch === '%') E.spr.blit("macio", OX + c2 * CELL, OY + r2 * CELL);
-        }
-    }
-    // saida achada: portinha pulsando na batida
-    if (s.exit.achada) {
-        var ex = OX + s.exit.c * CELL, ey = OY + s.exit.r * CELL;
-        var brilho = s.exit.aberta ? 40 + Math.floor(40 * pulso) : 18;
-        System.fillRect(ex + 2, ey + 2, CELL - 4, CELL - 4,
-                        System.mixColor(t.a, C.verde, brilho));
-        System.fillRect(ex + 5, ey + 4, CELL - 10, CELL - 8,
-                        System.mixColor(C.preto, C.verde, 60));
-        if (s.exit.aberta) {
-            E.gfx.text(">", ex + CELL / 2, ey + CELL / 2, {
-                color: C.branco, size: 2, align: "center", valign: "middle" });
-        }
-    }
-    // powerups: caixinha com glifo, pulso na batida
-    for (var key in s.powerups) {
-        var pc = parseInt(key, 10);
-        var pr = parseInt(key.slice(key.indexOf(',') + 1), 10);
-        if (s.grid[pr][pc] !== '.') continue;
-        var kx = OX + pc * CELL + 2, ky = OY + pr * CELL + 2, kw = CELL - 4;
-        var k = s.powerups[key];
-        var kor = k === 'B' ? C.ciano : k === 'C' ? C.laranja : k === 'V' ? C.verde :
-                  k === 'K' ? C.magenta : k === 'R' ? C.vermelho :
-                  k === 'E' ? C.branco : C.ouro;
-        var p2 = 0.5 + 0.5 * pulso;
-        System.fillRect(kx, ky, kw, kw,
-                        System.mixColor(C.preto, kor, 25 + Math.floor(20 * p2)));
-        E.gfx.text(glifoPower(k), kx + kw / 2, ky + kw / 2, {
-            color: kor, size: 1, align: "center", valign: "middle" });
-    }
-    // bombas: blit + faisca do pavio piscando na batida
-    for (var i = 0; i < s.bombs.length; i++) {
-        var bo = s.bombs[i];
-        var bx = OX + bo.c * CELL + (CELL - SZ.bomba) / 2;
-        var by = OY + bo.r * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso);
-        E.spr.blit("bomba", bx, by);
-        if (pulso < 0.5) System.fillCircle(bx + SZ.bomba / 2, by + 1, 2, C.ouro);
-    }
-    // labaredas: nucleo + bracos em 3 tons, crescendo dentro da batida
-    for (var f = 0; f < s.flames.length; f++) {
-        drawChama(s.flames[f], pulso);
-    }
-    // inimigos: bob no compasso; chefe pisca ao levar acerto
-    for (var en = 0; en < s.enemies.length; en++) {
-        var e = s.enemies[en];
-        if (e.morto) continue;
-        var nome = e.kind === 'cacador' ? "cacador" : e.kind;
-        var ew = e.kind === 'chefe' ? CELL * 2 - 4 : SZ.jogador;
-        var eflash = e.flash > 0;
-        if (e.flash > 0) e.flash -= E.dt;
-        var exx = e.fx * CELL - ew / 2;
-        var eyy = e.fy * CELL - ew / 2 + Math.floor(2 * Math.sin(beat * Math.PI * 2 + en));
-        if (eflash && Math.floor(beat * 16) % 2 === 0) {
-            System.fillCircle(e.fx * CELL, e.fy * CELL, ew * 0.5, C.branco);
-        } else {
-            E.spr.blit(nome, exx, eyy);
-        }
-    }
-    // jogador (pisca invulneravel; bob no compasso)
-    var inv = s.stats.inv > 0 && Math.floor(beat * 8) % 2 === 0;
-    if (!inv && !s.fim) {
-        var bob = Math.floor(2 * Math.sin(beat * Math.PI * 2));
-        E.spr.blit("jogador", s.player.x - SZ.jogador / 2,
-                   s.player.y - SZ.jogador / 2 + bob);
-        if (s.stats.shield) System.drawCircle(s.player.x, s.player.y,
-                                              SZ.jogador * 0.62, C.ciano);
-    }
-    // chefe na arena: barra de vida no topo
-    for (var ch2 = 0; ch2 < s.enemies.length; ch2++) {
-        if (s.enemies[ch2].kind !== 'chefe' || s.enemies[ch2].morto) continue;
-        var bw = Math.floor(W * 0.7);
-        E.gfx.bar((W - bw) / 2, 6, bw, 8, s.enemies[ch2].hp / 8,
-                  { fg: C.vermelho, screen: true });
-        break;
-    }
-    drawHUD(s, pulso);
-    E.fx.draw();
-}
-
-function drawChama(fl, pulso) {
-    var x = OX + fl.c * CELL, y = OY + fl.r * CELL;
-    var meia = CELL / 2;
-    var cresce = 0.55 + 0.45 * pulso;
-    if (fl.tipo === 'nucleo') {
-        System.fillCircle(x + meia, y + meia, meia * 0.95 * cresce + 2, C.branco);
-        System.fillCircle(x + meia, y + meia, meia * 0.7 * cresce, C.ouro);
-        System.fillCircle(x + meia, y + meia, meia * 0.4 * cresce, 0xFB18);
-    } else {
-        var len = CELL * cresce, esp = Math.floor(CELL * 0.7);
-        var x0 = fl.dx > 0 ? x + meia : fl.dx < 0 ? x + meia - len : x + meia - esp / 2;
-        var y0 = fl.dy > 0 ? y + meia : fl.dy < 0 ? y + meia - len : y + meia - esp / 2;
-        var w_ = fl.dy !== 0 ? esp : len;
-        var h_ = fl.dy !== 0 ? len : esp;
-        System.fillRect(x0, y0, w_, h_, C.laranja);
-        System.fillRect(x0 + (fl.dy !== 0 ? 2 : 0), y0 + (fl.dx !== 0 ? 2 : 0),
-                        fl.dy !== 0 ? esp - 4 : w_, fl.dx !== 0 ? esp - 4 : h_, C.ouro);
-        if (fl.tipo === 'ponta') {
-            System.fillCircle(x + meia + fl.dx * (meia * 0.6),
-                              y + meia + fl.dy * (meia * 0.6), 3, C.branco);
-        }
-    }
-}
-
-function glifoPower(k) {
-    return k === 'B' ? "B" : k === 'C' ? "C" : k === 'V' ? "V" :
-           k === 'K' ? "K" : k === 'R' ? "R" : k === 'E' ? "E" : "+";
-}
-
-function drawHUD(s, pulso) {
-    var y0 = OY + NV.ROWS * CELL;
-    var t = s.tema;
-    System.fillRect(0, y0, W, H - y0, t.hud);
-    System.fillRect(0, y0, W, 2, t.detalhe);
-    var cy = Math.floor((y0 + H) / 2);
-
-    // vidas: coracoes
-    for (var v = 0; v <= s.stats.vidas && v < 6; v++) {
-        System.fillCircle(8 + v * 14, cy - 4, 4, C.vermelho);
-        System.fillCircle(12 + v * 14, cy - 4, 4, C.vermelho);
-        System.fillTriangle(4 + v * 14, cy - 1, 16 + v * 14, cy - 1,
-                            10 + v * 14, cy + 6, C.vermelho);
-    }
-    // contadores: bomba / chama / patins
-    E.gfx.text("B" + s.stats.bombs + " C" + s.stats.flame + " V" + s.stats.vel,
-               Math.floor(W * 0.34), cy, {
-               color: t.hudTxt, size: 2, valign: "middle", screen: true });
-    // tempo (vermelho piscando no fim) ou onda na sobrevivencia
-    if (s.sobrevivencia) {
-        E.gfx.text("ONDA " + s.onda, W / 2 + 46, cy, {
-            color: t.hudTxt, size: 2, valign: "middle", screen: true });
-        E.gfx.text("SOBRE", W / 2 + 46, y0 + 9, {
-            color: t.hudTxt, size: 1, align: "center", screen: true });
-    } else {
-        var seg = Math.max(0, Math.ceil(s.tLeft));
-        E.gfx.text(String(seg), W / 2 + 46, cy, {
-            color: seg < 30 && pulso > 0.5 ? C.vermelho : t.hudTxt,
-            size: 2, valign: "middle", screen: true });
-        E.gfx.text(s.mundo + "." + s.nivel, W / 2 + 46, y0 + 9, {
-            color: t.hudTxt, size: 1, align: "center", screen: true });
-    }
-    E.gfx.text(String(s.score), s.stats.remote ? W - 76 : W - 10, cy, {
-        color: C.ouro, size: 2, align: "right", valign: "middle", screen: true });
-    // detonador remoto: chip BOOM pulsando no canto direito
-    if (s.stats.remote) {
-        var bx = W - 64, by = y0 + 6, bw2 = 56, bh = H - y0 - 12;
-        var pulsa = 20 + Math.floor(18 * pulso);
-        System.fillRect(bx, by, bw2, bh,
-                        System.mixColor(C.preto, C.vermelho, pulsa));
-        E.gfx.text("BOOM", bx + bw2 / 2, y0 + (H - y0) / 2, {
-            color: C.branco, size: 1, align: "center", valign: "middle", screen: true });
-    }
 }

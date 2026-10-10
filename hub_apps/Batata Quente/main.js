@@ -14,6 +14,11 @@
 // Sem ACK no rádio, o próprio "bk" é o ACK do passe: sem ele em 3,5 s o
 // passe é reenviado; 3 tentativas sem resposta e a batata volta.
 
+// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
+// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+var somFn = typeof System.sfx === "function" ? System.sfx :
+            (typeof System.playTone === "function" ? System.playTone : null);
+
 var mesh = require("celeros.mesh");
 var T = System.theme();
 // LED da placa: System.led so existe com a permissao "gpio" (o app nao pede
@@ -111,7 +116,7 @@ function boom() {
     overAt = System.millis();
     led(255, 0, 0);
     UI.invalidate();
-    System.playTone([[220, 120], [180, 120], [140, 160], [90, 400]]);
+    somFn && somFn([[220, 120], [180, 120], [140, 160], [90, 400]]);
 }
 
 function onMsg(m, now) {

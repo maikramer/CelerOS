@@ -123,7 +123,7 @@ function drawWorld(tc) {
     var xy = world.xy();
     if (!xy.length) {
         // drawString direto: o fundo do mundo e repintado a cada frame
-        System.setTextDatum(4);           // MC
+        System.setTextDatum(5);           // MC (LovyanGFX: 4 e middle-left)
         System.setTextColor(T.textDim, T.bg);
         System.drawString("Pinte, ou solte Corda/Pano", SW / 2, 108, 2);
         System.drawString("Pegar arrasta e arremessa;", SW / 2, 132, 1);

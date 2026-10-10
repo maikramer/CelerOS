@@ -10,6 +10,11 @@
 //   {t:"s"}              saque: vou sacar daqui a pouco (só informativo)
 // O "Piloto automático" defende sozinho (bom para demonstração e treino).
 
+// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
+// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+var somFn = typeof System.sfx === "function" ? System.sfx :
+            (typeof System.playTone === "function" ? System.playTone : null);
+
 var hasLink = typeof CelerLink !== "undefined";
 var T = System.theme();
 var TOP = 44, BOT = 316, PAD_Y = 292, PAD_W = 56, PAD_H = 8, R = 5, WIN = 5;
@@ -53,7 +58,7 @@ function onLink(raw, now) {
         aimErr = (Math.random() - 0.5) * 100;
     } else if (o.t === "p" && scr === PLAY) {
         mine++;
-        if (mine >= WIN) { scr = END; System.playTone([[660, 90], [880, 90], [1320, 220]]); }
+        if (mine >= WIN) { scr = END; somFn && somFn([[660, 90], [880, 90], [1320, 220]]); }
     }
     UI.invalidate();
 }

@@ -23,9 +23,13 @@ function saveScore() {
     FS.writeTextFile(SCORE_FILE, score.v + "," + score.d + "," + score.e);
 }
 
-var hasTone = (typeof System.playTone === "function");
+// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
+// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+var somFn = typeof System.sfx === "function" ? System.sfx :
+            (typeof System.playTone === "function" ? System.playTone : null);
+var hasTone = somFn !== null;
 function tone(hz, ms) {
-    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
 }
 
 var STATE_MENU = 0, STATE_PLAYING = 1, STATE_OVER = 2;

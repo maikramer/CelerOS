@@ -1,4 +1,4 @@
-// test.js — smoke do Supernova 2.0 no harness: titulo -> jogando -> arrasto
+// test.js — smoke do Supernova 2.2 no harness: titulo -> jogando -> arrasto
 // -> MORTE (hit deterministico via __harness.supernova.jogo) -> fim ->
 // de novo -> SUPERNOVA (detonacao com carga furada) -> pausa -> continuar,
 // parando no watchdog. No harness roda a via procedural (sem
@@ -17,14 +17,24 @@ module.exports.wire = function (env) {
     // watchdog do proprio teste (o runner so instala um com --frames/render)
     var origDelay = env.System.delay;
     var stopAt = 1000 + 9000;   // clock do harness comeca em 1000
+    var marcos = [];   // [ms, cena esperada] (preenchido no fim do wire)
     env.System.delay = function (ms) {
+        var now = env.System.millis() - 1000;
+        var m = h.supernova;
+        while (marcos.length && now >= marcos[0][0]) {
+            var mk = marcos.shift();
+            if (m && m.E.sceneName !== mk[1]) {
+                throw new Error('Supernova: em ' + mk[0] + ' ms esperava a cena ' + mk[1] +
+                                ', esta em ' + m.E.sceneName);
+            }
+        }
         if (env.System.millis() > stopAt) throw { harnessStop: true };
         return origDelay(ms);
     };
 
-    // TIT_Y0 = 480*0.42 = 202; JOGAR em y 350..402, x 150..330
+    // botoes no rodape (E.u: 2x no 480): JOGAR em y 328..382, x 90..390
     at(function () {
-        h.pushTouch([{ x: 240, y: 375, touched: 1 }, { x: 240, y: 375, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 355, touched: 1 }, { x: 240, y: 355, touched: 0 }]);
     }, 400);
 
     // arrasto na jogatina (a nave desvia e esquenta o motor)
@@ -48,25 +58,30 @@ module.exports.wire = function (env) {
         m.jogo.debugHit();
     }, 2200);
 
-    // fim de jogo (t > 0,5): DE NOVO em y 246..298, x 150..330
+    // fim de jogo (t > 0,5): DE NOVO em y 316..370, x 90..390
     at(function () {
-        h.pushTouch([{ x: 240, y: 272, touched: 1 }, { x: 240, y: 272, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 343, touched: 1 }, { x: 240, y: 343, touched: 0 }]);
     }, 3600);
 
-    // carrega e detona a supernova (toque no medidor do rodape)
+    // carrega e detona a supernova (toque no medidor do canto inferior esquerdo)
     at(function () {
         var m = h.supernova;
         if (m) m.jogo.state().charge = 100;
     }, 4600);
     at(function () {
-        h.pushTouch([{ x: 240, y: 450, touched: 1 }, { x: 240, y: 450, touched: 0 }]);
+        h.pushTouch([{ x: 60, y: 420, touched: 1 }, { x: 60, y: 420, touched: 0 }]);
     }, 5200);
 
     // pausa (canto superior direito) e continua — cobre o ultimo estado
     at(function () {
-        h.pushTouch([{ x: 440, y: 20, touched: 1 }, { x: 440, y: 20, touched: 0 }]);
+        h.pushTouch([{ x: 460, y: 30, touched: 1 }, { x: 460, y: 30, touched: 0 }]);
     }, 6400);
     at(function () {
         h.pushTouch([{ x: 240, y: 220, touched: 1 }, { x: 240, y: 220, touched: 0 }]);
     }, 7200);
+
+    // o fluxo de cenas tem que ter andado (coordenadas erradas = tap no
+    // vazio). Conferido no delay: o harness tem so 8 timers (os taps acima)
+    marcos = [[300, 'titulo'], [1500, 'jogando'], [3500, 'fim'], [4500, 'jogando'],
+              [7000, 'pausa'], [8000, 'jogando']];
 };

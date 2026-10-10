@@ -161,6 +161,8 @@ var SONG_CHEFE = {
     ]
 };
 
+var MUNDOS = TEMAS.length;   // a campanha fecha no chefe do ultimo mundo
+
 // trilha da fase: mundo 1 = batalha, 2 = forno, 3 = nucleo; chefe no 8o
 function musica(mundo, nivel, sobrevivencia) {
     if (sobrevivencia) return SONG_FORNO;
@@ -183,17 +185,39 @@ function params(mundo, nivel) {
     };
 }
 
+// celula livre longe do spawn (c + r >= minDist) e fora da lista evita
+function sorteiaLivre(grid, r, minDist, evita) {
+    for (var t = 0; t < 120; t++) {
+        var c = 1 + Math.floor(r() * (COLS - 2));
+        var rr = 1 + Math.floor(r() * (ROWS - 2));
+        if (grid[rr][c] !== '.' || c + rr < minDist) continue;
+        var ruim = false;
+        for (var i = 0; i < evita.length; i++) {
+            if (Math.abs(evita[i].c - c) + Math.abs(evita[i].r - rr) < 3) { ruim = true; break; }
+        }
+        if (!ruim) return { c: c, r: rr };
+    }
+    return null;
+}
+
 // gera {grid, exit, powerups, spawns} para mundo/nivel (1-based).
 // opts.sobrevivencia: arena fixa (seed proprio), mais vazia, sem saida,
-// sem tempo — as ondas quem comandam sao o main/ia
+// sem tempo — as ondas quem comandam sao o main/ia.
+// opts.duelo: arena do versus pela malha — os DOIS cantos respiram
+// (spawn do rival), sem saida, sem bichos, sem perigos de mundo; a seed
+// vem por mensagem (opts.seed) para os dois aparelhos gerarem igual.
 function gerar(mundo, nivel, opts) {
     opts = opts || {};
     var p = params(mundo, nivel);
-    var r = GRID.rng(opts.sobrevivencia ? 9090 : mundo * 100 + nivel);
-    var dens = opts.sobrevivencia ? 0.45 : p.dens;
+    var r = GRID.rng(opts.seed !== undefined ? opts.seed
+              : opts.sobrevivencia ? 9090 : mundo * 100 + nivel);
+    var dens = opts.duelo ? 0.46 : opts.sobrevivencia ? 0.45 : p.dens;
     // arena classica da dep celeros.grid: borda + pilares pares + macios
-    // por densidade, canto do spawn (1,1) respirando
-    var arena_ = GRID.classica(COLS, ROWS, r, { dens: dens });
+    // por densidade, canto do spawn (1,1) respirando (no duelo os dois)
+    var arena_ = GRID.classica(COLS, ROWS, r, {
+        dens: dens,
+        protege: opts.duelo ? [[1, 1], [COLS - 2, ROWS - 2]] : [[1, 1]]
+    });
     var grid = arena_.grid;
     var macios = arena_.macios;
     // garante macios minimos p/ saida + powerups
@@ -216,11 +240,11 @@ function gerar(mundo, nivel, opts) {
             if (grid[macios[mf].r][macios[mf].c] === '%') vivos.push(macios[mf]);
         macios = vivos;
     }
-    // saida sob um macio longe do spawn (sobrevivencia nao tem saida);
+    // saida sob um macio longe do spawn (sobrevivencia/duelo nao tem saida);
     // escolheAlcancavel (flood tratando macio como passavel) garante que
     // da pra chegar explodindo — nunca nasce em bolso cercado por parede
     var exit = { c: -1, r: -1 };
-    if (!opts.sobrevivencia) {
+    if (!opts.sobrevivencia && !opts.duelo) {
         var longe = [];
         for (var lf = 0; lf < macios.length; lf++)
             if (macios[lf].c + macios[lf].r > 12) longe.push(macios[lf]);
@@ -230,8 +254,10 @@ function gerar(mundo, nivel, opts) {
     // powerups sob macios distintos da saida (kinds basicos aqui; o
     // restante do catalogo entra conforme o mundo avanca)
     var catalogo = ['B', 'C', 'V'];
+    if (p.abs >= 4) catalogo.push('T');            // relogio (+30 s)
     if (p.abs >= 5) catalogo.push('B', 'C');
-    if (p.abs >= 9) catalogo.push('K', 'R');       // chute, detonador
+    if (p.abs >= 7) catalogo.push('K');            // chute
+    if (p.abs >= 10) catalogo.push('R', 'P');      // detonador, perfurante
     if (p.abs >= 13) catalogo.push('E', 'X');      // escudo, vida
     var powerups = {};
     var nPow = 2 + Math.floor(p.abs / 6);
@@ -250,9 +276,11 @@ function gerar(mundo, nivel, opts) {
     var spawns = [];
     var kinds = opts.sobrevivencia ? ['balao', 'fantasma', 'cacador']
               : p.abs < 3 ? ['balao']
-              : p.abs < 9 ? ['balao', 'fantasma']
-              : ['balao', 'fantasma', 'cacador'];
+              : p.abs < 6 ? ['balao', 'fantasma']
+              : p.abs < 11 ? ['balao', 'fantasma', 'divisor', 'cacador']
+              : ['fantasma', 'cacador', 'divisor', 'blindado', 'balao'];
     var ninim = opts.sobrevivencia ? 3 : p.inimigos;
+    if (opts.duelo) ninim = 0;   // duelo: so os dois jogadores
     for (var e = 0; e < ninim; e++) {
         for (var t3 = 0; t3 < 80; t3++) {
             var c3 = 1 + Math.floor(r() * (COLS - 2));
@@ -263,15 +291,36 @@ function gerar(mundo, nivel, opts) {
             break;
         }
     }
-    if (p.chefe && !opts.sobrevivencia) spawns.push({ kind: 'chefe', c: (COLS >> 1) - 1, r: 1 });
+    if (p.chefe && !opts.sobrevivencia && !opts.duelo)
+        spawns.push({ kind: 'chefe', c: (COLS >> 1) - 1, r: 1 });
+    // perigos do mundo (fora das fases de chefe): Forno = respiros de fogo
+    // que explodem na batida; Nucleo = pares de teleporte
+    var ventos = [], teles = [];
+    if (!opts.sobrevivencia && !opts.duelo && !p.chefe && mundo === 2) {
+        var nv = 2 + Math.floor(nivel / 3);
+        for (var v = 0; v < nv; v++) {
+            var cv = sorteiaLivre(grid, r, 7, ventos.concat(spawns));
+            if (cv) ventos.push({ c: cv.c, r: cv.r, aviso: false });
+        }
+    }
+    if (!opts.sobrevivencia && !opts.duelo && !p.chefe && mundo >= 3) {
+        var pares = nivel >= 4 ? 2 : 1;
+        for (var tp = 0; tp < pares * 2; tp++) {
+            var ct = sorteiaLivre(grid, r, 4, teles);
+            if (ct) teles.push({ c: ct.c, r: ct.r });
+        }
+        if (teles.length % 2) teles.pop();
+    }
+    var song = musica(mundo, nivel, opts.sobrevivencia);
     return { grid: grid, exit: exit, powerups: powerups, spawns: spawns,
+             ventos: ventos, teles: teles, bpm: song.bpm,
              sobrevivencia: !!opts.sobrevivencia,
-             tempo: opts.sobrevivencia ? 99999 : p.tempo,
+             tempo: (opts.sobrevivencia || opts.duelo) ? 99999 : p.tempo,
              tema: TEMAS[Math.min(mundo - 1, TEMAS.length - 1)] };
 }
 
 module.exports = {
-    COLS: COLS, ROWS: ROWS, NIVEIS_POR_MUNDO: NIVEIS_POR_MUNDO,
+    COLS: COLS, ROWS: ROWS, NIVEIS_POR_MUNDO: NIVEIS_POR_MUNDO, MUNDOS: MUNDOS,
     TEMAS: TEMAS, SONG_BATALHA: SONG_BATALHA, SONG_MENU: SONG_MENU,
     SONG_FORNO: SONG_FORNO, SONG_NUCLEO: SONG_NUCLEO, SONG_CHEFE: SONG_CHEFE,
     musica: musica, params: params, gerar: gerar, rng: rng

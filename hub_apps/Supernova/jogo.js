@@ -6,7 +6,8 @@
 // SENTINELA-MOR (chefe) a cada 5 ondas, com rajadas radiais na batida e
 // barra de vida; combo x2..x5 por abates em serie; drones splitter que se
 // dividem; tiro triplo de premiacao. Coordenadas em PIXELS FISICOS (canvas
-// nativo).
+// nativo); medidas e velocidades nasceram no 480 e escalam por K = E.U / 2
+// (1 no SmartDisplay, ~0,85 no relogio de 410).
 
 var E = require("celeros.engine");
 var P = require("celeros.physics");
@@ -20,6 +21,18 @@ var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20,
 var G_PLAYER = 1, G_PBULLET = 2, G_ENEMY = 4, G_EBULLET = 8, G_ORB = 16;
 
 var BPM = 132;
+
+// efeitos (System.sfx misturado por cima da trilha na API 32; um por vez —
+// o mais novo vence, entao os frequentes sao curtissimos)
+var SND = {
+    pop: [[880, 18], [520, 30]],
+    boom: [[180, 40], [110, 70], [70, 110]],
+    orbe: [[988, 35], [1319, 60]],
+    dano: [[300, 60], [180, 90], [120, 120]],
+    alerta: [[660, 90], [0, 40], [660, 90], [0, 40], [880, 160]],
+    chefe: [[523, 70], [659, 70], [784, 70], [1047, 220]],
+    supernova: [[90, 60], [140, 60], [220, 60], [330, 80], [494, 90], [740, 120], [1109, 220]]
+};
 
 // Lá menor, 2 compassos de loop (bumbo/caixa/chimbal GM, baixo triangular,
 // melodia quadrada e arpejo sq25 no contratempo).
@@ -54,17 +67,26 @@ var SONG = {
     ]
 };
 
-var W = 0, H = 0;
+var W = 0, H = 0, K = 1;
 var world = null;
 var S = null;
 var lastBeatInt = -1;
 
-function clampX(x) { return x < 30 ? 30 : (x > W - 30 ? W - 30 : x); }
+function clampX(x) {
+    var m = 30 * K;
+    return x < m ? m : (x > W - m ? W - m : x);
+}
 
 function reset() {
     W = E.W;
     H = E.H;
-    world = P.world({ gravity: { x: 0, y: 0 }, maxSub: 6 });
+    K = E.U / 2;
+    // maxSub 2: com 6, o step do pico (combo + minis + rajada do chefe ~50
+    // corpos sensor) passava de 1 s no Duktape do device e virava RangeError
+    // "execution timeout" (lastcrash 2026-10-09). A 20-25 fps reais do jogo
+    // o sub-passo de ~25 ms mantem as balas de 620 px/s sem atravessar
+    // (janela de colisao bala 5 + inimigo 20 = 25 px)
+    world = P.world({ gravity: { x: 0, y: 0 }, maxSub: 2 });
     S = {
         t: 0, world: world, player: null,
         score: 0, kills: 0, lives: 3, charge: 0,
@@ -75,7 +97,7 @@ function reset() {
     };
     var p = world.add({
         cat: 'player', group: G_PLAYER, mask: G_EBULLET | G_ENEMY,
-        x: W / 2, y: H * 0.78, r: 24, sensor: true
+        x: W / 2, y: H * 0.8, r: 24 * K, sensor: true
     });
     p.cool = 0;
     p.invuln = 1.2;
@@ -101,14 +123,14 @@ function spawnConvoy() {
     var s = S;
     if (s.boss) return;
     var n = 2 + Math.min(2, Math.floor(s.intensity / 2));
-    var cx = 60 + Math.random() * (W - 120);
+    var cx = 60 * K + Math.random() * (W - 120 * K);
     for (var i = 0; i < n; i++) {
         var e = world.add({
             cat: 'enemy', kind: 0, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-            x: clampX(cx + (i - (n - 1) / 2) * 78), y: -40 - i * 34, r: 20,
+            x: clampX(cx + (i - (n - 1) / 2) * 78 * K), y: (-40 - i * 34) * K, r: 20 * K,
             hp: 1, sensor: true, flashT: 0,
             ph: Math.random() * Math.PI * 2, cool: 1.4 + Math.random() * 2.2,
-            vx: 26 + s.intensity * 5
+            vx: (26 + s.intensity * 5) * K
         });
         e.upd = updDrone;
         e.onCollide = enemyCollide;
@@ -121,7 +143,7 @@ function spawnConvoy() {
 function spawnSentinel() {
     var e = world.add({
         cat: 'enemy', kind: 1, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: clampX(70 + Math.random() * (W - 140)), y: -50, r: 20,
+        x: clampX(70 * K + Math.random() * (W - 140 * K)), y: -50 * K, r: 20 * K,
         hp: 3 + Math.floor(S.intensity / 3), sensor: true, flashT: 0,
         ph: Math.random() * Math.PI * 2, cool: 1.1 + Math.random()
     });
@@ -136,7 +158,7 @@ function spawnSentinel() {
 function spawnSplitter() {
     var e = world.add({
         cat: 'enemy', kind: 3, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: clampX(60 + Math.random() * (W - 120)), y: -40, r: 20,
+        x: clampX(60 * K + Math.random() * (W - 120 * K)), y: -40 * K, r: 20 * K,
         hp: 2, sensor: true, flashT: 0,
         ph: Math.random() * Math.PI * 2
     });
@@ -147,7 +169,7 @@ function spawnSplitter() {
 function spawnMini(x, ph) {
     var e = world.add({
         cat: 'enemy', kind: 4, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: clampX(x), y: -20, r: 12, hp: 1, sensor: true, flashT: 0,
+        x: clampX(x), y: -20 * K, r: 12 * K, hp: 1, sensor: true, flashT: 0,
         ph: ph
     });
     e.upd = updMini;
@@ -155,15 +177,15 @@ function spawnMini(x, ph) {
 }
 
 function spawnMinis(e) {
-    spawnMini(e.x - 22, e.ph);
-    spawnMini(e.x + 22, e.ph + 1.5);
+    spawnMini(e.x - 22 * K, e.ph);
+    spawnMini(e.x + 22 * K, e.ph + 1.5);
 }
 
 function spawnOrb(x) {
     var o = world.add({
         cat: 'orb', group: G_ORB, mask: G_PLAYER,
-        x: x === undefined ? 50 + Math.random() * (W - 100) : clampX(x),
-        y: -30, r: 16, sensor: true, ph: 0
+        x: x === undefined ? 50 * K + Math.random() * (W - 100 * K) : clampX(x),
+        y: -30 * K, r: 16 * K, sensor: true, ph: 0
     });
     o.upd = updOrb;
     o.onCollide = function (me, other) {
@@ -171,8 +193,9 @@ function spawnOrb(x) {
         me.dead = true;
         S.charge = Math.min(100, S.charge + 25);
         S.score += 15;
-        E.fx.ring(me.x, me.y, { color: OURO, speed: 300, life: 0.5 });
-        E.fx.popText(me.x, me.y - 14, "+carga", { color: OURO });
+        E.fx.ring(me.x, me.y, { color: OURO, speed: 300 * K, life: 0.5 });
+        E.fx.popText(me.x, me.y - 14 * K, "+CARGA", { color: OURO, ts: 'small' });
+        E.audio.sfx(SND.orbe);
     };
 }
 
@@ -180,60 +203,62 @@ function spawnBoss() {
     var hp = 26 + S.wave * 3;
     var b = world.add({
         cat: 'enemy', kind: 2, group: G_ENEMY, mask: G_PLAYER | G_PBULLET,
-        x: W / 2, y: -90, r: 46, hp: hp, hpMax: hp, sensor: true, flashT: 0
+        x: W / 2, y: -90 * K, r: 46 * K, hp: hp, hpMax: hp, sensor: true, flashT: 0
     });
     b.upd = updBoss;
     b.onCollide = enemyCollide;
     S.boss = b;
-    E.fx.popText(W / 2, H * 0.3, "!! SENTINELA-MOR !!", { color: MAGENTA, life: 1.6 });
+    E.fx.popText(W / 2, H * 0.3, "SENTINELA-MOR", { color: MAGENTA, life: 1.6, ts: 'big' });
+    E.audio.sfx(SND.alerta);
 }
 
 // ------------------------------------------------------ roteiro/movimento ---
 
 function updDrone(e, dt) {
-    e.y += (46 + S.intensity * 7) * dt;
+    e.y += (46 + S.intensity * 7) * K * dt;
     e.x += Math.sin(S.t * 2.2 + e.ph) * e.vx * dt * 2.4;
     e.cool -= dt;
-    if (e.cool <= 0 && e.y > 30 && e.y < H * 0.7) {
+    if (e.cool <= 0 && e.y > 30 * K && e.y < H * 0.7) {
         e.cool = 2.6 + Math.random() * 2.5 - S.intensity * 0.12;
-        ebullet(e.x, e.y + 22, (S.player.x - e.x) * 0.22, 150 + S.intensity * 8);
+        ebullet(e.x, e.y + 22 * K, (S.player.x - e.x) * 0.22, (150 + S.intensity * 8) * K);
     }
 }
 
 function updSentinel(e, dt) {
-    if (e.y < H * 0.24) e.y += 34 * dt;
-    else e.x += Math.sin(S.t * 0.9 + e.ph) * 40 * dt;
+    if (e.y < H * 0.24) e.y += 34 * K * dt;
+    else e.x += Math.sin(S.t * 0.9 + e.ph) * 40 * K * dt;
     e.cool -= dt;
-    if (e.cool <= 0 && e.y > 20) {
+    if (e.cool <= 0 && e.y > 20 * K) {
         e.cool = 1.7 + Math.random() * 1.2 - S.intensity * 0.08;
         var dx = S.player.x - e.x, dy = S.player.y - e.y;
         var d = Math.sqrt(dx * dx + dy * dy) || 1;
-        var sp = 205 + S.intensity * 10;
-        ebullet(e.x, e.y + 16, dx / d * sp, dy / d * sp);
+        var sp = (205 + S.intensity * 10) * K;
+        ebullet(e.x, e.y + 16 * K, dx / d * sp, dy / d * sp);
     }
 }
 
 function updSplitter(e, dt) {
-    e.y += (70 + S.intensity * 8) * dt;
-    e.x += Math.sin(S.t * 4 + e.ph) * 90 * dt;
+    e.y += (70 + S.intensity * 8) * K * dt;
+    e.x += Math.sin(S.t * 4 + e.ph) * 90 * K * dt;
 }
 
 function updMini(e, dt) {
-    e.y += (150 + S.intensity * 10) * dt;
+    e.y += (150 + S.intensity * 10) * K * dt;
 }
 
 function updBoss(e, dt) {
-    if (e.y < 110) {
-        e.y += 40 * dt;
+    var y0 = H * 0.23;
+    if (e.y < y0) {
+        e.y += 40 * K * dt;
         return;
     }
     var fast = e.hp < e.hpMax / 2;
     e.x = W / 2 + Math.sin(S.t * (fast ? 0.9 : 0.55)) * (W * 0.3);
-    if (fast) e.y = 110 + Math.sin(S.t * 1.3) * 14;
+    if (fast) e.y = y0 + Math.sin(S.t * 1.3) * 14 * K;
 }
 
 function updOrb(o, dt) {
-    o.y += 64 * dt;
+    o.y += 64 * K * dt;
     o.ph += dt * 5;
 }
 
@@ -242,7 +267,7 @@ function updOrb(o, dt) {
 function pbullet(x, y, vx, vy) {
     var b = world.add({
         cat: 'pbullet', group: G_PBULLET, mask: G_ENEMY,
-        x: x, y: y, r: 5, vx: vx, vy: vy, sensor: true, dead: false
+        x: x, y: y, r: 5 * K, vx: vx, vy: vy, sensor: true, dead: false
     });
     b.onCollide = function (me, other) {
         if (me.dead || other.dead || other.killed) return;
@@ -250,7 +275,7 @@ function pbullet(x, y, vx, vy) {
         me.dead = true;
         other.hp -= 1;
         other.flashT = 0.09;
-        E.fx.burst(me.x, me.y + 6, { n: 3, color: BRANCO, speed: 80, life: 0.3, size: 1 });
+        E.fx.burst(me.x, me.y + 6 * K, { n: 3, color: BRANCO, speed: 80 * K, life: 0.3, size: 1 });
         if (other.hp <= 0) other.killed = true;
     };
     return b;
@@ -259,7 +284,7 @@ function pbullet(x, y, vx, vy) {
 function ebullet(x, y, vx, vy) {
     var b = world.add({
         cat: 'ebullet', group: G_EBULLET, mask: G_PLAYER,
-        x: x, y: y, r: 5, vx: vx, vy: vy, sensor: true, dead: false
+        x: x, y: y, r: 5 * K, vx: vx, vy: vy, sensor: true, dead: false
     });
     b.onCollide = function (me, other) {
         if (me.dead) return;
@@ -276,7 +301,7 @@ function enemyCollide(me, other) {
     if (me.dead || me.killed) return;
     if (other.cat === 'player' && !S.over && S.player.invuln <= 0) {
         me.dead = true;
-        E.fx.burst(me.x, me.y, { n: 12, color: LARANJA, speed: 120, life: 0.5 });
+        E.fx.burst(me.x, me.y, { n: 12, color: LARANJA, speed: 120 * K, life: 0.5 });
         hitPlayer();
     }
 }
@@ -284,17 +309,17 @@ function enemyCollide(me, other) {
 // rajada radial do chefe, sincronizada na batida
 function bossBurst() {
     var b = S.boss;
-    if (!b || b.y < 60) return;
+    if (!b || b.y < 60 * K) return;
     var fast = b.hp < b.hpMax / 2;
     var n = fast ? 14 : 9;
-    var sp = 130 + S.intensity * 8 + (fast ? 40 : 0);
+    var sp = (130 + S.intensity * 8 + (fast ? 40 : 0)) * K;
     var a0 = Math.random() * Math.PI;
     for (var i = 0; i < n; i++) {
         var a = a0 + i * Math.PI * 2 / n;
-        ebullet(b.x + Math.cos(a) * 44, b.y + Math.sin(a) * 44,
+        ebullet(b.x + Math.cos(a) * 44 * K, b.y + Math.sin(a) * 44 * K,
                 Math.cos(a) * sp, Math.sin(a) * sp);
     }
-    E.fx.ring(b.x, b.y, { color: MAGENTA, speed: 500, life: 0.4 });
+    E.fx.ring(b.x, b.y, { color: MAGENTA, speed: 500 * K, life: 0.4 });
 }
 
 // ----------------------------------------------------------- simulacao ---
@@ -339,16 +364,16 @@ function update(dt) {
     if (p.invuln > 0) p.invuln -= dt;
     if (p.cool <= 0) {
         p.cool = 0.16;
-        pbullet(p.x - 14, p.y - 26, 0, -620);
-        pbullet(p.x + 14, p.y - 26, 0, -620);
+        pbullet(p.x - 14 * K, p.y - 26 * K, 0, -620 * K);
+        pbullet(p.x + 14 * K, p.y - 26 * K, 0, -620 * K);
         if (s.triple > 0) {
-            pbullet(p.x, p.y - 30, -130, -600);
-            pbullet(p.x, p.y - 30, 130, -600);
+            pbullet(p.x, p.y - 30 * K, -130 * K, -600 * K);
+            pbullet(p.x, p.y - 30 * K, 130 * K, -600 * K);
         }
     }
     if (Math.random() < 0.7) {
-        E.fx.burst(p.x + (Math.random() * 10 - 5), p.y + 34,
-                   { n: 1, color: CIANO, speed: 50, speed2: 100,
+        E.fx.burst(p.x + (Math.random() * 10 - 5) * K, p.y + 34 * K,
+                   { n: 1, color: CIANO, speed: 50 * K, speed2: 100 * K,
                      angle: Math.PI / 2, spread: 0.5, life: 0.28, size: 1 });
     }
 
@@ -383,17 +408,17 @@ function sweep() {
     for (var i = all.length - 1; i >= 0; i--) {
         var b = all[i];
         if (b.cat === 'pbullet') {
-            if (b.dead || b.y < -24) world.remove(b);
+            if (b.dead || b.y < -24 * K) world.remove(b);
         } else if (b.cat === 'ebullet') {
-            if (b.dead || b.y > H + 24 || b.x < -24 || b.x > W + 24) world.remove(b);
+            if (b.dead || b.y > H + 24 * K || b.x < -24 * K || b.x > W + 24 * K) world.remove(b);
         } else if (b.cat === 'orb') {
-            if (b.dead || b.y > H + 30) world.remove(b);
+            if (b.dead || b.y > H + 30 * K) world.remove(b);
         } else if (b.cat === 'enemy') {
             if (b.killed) killEnemy(b);
             else if (b.dead) {
                 explosionFx(b);
                 world.remove(b);
-            } else if (b.y > H + 60) world.remove(b);
+            } else if (b.y > H + 60 * K) world.remove(b);
         }
     }
 }
@@ -401,12 +426,13 @@ function sweep() {
 function explosionFx(e) {
     var big = e.kind === 1 || e.kind === 2 || e.kind === 3;
     var col = (e.kind === 1 || e.kind === 2) ? MAGENTA : (e.kind === 3 ? OURO : LARANJA);
-    E.fx.burst(e.x, e.y, { n: big ? 26 : 14, color: col, speed: big ? 170 : 120, life: 0.7 });
-    E.fx.burst(e.x, e.y, { n: big ? 10 : 5, color: BRANCO, speed: 90, life: 0.4, size: 1 });
-    E.fx.ring(e.x, e.y, { color: col, speed: big ? 420 : 260, life: 0.55 });
+    E.fx.burst(e.x, e.y, { n: big ? 22 : 12, color: col, speed: (big ? 170 : 120) * K, life: 0.6 });
+    E.fx.burst(e.x, e.y, { n: big ? 8 : 4, color: BRANCO, speed: 90 * K, life: 0.35, size: 1 });
+    E.fx.ring(e.x, e.y, { color: col, speed: (big ? 420 : 260) * K, life: 0.5 });
     // tremor so em evento grande: drone comum abatido em serie sacudia a
     // tela o tempo todo (a "vibracao" que o player sentia)
-    if (big) E.cam.shake(5, 0.3);
+    if (big) E.cam.shake(4 * K, 0.25);
+    E.audio.sfx(big ? SND.boom : SND.pop);
 }
 
 function killEnemy(e) {
@@ -419,7 +445,7 @@ function killEnemy(e) {
     if (m > s.mult) {
         s.mult = m;
         s.multPulse = 1.2;
-        E.fx.popText(s.player.x, s.player.y - 50, "COMBO x" + m, { color: OURO, life: 1.1 });
+        E.fx.popText(s.player.x, s.player.y - 50 * K, "COMBO x" + m, { color: OURO, life: 1.1, ts: 'big' });
     }
     var tot = pts * s.mult;
     s.score += tot;
@@ -427,7 +453,7 @@ function killEnemy(e) {
         s.charge = Math.min(100, s.charge + (e.kind === 2 ? 40 : (e.kind === 1 ? 7 : 3)));
     }
     explosionFx(e);
-    E.fx.popText(e.x, e.y - 10, "+" + tot, { color: e.kind === 1 ? MAGENTA : OURO });
+    E.fx.popText(e.x, e.y - 10 * K, "+" + tot, { color: e.kind === 1 ? MAGENTA : OURO, ts: 'small' });
     if (e.kind === 3) spawnMinis(e);
     if (e.kind === 2) bossDown(e);
     world.remove(e);
@@ -438,12 +464,14 @@ function bossDown(e) {
     s.boss = null;
     s.bossNext += 5;
     s.triple = 10;
-    E.fx.flash(BRANCO, 350);
-    E.fx.ring(e.x, e.y, { color: MAGENTA, speed: 700, life: 0.7, r0: 20 });
-    E.cam.shake(8, 0.4);
-    spawnOrb(e.x - 50);
-    spawnOrb(e.x + 50);
-    E.fx.popText(W / 2, H * 0.4, "CHEFE AO CHAO! TIRO TRIPLO", { color: MAGENTA, life: 1.4 });
+    E.fx.flash(MAGENTA, 350);
+    E.fx.ring(e.x, e.y, { color: MAGENTA, speed: 700 * K, life: 0.7, r0: 20 * K });
+    E.cam.shake(7 * K, 0.4);
+    spawnOrb(e.x - 50 * K);
+    spawnOrb(e.x + 50 * K);
+    E.fx.popText(W / 2, H * 0.4, "CHEFE AO CHAO!", { color: MAGENTA, life: 1.4, ts: 'big' });
+    E.fx.popText(W / 2, H * 0.4 + 30 * K, "TIRO TRIPLO", { color: VERDE, life: 1.4, ts: 'label' });
+    E.audio.sfx(SND.chefe);
 }
 
 function hitPlayer() {
@@ -451,19 +479,19 @@ function hitPlayer() {
     s.lives--;
     s.streak = 0;
     s.mult = 1;
-    E.audio.stop();
-    E.fx.burst(p.x, p.y, { n: 26, color: CIANO, speed: 170, life: 0.8 });
-    E.fx.ring(p.x, p.y, { color: CIANO, speed: 420, life: 0.55 });
-    E.fx.flash(BRANCO, 220);
-    E.cam.shake(6, 0.35);
+    E.fx.burst(p.x, p.y, { n: 26, color: CIANO, speed: 170 * K, life: 0.8 });
+    E.fx.ring(p.x, p.y, { color: CIANO, speed: 420 * K, life: 0.55 });
+    E.fx.flash(0xF800, 260);
+    E.cam.shake(6 * K, 0.35);
     if (s.lives <= 0) {
         s.over = true;
         s.overT = 0;
+        E.audio.stop();
         E.audio.sfx("over");
     } else {
+        // a trilha segue (sfx misturado): perder vida nao corta a musica
         p.invuln = 2.2;
-        E.audio.sfx("hit");
-        E.audio.music(SONG);
+        E.audio.sfx(SND.dano);
     }
 }
 
@@ -486,7 +514,7 @@ function detonate() {
         } else {
             gained += b.kind === 1 ? 45 : 15;
             b.killed = true;
-            E.fx.burst(b.x, b.y, { n: 20, color: OURO, speed: 150, life: 0.7 });
+            E.fx.burst(b.x, b.y, { n: 14, color: OURO, speed: 150 * K, life: 0.6 });
         }
     }
     for (i = all.length - 1; i >= 0; i--) {
@@ -500,16 +528,21 @@ function detonate() {
     }
     s.score += gained + 60;
     s.charge = 0;
-    E.fx.burst(s.player.x, s.player.y - 30, { n: 46, color: OURO, speed: 300, life: 0.9 });
-    E.fx.burst(s.player.x, s.player.y - 30, { n: 30, color: BRANCO, speed: 180, life: 0.6 });
-    E.fx.ring(s.player.x, s.player.y - 30, { color: OURO, speed: 700, life: 0.7, r0: 10 });
-    E.fx.ring(s.player.x, s.player.y - 30, { color: CIANO, speed: 520, life: 0.7, r0: 10 });
-    E.fx.flash(BRANCO, 500);
-    E.cam.shake(8, 0.45);
-    E.fx.popText(W / 2, H / 2 - 30, "SUPERNOVA! +" + gained, { color: OURO, life: 1.4 });
-    E.audio.stop();
-    E.audio.sfx("boom");
-    s.resumeAt = s.t + 1.6;
+    E.fx.burst(s.player.x, s.player.y - 30 * K, { n: 40, color: OURO, speed: 300 * K, life: 0.9 });
+    E.fx.burst(s.player.x, s.player.y - 30 * K, { n: 24, color: BRANCO, speed: 180 * K, life: 0.6 });
+    E.fx.ring(s.player.x, s.player.y - 30 * K, { color: OURO, speed: 700 * K, life: 0.7, r0: 10 * K });
+    E.fx.ring(s.player.x, s.player.y - 30 * K, { color: CIANO, speed: 520 * K, life: 0.7, r0: 10 * K });
+    // o evento maior do jogo: este sim e flash de tela cheia
+    E.fx.flash(BRANCO, 420, { full: true });
+    E.cam.shake(8 * K, 0.45);
+    E.fx.popText(W / 2, H / 2 - 30 * K, "SUPERNOVA! +" + gained, { color: OURO, life: 1.4, ts: 'big' });
+    if (E.caps.mix) {
+        E.audio.sfx(SND.supernova);   // por cima da trilha
+    } else {
+        E.audio.stop();               // firmware velho: canal unico
+        E.audio.sfx("boom");
+        s.resumeAt = s.t + 1.6;
+    }
     return true;
 }
 
@@ -526,5 +559,5 @@ function debugHit() {
 module.exports = {
     reset: reset, update: update, detonate: detonate,
     state: state, movePlayer: movePlayer,
-    SONG: SONG, startMusic: startMusic, debugHit: debugHit, BPM: BPM
+    SONG: SONG, startMusic: startMusic, debugHit: debugHit, BPM: BPM, SND: SND
 };

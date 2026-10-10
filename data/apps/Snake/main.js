@@ -18,12 +18,16 @@ var HI_FILE = "/local/config_snake_hi.txt";
 var GOLD_EVERY = 5;             // fruta dourada a cada N frutas
 var GOLD_MS = 7000;             // validade da dourada
 
-var hasTone = (typeof System.playTone === "function");
+// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
+// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+var somFn = typeof System.sfx === "function" ? System.sfx :
+            (typeof System.playTone === "function" ? System.playTone : null);
+var hasTone = somFn !== null;
 function tone(hz, ms) {          // playTone aceita melodia [[freq,ms],...]
-    if (hasTone) { try { System.playTone([[hz, ms]]); } catch (e) {} }
+    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
 }
 function tune(notes) {           // sequencia curta (ex.: recorde)
-    if (hasTone) { try { System.playTone(notes); } catch (e) {} }
+    if (hasTone) { try { somFn && somFn(notes); } catch (e) {} }
 }
 if (typeof System.keepAwake === "function") {
     try { System.keepAwake(120000); } catch (e) {}  // partida sem apagar tela
