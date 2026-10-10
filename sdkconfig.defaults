@@ -83,6 +83,23 @@ CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="main/Assets/Tls/extra_roots.pem"
 # Tabela de nomes de esp_err_t (logs mostram o codigo numerico)
 # CONFIG_ESP_ERR_TO_NAME_LOOKUP is not set
 
+# Tamanho: o mbedTLS so faz o lado CLIENTE (HttpClient, OTA, IA; o web
+# server local e HTTP puro e nao ha esp_https_server no tree). Sem
+# renegociacao, sem escrita de PEM/parse de CSR, e curvas so as que a web
+# usa: P-256/P-384 (raizes do bundle Mozilla) + X25519 (troca de chave).
+# P-256 e CMAC seguem tambem pelo SMP do NimBLE e pelo PMF do WPA3.
+# Medido 2026-10-09: -9,7 KB na CYD, -10 KB no watch.
+CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y
+# CONFIG_MBEDTLS_TLS_SERVER_AND_CLIENT is not set
+# CONFIG_MBEDTLS_SSL_RENEGOTIATION is not set
+# CONFIG_MBEDTLS_PEM_WRITE_C is not set
+# CONFIG_MBEDTLS_X509_CSR_PARSE_C is not set
+# CONFIG_MBEDTLS_ECP_DP_SECP521R1_ENABLED is not set
+# CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED is not set
+# CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED is not set
+# CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED is not set
+# CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED is not set
+
 # ISR da UART em IRAM: durante erase/programa da flash (LittleFS em push/OTA) o
 # ISR em cache congela, o FIFO RX (128 B) transborda em ~1,4 ms a 921600 e o
 # stream de chunks do proto 2 perde bytes (framing destruido). O CDC/USJ tem
