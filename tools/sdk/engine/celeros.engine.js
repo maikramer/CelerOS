@@ -21,9 +21,20 @@
 // menus sem redesenho por quadro = sem tremor no painel RGB); camada
 // E.dirty (apaga so o que mudou, nada de fillScreen por quadro) e
 // E.tilemap (celulas sujas); sfx misturado sem bloquear (System.sfx).
+//
+// 1.2.3 (performance, sem mudanca de API): opts compartilhado nos wrappers
+// gfx (zero alocacao por primitiva sem opts — GC do Duktape respirava a
+// cada quadro); E.font(px) e a largura de texto memoizados nos estilos
+// compartilhados (textWidth so na 1a vez de cada string); dirty.add sem
+// Math.floor/ceil para coords inteiras; setTextDatum so quando o texto
+// pede origem diferente do default 0.
 
-var E = { version: '1.2.2' };
+var E = { version: '1.2.3' };
 var S = System;
+
+// opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
+// objeto novo por primitiva era pressao de GC no Duktape a cada quadro
+var EMPTY = {};
 
 // ------------------------------------------------------- caps / init ------
 
@@ -73,6 +84,7 @@ E.init = function (opts) {
     E.H = E.caps.h = S.screenHeight();
     E.U = Math.min(E.W, E.H) / 240;
     E._fonts = null;    // tabela de fontes medida sob demanda (E.font)
+    E._fontMemo = null; // idem: px -> entrada da tabela (busca e O(1))
     try { E.theme = S.theme(); } catch (e) { E.theme = null; }
     if (opts.keepAwake !== false && typeof S.keepAwake === 'function') {
         S.keepAwake(true);
@@ -92,7 +104,14 @@ E.u = function (v) { return Math.round(v * E.U); };
 // Tipografia por PIXEL: as fontes do firmware (1/2/4) medidas no alvo
 // (fontHeight ja inclui a promocao de tela grande) x textSize 1..4. font(px)
 // devolve {font, size, h} da maior que cabe em px (ou a menor de todas).
+// A tabela e os resultados por px sao memoizados: text() consulta por quadro.
+E._fontMemo = null;
 E.font = function (px) {
+    var memo = E._fontMemo;
+    if (memo) {
+        var hit = memo[px];
+        if (hit) return hit;
+    }
     var t = E._fonts;
     if (!t) {
         t = [];
@@ -101,7 +120,8 @@ E.font = function (px) {
             var h = 0;
             try { h = S.fontHeight(fs[i]); } catch (e) { h = 0; }
             if (!(h > 0)) h = fs[i] === 1 ? 8 : (fs[i] === 2 ? 16 : 26);
-            for (var sz = 1; sz <= 4; sz++) t.push({ font: fs[i], size: sz, h: h * sz });
+            for (var sz = 1; sz <= 4; sz++) t.push({ font: fs[i], size: sz, h: h * sz,
+                                                      _w: {}, _wn: 0 });
         }
         // menor altura primeiro; no empate vence a fonte maior (size 1 de
         // uma fonte grande e mais nitido que size 2 de uma pequena)
@@ -125,6 +145,8 @@ E.font = function (px) {
         }
         best = pick;
     }
+    if (!memo) memo = E._fontMemo = {};
+    memo[px] = best;
     return best;
 };
 
@@ -448,7 +470,13 @@ E.dirty = {
     add: function (x, y, w, h) {
         var d = E.dirty;
         if (!d.on || d._mute || !(w > 0) || !(h > 0)) return;
-        d._cur.push(Math.floor(x) - 1, Math.floor(y) - 1, Math.ceil(w) + 2, Math.ceil(h) + 2);
+        // coords inteiras (o caso de todo gfx/blit, que ja arredonda) nao
+        // pagam as 4 chamadas Math.*: ToInt32 resolve no proprio comparador
+        if (x !== (x | 0)) x = Math.floor(x);
+        if (y !== (y | 0)) y = Math.floor(y);
+        if (w !== (w | 0)) w = Math.ceil(w);
+        if (h !== (h | 0)) h = Math.ceil(h);
+        d._cur.push(x - 1, y - 1, w + 2, h + 2);
     },
     // alguma caixa (apagada agora ou desenhada neste quadro) toca o rect?
     // o HUD usa para saber se precisa repintar
@@ -893,7 +921,9 @@ E.gfx = (function () {
     function py(y, screen) { return Math.round(screen ? y : E.cam.wy(y)); }
 
     // resolve {font, size} do texto: px (pixels), ts (papel em E.ts,
-    // escalado por E.U) ou o par cru font/size de antes
+    // escalado por E.U) ou o par cru font/size de antes. Estilos vindos de
+    // E.font sao COMPARTILHADOS (tabela memoizada): o cache de largura do
+    // measure pende neles — sem chave string, sem alocar
     function textStyle(o) {
         var want = o.px !== undefined ? o.px :
                    (o.ts !== undefined ? (E.ts[o.ts] || 13) * E.U : -1);
@@ -904,17 +934,31 @@ E.gfx = (function () {
     // no canvas nativo (metade no 480): corrige pela escala do vidro
     var api = 0;
     try { api = S.getAPILevel(); } catch (e) { api = 0; }
+    var _WCAP = 200;      // teto por estilo: textos dinamicos (score) nao crescem sem fim
     function measure(str, st) {
-        var w = 0;
-        try { w = S.textWidth(str, st.font) * st.size; } catch (e) { w = str.length * 8 * st.size; }
-        if (E.caps.native && api > 0 && api < 32) w = Math.round(w * E.W / 240);
-        return w;
+        var c = st._w;
+        if (c) {
+            var w = c[str];
+            if (w !== undefined) return w;
+        }
+        var w2 = 0;
+        try { w2 = S.textWidth(str, st.font) * st.size; } catch (e) { w2 = str.length * 8 * st.size; }
+        if (E.caps.native && api > 0 && api < 32) w2 = Math.round(w2 * E.W / 240);
+        if (c && st._wn < _WCAP) { c[str] = w2; st._wn++; }
+        return w2;
     }
+
+    // opts de rect em scratch (button/bar/panel redesenham a cada quadro;
+    // g.rect so le) — mesmo papel do EMPTY para os literais internos
+    var _ro = { r: 0, screen: false };
+    var _roS = { r: 0, fill: false, screen: false };
+    var _btnLo = { color: 0, align: 'center', valign: 'middle', screen: false,
+                   fit: 0, font: undefined, px: 12 };
 
     var g = {
         // rect(x,y,w,h,cor,{fill=true, r (cantos), screen})
         rect: function (x, y, w, h, color, o) {
-            o = o || {};
+            o = o || EMPTY;
             var X = px(x, o.screen), Y = py(y, o.screen);
             var W2 = Math.round(w), H2 = Math.round(h);
             if (o.r && E.caps.round) {
@@ -932,7 +976,7 @@ E.gfx = (function () {
         },
         // circle(x,y,r,cor,{fill=true, smooth, screen})
         circle: function (x, y, r, color, o) {
-            o = o || {};
+            o = o || EMPTY;
             var X = px(x, o.screen), Y = py(y, o.screen), R = Math.round(r);
             if (R < 1) R = 1;
             if (o.fill === false) S.drawCircle(X, Y, R, color);
@@ -942,7 +986,7 @@ E.gfx = (function () {
         },
         // line(x0,y0,x1,y1,cor,{w (espessura), screen})
         line: function (x0, y0, x1, y1, color, o) {
-            o = o || {};
+            o = o || EMPTY;
             var ax = px(x0, o.screen), ay = py(y0, o.screen);
             var bx = px(x1, o.screen), by = py(y1, o.screen);
             var lw = o.w > 1 ? Math.round(o.w) : 1;
@@ -954,7 +998,7 @@ E.gfx = (function () {
             }
         },
         tri: function (x0, y0, x1, y1, x2, y2, color, o) {
-            o = o || {};
+            o = o || EMPTY;
             var ax = px(x0, o.screen), ay = py(y0, o.screen);
             var bx = px(x1, o.screen), by = py(y1, o.screen);
             var cx = px(x2, o.screen), cy = py(y2, o.screen);
@@ -970,7 +1014,7 @@ E.gfx = (function () {
                 g.rect(x, y, w, h, c1, o);
                 return;
             }
-            o = o || {};
+            o = o || EMPTY;
             var X = px(x, o.screen), Y = py(y, o.screen);
             S.fillGradient(X, Y, Math.round(w), Math.round(h), c1, c2, o.dir === 'x' ? 1 : 0);
             if (D.on) D.add(X, Y, w, h);
@@ -980,7 +1024,7 @@ E.gfx = (function () {
                 g.circle(x, y, r1, color, o);
                 return;
             }
-            o = o || {};
+            o = o || EMPTY;
             var X = px(x, o.screen), Y = py(y, o.screen), R = Math.round(r1);
             S.fillArc(X, Y, Math.round(r0), R, Math.round(a0), Math.round(a1), color);
             if (D.on) D.add(X - R - 1, Y - R - 1, R * 2 + 3, R * 2 + 3);
@@ -990,7 +1034,7 @@ E.gfx = (function () {
         // (cru, como antes), fit (largura maxima: encolhe ate caber), align
         // left|center|right, valign top|middle|bottom, screen}
         text: function (str, x, y, o) {
-            o = o || {};
+            o = o || EMPTY;
             str = String(str);
             var st = textStyle(o);
             if (o.fit > 0 && st.h > 0) {
@@ -1009,14 +1053,18 @@ E.gfx = (function () {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color, o.bg);
             }
             // datum no LAYOUT DO LOVYANGFX (nao TFT_eSPI): linha vale 4 —
-            // 4=middle-left, 5=middle-center, 8=bottom-left (9=BC, 10=BR)
+            // 4=middle-left, 5=middle-center, 8=bottom-left (9=BC, 10=BR).
+            // Datum 0 e o default do firmware: o estado so e tocado quando
+            // o texto pede outra origem (app que mexeu no System.setTextDatum
+            // direto deve devolve-lo a 0, como os apps do repo fazem)
             var col = o.align === 'center' ? 1 : (o.align === 'right' ? 2 : 0);
             var row = o.valign === 'middle' ? 4 : (o.valign === 'bottom' ? 8 : 0);
-            S.setTextDatum(row + col);
+            var datum = row + col;
+            if (datum) S.setTextDatum(datum);
             if (st.size !== 1) S.setTextSize(st.size);
             S.drawString(str, X, Y, st.font);
             if (st.size !== 1) S.setTextSize(1);
-            S.setTextDatum(0);
+            if (datum) S.setTextDatum(0);
             if (D.on) {
                 var tw = measure(str, st);
                 var th = st.h || (S.fontHeight(st.font) * st.size);
@@ -1026,14 +1074,14 @@ E.gfx = (function () {
             }
         },
         // largura em pixels do texto com as mesmas opts do text()
-        measure: function (str, o) { return measure(String(str), textStyle(o || {})); },
+        measure: function (str, o) { return measure(String(str), textStyle(o || EMPTY)); },
         // botao immediate-mode: desenha e devolve o rect p/ E.hit(). O
         // rotulo escala com a altura do botao (px = 50% de h, encolhe ate
         // caber na largura). Registra o rect: cena static repinta sozinha
         // quando o dedo entra/sai dele (feedback de press sem draw/quadro)
         button: function (label, x, y, w, h, o) {
-            o = o || {};
-            var T = E.theme || {};
+            o = o || EMPTY;
+            var T = E.theme || EMPTY;
             var r = { x: x, y: y, w: w, h: h };
             var accent = o.color || T.accent || 0x07FF;
             var on = E.press(r);
@@ -1043,41 +1091,46 @@ E.gfx = (function () {
                 (on ? (E.caps.wide ? S.mixColor(o.bg !== undefined ? o.bg : (T.card || 0x1082), 0xFFFF, 18) : accent)
                     : (o.bg !== undefined ? o.bg : (T.card || 0x1082)));
             var rad = o.r === undefined ? Math.round(Math.min(h * 0.28, 12 * E.U)) : o.r;
-            g.rect(x, y, w, h, fill, { r: rad, screen: o.screen });
+            _ro.r = rad; _ro.screen = o.screen;
+            g.rect(x, y, w, h, fill, _ro);
             if (!primary && o.stroke !== false) {
-                g.rect(x, y, w, h, o.stroke || accent, { r: rad, fill: false, screen: o.screen });
+                _roS.r = rad; _roS.screen = o.screen;
+                g.rect(x, y, w, h, o.stroke || accent, _roS);
             }
-            var lo = {
-                color: o.textColor !== undefined ? o.textColor :
-                       (primary ? (T.onAccent || 0x0000) : (T.text || 0xFFFF)),
-                align: 'center', valign: 'middle', screen: o.screen,
-                fit: w - Math.round(12 * E.U)
-            };
-            if (o.font) lo.font = o.font;
-            else lo.px = o.px || Math.round(h * 0.5);
+            // scratch dos labels (g.text so le): label de botao a cada quadro
+            // nao aloca
+            var lo = _btnLo;
+            lo.color = o.textColor !== undefined ? o.textColor :
+                       (primary ? (T.onAccent || 0x0000) : (T.text || 0xFFFF));
+            lo.align = 'center'; lo.valign = 'middle'; lo.screen = o.screen;
+            lo.fit = w - Math.round(12 * E.U);
+            if (o.font) { lo.font = o.font; lo.px = undefined; }
+            else { lo.px = o.px || Math.round(h * 0.5); lo.font = undefined; }
             g.text(label, x + w / 2, y + h / 2, lo);
             E._btns.push(r);
             return r;
         },
         // medidor de fracao: opts {fg, bg, r, screen}
         bar: function (x, y, w, h, frac, o) {
-            o = o || {};
-            var T = E.theme || {};
+            o = o || EMPTY;
+            var T = E.theme || EMPTY;
             var f = E.m.clamp(frac, 0, 1);
-            g.rect(x, y, w, h, o.bg || (T.stroke || 0x3186), { r: o.r, screen: o.screen });
+            _ro.r = o.r; _ro.screen = o.screen;
+            g.rect(x, y, w, h, o.bg || (T.stroke || 0x3186), _ro);
             if (f > 0.01) {
                 g.rect(x + 1, y + 1, Math.max(1, (w - 2) * f), h - 2,
-                       o.fg || (T.accent || 0x07FF), { r: o.r, screen: o.screen });
+                       o.fg || (T.accent || 0x07FF), _ro);
             }
         },
         // painel/card com borda
         panel: function (x, y, w, h, o) {
-            o = o || {};
-            var T = E.theme || {};
+            o = o || EMPTY;
+            var T = E.theme || EMPTY;
             var rad = o.r === undefined ? Math.round(10 * E.U) : o.r;
-            g.rect(x, y, w, h, o.bg || (T.card || 0x1082), { r: rad, screen: o.screen });
-            g.rect(x, y, w, h, o.stroke || (T.stroke || 0x3186),
-                   { r: rad, fill: false, screen: o.screen });
+            _ro.r = rad; _ro.screen = o.screen;
+            g.rect(x, y, w, h, o.bg || (T.card || 0x1082), _ro);
+            _roS.r = rad; _roS.screen = o.screen;
+            g.rect(x, y, w, h, o.stroke || (T.stroke || 0x3186), _roS);
         }
     };
     return g;
@@ -1109,7 +1162,7 @@ E.fx = {
     // burst(x, y, {n, color|colors[], speed, speed2, angle, spread, life,
     //               size, grav, drag, shape dot|spark|ring})
     burst: function (x, y, o) {
-        o = o || {};
+        o = o || EMPTY;
         var n = o.n || 12;
         var sp = o.speed === undefined ? 60 : o.speed;
         var sp2 = o.speed2 === undefined ? sp : o.speed2;
@@ -1138,7 +1191,7 @@ E.fx = {
 
     // onda de choque: anel que expande (speed px/s) e some
     ring: function (x, y, o) {
-        o = o || {};
+        o = o || EMPTY;
         var p = this._spawn();
         if (!p) return;
         p.x = x;
@@ -1158,7 +1211,7 @@ E.fx = {
     // texto flutuante (score, dano) que sobe e some; opts {color, life,
     // px | ts (default 'label'), font (cru), screen}
     popText: function (x, y, str, o) {
-        o = o || {};
+        o = o || EMPTY;
         this._floaters.push({
             x: x, y: y, str: String(str),
             color: o.color === undefined ? 0xFFE0 : o.color,
@@ -1187,7 +1240,7 @@ E.fx = {
     // integral voltava — e a disputa de banda com o DMA do painel RGB que
     // faz o vidro vibrar. Velocidade media preservada (dt x stride).
     stars: function (n, o) {
-        o = o || {};
+        o = o || EMPTY;
         var w = o.w || E.W, h = o.h || E.H;
         var stride = o.stride || 1;
         var pts = [];
