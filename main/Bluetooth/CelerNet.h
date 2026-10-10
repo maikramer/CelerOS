@@ -88,6 +88,7 @@ public:
         uint32_t txNoToken;             // bursts devidos esperando ficha (bench)
         uint32_t rxDropped;             // entregas perdidas (fila RX cheia)
         uint32_t relayed;               // quadros de outros repetidos
+        uint32_t relayDropped;          // repeticoes descartadas (anel de TX cheio)
         uint16_t heard;                 // nos na tabela de presenca
     };
 

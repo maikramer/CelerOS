@@ -99,7 +99,6 @@ struct NetHeap {
 };
 
 QueueHandle_t s_raw = nullptr;      // adv reports (host -> tick)
-SemaphoreHandle_t s_lock = nullptr; // recursive: tick/poll/start concorrem
 NetHeap* s_heap = nullptr;          // PSRAM (ou interna, se falhar)
 
 bool s_active = false;
@@ -114,6 +113,7 @@ uint32_t s_txDropped = 0;
 uint32_t s_rxDropped = 0;
 uint32_t s_relayed = 0;
 uint32_t s_relaySuppressed = 0;  // repeticoes canceladas (outro ja repetiu)
+uint32_t s_relayDropped = 0;     // repeticoes perdidas: anel de TX cheio
 // Pendencias em uso na fila de TX: a fila mora na PSRAM e o tick (~60x/s)
 // a varria INTEIRA duas vezes so para saber se estava vazia — com falha de
 // cache a cada linha, o relogio gastava ~15 ms a cada 3 s nisso (bancada
@@ -234,6 +234,19 @@ constexpr uint32_t K_TOKEN_MAX = 16;
 // e state pequeno ficam na interna (RX/remontador/presenca/dedup na PSRAM)
 // — o controlador e que respira na interna.
 constexpr size_t K_NET_MIN_INTERNAL = 4 * 1024;
+
+// No vencido (TTL sem ouvir BEAT)? Com a fila de TX/repeticao pendente o
+// proprio no esta SURDO — cada quadro devido desliga o scanner para o burst
+// e, sob trafego sustentado (relay fragmentado + BEATs dos vizinhos), ele
+// perde BEATs inteiros: nao e o vizinho que foi embora. A expiracao e
+// adiada enquanto transmitimos, com teto duro: sem ouvir NADA por 4x TTL,
+// o no sai mesmo sob trafego (foi embora de verdade). Usado pela varredura
+// do tick (evento de saida) E pelo nodes() — lista e eventos coerentes.
+bool nodeExpired(uint32_t lastMs, uint32_t nowMs) {
+    const uint32_t age = nowMs - lastMs;
+    if (age <= K_NODE_TTL_MS) return false;
+    return s_pendingUsed == 0 || age > 4 * K_NODE_TTL_MS;
+}
 
 SemaphoreHandle_t lock() {
     // init thread-safe (C++11): a 1a chamada cria, as demais devolvem
@@ -533,7 +546,14 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
                     jitter += 700 + (esp_random() % 900);  // comportamento antigo
                 }
             }
-            if (pendingPush(frame, (uint8_t)n, false, nowMs + jitter)) s_relayed++;
+            if (pendingPush(frame, (uint8_t)n, false, nowMs + jitter)) {
+                s_relayed++;
+            } else {
+                // anel cheio: o vizinho reenvia (redundancia do flood), mas o
+                // descarte fica visivel no info() — relay perdido em serie e
+                // sintoma de fila atolada
+                s_relayDropped++;
+            }
         }
     }
 }
@@ -780,6 +800,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_txDropped = s_rxDropped = s_relayed = 0;
     s_txStarted = s_txFail = s_txNoToken = 0;
     s_relaySuppressed = 0;
+    s_relayDropped = 0;
     s_rxRaw = s_rxRawDropped = 0;
     s_rxFrames = 0;
     s_tokens = K_TOKEN_MAX;
@@ -993,8 +1014,9 @@ int CelerNet::nodes(Node* out, int max) {
         if (!s_heap->nodes[i].used) continue;
         // vencido: fica de fora, mas QUEM libera e o sweep do tick (que dispara
         // o evento de saida) — liberar aqui engolia o "saiu" do Pack e a volta
-        // do no virava um segundo "entrou"
-        if (nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) continue;
+        // do no virava um segundo "entrou". Mesmo criterio do sweep
+        // (nodeExpired): a lista nao esconde um no que o sweep ainda mantem
+        if (nodeExpired(s_heap->nodes[i].lastMs, nowMs)) continue;
         out[n].id = s_heap->nodes[i].id;
         snprintf(out[n].name, sizeof(out[n].name), "%s", s_heap->nodes[i].name);
         out[n].caps = s_heap->nodes[i].caps;
@@ -1039,6 +1061,7 @@ void CelerNet::info(Info* out) {
     out->txNoToken = s_txNoToken;
     out->rxDropped = s_rxDropped;
     out->relayed = s_relayed;
+    out->relayDropped = s_relayDropped;
     xSemaphoreGiveRecursive(lock());
 }
 
@@ -1160,11 +1183,12 @@ void CelerNet::tickBody() {
 
     // Varredura de expiracao (~1x/s): no que passou 15 s sem BEAT sai da
     // tabela — e o evento de SAIDA (o de entrada sai do nodeTouch) e para
-    // o servico Pack, que nao precisa varrer por conta propria.
+    // o servico Pack, que nao precisa varrer por conta propria. O criterio
+    // e o nodeExpired (histerese enquanto o nosso TX esta pendente).
     if (nowMs - s_lastSweepMs >= 1000) {
         s_lastSweepMs = nowMs;
         for (int i = 0; i < CelerNet::NODES_MAX; i++) {
-            if (s_heap->nodes[i].used && nowMs - s_heap->nodes[i].lastMs > K_NODE_TTL_MS) {
+            if (s_heap->nodes[i].used && nodeExpired(s_heap->nodes[i].lastMs, nowMs)) {
                 s_heap->nodes[i].used = false;
                 if (s_memberCb != nullptr) {
                     s_memberCb(s_heap->nodes[i].id, s_heap->nodes[i].name,

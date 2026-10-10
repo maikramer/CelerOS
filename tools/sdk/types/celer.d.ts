@@ -22,7 +22,7 @@ interface UIListItem { label: string; sub?: string; right?: string; rightColor?:
 // CelerNet (API 26): malha BLE — poll/nodes/status
 interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }
 interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }
-interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; rxDropped: number; relayed: number; heard: number; }
+interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }
 
 declare function setTimeout(callback: () => void, ms: number): number;
 declare function setInterval(callback: () => void, ms: number): number;

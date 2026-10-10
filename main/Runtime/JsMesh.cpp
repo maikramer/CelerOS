@@ -134,6 +134,7 @@ duk_ret_t JSBindings::js_meshStatus(duk_context *ctx) {
     putUint(ctx, "txNoToken", st.txNoToken);
     putUint(ctx, "rxDropped", st.rxDropped);
     putUint(ctx, "relayed", st.relayed);
+    putUint(ctx, "relayDropped", st.relayDropped);  // repeticoes descartadas (anel cheio)
     putInt(ctx, "heard", st.heard);
     return 1;
 }

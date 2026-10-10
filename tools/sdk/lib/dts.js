@@ -188,7 +188,7 @@ function generate() {
     out.push('// CelerNet (API 26): malha BLE — poll/nodes/status');
     out.push('interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }');
     out.push('interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }');
-    out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; rxDropped: number; relayed: number; heard: number; }');
+    out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }');
     out.push('');
     // funcoes globais (ex.: timers API 12): setTimeout e irmãos no escopo global
     if (manifest.objects.global) {
