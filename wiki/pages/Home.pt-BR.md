@@ -26,7 +26,15 @@ desenvolvimento.
 
 ## Novidades
 
-Destaques das rodadas de outubro de 2026 (firmware 1.8, API JS nível 27):
+Firmware 1.8.2 — a rodada dos jogos (API JS nível 32):
+
+* **Supernova 2.2** e **Detona! 0.6** — dois jogos completos empurrando o runtime: um shooter de sprites 480×480 em **canvas nativo** (API 28) e um bomberman de grade cujo **duelo 1×1 joga pela malha Bluetooth** — lobby, convite e melhor de 3 rounds na **mesma arena construída de uma seed compartilhada**, com só eventos discretos de um quadro cruzando o rádio (cada jogador é a autoridade do próprio corpo).
+* **Dependências compartilhadas no hub** (API 30) — as bibliotecas de engine, física, malha, SFX e grid instalam uma vez e todo app reusa (`deps.json`): pacotes de app menores e o teto de tamanho do app subiu de 128 KB para **1 MB**.
+* **Física verlet nativa** (`System.verlet*`, API 31) — integração, relaxamento e colisões em C++ para mundos com milhares de pontos; o Physics Drop 4 e o app Bench Fisica já usam.
+* **Jogos com som e movimento certos** — o `System.sfx` mistura efeitos sonoros na música (API 32 — um único slot de áudio costumava travar o jogo), só os retângulos que mudaram vão ao vidro (até 8 caixas sujas por quadro) e a interrupção do painel do SmartDisplay saiu do núcleo do JavaScript: a imagem não treme mais e as placas com PSRAM ganham até ~2× mais quadros por segundo.
+* A 1.8.1, no meio do caminho, fez o **OTA sobreviver à viagem**: conexão que cai retoma por HTTP Range do último byte gravado, com back-off crescente, e o `celerctl push` confere que a placa bootou mesmo no slot gravado.
+
+Firmware 1.8, antes disso (API JS nível 27) — a matilha:
 
 * **A matilha** — os CelerOS se descobrem e formam uma **malha Bluetooth multi-salto** (CelerNet, API 26–27): cada nó repete sozinho, a presença leva o papel de cada aparelho, mensagens diretas ou em broadcast até 434 B por até 8 saltos, e o **Pack** passa a **música em curso para o vizinho com alto-falante** — do mesmo ponto da música ([página da malha](/maikramer/CelerOS/wiki/Pack-Mesh)).
 * **Seis apps que vivem na malha** (App Store): **Sonar** (radar em anéis de saltos, ping real de RTT/perda, censo), **Batata Quente** (batata quente por unicast), **Mural** (recadinho que alcança quem estava **desligado**, via Trickle), **Sentinela** (vigia por IMU/mic com alarme em duas vias), **Coral** (coro de 4 vozes com entrada sincronizada) e **Pong Duplo** (pong espelhado pelo Celer Link) ([página da malha](/maikramer/CelerOS/wiki/Pack-Mesh)).

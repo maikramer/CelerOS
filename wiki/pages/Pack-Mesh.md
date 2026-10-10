@@ -22,7 +22,7 @@ network) so the others know what it can do for the pack.
   the **roaming party**: the chiptune playing on one device moves to the
   member with a speaker and **resumes from the same millisecond**
   (`Pack.handoffMusic()`).
-- **Matilda app** — the pack panel (system app, replaces the old CelerNet
+- **Matilha app** — the pack panel (system app, replaces the old CelerNet
   app): toggles the mesh, lists members with role/signal/age, sends direct
   or broadcast messages and passes the music along.
 
@@ -42,6 +42,7 @@ need no app at all (repeating is the OS's job).
 | **Mural** | House message board that reaches devices that were **off** when you wrote: each board keeps the posts and syncs with its neighbours using the Trickle algorithm (RFC 6206) — quiet when everyone agrees, fast when someone comes back. |
 | **Sentinela** | Alarm made of your boards: a watch on the door (motion), the dog (noise) or any panic button rings every open Sentinela with the zone name, up to 8 hops away. Anti-tamper: an armed guard that **vanishes** from the air also rings. PIN to disarm. |
 | **Coral** | Orchestra of devices: the conductor splits a song into voices (melody, harmony, bass, drums) across the boards with a speaker and they all come in together, discounting the per-hop latency. |
+| **Detona!** | The bomberman goes versus: lobby with the Detona! boards nearby, invite and **best of 3 rounds in the same arena** — both screens build it from one shared seed. Only discrete one-frame events cross the air (cell moves, bombs fused to the owner's beat, kicks, deaths); each player is the authority over its own body. |
 | **Pong Duplo** | (Celer Link, not the mesh) Pong across two screens side by side: the ball leaves the top of one and enters the other. Pairing by 6-digit code. |
 
 Protocol design tips (16-byte packets, the `P` prefix the Pack swallows,

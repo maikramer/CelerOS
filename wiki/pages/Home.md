@@ -27,7 +27,15 @@ development.
 
 ## What's new
 
-Highlights of the October 2026 rounds (firmware 1.8, JS API level 27):
+Firmware 1.8.2 — the games round (JS API level 32):
+
+* **Supernova 2.2** and **Detona! 0.6** — two full games pushing the runtime: a 480×480 sprite shooter on a **native canvas** (API 28) and a grid bomberman whose **1×1 duel plays over the Bluetooth mesh** — lobby, invite and best of 3 rounds in the **same arena built from a shared seed**, with only discrete one-frame events crossing the radio (each player is the authority over its own body).
+* **Shared dependencies on the hub** (API 30) — the engine, physics, mesh, SFX and grid libraries install once and every app reuses them (`deps.json`): app packages got smaller and the app size ceiling rose from 128 KB to **1 MB**.
+* **Native verlet physics** (`System.verlet*`, API 31) — integration, relaxation and collisions in C++ for worlds with thousands of points; Physics Drop 4 and the Bench Fisica app already ride it.
+* **Games that sound and move right** — `System.sfx` mixes sound effects into the music (API 32 — a single audio slot used to freeze the game), only the rectangles that changed go to the glass (up to 8 dirty boxes per frame), and the SmartDisplay panel interrupt left the JavaScript core: the image no longer shakes and PSRAM boards gain up to ~2× more frames per second.
+* 1.8.1, in between, made **over-the-air updates survive the trip**: a dropped connection resumes by HTTP Range from the last written byte with growing back-off, and `celerctl push` verifies the board actually booted the slot it wrote.
+
+Firmware 1.8, before that (JS API level 27) — the pack:
 
 * **The pack ("matilha")** — devices discover each other and form a **multi-hop Bluetooth mesh** (CelerNet, API 26–27): every node relays by itself, presence carries each device's role, messages travel direct or broadcast up to 434 B across up to 8 hops, and the **Pack** hands the **playing chiptune to the neighbour with a speaker** — from the exact same beat ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).
 * **Six apps that live on the mesh** (App Store): **Sonar** (radar by rings of hops, real RTT ping/loss, census), **Batata Quente** (hot potato by unicast), **Mural** (message board that reaches devices that were **off**, via Trickle), **Sentinela** (IMU/mic watchdog with two-way alarm), **Coral** (4-voice choir with synchronised entry) and **Pong Duplo** (mirrored pong over the Celer Link) ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).

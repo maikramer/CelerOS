@@ -15,7 +15,15 @@ development.
 
 ## What's new
 
-Highlights of the October 2026 rounds (firmware 1.8, JS API level 27):
+Firmware 1.8.2 — the games round (JS API level 32):
+
+* **Supernova 2.2** and **Detona! 0.6** — two full games pushing the runtime: a 480×480 sprite shooter on a **native canvas** (API 28) and a grid bomberman whose **1×1 duel plays over the Bluetooth mesh** — lobby, invite and best of 3 rounds in the **same arena built from a shared seed**, with only discrete one-frame events crossing the radio (each player is the authority over its own body).
+* **Shared dependencies on the hub** (API 30) — the engine, physics, mesh, SFX and grid libraries install once and every app reuses them (`deps.json`): app packages got smaller and the app size ceiling rose from 128 KB to **1 MB**.
+* **Native verlet physics** (`System.verlet*`, API 31) — integration, relaxation and collisions in C++ for worlds with thousands of points; Physics Drop 4 and the Bench Fisica app already ride it.
+* **Games that sound and move right** — `System.sfx` mixes sound effects into the music (API 32 — a single audio slot used to freeze the game), only the rectangles that changed go to the glass (up to 8 dirty boxes per frame), and the SmartDisplay panel interrupt left the JavaScript core: the image no longer shakes and PSRAM boards gain up to ~2× more frames per second.
+* 1.8.1, in between, made **over-the-air updates survive the trip**: a dropped connection resumes by HTTP Range from the last written byte with growing back-off, and `celerctl push` verifies the board actually booted the slot it wrote.
+
+Firmware 1.8, before that (JS API level 27) — the pack:
 
 * **The pack ("matilha")** — CelerOS devices discover each other and form a **multi-hop Bluetooth mesh** (CelerNet, API 26–27): every node relays by itself (boards in the middle need no app), presence carries each device's **role** (speaker, mic, display, legs, LEDs), and messages travel direct or broadcast up to 434 bytes across up to 8 hops. The **Pack** service on top hands the **playing chiptune over to the neighbour with a speaker** — from the exact same beat — and delivers app envelopes with de-duplication.
 * **Six apps that live on the mesh** (App Store): **Sonar** (radar of the neighbourhood by rings of hops, real RTT ping and loss, census), **Batata Quente** (hot potato by unicast with the fuse ticking), **Mural** (a house message board that reaches devices that were **off**, syncing with the Trickle algorithm), **Sentinela** (watchdog by IMU/mic with a two-way alarm), **Coral** (4-voice choir with **synchronised entry** compensating each hop's delay) and **Pong Duplo** (mirrored pong over the Celer Link, pairing by code).
@@ -83,6 +91,7 @@ noticeably simpler:
 * **Immediate-mode UI** — adaptive layout (`main/Display/Layout.h`): the same apps scale from 240x320 up to 480x480, with PNG icons decoded to an RGB565+A4 cache.
 * **Pre-installed apps in JS** — Settings, App Store, Installer, Help, Web Server, Terminal, Snake, Chat IA, Qwen and the demos (HTTP Demo, Touch Test) live in the LittleFS partition; the firmware carries only the core (that shaved ~330 KB off the CYD image). Boards overlay their own home apps (Watchface on the watch, Dog Face on the dog, Barebone on the devkit).
 * **App Store & Installer** — browse and install apps from the [CelerOS Hub](https://os.celer.tec.br) over Wi-Fi, or sideload from the SD card.
+* **Games & shared libraries** — a real game stack in the JS runtime: native canvas with a sprite pool (`System.setNativeCanvas`, API 28), verlet physics in C++ (`System.verlet*`, API 31), sound effects mixed into the music (`System.sfx`, API 32) and shared dependencies on the hub (`deps.json`, API 30 — engine/physics/mesh/SFX/grid install once per device; app ceiling 1 MB). Supernova and Detona! (whose 1×1 duel plays over the mesh) are built on it.
 * **Over-the-air updates** — firmware updates from the device (Settings → System Updates), from the browser (`/update` upload page), or via `celerctl ota push`. See [tools/README_OTA.md](tools/README_OTA.md).
 * **Captive portal Wi-Fi setup** — no credentials stored? The device opens a `CelerOS-Setup-XXXX` access point; you configure Wi-Fi from your phone. Wi-Fi auto-reconnects on router drops.
 * **Live screen from the browser** — `/screen` mirrors the display over Wi-Fi (RLE frames served row-block by row-block, so the device keeps running smoothly) and forwards your clicks as touches.
