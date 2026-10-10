@@ -260,6 +260,16 @@ void clockChanged() {
     time_t now;
     time(&now);
     s_lastCheck = now;
+    // Soneca marcada com o relogio ainda invalido (epoch do boot): quando a
+    // hora real chega por NTP/celular, o resto absurdamente atrasado
+    // dispararia no proximo tick. Soneca legitima nasce a SNOOZE_MIN minutos
+    // no FUTURO — mais que um periodo inteiro atras do relogio novo e lixo
+    // do relogio antigo: descarta.
+    if (s_snoozeAt != 0 && s_snoozeAt < now - SNOOZE_MIN * 60) {
+        s_snoozeAt = 0;
+        s_snoozeId = -1;
+        persistSnooze();
+    }
 }
 
 time_t nextEvent() {
