@@ -3,6 +3,7 @@
 
 #include <string>
 #include <map>
+#include <cstdlib>
 #include <nvs_flash.h>
 #include <nvs_handle.hpp>
 #include <nvs.h>
@@ -191,10 +192,21 @@ ErrorCode NVS::readValue(const std::string& namespaceName, const std::string& ke
             nvs_close(handle);
             return CommonErrorCodes::FileNotFound;
         }
-        char* valueBuffer = new char[requiredSize]; // Allocate buffer
+        // malloc em vez de new[]: sem excecoes, um new que falha aborta o
+        // aparelho — aqui a leitura devolve erro limpo (mesmo padrao do
+        // HttpClient::setBodySink)
+        char* valueBuffer = static_cast<char*>(malloc(requiredSize));
+        if (valueBuffer == nullptr) {
+            nvs_close(handle);
+            ESP_LOGE("NVS", "Out of memory reading key '%s'", key.c_str());
+            return CommonErrorCodes::StorageReadError;
+        }
         esp_err = nvs_get_str(handle, key.c_str(), valueBuffer, &requiredSize);
-        value = std::string(valueBuffer);
-        delete[] valueBuffer;
+        if (esp_err == ESP_OK) {
+            // requiredSize volta com o tamanho real (inclui o '\0')
+            value.assign(valueBuffer, requiredSize - 1);
+        }
+        free(valueBuffer);
     } else if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int>) {
         esp_err = nvs_get_i8(handle, key.c_str(), &value);
     } else if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, unsigned int>) {
