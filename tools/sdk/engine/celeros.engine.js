@@ -28,8 +28,15 @@
 // compartilhados (textWidth so na 1a vez de cada string); dirty.add sem
 // Math.floor/ceil para coords inteiras; setTextDatum so quando o texto
 // pede origem diferente do default 0.
+//
+// 1.2.4 (performance): E.fx conta as particulas vivas e pula o pool
+// inteiro (140+ slots, 2 lacos por quadro) quando nao ha nenhuma, e o
+// draw das particulas faz a conta da camera inline (sem 2 chamadas por
+// particula).
+// Novo E.dirty.erase(x, y, w, h): apaga ja + registra (o desenho parado
+// que vai se mexer — corpo que acorda, estilingue que estica).
 
-var E = { version: '1.2.3' };
+var E = { version: '1.2.4' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -478,6 +485,21 @@ E.dirty = {
         if (h !== (h | 0)) h = Math.ceil(h);
         d._cur.push(x - 1, y - 1, w + 2, h + 2);
     },
+    // apaga JA o rect (fundo/painter) e registra: algo desenhado PARADO
+    // (fora da camada, redesenhado so quando tocado) que vai se mexer — a
+    // borracha so conhece as caixas do quadro anterior e o desenho velho
+    // ficaria. Chame no inicio do draw: o que vem depois ve o toque
+    erase: function (x, y, w, h) {
+        var d = E.dirty;
+        if (!d.on || !(w > 0) || !(h > 0)) return;
+        // pixels inteiros com a mesma folga de 1 px do add (o desenho velho
+        // pode ter borda AA fora da caixa fracionaria)
+        var x0 = Math.floor(x), y0 = Math.floor(y);
+        w = Math.ceil(x + w) - x0;
+        h = Math.ceil(y + h) - y0;
+        d._fill(x0 - 1, y0 - 1, w + 2, h + 2);
+        d.add(x0, y0, w, h);
+    },
     // alguma caixa (apagada agora ou desenhada neste quadro) toca o rect?
     // o HUD usa para saber se precisa repintar
     touches: function (x, y, w, h) {
@@ -485,9 +507,15 @@ E.dirty = {
         if (d._wasFull || d._full) return true;
         return d._hit(d._prev, x, y, w, h) || d._hit(d._cur, x, y, w, h);
     },
+    // (bordas do rect e o length fora do laco: o Duktape nao iça nada —
+    // a pilha parada pergunta isto por peca, por quadro)
     _hit: function (a, x, y, w, h) {
-        for (var i = 0; i < a.length; i += 4) {
-            if (a[i] < x + w && a[i] + a[i + 2] > x && a[i + 1] < y + h && a[i + 1] + a[i + 3] > y) return true;
+        var x1 = x + w, y1 = y + h, bx, by;
+        for (var i = 0, n = a.length; i < n; i += 4) {
+            bx = a[i];
+            if (bx >= x1 || bx + a[i + 2] <= x) continue;
+            by = a[i + 1];
+            if (by < y1 && by + a[i + 3] > y) return true;
         }
         return false;
     },
@@ -608,6 +636,7 @@ E.clearTweens = function () { E._tweens.length = 0; };
 E._tickTimers = function (now) {
     for (var k = E._timers.length - 1; k >= 0; k--) {
         var t = E._timers[k];
+        if (!t) { continue; }   // fn de outro timer limpou a lista no meio do tick
         if (t.dead) { E._timers.splice(k, 1); continue; }
         if (now < t.at) continue;
         if (t.every) {
@@ -639,6 +668,7 @@ E.tween = function (obj, to, ms, opts) {
 E._tickTweens = function (now) {
     for (var k = E._tweens.length - 1; k >= 0; k--) {
         var tw = E._tweens[k];
+        if (!tw) { continue; }  // onDone de outro tween limpou a lista no meio do tick
         if (tw.dead) { E._tweens.splice(k, 1); continue; }
         if (now < tw.t0) continue;
         var p = (now - tw.t0) / tw.ms;
@@ -1141,6 +1171,7 @@ E.gfx = (function () {
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
     _parts: [],
+    _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
     _floaters: [],
     _flashColor: 0,
@@ -1155,6 +1186,7 @@ E.fx = {
                                life: 1, size: 2, color: 0xFFFF, grav: 0,
                                drag: 0, shape: 'dot', grow: 30 });
         }
+        this._live = 0;
         this._floaters = [];
         this._flashT = 0;
     },
@@ -1295,6 +1327,7 @@ E.fx = {
             if (this._parts[k].dead) {
                 this._cursor = (k + 1) % this._parts.length;
                 this._parts[k].dead = false;
+                this._live++;
                 return this._parts[k];
             }
         }
@@ -1303,11 +1336,11 @@ E.fx = {
 
     _tick: function (dt) {
         var ps = this._parts;
-        for (var i = 0; i < ps.length; i++) {
+        for (var i = 0, n = this._live > 0 ? ps.length : 0; i < n; i++) {
             var p = ps[i];
             if (p.dead) continue;
             p.t += dt;
-            if (p.t >= p.life) { p.dead = true; continue; }
+            if (p.t >= p.life) { p.dead = true; this._live--; continue; }
             p.vy += p.grav * dt;
             if (p.drag > 0) {
                 var d = 1 - p.drag * dt;
@@ -1329,13 +1362,15 @@ E.fx = {
 
     draw: function () {
         var ps = this._parts, D = E.dirty, mix = E.caps.wide;
-        for (var i = 0; i < ps.length; i++) {
+        // camera do quadro (E.cam.wx/wy inline: 2 chamadas a menos por particula)
+        var cox = E.cam.ox - E.cam.x, coy = E.cam.oy - E.cam.y;
+        for (var i = 0, n = this._live > 0 ? ps.length : 0; i < n; i++) {
             var p = ps[i];
             if (p.dead) continue;
             var k = 1 - p.t / p.life;
             var col = p.color;
             if (k < 0.5 && mix) col = S.mixColor(p.color, 0x0000, Math.round(100 - k * 200));
-            var x = Math.round(E.cam.wx(p.x)), y = Math.round(E.cam.wy(p.y));
+            var x = Math.round(p.x + cox), y = Math.round(p.y + coy);
             if (p.shape === 'spark') {
                 var x2 = Math.round(x - p.vx * 0.05), y2 = Math.round(y - p.vy * 0.05);
                 S.drawLine(x, y, x2, y2, col);
