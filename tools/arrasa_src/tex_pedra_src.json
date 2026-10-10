@@ -1,0 +1,33 @@
+{
+  "timestamp": 1791634931.009494,
+  "prompt": "hand painted cartoon grey rock texture, stylized stone surface with a few large dark cracks and lighter chips, mobile game asset, flat shading, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 93,
+    "prompt_final": "hand painted cartoon grey rock texture, stylized stone surface with a few large dark cracks and lighter chips, mobile game asset, flat shading, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "prompt": "hand painted cartoon grey rock texture, stylized stone surface with a few large dark cracks and lighter chips, mobile game asset, flat shading, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "negative_prompt": "photo, realistic, pebbles, cobblestones, bricks, tiles, aerial view, satellite image, drone shot, landscape, horizon, sky, trees, bushes, buildings, roads, water, isometric view, oblique angle, perspective, tilted camera, side view, macro photography, extreme close-up, individual grass blades leaning sideways, 3d render, depth of field, bokeh, strong directional shadows, deep relief, ambient occlusion, high contrast, dramatic lighting, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 7.0,
+    "num_inference_steps": 28,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 1.0,
+      "edge_mse_horizontal": 17.61263084411621,
+      "edge_mse_vertical": 44.65625,
+      "max_abs_edge_diff": 28,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": false
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/arrasa_src/tex_pedra_src.png",
+  "filename": "tex_pedra_src.png"
+}

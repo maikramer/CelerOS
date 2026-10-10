@@ -409,4 +409,30 @@ declare namespace P {
         sticks?: VerletStick[];
         iterations?: number;
     }): Verlet;
+    /** Corpo rigido nativo (API 33). Indices estaveis; state() = [x, y, ang, hit, rapidez, flags] por indice. */
+    interface RigidOpts { static?: boolean; density?: number; friction?: number; bounce?: number; angle?: number }
+    interface Rigid {
+        id: number;
+        /** numeros por corpo no array do state() (6) */
+        N: number;
+        box(x: number, y: number, w: number, h: number, o?: RigidOpts): number;
+        circle(x: number, y: number, r: number, o?: RigidOpts): number;
+        remove(i: number): boolean;
+        set(i: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): boolean;
+        impulse(i: number, jx: number, jy: number): boolean;
+        /** devolve os sub-passos rodados */
+        step(dt: number, o?: { gravity?: Vec; maxSub?: number }): number;
+        state(): number[];
+        count(): number;
+        x(i: number, s: number[]): number;
+        y(i: number, s: number[]): number;
+        angle(i: number, s: number[]): number;
+        hit(i: number, s: number[]): number;
+        speed(i: number, s: number[]): number;
+        alive(i: number, s: number[]): boolean;
+        awake(i: number, s: number[]): boolean;
+        free(): void;
+    }
+    /** null em firmware sem System.rigidNew (API 33, placas S3). */
+    function rigid(opts?: { iterations?: number }): Rigid | null;
 }

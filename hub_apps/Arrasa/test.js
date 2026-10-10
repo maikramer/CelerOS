@@ -1,142 +1,186 @@
-// test.js — bateria do Arrasa! no harness (verlet nativo via stub, mesmo
-// determinismo do firmware). Dirige o jogo pelos toques e a pega
-// __harness.arrasa.F:
-//   1. titulo -> JOGAR
-//   2. estabilidade: 10 s de mundo rodando e o castelo NAO pode derreter
-//      sozinho (nenhum vinculo rompido, coroa de pe)
-//   3. arremesso de verdade: puxao maximo atras e baixo, solta — os
-//      elasticos sao cortados no plano da forquilha, a pedra voa forte,
-//      o castelo apanha (vinculos rompidos) e a COROA CAIU
-//   4. cena de fim (vitoria) + orcamento dentro dos tetos
-//   5. tensao direta: puxao lateral num ponto do topo rompe vinculos
+// test.js — bateria do Arrasa! no harness (o System.rigid* e o espelho JS
+// do solver nativo: tools/sdk/lib/rigid2d.js). Dirige o jogo por toques
+// REAIS no canvas nativo 480x480 e confere pelo __harness.arrasa:
+//   1. titulo -> JOGAR -> mapa -> fase 1
+//   2. a fase assenta parada: nada quebra, ninguem morre, tudo dorme
+//   3. mira de verdade: arrasto do berco para tras e solta — o elastico
+//      lanca a pedra (evento lancou, corpo no mundo com velocidade)
+//   4. o tiro certo (puxao conhecido) limpa a fase: vitoria, estrelas e
+//      recorde salvos, cena de fim
+//   5. TNT em cadeia, bomba e tripla pela API do mundo; teto de corpos
 
 module.exports.wire = function (env) {
     var h = env.__harness;
-
-    // fila propria de agendamentos no relogio virtual (padrao Detona:
-    // o setTimeout do harness segura so 8 timers e descarta o resto)
     var fila = [];
     function at(fn, ms) {
         fila.push({ t: env.System.millis() + ms, fn: fn });
         fila.sort(function (a, b) { return a.t - b.t; });
     }
     var origDelay = env.System.delay;
-    var stopAt = 1000 + 30000;
+    var stopAt = 1000 + 40000;
     env.System.delay = function (ms) {
         while (fila.length && env.System.millis() >= fila[0].t) fila.shift().fn();
         if (env.System.millis() > stopAt) throw { harnessStop: true };
         return origDelay(ms);
     };
-    function toque(x, y) {
-        h.pushTouch([{ x: x, y: y, touched: 1 }, { x: x, y: y, touched: 0 }]);
-    }
+    function assert(cond, msg) { if (!cond) throw new Error('arrasa: ' + msg); }
+    function X() { return h.arrasa; }
     function cena(nome) {
-        var E = h.arrasa && h.arrasa.E;
-        assert(E && E.sceneName === nome,
-               'esperava a cena ' + nome + ', esta em ' + (E && E.sceneName));
+        var E = X() && X().E;
+        assert(E && E.sceneName === nome, 'esperava a cena ' + nome + ', esta em ' + (E && E.sceneName));
     }
-    function assert(cond, msg) {
-        if (!cond) throw new Error('arrasa: ' + msg);
+    function toque(x, y) { h.pushTouch([{ x: x, y: y, touched: 1 }, { x: x, y: y, touched: 0 }]); }
+    function arrasto(x0, y0, x1, y1, n) {
+        var fr = [];
+        for (var k = 0; k <= n; k++) fr.push({ x: x0 + (x1 - x0) * k / n, y: y0 + (y1 - y0) * k / n, touched: 1 });
+        for (var j = 0; j < 4; j++) fr.push({ x: x1, y: y1, touched: 1 });
+        fr.push({ x: x1, y: y1, touched: 0 });
+        h.pushTouch(fr);
     }
+    var lancou = false, pontos0 = 0;
 
-    var sticks0 = 0, count0 = 0;
-    var puxo = { p: -1, x: 0, y: 0 };   // estado do puxao direto (passo 5)
-
-    // 1. titulo -> JOGAR (botao no rodape do 480 nativo)
-    at(function () {
-        cena('titulo');
-        toque(240, 350);
-    }, 400);
-
-    // 2. entrou: castelo montado, pedra armada; 10 s de estabilidade.
-
-    // (700 ms depois do toque — 2 quadros: o pushTouch so e lido pelo
-    // app no frame SEGUINTE; dois at() no mesmo t executam no mesmo
-    // while e o assert via a cena de antes)
+    // 1. titulo -> mapa -> fase 1 (canvas nativo 480: JOGAR ~ (240, 190))
+    at(function () { cena('titulo'); toque(240, 190); }, 400);
+    at(function () { cena('mapa'); toque(80, 160); }, 900);
     at(function () {
         cena('jogando');
-        var F = h.arrasa.F;
-        assert(F.mundo && F.count() === 54, 'mundo montado (2 garfos + 42 blocos + 6 coroa + 4 pedra = ' + F.count() + ')');
-        assert(F.pedra && F.pedra.estado === 'pronta', 'pedra armada no estilingue');
-        assert(F.blocos.length === 8, 'castelo de 7 blocos + coroa (' + F.blocos.length + ')');
-        assert(F.coroaB, 'coroa montada');
-        sticks0 = F.sticks();
-        count0 = F.count();
-    }, 700);
-    at(function () {
-        var F = h.arrasa.F;
-        assert(F.rompidos === 0,
-               'castelo derreteu sozinho: ' + F.rompidos + ' vinculos em 10 s');
-        assert(!F.coroaCaiu, 'coroa caiu sozinha');
-        assert(F.pedra && F.pedra.estado === 'pronta', 'pedra continua armada');
-    }, 10600);
+        var M = X().M;
+        assert(M.w && !M.sem, 'mundo rigido criado (API 33 no stub)');
+        assert(M.goblins === 2, 'fase 1 tem 2 goblins (' + M.goblins + ')');
+        assert(M.tiros.length === 1 && M.tiro, 'fase 1: 2 tiros (1 armando + 1 na fila)');
+    }, 1500);
 
-
-
-    // 3. arremesso: pega perto do bercо, estica a tracao maxima quase
-    // horizontal com leve componente para baixo (mira balistica no meio da
-    // torre: origem ~(35,198), v~(12,2.7) por step, g=0.3) e solta.
-    // Tracao SUSTENTADA por 3 frames (o jogo chama arrastando a cada frame)
+    // pausa no meio da fase e volta sem recarregar (o tempo da fase segue)
+    var tPausa = 0;
+    at(function () { tPausa = X().M.t; toque(36, 34); }, 2000);
+    at(function () { cena('pausa'); toque(240, 196); }, 2500);
     at(function () {
-        var F = h.arrasa.F;
-        assert(F.puxar(20, 190) === true, 'puxao pegou a pedra');
-        F.arrastando(9, 187);
-    }, 11000);
-    at(function () { h.arrasa.F.arrastando(9, 187); }, 11033);
-    at(function () { h.arrasa.F.arrastando(9, 187); }, 11066);
-    at(function () {
-        var F = h.arrasa.F;
-        F.arrastando(9, 187);
-        F.soltar();
-    }, 11099);
-    at(function () {
-        var F = h.arrasa.F;
-        assert(F.lancamento && F.lancamento.vx > 3,
-               'pedra transferida pro mundo A com velocidade (vx=' +
-               (F.lancamento ? F.lancamento.vx.toFixed(1) : '?') + ')');
-        assert(F.pedra.local === 'A', 'pedra voando no mundo A');
-    }, 11600);
+        cena('jogando');
+        assert(X().M.t >= tPausa && X().M.goblins === 2, 'CONTINUAR retoma a mesma fase');
+    }, 3000);
 
-    // 3b. o castelo apanha e a coroa cai
+    // 2. assenta parada
     at(function () {
-        var F = h.arrasa.F;
-        assert(F.rompidos > 4, 'castelo apanhou de verdade (' + F.rompidos + ' vinculos)');
-        assert(F.coroaCaiu, 'a coroa caiu com 1 pedra forte');
-    }, 15600);
+        var M = X().M;
+        assert(M.pontos === 0 && M.goblins === 2, 'fase desmontou sozinha (pontos ' + M.pontos + ')');
+        assert(M.tiro.estado === 'pronto', 'pedra armada no estilingue (' + M.tiro.estado + ')');
+        var acordados = 0;
+        for (var i = 0; i < M.corpos.length; i++) {
+            if (M.corpos[i] && !M.corpos[i].fixo && M.w.awake(i, M.s)) acordados++;
+        }
+        assert(acordados === 0, 'a fortaleza dorme parada (' + acordados + ' acordados)');
+        // 3. mira por toque: do berco (51,239 -> 77,358 na tela) para tras
+        arrasto(77, 358, 22, 380, 8);
+    }, 4000);
+    at(function () {
+        var M = X().M;
+        assert(M.tiro.estado === 'voando' || M.tiro.estado === 'assentando' || M.tiro.estado === 'fim',
+               'o toque lancou a pedra (' + M.tiro.estado + ')');
+        lancou = true;
+    }, 4900);
 
-    // 4. cena de fim (vitoria: coroa caiu) + orcamento
+    // 4. recarrega a fase e da o tiro conhecido (puxao 160 graus, 85%)
+    at(function () {
+        var M = X().M;
+        assert(lancou, 'lance por toque');
+        if (!M.acabou) M.carregar(0);
+    }, 11500);
+    at(function () {
+        var M = X().M;
+        if (M.acabou) return;
+        assert(M.tiro.estado === 'pronto', 'recarga armou');
+        M.tiro.estado = 'mirando';
+        var a = 160 * Math.PI / 180;
+        M.pull.x = Math.cos(a) * 42 * 0.85;
+        M.pull.y = Math.sin(a) * 42 * 0.85;
+        assert(M.soltar() !== null, 'soltar lanca');
+    }, 14000);
+    at(function () {
+        var M = X().M;
+        assert(M.rastro.length === 0 && M.rastroNovo.length === 0, 'rastro limpo ao fim do voo');
+        assert(M.venceu, 'o tiro certo limpa a fase 1 (goblins ' + M.goblins + ')');
+        assert(M.estrelas() >= 1, 'vitoria vale estrela');
+    }, 19000);
     at(function () {
         cena('fim');
-        var F = h.arrasa.F;
-        assert(F.count() <= 220 && F.sticks() <= 640,
-               'orcamento: ' + F.count() + ' pts / ' + F.sticks() + ' vinculos');
-    }, 19000);
+        var E = X().E;
+        assert(E.save.num('est0', 0) >= 1, 'estrelas salvas no NVS');
+        assert(E.save.num('pts0', 0) > 0, 'recorde salvo');
+    }, 21000);
 
-    // 5. orcamento: consome as 5 pedras e confere os tetos do mundo A
+    // 5. explosoes e habilidades pela API do mundo
     at(function () {
-        var F = h.arrasa.F;
-        F.init(null, 5);
-        F.steps = 200;
-        for (var k = 0; k < 5; k++) {
-            F.tracao = { vx: 5, vy: 0 };
-            F.pedra.estado = 'lancando';
-            F.pedra.steps = 999;            // forca o corte por timeout
-            F.step();                        // transfere pro mundo A voando
-            assert(F.pedra.local === 'A' && F.pedra.estado === 'voando',
-                   'pedra ' + (k + 1) + ' transferida pro mundo A');
-            var guard = 600;                 // deixa a fisica parar a pedra
-            while (F.pedra.estado === 'voando' && guard-- > 0) F.step();
-            assert(F.pedra.estado === 'entulho', 'pedra ' + (k + 1) + ' virou entulho (guard ' + guard + ')');
-            if (k < 4) assert(F.arMar() === true, 'armou a pedra ' + (k + 2) + ' de 5');
-            else assert(F.arMar() === false, 'sem pedras alem da 5');
+        var M = X().M;
+        M.carregar(9);
+        for (var k = 0; k < 40; k++) M.step(1 / 30);
+        var g0 = M.goblins, tnt = -1;
+        for (var i = 0; i < M.corpos.length; i++) if (M.corpos[i] && M.corpos[i].mat === 'tnt') tnt = i;
+        assert(tnt >= 0, 'o Castelo do Rei tem TNT');
+        M.corpos[tnt].morto = true;
+        var boom = false;
+        for (k = 0; k < 90; k++) {
+            var ev = M.step(1 / 30);
+            for (var e = 0; e < ev.length; e++) if (ev[e].t === 'boom') boom = true;
         }
-        assert(F.mundo.count() <= 220 && F.mundoB.count() <= 220, 'teto de pontos: A ' +
-               F.mundo.count() + ' / B ' + F.mundoB.count());
-        assert(F.sticks() <= 640, 'teto de vinculos: ' + F.sticks());
-    }, 19800);
+        assert(boom, 'TNT destruida explode');
+        assert(M.goblins < g0, 'a explosao derrubou goblins (' + g0 + ' -> ' + M.goblins + ')');
+        assert(M.w.count() <= 96, 'teto de corpos do mundo (' + M.w.count() + ')');
+
+        // bomba: lanca e explode no toque
+        M.carregar(4);
+        for (k = 0; k < 40; k++) M.step(1 / 30);
+        M.tiro.tipo = 'bomba';
+        M.tiro.estado = 'mirando';
+        M.pull.x = -36; M.pull.y = 12;
+        M.soltar();
+        for (k = 0; k < 12; k++) M.step(1 / 30);
+        var evb = [];
+        assert(M.habilidade(evb) === true, 'bomba explode no toque');
+        assert(evb.length && evb[evb.length - 1].t === 'boom', 'evento boom da bomba');
+
+        // tripla: racha em 3 no ar
+        M.carregar(2);
+        for (k = 0; k < 40; k++) M.step(1 / 30);
+        M.tiro.tipo = 'tripla';
+        M.tiro.estado = 'mirando';
+        M.pull.x = -36; M.pull.y = 14;
+        M.soltar();
+        for (k = 0; k < 8; k++) M.step(1 / 30);
+        var evt = [];
+        assert(M.habilidade(evt) === true && M.tiro.extras.length === 2, 'tripla racha em 3 pedras');
+
+        // flecha, bumerangue e chocadeira: velocidade medida no ar muda
+        function lancaTipo(tipo) {
+            M.carregar(0);
+            for (var q = 0; q < 40; q++) M.step(1 / 30);
+            M.tiro.tipo = tipo;
+            M.tiro.estado = 'mirando';
+            M.pull.x = -30; M.pull.y = 22;
+            M.soltar();
+            for (q = 0; q < 8; q++) M.step(1 / 30);
+            return M.tiro;
+        }
+        var tf = lancaTipo('flecha'), v0 = Math.abs(tf.v.x), evf = [];
+        assert(M.habilidade(evf) && evf[0].t === 'dispara', 'flecha dispara no toque');
+        M.step(1 / 30);
+        assert(Math.abs(M.tiro.v.x) > v0 * 1.8, 'flecha acelera (' + v0.toFixed(0) + ' -> ' + Math.abs(M.tiro.v.x).toFixed(0) + ')');
+        var tb = lancaTipo('bumerangue'), evv = [];
+        assert(tb.v.x > 0 && M.habilidade(evv) && evv[0].t === 'volta', 'bumerangue volta no toque');
+        M.step(1 / 30);
+        assert(M.tiro.v.x < 0, 'bumerangue anda para tras (vx ' + M.tiro.v.x.toFixed(0) + ')');
+        lancaTipo('chocadeira');
+        var evc = [];
+        assert(M.habilidade(evc) && evc[0].t === 'bota' && M.tiro.extras.length === 1, 'chocadeira bota o ovo');
+        var boomOvo = false;
+        for (k = 0; k < 60 && !boomOvo; k++) {
+            var e2 = M.step(1 / 30);
+            for (var z = 0; z < e2.length; z++) if (e2[z].t === 'boom') boomOvo = true;
+        }
+        assert(boomOvo, 'o ovo explode ao bater');
+    }, 22000);
 
     at(function () {
         env.System.print('[arrasa] bateria completa');
         throw { harnessStop: true };
-    }, 21500);
+    }, 23000);
 };

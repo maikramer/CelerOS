@@ -1,0 +1,33 @@
+{
+  "timestamp": 1791634867.854802,
+  "prompt": "seamless wood texture, natural grain, high detail, tiling pattern, cartoon wooden plank texture, horizontal wood grain, warm orange brown, clean stylized mobile game style, bold grain lines",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 81,
+    "prompt_final": "seamless wood texture, natural grain, high detail, tiling pattern, cartoon wooden plank texture, horizontal wood grain, warm orange brown, clean stylized mobile game style, bold grain lines",
+    "prompt": "seamless wood texture, natural grain, high detail, tiling pattern, cartoon wooden plank texture, horizontal wood grain, warm orange brown, clean stylized mobile game style, bold grain lines",
+    "negative_prompt": "blurry, low quality, distorted, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 7.5,
+    "num_inference_steps": 50,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 1.0,
+      "edge_mse_horizontal": 0.0,
+      "edge_mse_vertical": 0.0,
+      "max_abs_edge_diff": 0,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": true
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/arrasa_src/tex_madeira_src.png",
+  "filename": "tex_madeira_src.png"
+}

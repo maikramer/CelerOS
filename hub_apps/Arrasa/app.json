@@ -1,8 +1,8 @@
 {
   "name": "Arrasa!",
   "packageName": "celeros.arrasa",
-  "version": "0.1.0",
-  "api": 30,
+  "version": "1.0.0",
+  "api": 33,
   "permissions": [],
   "requires": [
     "psram"
@@ -11,10 +11,10 @@
   "type": "Game",
   "category": "Arcade",
   "topbar": false,
-  "description": "Duelo de catapultas com fisica verlet NATIVA em C++: o estilingue e uma corda de verdade que o dedo tensiona e solta, e os castelos racham vinculo por vinculo por tensao e desabam de verdade — os escombros empilham. Derrube a coroa com as pedras que tem; rachadura no tempo forte da trilha chiptune vale dobro. Solo hoje, duelo 1x1 pela malha CelerNet chegando.",
-  "changelog": "0.1.0 - nucleo fisico: estilingue verlet de verdade (2 elasticos aos garfos fixos, corte no plano da forquilha), pedra cluster rigido, castelo de blocos com rompimento de vinculos por tensao (madeira/pedra/coroa), escombros que empilham, camada suja com painter de ceu/chao, trilha chiptune com racha critico no tempo forte, recorde no NVS",
+  "description": "Estilingue contra a fortaleza dos goblins, com fisica de corpo rigido NATIVA: tabuas e blocos de madeira, gelo e pedra giram, empilham, tombam e quebram pelo impacto; a pedra puxa o elastico de couro, voa e nunca atravessa nada. 10 fases com estrelas, TNT e 7 tipos de pedra com poderes: pedrao, tripla (racha em 3), flecha (dispara reto), bomba, chocadeira (solta ovo-bomba) e bumerangue (volta por tras).",
+  "changelog": "1.0.0 - jogo novo sobre o corpo rigido nativo (API 33): pecas que giram e empilham, dano por impacto, TNT e bomba com explosao radial, tripla que racha no ar, elastico que estica e afina, mira com trajetoria, rastro do voo (some ao fim do turno), pedras flecha/bumerangue/chocadeira com arte propria, 10 fases com 3 estrelas e recorde por fase, arte gerada (personagens, cenario, texturas)",
   "deps": {
     "celeros.engine": "^1.2.2",
-    "celeros.physics": "^1.4.0"
+    "celeros.physics": "^1.5.0"
   }
 }
