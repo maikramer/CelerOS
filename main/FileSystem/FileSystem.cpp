@@ -359,9 +359,11 @@ bool FileSystem::readCalData(uint16_t* calData) {
 bool FileSystem::writeCalData(uint16_t* calData) {
     FILE* f = fopen("/local/touch_cal_p.bin", "wb");
     if (f == nullptr) return false;
-    fwrite(calData, 1, 10, f);
+    // fwrite de 10 bytes pode falhar (disco cheio): sem checar, devolvia
+    // sucesso e a calibracao antiga seguia valendo no proximo boot
+    bool ok = (fwrite(calData, 1, 10, f) == 10);
     fclose(f);
-    return true;
+    return ok;
 }
 
 bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
