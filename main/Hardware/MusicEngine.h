@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <array>
 
 namespace MusicEngine {
 
@@ -245,13 +246,17 @@ struct Renderer {
     }
 
     inline static int32_t sinTbl(uint32_t ph) {  // fase Q32 -> -256..255
-        static int16_t tbl[257];
-        static bool init = false;
-        if (!init) {
+        // Tabela de seno em flash (rodata): antes era um static int16_t[257]
+        // em DRAM preenchido no primeiro uso. O MESMO loop, agora avaliado
+        // em tempo de compilacao (constexpr) — 257/257 valores conferidos
+        // identicos contra a tabela runtime no host, e os bytes do objeto
+        // xtensa sao iguais aos do host (GCC 15 nas duas pontas).
+        static constexpr std::array<int16_t, 257> tbl = [] {
+            std::array<int16_t, 257> t{};
             for (int i = 0; i <= 256; i++)
-                tbl[i] = (int16_t)(__builtin_sin(i * 6.283185307179586 / 256.0) * 256.0);
-            init = true;
-        }
+                t[i] = (int16_t)(__builtin_sin(i * 6.283185307179586 / 256.0) * 256.0);
+            return t;
+        }();
         return tbl[ph >> 24];
     }
 
