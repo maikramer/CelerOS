@@ -150,6 +150,13 @@ bool sendRaw(const std::string& line) {
         }
         if (rc != 0) {
             ESP_LOGW(TAG, "notify rc=%d", rc);
+            // Ressincroniza o montador de linhas do celular: os chunks ja no
+            // ar ficaram SEM o '\n' final e o fragmento orfao grudaria na
+            // proxima mensagem (as duas se perdiam). Um '\n' solto encerra a
+            // linha mutilada; melhor esforco — se tambem falhar, nao ha mais
+            // o que fazer por aqui.
+            struct os_mbuf* om = ble_hs_mbuf_from_flat("\n", 1);
+            if (om != nullptr) ble_gatts_notify_custom(s_connHandle, s_txHandle, om);
             return false;
         }
         off += n;
@@ -574,6 +581,11 @@ int onGapSecurity(ble_gap_event* event) {
                 ESP_LOGI(TAG, "enlace criptografado");
             } else {
                 ESP_LOGW(TAG, "criptografia falhou (status=%d)", event->enc_change.status);
+                // Derruba a conexao MUDA: mantida aberta, o Gadgetbridge nao
+                // refaz o pareamento (o enlace existe, so nao criptografa) e
+                // fica num laco de reconexao surdo. O DISCONNECT limpa o
+                // estado e re-anuncia; a proxima conexao tenta de novo.
+                ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
             }
             return 0;
         case BLE_GAP_EVENT_REPEAT_PAIRING: {
