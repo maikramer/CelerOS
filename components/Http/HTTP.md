@@ -10,7 +10,7 @@ Cliente HTTP simplificado para ESP32 com interface C++ moderna, suporte a TLS, a
 - [Métodos HTTP](#métodos-http)
 - [Autenticação](#autenticação)
 - [TLS/HTTPS](#tlshttps)
-- [Eventos](#eventos)
+- [Callbacks](#callbacks)
 - [Exemplos](#exemplos)
 
 ---
@@ -22,7 +22,7 @@ Cliente HTTP simplificado para ESP32 com interface C++ moderna, suporte a TLS, a
 - **TLS/HTTPS**: Suporte a certificados PEM
 - **Autenticação**: Basic Auth e Bearer Token
 - **Headers**: Gerenciamento completo de headers
-- **Eventos**: Callbacks para conclusão e erro
+- **Callbacks**: Progresso e status por pedido
 - **Progress**: Callback para progresso de download/upload
 
 ---
@@ -138,10 +138,9 @@ HttpResponse resp = http.patch(
 // Obter apenas headers (sem body)
 HttpResponse resp = http.head("https://api.example.com/file.zip");
 
-// Verificar tamanho do arquivo
-auto it = resp.headers.find("Content-Length");
-if (it != resp.headers.end()) {
-    ESP_LOGI("HTTP", "Tamanho: %s bytes", it->second.c_str());
+// Verificar tamanho do arquivo (contentLength: -1 se desconhecido)
+if (resp.contentLength >= 0) {
+    ESP_LOGI("HTTP", "Tamanho: %lld bytes", (long long)resp.contentLength);
 }
 ```
 
@@ -207,13 +206,10 @@ const char* cert = "-----BEGIN CERTIFICATE-----\n"
 http.setCertPEM(cert);
 ```
 
-### Desabilitar Verificação (NÃO RECOMENDADO)
-
-```cpp
-HttpConfig config;
-config.disableSslVerify = true;  // Inseguro!
-HttpClient http(config);
-```
+> Nota: a verificação de certificado está sempre ativa (bundle da IDF);
+> não existe mais a opção `disableSslVerify` em `HttpConfig`. Sem PSRAM,
+> prefira `setCertPEM` com o certificado específico a carregar o bundle
+> completo no heap.
 
 ---
 
@@ -223,11 +219,15 @@ Estrutura de resposta:
 
 ```cpp
 struct HttpResponse {
-    int statusCode;                              // Código HTTP (200, 404, etc)
-    std::string body;                            // Corpo da resposta
-    std::map<std::string, std::string> headers;  // Headers da resposta
-    std::string errorMessage;                    // Mensagem de erro (se houver)
-    
+    bool success;                    // Pedido completou sem erro de conexão
+    int statusCode;                  // Código HTTP (200, 404, etc)
+    std::string body;                // Corpo da resposta (vazio com setBodySink)
+    std::string errorMessage;        // Mensagem de erro (se houver)
+    int64_t contentLength;           // Content-Length (-1 se desconhecido)
+    uint32_t durationMs;             // Duração total do pedido
+    uint32_t connectMs;              // Até DNS+TCP+TLS prontos; 0 = não conectou
+    uint32_t firstByteMs;            // Até o 1o header de resposta; 0 = sem resposta
+
     bool isOk() const;          // 2xx
     bool isRedirect() const;    // 3xx
     bool isClientError() const; // 4xx
@@ -238,6 +238,9 @@ struct HttpResponse {
     bool isForbidden() const;   // 403
 };
 ```
+
+> O mapa `headers` foi removido (economia de RAM): use `contentLength`
+> para o tamanho e `setOnStatus`/`setProgressCallback` para o resto.
 
 ### Verificando Resposta
 
@@ -261,23 +264,11 @@ if (resp.isOk()) {
 
 ---
 
-## Eventos
+## Callbacks
 
-### onComplete
-
-```cpp
-http.onComplete.addHandler([](const HttpResponse& resp) {
-    ESP_LOGI("HTTP", "Requisição completa: %d", resp.statusCode);
-});
-```
-
-### onError
-
-```cpp
-http.onError.addHandler([](const std::string& url, const std::string& error) {
-    ESP_LOGE("HTTP", "Erro em %s: %s", url.c_str(), error.c_str());
-});
-```
+> Os eventos `onComplete`/`onError` foram removidos (nenhum assinante no
+> firmware): o resultado chega pelo retorno de `get/post/...`; progresso e
+> status vêm pelos callbacks abaixo.
 
 ### Progress Callback
 

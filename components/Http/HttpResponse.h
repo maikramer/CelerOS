@@ -2,7 +2,6 @@
 #define HTTP_RESPONSE_H
 
 #include <string>
-#include <map>
 #include <cstdint>
 #include <cstring>
 
@@ -17,9 +16,8 @@
  */
 struct HttpResponse {
     bool success;                               /**< True if request completed without errors */
-    int statusCode;                             /**< HTTP status code (200, 404, etc.) */
+    int statusCode;                             /**< HTTP status code (200, 404, etc) */
     std::string body;                           /**< Response body */
-    std::map<std::string, std::string> headers; /**< Response headers */
     std::string errorMessage;                   /**< Error message if !success */
     int64_t contentLength;                      /**< Content length (-1 if unknown) */
     uint32_t durationMs;                        /**< Request duration in milliseconds */
@@ -64,21 +62,6 @@ struct HttpResponse {
      */
     bool isServerError() const {
         return statusCode >= 500 && statusCode < 600;
-    }
-
-    /**
-     * @brief Get a header value by name (case-insensitive).
-     * @param name Header name.
-     * @return Header value or empty string if not found.
-     */
-    std::string getHeader(const std::string& name) const {
-        // Simple case-insensitive search
-        for (const auto& pair : headers) {
-            if (strcasecmp(pair.first.c_str(), name.c_str()) == 0) {
-                return pair.second;
-            }
-        }
-        return "";
     }
 };
 

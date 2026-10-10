@@ -2,10 +2,8 @@
 #define HTTP_CLIENT_H
 
 #include <string>
-#include <map>
 #include <functional>
 #include "HttpResponse.h"
-#include "Event.h"
 #include "esp_http_client.h"
 
 /**
@@ -40,7 +38,6 @@ struct HttpConfig {
     bool followRedirects;       /**< Follow HTTP redirects */
     uint8_t maxRedirects;       /**< Maximum redirects to follow */
     bool keepAlive;             /**< Use HTTP keep-alive */
-    bool disableSslVerify;      /**< Disable SSL certificate verification (not recommended) */
 
     HttpConfig() :
         timeoutMs(10000),
@@ -48,8 +45,7 @@ struct HttpConfig {
         bufferSizeTx(1024),
         followRedirects(true),
         maxRedirects(5),
-        keepAlive(false),
-        disableSslVerify(false) {}
+        keepAlive(false) {}
 };
 
 /**
@@ -142,6 +138,11 @@ public:
 
     /**
      * @brief Set a request header.
+     *
+     * Tabela fixa (kMaxHeaders entradas, sem alocacao de no por header —
+     * em placa sem PSRAM um map::operator[] que falha aborta o aparelho).
+     * Cabecalho de mesmo nome e sobrescrito; tabela cheia loga aviso e
+     * ignora o pedido.
      * @param name Header name.
      * @param value Header value.
      * @return Reference to this for chaining.
@@ -328,19 +329,9 @@ public:
      */
     HttpResponse downloadToFile(const std::string& url, const std::string& filePath);
 
-    // ========== Events ==========
-
-    /**
-     * @brief Event triggered when request completes.
-     * Parameter: HttpResponse
-     */
-    Event<const HttpResponse&> onComplete;
-
-    /**
-     * @brief Event triggered on error.
-     * Parameters: URL, error message
-     */
-    Event<const std::string&, const std::string&> onError;
+    // Sem eventos onComplete/onError: ninguem nunca assinou nenhum dos dois
+    // (uso sincrono pelo retorno de performRequest/downloadToFile; progresso
+    // e status vao por setProgressCallback/setOnStatus).
 
 private:
     /**
@@ -384,7 +375,18 @@ private:
     static int toEspMethod(HttpMethod method);
 
     HttpConfig _config;
-    std::map<std::string, std::string> _headers;
+
+    // Headers do pedido: capacidade fixa em vez de std::map (cada
+    // map::operator[] alocava um no por header em CADA pedido; sem PSRAM a
+    // alocacao falhada aborta — classe de erro proibida no firmware)
+    static constexpr size_t kMaxHeaders = 8;
+    struct HeaderEntry {
+        std::string name;
+        std::string value;
+    };
+    HeaderEntry _headers[kMaxHeaders];
+    size_t _headerCount;
+
     std::string _certPem;
     std::string _username;
     std::string _password;

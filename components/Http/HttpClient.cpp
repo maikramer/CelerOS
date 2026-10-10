@@ -8,12 +8,14 @@
 #include <cstring>
 
 HttpClient::HttpClient() :
+    _headerCount(0),
     _responseBody(nullptr),
     _contentLength(-1) {
 }
 
 HttpClient::HttpClient(const HttpConfig& config) :
     _config(config),
+    _headerCount(0),
     _responseBody(nullptr),
     _contentLength(-1) {
 }
@@ -47,17 +49,45 @@ HttpClient& HttpClient::setBufferSizeTx(uint32_t bytes) {
 }
 
 HttpClient& HttpClient::setHeader(const std::string& name, const std::string& value) {
-    _headers[name] = value;
+    for (size_t i = 0; i < _headerCount; i++) {
+        if (_headers[i].name == name) {
+            _headers[i].value = value;  // mesmo nome: sobrescreve
+            return *this;
+        }
+    }
+    if (_headerCount < kMaxHeaders) {
+        _headers[_headerCount].name = name;
+        _headers[_headerCount].value = value;
+        _headerCount++;
+    } else {
+        ESP_LOGW(TAG, "Header table full (%u): '%s' ignored",
+                 (unsigned)kMaxHeaders, name.c_str());
+    }
     return *this;
 }
 
 HttpClient& HttpClient::removeHeader(const std::string& name) {
-    _headers.erase(name);
+    for (size_t i = 0; i < _headerCount; i++) {
+        if (_headers[i].name == name) {
+            // desloca os seguintes uma casa para tras
+            for (size_t j = i + 1; j < _headerCount; j++) {
+                _headers[j - 1] = std::move(_headers[j]);
+            }
+            _headerCount--;
+            _headers[_headerCount].name.clear();
+            _headers[_headerCount].value.clear();
+            break;
+        }
+    }
     return *this;
 }
 
 HttpClient& HttpClient::clearHeaders() {
-    _headers.clear();
+    for (size_t i = 0; i < _headerCount; i++) {
+        _headers[i].name.clear();
+        _headers[i].value.clear();
+    }
+    _headerCount = 0;
     return *this;
 }
 
@@ -179,11 +209,6 @@ esp_http_client_config_t HttpClient::baseConfig(const std::string& url,
     } else if (url.find("https://") == 0) {
         // Use bundle for HTTPS if no specific cert provided
         config.crt_bundle_attach = esp_crt_bundle_attach;
-    }
-
-    // Skip verification if explicitly disabled (not recommended)
-    if (_config.disableSslVerify) {
-        config.skip_cert_common_name_check = true;
     }
 
     // Basic auth
@@ -370,7 +395,6 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
         response.success = false;
         response.errorMessage = "Failed to create HTTP client";
         ESP_LOGE(TAG, "%s", response.errorMessage.c_str());
-        onError.trigger(url, response.errorMessage);
         _responseBody = nullptr;
         return response;
     }
@@ -382,8 +406,9 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     auto armRequest = [&]() {
         esp_http_client_set_url(client, url.c_str());
         esp_http_client_set_method(client, static_cast<esp_http_client_method_t>(toEspMethod(method)));
-        for (const auto& header : _headers) {
-            esp_http_client_set_header(client, header.first.c_str(), header.second.c_str());
+        for (size_t i = 0; i < _headerCount; i++) {
+            esp_http_client_set_header(client, _headers[i].name.c_str(),
+                                       _headers[i].value.c_str());
         }
         if (!body.empty() && (method == HttpMethod::POST ||
                               method == HttpMethod::PUT ||
@@ -414,7 +439,6 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     if (client == nullptr) {  // init do retry falhou: nao ha o que ler
         response.success = false;
         response.errorMessage = "Failed to create HTTP client";
-        onError.trigger(url, response.errorMessage);
         _responseBody = nullptr;
         return response;
     }
@@ -443,15 +467,11 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
         snprintf(msg, sizeof(msg), "%s (0x%x)", esp_err_to_name(err), err);
         response.errorMessage = msg;
         ESP_LOGE(TAG, "Request to %s failed: %s", url.c_str(), response.errorMessage.c_str());
-        onError.trigger(url, response.errorMessage);
     }
 
     // Cleanup
     if (!_keepHandle) esp_http_client_cleanup(client);
     _responseBody = nullptr;
-
-    // Trigger completion event
-    onComplete.trigger(response);
 
     return response;
 }
@@ -499,7 +519,6 @@ HttpResponse HttpClient::downloadToFile(const std::string& url, const std::strin
     FILE* f = fopen(filePath.c_str(), "wb");
     if (f == nullptr) {
         response.errorMessage = "Cannot open " + filePath + " for writing";
-        onError.trigger(url, response.errorMessage);
         return response;
     }
     _dlFile = f;
@@ -532,10 +551,8 @@ HttpResponse HttpClient::downloadToFile(const std::string& url, const std::strin
             response.errorMessage = "HTTP status " + std::to_string(response.statusCode);
         }
         remove(filePath.c_str());  // nao deixa arquivo parcial
-        onError.trigger(url, response.errorMessage);
         return response;
     }
 
-    onComplete.trigger(response);
     return response;
 }
