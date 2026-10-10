@@ -1312,6 +1312,19 @@ function runInline(src, env) {
     check('chegou ao fim da bateria', joinLog(r.log).indexOf('[arrasa] bateria completa') >= 0);
 })();
 
+// --- Physics Drop (hub_apps): verlet nativo (API 31) no stub ---------------
+// A bateria vive no proprio app (hub_apps/Physics Drop/test.js, a mesma do
+// `celer.js test`): o caminho NATIVO do P.verletFast (feature-detect acha o
+// stub), corda/pano caem com colisao ponto-ponto, PEGAR segura o no no dedo,
+// CORTAR fatia vinculos e a gravidade invertida ergue o mundo.
+(function() {
+    console.log('Physics Drop:');
+    var wire = require(path.join(ROOT, 'hub_apps', 'Physics Drop', 'test.js')).wire;
+    var r = runApp('hub_apps/Physics Drop/main.js', wire);
+    check('bateria do app passa (test.js)', r.err === null, r.err || '');
+    check('PEGAR segurou o no no dedo (log do app)', joinLog(r.log).indexOf('grab: tool=') >= 0);
+})();
+
 // --- Cronometro (hub_apps) --------------------------------------------------
 (function() {
     console.log('Cronometro:');

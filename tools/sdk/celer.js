@@ -36,7 +36,7 @@ function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
-    console.log('                                               (--game: jogo c/ deps celeros.engine/physics)');
+    console.log('                                               (--game: jogo c/ dep celeros.engine)');
     console.log('  deps [PASTA]                                 deps do app.json + versoes no hub/local');
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
@@ -120,14 +120,15 @@ function cmdNew(args) {
     };
     if (game) {
         // jogos com a engine rodam nas placas S3 com PSRAM (teto de 128 KB);
-        // sem topbar, tela cheia como o Supernova. A engine/fisica sao DEPS
-        // do hub (API 30): nao sao copiadas — o install da loja as baixa em
-        // /local/modules e o require resolve de la
+        // sem topbar, tela cheia como o Supernova. A engine e DEP do hub
+        // (API 30): nao e copiada — o install da loja baixa em
+        // /local/modules e o require resolve de la. Fisica de arcade de
+        // poucos corpos (o padrao do template) e na mao; celeros.physics so
+        // entra quando o jogo pedir verlet/rigid (ver Game Engine Guide)
         appJson.requires = ['psram'];
         appJson.topbar = false;
         appJson.deps = {
             'celeros.engine': '^' + engineVersion('celeros.engine.js'),
-            'celeros.physics': '^' + engineVersion('celeros.physics.js'),
         };
     }
 
@@ -154,7 +155,7 @@ function cmdNew(args) {
                         path.join(dir, 'celeros.engine.d.ts'));
     }
 
-    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com deps celeros.engine/physics' : '') + ')');
+    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com dep celeros.engine' : '') + ')');
     console.log('proximos passos:');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);

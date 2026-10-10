@@ -5,7 +5,7 @@
 Uma game engine 2D completa para apps CelerOS, entregue como dois módulos JS — desde a API 30, **dependências compartilhadas do hub** (`"deps"` no `app.json`): a loja as instala no cache público `/local/modules` e o `require()` resolve de lá, uma única cópia por versão no aparelho (o pacote do jogo emagrece ~53 KB). Sem permissão extra; vendorizar uma cópia na pasta do app continua funcionando (e vence):
 
 - **`celeros.engine`** — game loop com cenas, reconhecimento de gestos de toque, desenho com câmera, sprites, partículas, tweens/timers, áudio chiptune com relógio de batida e saves no NVS.
-- **`celeros.physics`** (opcional) — física 2D arcade: círculos/AABB, gravidade, restituição, atrito, sub-passos anti-túnel, tilemaps e corda/pano por Verlet. Matemática pura, zero dependências.
+- **`celeros.physics`** (opcional) — o módulo de física: corda/pano por Verlet acelerado nativamente (`P.verletFast`, API 31) e corpos rígidos que giram e tombam (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15.
 
 Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
@@ -15,7 +15,7 @@ Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execu�
 |---|---|
 | API do firmware | 23+ para módulos; **30+** para as deps compartilhadas (recursos novos — primitivas smooth, `playMusic`, canvas nativo — são auto-detectados) |
 | Placas-alvo | As ESP32-S3 com PSRAM: SmartDisplay, watch Waveshare, cão SpotPear |
-| Orçamento de tamanho | `celeros.engine` ≈ 35 KB + `celeros.physics` ≈ 17 KB — somam no teto do app MESMO como deps (a engine compila no heap de cada jogo): declare `"requires": ["psram"]` no `app.json` para subir o teto de JS de 48 KB para 128 KB (a loja passa a bloquear install em placa sem PSRAM — que é o que você quer num jogo com engine) |
+| Orçamento de tamanho | `celeros.engine` ≈ 35 KB (+ `celeros.physics` ≈ 17 KB **só se declarada**) — as deps somam no teto do app MESMO compartilhadas (a engine compila no heap de cada jogo): declare `"requires": ["psram"]` no `app.json` para subir o teto de JS de 48 KB para 128 KB (a loja passa a bloquear install em placa sem PSRAM — que é o que você quer num jogo com engine) |
 | Sabor do app | `"topbar": false` para jogos em tela cheia (como o Supernova) é recomendado; o botão de saída mora no menu de título do seu jogo (`System.exitApp()`) |
 | CYD (sem PSRAM) | Jogos com engine não cabem no teto de 48 KB — nem como deps (a soma continua contando). Ou vendorize só a engine (≈ 35 KB, sobram ~13 KB para o seu código) ou escreva jogos de canvas puro |
 
@@ -33,7 +33,7 @@ node tools/sdk/celer.js deps set celeros.engine ^1.0.0 MeuJogo
 # publique as deps da engine no repositorio do hub (publica a arvore
 # canonica tools/sdk/engine/; precisa do token com escopo deps):
 python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
-python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 23
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 31
 
 # itere (lint a cada save; emulador renderiza PNG; device faz live reload —
 # no PC o require resolve as deps da arvore tools/sdk/engine):
@@ -42,37 +42,42 @@ node tools/sdk/celer.js emu MeuJogo
 python3 tools/celerctl.py dev MeuJogo
 ```
 
-O `new --game` scaffolds o **Quica**, um joguinho completo de manter-a-bola-no-ar (cenas titulo/jogo/fim, raquete por arrasto, bolas com física, partículas, sfx, recorde) — leia o `main.js` dele; é o exemplo canônico.
+O `new --game` scaffolds o **Quica**, um joguinho completo de manter-a-bola-no-ar (cenas titulo/jogo/fim, raquete por arrasto, bolas quicando, partículas, sfx, recorde) — leia o `main.js` dele; é o exemplo canônico. A física das bolas é feita à mão de propósito: a escada de física começa no zero (§15).
 
 ## 3. Quickstart: um jogo completo em ~30 linhas
 
 ```js
 // main.js
 var E = require("celeros.engine");
-var P = require("celeros.physics");
 
 E.init({ dir: "Bolas", fps: 30, save: "bolas." });
 var W = E.W, H = E.H;
 
-var world = P.world({ gravity: { x: 0, y: 300 },
-                      bounds: { x: 0, y: 0, w: W, h: H }, walls: "contain" });
-var balls = [];
+var balls = [];                    // pool: nenhuma alocacao dentro do frame
 
 E.run({
   jogo: {
     update: function (dt) {
       if (E.input.tap) {
-        balls.push(world.add({ x: E.input.tap.x, y: E.input.tap.y, r: 8,
-                               vx: E.m.rand(-120, 120), vy: 0, bounce: 0.85 }));
+        balls.push({ x: E.input.tap.x, y: E.input.tap.y, r: 8,
+                     vx: E.m.rand(-120, 120), vy: 0 });   // bounce: 0.85 abaixo
+        if (balls.length > 40) balls.shift();             // teto do pool
         E.audio.sfx("ui");
       }
-      world.step(dt);
+      for (var i = 0; i < balls.length; i++) {
+        var b = balls[i];
+        b.vy += 900 * dt;                                 // gravidade
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.85; }
+        if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.85; }
+        if (b.y + b.r > H) { b.y = H - b.r; b.vy = -Math.abs(b.vy) * 0.85; }
+      }
     },
     draw: function () {
       System.fillScreen(E.theme.bg);
-      for (var i = 0; i < world.count; i++) {
-        var b = world.all[i];
-        E.gfx.circle(b.x, b.y, b.r, E.theme.accent);
+      for (var i = 0; i < balls.length; i++) {
+        E.gfx.circle(balls[i].x, balls[i].y, balls[i].r, E.theme.accent);
       }
       E.gfx.text(balls.length + " bolas", W / 2, 8,
                  { align: "center", color: E.theme.textDim, font: 1 });
@@ -81,6 +86,10 @@ E.run({
   }
 }, "jogo");
 ```
+
+Essa é toda a física que esse jogo precisa: integrar, mover, refletir nas
+paredes (§15, degrau 0 da escada — poucos corpos e planos é sempre mais
+barato na mão do que em qualquer engine).
 
 A engine **possui o loop**: você descreve cenas e ela chama `update(dt)`/`draw()` no fps alvo, pollando toque e tickando efeitos/timers/tweens/áudio pra você. Esse loop é seguro contra o exec-timeout (cede todo frame).
 
@@ -289,90 +298,66 @@ if (E.save.best("recorde", pontos)) { /* novo recorde! */ }
 
 ## 15. Física (`celeros.physics`, opcional)
 
-`require("celeros.physics")` — matemática pura. O `P.verlet` ganhou um irmão
-acelerado: `P.verletFast` usa o verlet nativo do firmware (API 31,
-`System.verlet*` — integração/relaxação em C++ float, pontos fora do heap
-Duktape) e cai sozinho para o verlet JS em firmware antigo; cordas/panos com
-muitos nós ficam de graça. Acesso por índice (`v.xy()` devolve
-`[x0, y0, x1, ...]` plano). Nenhuma chamada a `System`, então testa unitariamente em qualquer lugar. Coordenadas: y cresce para **baixo** (tela); o `x, y` do corpo é o **centro**; corpo circular tem `r`, caixa `w/h`.
+**A maioria dos jogos não precisa de módulo de física.** Num device
+Duktape, um mundo objeto-por-corpo paga pressão de GC que cresce com o
+número de corpos — os jogos da própria loja aprenderam isso em produção (o
+Supernova largou o módulo quando ~85 corpos sensor por frame trouxeram
+engasgos de GC) e convergiram para a mesma escada. Só suba o degrau que o
+jogo pedir:
+
+| Degrau | Estilo de jogo | Ferramenta | Referência |
+|---|---|---|---|
+| **0 — nenhuma** | Arcade com até poucas dezenas de corpos: pong, breakout, runners, shooters | Pools pré-alocados + testes de distância/AABB + reflexão, na mão | Template Quica, Supernova |
+| **1 — Verlet** | Cordas, panos, soft bodies, sandboxes de pontos | `P.verletFast` → `System.verlet*` nativo (API 31, **todas as placas**; cai sozinho no verlet JS em firmware antigo) | Physics Drop |
+| **2 — Rígido** | Pilhas que tombam, destruição, estilingues | `P.rigid` → `System.rigid*` nativo (API 33, placas S3 com PSRAM) | Arrasa! |
+
+Campos de perseguição **não** são física: o módulo disso é o `celeros.grid`
+(BFS — os perseguidores do Detna usam).
+
+Coordenadas em tudo: y cresce para **baixo** (tela); o `x, y` do corpo é o
+**centro**; corpo circular tem `r`, caixa `w/h`. Nenhuma chamada a `System`
+na matemática, então testa unitariamente em qualquer lugar.
+
+### Degrau 0: pools + reflexão (o default)
+
+Corpos num array pré-alocado (`{x, y, vx, vy, r}` — campos crus, nada criado
+por frame), integra na mão, reflete nas paredes e teste raquete/plataforma
+por **travessia**: o corpo cruzou a superfície quando
+`prevY + r <= topo && novoY + r > topo` e está dentro do alcance horizontal —
+isso é à prova de túnel e não precisa de sub-passos. O template Quica é o
+exemplo completo; o Supernova roda balas/inimigos em pools com checagem por
+distância do mesmo jeito. É também o degrau mais amigo do GC: zero alocação
+dentro do frame.
+
+### Degrau 1: corda / pano / softbody (`P.verletFast`)
 
 ```js
 var P = require("celeros.physics");
-var w = P.world({ gravity: { x: 0, y: 900 },
-                  bounds: { x: 0, y: 0, w: 240, h: 320 },
-                  walls: "contain" });          // contain | wrap | none
-
-var bola = w.add({ x: 120, y: 40, r: 8, bounce: 0.8, friction: 0.1 });
-var raquete = w.add({ x: 120, y: 300, w: 64, h: 10, static: true });
-
-w.step(dt);   // 1x por frame, depois do input
+var w = P.verletFast({ iterations: 4, radius: 2.5 });  // radius > 0 = nós com corpo (colidem)
+var a = w.add(120, 30), b = w.add(120, 60);
+w.stick(a, b);                    // len default = distância atual
+w.pin(a);                         // prega o no no ar
+w.step(dt, { gravity: { x: 0, y: 900 }, damp: 0.999,
+             bounds: { x: 0, y: 0, w: 240, h: 320 }, bounce: 0.8 });
+var xy = w.xy();                  // [x0, y0, x1, y1, ...] plano
 ```
 
-Opções do corpo: `vx, vy, ax, ay, gravity` (multiplicador), `bounce` (0..1), `friction` (0..1), `drag`, `mass`, `static`, `sensor` (só evento), `group`/`mask` (bitmask: o par colide quando `a.mask & b.group && b.mask & a.group`), `tiles: false` (ignora o tilemap), `drop` (atravessa plataformas one-way), `onCollide(me, other, info{nx,ny,overlap})` (1 tiro por par por step) e `grounded` (apoiado em algo).
+Na API 31+ o mundo vive em floats C++ fora do heap Duktape
+(`w.native === true`); firmware antigo roda transparentemente o verlet JS
+com a mesma interface (sem colisão ponto-ponto). Acesso por índice,
+`delPoint`/`delStick` para cirurgia, `pins()` lê as pregas. Exemplo
+completo: Physics Drop (pintar, pegar-e-arremessar, pino, tesoura, apagar).
 
-Objetos rápidos são **sub-passados** automaticamente — nada atravessa parede fina (`world.maxSub` limita o trabalho, default 8). Bordas: `"contain"` (clamp + quique), `"wrap"` (borda estilo Pac-Man) ou `"none"`.
+### Degrau 2: corpo rígido (`P.rigid`, API 33)
 
-### Tilemaps (platformer)
-
-```js
-var grid = [
-  "............",
-  "..==...==...",
-  "............",
-  "####...####.",
-];
-var tiles = P.tiles(grid, 16, 16);   // '#' sólido, '=' one-way (customize em opts)
-w.addTiles(tiles);
-tiles.tileAt(px, py); tiles.setTile(col, row, "#");
-```
-
-Resolução por eixo, `grounded` no pouso, plataforma one-way só pega quem cai de cima (`body.drop = true` para atravessar de propósito).
-
-### Jogos de grade (top-down)
-
-O mesmo tilemap conduz movimento estilo Bomberman/Zelda: `gravity: {x:0, y:0}` e a resolução por eixo para o corpo nas paredes nas quatro direções, deslizando no eixo livre.
-
-```js
-var w = P.world({ gravity: {x:0, y:0} });
-w.addTiles(P.tiles(grid, 32, 32, {
-  solid: function (ch) { return ch === "#" || ch === "%" || ch === "B"; }
-}));
-var heroi = w.add({ x: 48, y: 48, r: 11 });  // r ~ 1/3 da célula desliza bem
-heroi.vx = 90; heroi.vy = 0;                 // sete pelo input a cada frame
-```
-
-Sete `vx/vy` pelo input a cada frame; `bounce` 0 (default) para seco na parede. A "ajuda de canto" clássica (conduzir para o corredor aberto quando raspar numa quina) fica no jogo: bloqueado no eixo do movimento e desalinhado menos que ~40% da célula no outro eixo, esterça para o centro da lane.
-
-### Campos de fluxo (IA de perseguição)
-
-`P.flow(tiles, cx, cy, opts)` inunda um campo de distância BFS a partir de uma célula (tipicamente a do jogador). Perseguidores leem `next()` e descem o gradiente — sem A* por corpo.
-
-```js
-var flow = P.flow(tiles, colDoJogador, linhaDoJogador);  // recompute ao mudar o labirinto ou ~2x/s
-var passo = flow.next(colDoInimigo, linhaDoInimigo);     // {c, r} uma célula mais perto, ou null
-```
-
-`opts.passable(ch)` troca a andabilidade (um fantasma que atravessa bloco macio passa o próprio predicado); células inalcançáveis leem `Infinity`. Custo O(células) por recompute, determinístico e independente de ordem.
-
-### Corda / pano / softbody (Verlet)
-
-```js
-var pts = []; for (var i = 0; i < 8; i++) pts.push({ x: 120, y: 30 + i * 8 });
-var corda = P.verlet({ points: pts, sticks: [{ a: 0, b: 1 }, ...], iterations: 4 });
-corda.pin(0);
-corda.step(dt);      // opts: gravity, damp, bounds, bounce
-```
-
-### Corpo rígido: pilhas que tombam (`P.rigid`, API 33)
-
-As caixas do `P.world` nunca giram. Para castelos de tábuas que tombam,
-rodas e jogos de "jogar a pedra na torre", o `P.rigid()` usa o solver de
-corpo rígido nativo do firmware (API 33, placas S3; `System.rigid*`):
-caixas e círculos que giram, atrito, restituição, pilhas que dormem e
-sub-passos anti-túnel. Por índice como o `verletFast`; o `state()` devolve
-6 números por corpo (`x, y, angle, hit, speed, flags`) e o `hit` (impulso
-do impacto no último step) é o que vira dano. Sem fallback JS: devolve
-`null` em firmware sem o binding — avise o jogador para atualizar.
+Para castelos de tábuas que tombam, rodas e jogos de "jogar a pedra na
+torre", o `P.rigid()` usa o solver de corpo rígido nativo do firmware
+(API 33, placas S3; `System.rigid*`): caixas e círculos que giram, atrito,
+restituição, pilhas que dormem e sub-passos anti-túnel. Por índice como o
+`verletFast`; o `state()` devolve 6 números por corpo (`x, y, angle, hit,
+speed, flags`) e o `hit` (impulso do impacto no último step) é o que vira
+dano. **Sem fallback JS**: devolve `null` em firmware sem o binding — avise
+o jogador para atualizar.
 
 ```js
 var w = P.rigid({ iterations: 10 });
@@ -391,12 +376,26 @@ em torno do centro — o par natural dos corpos que giram; com `smooth` ele
 também redimensiona a arte uma vez no load para a tela da placa. Exemplo
 completo: `hub_apps/Arrasa` (estilingue contra fortalezas de goblins).
 
+### Sobreposição estática: `P.hit`
+
+`P.hit(a, b)` responde "esses dois círculos/caixas se sobrepõem agora" (todas
+as combinações) — útil para pickups e testes de UI, sem mundo envolvido.
+
+### Legado: `P.world`, `P.tiles`, `P.flow`
+
+O módulo 1.x ainda embarca um mundo arcade interpretado (`P.world` +
+tilemaps `P.tiles`) e um campo BFS (`P.flow`). Eles não têm consumidores na
+loja hoje e jogos novos não devem adotá-los: o mundo interpretado é
+exatamente a armadilha de GC que o degrau 0 evita (quem os usava migrou — o
+Supernova para pools, o Detna para o `celeros.grid`), e campo de perseguição
+mora no `celeros.grid`. Eles saem do módulo na 2.0.
+
 ### Receitas
 
-- **Platformer:** herói = corpo AABB (`friction` 1, `bounce` 0); mova setando `vx`; pule quando `grounded`; a câmera dá `follow` no herói.
-- **Breakout:** raquete = corpo `static` que você reposiciona; bola = círculo com `bounce: 1`; tijolos = caixas que você `remove()` ao acertar (ou tilemap + `setTile`).
-- **Shooter top-down:** `gravity: {x:0, y:0}`, `drag` para dar atrito; inimigos/balas em pools; corpos `sensor` para pickups.
-- **Bomberman:** top-down + tiles com `solid` custom (bloco macio e bomba viva inclusos); bombas, labaredas e saída são estado da grade, não corpos; perseguidores seguem um campo `P.flow`; a explosão anda pela grade para fora a partir do centro, um bloco macio de profundidade.
+- **Platformer:** degrau 0 — herói AABB contra o tilemap, move X depois Y, pousa e pula quando o passo do Y acha chão; `grounded` é "o passo do Y colidiu neste frame". A câmera dá `follow` no herói.
+- **Breakout:** degrau 0 — o padrão do Quica com tijolos como grade de flags vivas; o teste de travessia da bola por aresta do tijolo é o mesmo da raquete.
+- **Shooter top-down:** degrau 0 — `vx/vy` pelo input com fator de arrasto; inimigos/balas em pools, checagem por distância para acertos.
+- **Bomberman:** estado de grade, não corpos — `celeros.grid` para consultas sólido/oneway e caminhos dos perseguidores; a explosão anda pela grade para fora a partir do centro, um bloco macio de profundidade (é o Detna hoje).
 
 ## 16. Canvas nativo (tela cheia, API 28)
 
@@ -448,7 +447,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- Engine+física+jogo passam de 48 KB (as deps somam no teto do app!) → mantenha `"requires": ["psram"]`. O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js` (porte 1:1 do JsStripper do firmware — sem comentários/indentação, quebras de linha mantidas, então a linha do erro bate com o fonte), que é exatamente o que o aparelho compila. Hoje: `celeros.engine` 54 KB de fonte → 32 KB, `celeros.physics` 25 → 15 KB.
+- Engine+jogo passam de 48 KB (as deps somam no teto do app!) → mantenha `"requires": ["psram"]`. O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js` (porte 1:1 do JsStripper do firmware — sem comentários/indentação, quebras de linha mantidas, então a linha do erro bate com o fonte), que é exatamente o que o aparelho compila. Hoje: `celeros.engine` 59 KB de fonte → 33 KB; `celeros.physics` 30 → 17 KB — e jogos do degrau 0 (§15) nem a declaram.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC. Desde a engine 1.2.3 os wrappers também não alocam: chamadas de `E.gfx.*` sem opts compartilham um objeto só de leitura, a busca do `E.font` é memoizada e a largura de cada string (`textWidth`) é medida uma vez por estilo — HUD/placar/botão repetidos não custam chamadas de firmware.
 - Se você chama `System.setTextDatum` direto, devolva o `0` ao terminar: a engine 1.2.3 só toca no datum quando o texto pede origem diferente do default, então o `E.gfx.text` confia que o app o deixou em `0` (todos os apps do repo já fazem).
 - Evite `fillScreen` + redesenho total por frame: no painel RGB do SmartDisplay (framebuffer varrido da PSRAM) isso estrangula o DMA do LCD e a imagem treme. Use cenas `static`, `E.dirty` e `E.tilemap` (§16b).
@@ -474,6 +473,6 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + sfx educado |
 | `E.save.get/set/num/best` | persistência NVS |
 | `E.m.*`, `E.rng(seed)` | matemática, RNG determinístico |
-| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.rigid`, `P.hit` | física arcade, corpo rígido nativo (módulo opcional) |
+| `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 
 O autocomplete do editor vem no scaffold: `engine.d.ts` (engine + física) junto do `celer.d.ts` (API do firmware).

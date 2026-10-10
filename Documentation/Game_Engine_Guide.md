@@ -5,7 +5,7 @@
 A complete 2D game engine for CelerOS apps, shipped as two plain JS modules — since API 30, **shared hub dependencies** (`"deps"` in `app.json`): the store installs them into the public `/local/modules` cache and `require()` resolves from there, one copy per version on the device (your game package gets ~53 KB lighter). No extra permissions; vendoring a copy into the app folder still works (and wins):
 
 - **`celeros.engine`** — game loop with scenes, touch gesture recognition, drawing with camera, sprites, particles, tweens/timers, chiptune audio with a beat clock, and NVS saves.
-- **`celeros.physics`** (optional) — arcade 2D physics: circles/AABB, gravity, bounce, friction, anti-tunneling substeps, tilemaps and Verlet ropes/cloth. Pure math, zero dependencies.
+- **`celeros.physics`** (optional) — the physics module: native-accelerated Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies that rotate and topple (`P.rigid`, API 33). **Most games need none of it** — see the physics ladder in §15.
 
 Both are ES5 (Duktape) and feature-detect the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -15,7 +15,7 @@ Both are ES5 (Duktape) and feature-detect the firmware at runtime, so the same g
 |---|---|
 | Firmware API | 23+ for modules; **30+** for the shared deps (newer features — smooth primitives, `playMusic`, native canvas — are auto-detected) |
 | Intended boards | The ESP32-S3 boards with PSRAM: SmartDisplay, Waveshare watch, SpotPear dog |
-| Size budget | `celeros.engine` ≈ 35 KB + `celeros.physics` ≈ 17 KB — they count toward the app ceiling EVEN as deps (the engine still compiles inside each game's heap): declare `"requires": ["psram"]` in `app.json` to lift the JS budget from 48 KB to 128 KB (the store then blocks installing on non-PSRAM boards — which is what you want for engine games) |
+| Size budget | `celeros.engine` ≈ 35 KB (+ `celeros.physics` ≈ 17 KB **only if declared**) — deps count toward the app ceiling EVEN shared (the engine still compiles inside each game's heap): declare `"requires": ["psram"]` in `app.json` to lift the JS budget from 48 KB to 128 KB (the store then blocks installing on non-PSRAM boards — which is what you want for engine games) |
 | App flavor | `"topbar": false` for fullscreen games (like Supernova) is recommended; the exit button lives in your title menu (`System.exitApp()`) |
 | CYD (no PSRAM) | Engine games don't fit the 48 KB budget — not even as deps (the sum still counts). Either vendor the engine alone (≈ 35 KB, leaving ~13 KB for your code) or write plain-canvas games |
 
@@ -33,7 +33,7 @@ node tools/sdk/celer.js deps set celeros.engine ^1.0.0 MyGame
 # publish the engine deps to the hub repository (publishes the canonical
 # tools/sdk/engine/ tree; needs a token with the deps scope):
 python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
-python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 23
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 31
 
 # iterate (lint runs on save; emulator renders a PNG; device does live
 # reload — on the PC require resolves deps from the tools/sdk/engine tree):
@@ -42,37 +42,42 @@ node tools/sdk/celer.js emu MyGame
 python3 tools/celerctl.py dev MyGame
 ```
 
-`new --game` scaffolds **Quica**, a complete keep-up game (title/game/over scenes, drag paddle, physics balls, particles, sfx, high score) — read its `main.js`; it is the canonical example.
+`new --game` scaffolds **Quica**, a complete keep-up game (title/game/over scenes, drag paddle, bouncing balls, particles, sfx, high score) — read its `main.js`; it is the canonical example. Its ball physics is hand-rolled on purpose: the physics ladder starts at zero (§15).
 
 ## 3. Quickstart: a complete game in ~30 lines
 
 ```js
 // main.js
 var E = require("celeros.engine");
-var P = require("celeros.physics");
 
 E.init({ dir: "Bolas", fps: 30, save: "bolas." });
 var W = E.W, H = E.H;
 
-var world = P.world({ gravity: { x: 0, y: 300 },
-                      bounds: { x: 0, y: 0, w: W, h: H }, walls: "contain" });
-var balls = [];
+var balls = [];                    // pool: no allocation inside the frame
 
 E.run({
   jogo: {
     update: function (dt) {
       if (E.input.tap) {
-        balls.push(world.add({ x: E.input.tap.x, y: E.input.tap.y, r: 8,
-                               vx: E.m.rand(-120, 120), vy: 0, bounce: 0.85 }));
+        balls.push({ x: E.input.tap.x, y: E.input.tap.y, r: 8,
+                     vx: E.m.rand(-120, 120), vy: 0 });   // bounce: 0.85 below
+        if (balls.length > 40) balls.shift();             // pool cap
         E.audio.sfx("ui");
       }
-      world.step(dt);
+      for (var i = 0; i < balls.length; i++) {
+        var b = balls[i];
+        b.vy += 900 * dt;                                 // gravity
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.85; }
+        if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.85; }
+        if (b.y + b.r > H) { b.y = H - b.r; b.vy = -Math.abs(b.vy) * 0.85; }
+      }
     },
     draw: function () {
       System.fillScreen(E.theme.bg);
-      for (var i = 0; i < world.count; i++) {
-        var b = world.all[i];
-        E.gfx.circle(b.x, b.y, b.r, E.theme.accent);
+      for (var i = 0; i < balls.length; i++) {
+        E.gfx.circle(balls[i].x, balls[i].y, balls[i].r, E.theme.accent);
       }
       E.gfx.text(balls.length + " bolas", W / 2, 8,
                  { align: "center", color: E.theme.textDim, font: 1 });
@@ -81,6 +86,10 @@ E.run({
   }
 }, "jogo");
 ```
+
+That is the whole physics this game needs: integrate, move, reflect on the
+walls (§15, rung 0 of the ladder — a few bodies and planes is always cheaper
+by hand than any engine).
 
 The engine **owns the loop**: you describe scenes and the engine calls `update(dt)`/`draw()` at your target fps, polling touch, ticking effects/timers/tweens/audio for you. That loop is exec-timeout safe (it yields every frame).
 
@@ -289,90 +298,65 @@ if (E.save.best("recorde", score)) { /* new record! */ }
 
 ## 15. Physics (`celeros.physics`, optional)
 
-`require("celeros.physics")` — pure math. `P.verlet` got an accelerated
-sibling: `P.verletFast` uses the firmware's native verlet (API 31,
-`System.verlet*` — integration/relaxation in C++ float, points outside the
-Duktape heap) and falls back to the JS verlet on old firmware by itself;
-ropes/cloths with many nodes become free. Index-based access (`v.xy()`
-returns a flat `[x0, y0, x1, ...]`). No `System` calls, so it unit-tests anywhere. Coordinates: y grows **down** (screen); body `x, y` is the **center**; circle bodies have `r`, boxes `w/h`.
+**Most games need no physics module at all.** On a Duktape device an
+object-per-body world pays GC pressure that grows with body count — the
+store's own games learned it in production (Supernova dropped the module
+when ~85 sensor bodies per frame brought GC stalls) and converged on the
+same ladder. Climb it only as far as the game demands:
+
+| Rung | Game style | Tool | Reference |
+|---|---|---|---|
+| **0 — none** | Arcade with a few dozen bodies or fewer: pong, breakout, runners, shooters | Pre-allocated pools + distance/AABB tests + reflection, by hand | Quica template, Supernova |
+| **1 — Verlet** | Ropes, cloth, soft bodies, point sandboxes | `P.verletFast` → native `System.verlet*` (API 31, **every board**; falls back to the JS verlet on old firmware by itself) | Physics Drop |
+| **2 — Rigid** | Stacks that topple, destruction, slingshots | `P.rigid` → native `System.rigid*` (API 33, S3 boards with PSRAM) | Arrasa! |
+
+Pursuit/chase fields are **not** physics: `celeros.grid` (BFS) is the module
+for that (Detna's chasers use it).
+
+Coordinates everywhere: y grows **down** (screen); body `x, y` is the
+**center**; circle bodies have `r`, boxes `w/h`. No `System` calls in the
+math, so everything unit-tests anywhere.
+
+### Rung 0: pools + reflection (the default)
+
+Keep bodies in a pre-allocated array (`{x, y, vx, vy, r}` — plain fields,
+nothing created per frame), integrate by hand, reflect on walls, and test
+paddle/platform hits by **crossing**: the body crossed the surface when
+`prevY + r <= top && newY + r > top` and it is horizontally within reach —
+that is bulletproof against tunneling and needs no sub-steps. The Quica
+template is the complete worked example; Supernova runs bullets/enemies in
+pools with distance checks the same way. This rung is also the GC-friendliest:
+zero allocations inside the frame.
+
+### Rung 1: ropes / cloth / soft bodies (`P.verletFast`)
 
 ```js
 var P = require("celeros.physics");
-var w = P.world({ gravity: { x: 0, y: 900 },
-                  bounds: { x: 0, y: 0, w: 240, h: 320 },
-                  walls: "contain" });          // contain | wrap | none
-
-var ball = w.add({ x: 120, y: 40, r: 8, bounce: 0.8, friction: 0.1 });
-var paddle = w.add({ x: 120, y: 300, w: 64, h: 10, static: true });
-
-w.step(dt);   // once per frame, after your input handling
+var w = P.verletFast({ iterations: 4, radius: 2.5 });   // radius > 0 = point bodies collide
+var a = w.add(120, 30), b = w.add(120, 60);
+w.stick(a, b);                    // len defaults to the current distance
+w.pin(a);                         // nail a point in the air
+w.step(dt, { gravity: { x: 0, y: 900 }, damp: 0.999,
+             bounds: { x: 0, y: 0, w: 240, h: 320 }, bounce: 0.8 });
+var xy = w.xy();                  // flat [x0, y0, x1, y1, ...]
 ```
 
-Body options: `vx, vy, ax, ay, gravity` (multiplier), `bounce` (0..1), `friction` (0..1), `drag`, `mass`, `static`, `sensor` (events only), `group`/`mask` (bitmask: pair collides when `a.mask & b.group && b.mask & a.group`), `tiles: false` (skip tilemap), `drop` (ignore one-way platforms), `onCollide(me, other, info{nx,ny,overlap})` (fires once per pair per step), and `grounded` (set when resting on something).
+On API 31+ the world lives in C++ floats outside the Duktape heap
+(`w.native === true`); old firmware transparently runs the JS verlet with
+the same interface (without point-point collision). Index-based access,
+`delPoint`/`delStick` for surgery, `pins()` to read the nails. Full example:
+Physics Drop (paint, grab-and-throw, pin, scissors, eraser).
 
-Fast objects are automatically **sub-stepped** so nothing tunnels through thin walls (`world.maxSub` caps the work, default 8). Bounds walls: `"contain"` (clamp + bounce), `"wrap"` (Pac-Man edges) or `"none"`.
+### Rung 2: rigid bodies (`P.rigid`, API 33)
 
-### Tilemaps (platformers)
-
-```js
-var grid = [
-  "............",
-  "..==...==...",
-  "............",
-  "####...####.",
-];
-var tiles = P.tiles(grid, 16, 16);   // '#' solid, '=' one-way (customize via opts)
-w.addTiles(tiles);
-tiles.tileAt(px, py); tiles.setTile(col, row, "#");
-```
-
-Per-axis resolution, `grounded` on landing, one-way platforms only catch you falling from above (`body.drop = true` to fall through on purpose).
-
-### Grid games (top-down)
-
-The same tilemap drives Bomberman/Zelda-style movement: `gravity: {x:0, y:0}` and the per-axis resolution stops the body at walls in all four directions while letting it slide along the free axis.
-
-```js
-var w = P.world({ gravity: {x:0, y:0} });
-w.addTiles(P.tiles(grid, 32, 32, {
-  solid: function (ch) { return ch === "#" || ch === "%" || ch === "B"; }
-}));
-var hero = w.add({ x: 48, y: 48, r: 11 });   // r ~ 1/3 of the cell slides well
-hero.vx = 90; hero.vy = 0;                   // set from input each frame
-```
-
-Set `vx/vy` from the input every frame; `bounce` 0 (default) stops dead at walls. The classic corner "lane assist" (nudging into the open corridor when clipping a corner) is game-side: when blocked on the moving axis and offset by less than ~40% of a cell on the other axis, steer toward that lane's center.
-
-### Flow fields (chase AI)
-
-`P.flow(tiles, cx, cy, opts)` floods a BFS distance field from a source cell (usually the player's). Chasers read `next()` and walk the gradient down — no per-body A*.
-
-```js
-var flow = P.flow(tiles, playerCol, playerRow);   // recompute on maze change or ~2x/s
-var step = flow.next(enemyCol, enemyRow);         // {c, r} one cell closer, or null
-```
-
-`opts.passable(ch)` overrides walkability (a ghost that crosses soft blocks passes its own predicate); unreachable cells read `Infinity`. Cost is O(cells) per recompute, order-independent and deterministic.
-
-### Rope / cloth / softbody (Verlet)
-
-```js
-var pts = []; for (var i = 0; i < 8; i++) pts.push({ x: 120, y: 30 + i * 8 });
-var rope = P.verlet({ points: pts, sticks: [{ a: 0, b: 1 }, ...], iterations: 4 });
-rope.pin(0);
-rope.step(dt);       // opts: gravity, damp, bounds, bounce
-```
-
-### Rigid bodies: stacks that topple (`P.rigid`, API 33)
-
-`P.world` boxes never rotate. For castles of planks that tip over, wheels
-and "throw a rock at the tower" games, `P.rigid()` drives the firmware's
-native rigid-body solver (API 33, S3 boards; `System.rigid*`): rotating
-boxes and circles, friction, restitution, sleeping stacks and anti-tunnel
-sub-steps. Index-based like `verletFast`; `state()` returns 6 numbers per
-body (`x, y, angle, hit, speed, flags`) and `hit` (the impact impulse of
-the last step) is what you turn into damage. No JS fallback: it returns
-`null` on firmware without the binding — tell the player to update.
+For castles of planks that tip over, wheels and "throw a rock at the tower"
+games, `P.rigid()` drives the firmware's native rigid-body solver (API 33,
+S3 boards; `System.rigid*`): rotating boxes and circles, friction,
+restitution, sleeping stacks and anti-tunnel sub-steps. Index-based like
+`verletFast`; `state()` returns 6 numbers per body (`x, y, angle, hit, speed,
+flags`) and `hit` (the impact impulse of the last step) is what you turn into
+damage. **No JS fallback**: it returns `null` on firmware without the
+binding — tell the player to update.
 
 ```js
 var w = P.rigid({ iterations: 10 });
@@ -391,12 +375,32 @@ its centre — the natural pair for rotating bodies; with `smooth` it also
 resizes art once at load time to the board's screen. Full example:
 `hub_apps/Arrasa` (slingshot vs. goblin fortresses).
 
+### Static overlap: `P.hit`
+
+`P.hit(a, b)` answers "do these two circles/boxes overlap right now" (all
+combinations) — handy for pickups and UI-ish tests, no world involved.
+
+### Legacy: `P.world`, `P.tiles`, `P.flow`
+
+The 1.x module also ships an interpreted arcade world (`P.world` +
+`P.tiles` tilemaps) and a BFS flow field (`P.flow`). They have no consumers
+in the store today and new games should not adopt them: the interpreted
+world is exactly the GC trap rung 0 avoids (its users migrated away —
+Supernova to pools, Detna to `celeros.grid`), and pursuit fields live in
+`celeros.grid`. They leave the module in 2.0.
+
 ### Recipes
 
-- **Platformer:** hero = AABB body (`friction` 1, `bounce` 0); move by setting `vx`; jump when `grounded`; camera `follow`s hero.
-- **Breakout:** paddle = `static` body you reposition; ball = circle with `bounce: 1`; bricks = dynamic-mass boxes you `remove()` on hit (or a tilemap + `setTile`).
-- **Top-down shooter:** `gravity: {x:0, y:0}`, `drag` for friction feel; enemies/bullets in pools; `sensor` bodies for pickups.
-- **Bomberman:** top-down + tiles with a custom `solid` (soft blocks and live bombs included); bombs, blasts and exits are grid state, not bodies; chasers follow a `P.flow` field; explosions walk the grid outward from the blast center, one soft block deep.
+- **Platformer:** rung 0 — hero AABB vs. the tilemap, move X then Y, land
+  and jump when the Y pass finds floor; `grounded` is "the Y pass collided
+  this frame". Camera `follow`s the hero.
+- **Breakout:** rung 0 — the Quica pattern with bricks as a grid of alive
+  flags; the ball's crossing test per brick edge is the same as the paddle.
+- **Top-down shooter:** rung 0 — `vx/vy` from input with a drag factor;
+  bullets/enemies in pools, distance checks for hits.
+- **Bomberman:** grid state, not bodies — `celeros.grid` for solid/oneway
+  queries and chaser paths; explosions walk the grid outward from the blast
+  center, one soft block deep (this is Detna today).
 
 ## 16. Native canvas (fullscreen, API 28)
 
@@ -448,7 +452,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Engine+physics+game go over 48 KB (deps count toward the app ceiling!) → keep `"requires": ["psram"]`. The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles. Today: `celeros.engine` 54 KB source → 32 KB, `celeros.physics` 25 → 15 KB.
+- Engine+game go over 48 KB (deps count toward the app ceiling!) → keep `"requires": ["psram"]`. The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles. Today: `celeros.engine` 59 KB source → 33 KB; `celeros.physics` 30 → 17 KB — and rung-0 games (§15) skip it entirely.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses. Since engine 1.2.3 the wrappers themselves don't allocate: opts-less `E.gfx.*` calls share one read-only object, `E.font` lookups are memoized and each string's `textWidth` is measured once per style — repeated HUD/score/button text costs no extra firmware calls.
 - If you call `System.setTextDatum` directly, restore `0` when done: engine 1.2.3 only touches the datum when a text asks for a non-default origin, so `E.gfx.text` relies on apps leaving it at `0` (every app in this repo already does).
 - Avoid full-screen `fillScreen` + redraw everything per frame: on the SmartDisplay's RGB panel (framebuffer scanned from PSRAM) it starves the LCD DMA and the image jitters. Use `static` scenes, `E.dirty` and `E.tilemap` (§16b).
@@ -474,6 +478,6 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + polite sfx |
 | `E.save.get/set/num/best` | NVS persistence |
 | `E.m.*`, `E.rng(seed)` | math, deterministic RNG |
-| `P.world/add/step`, `P.tiles`, `P.verlet`, `P.rigid`, `P.hit` | arcade physics, native rigid bodies (optional module) |
+| `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 
 Editor autocomplete ships in the scaffold: `engine.d.ts` (engine + physics) alongside `celer.d.ts` (firmware API).

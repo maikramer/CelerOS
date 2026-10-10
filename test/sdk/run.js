@@ -90,6 +90,40 @@ function check(name, ok, detail) {
     check('pushSprite copia para o framebuffer', r.fb[30 * W + 30] === T.red && r.fb[30 * W + 49] === T.red);
     env.System.deleteSprite();
 
+    // sprites por id (contrato do firmware): useSprite seleciona o alvo do
+    // desenho (fillScreen incluso), pushSprite blita o CORRENTE na tela e
+    // honra a cor-chave do 3o arg
+    var r2 = new Renderer();
+    var env2 = { System: { drawPNG: function () { return true; } } };
+    r2.wire(env2);
+    var S2 = env2.System;
+    r2.fb.fill(T.bg);
+    var idA = S2.createSprite(10, 10);
+    var idB = S2.createSprite(6, 6);
+    check('createSprite devolve ids 1.. (contrato do firmware)', idA === 1 && idB === 2);
+    S2.useSprite(idA);
+    S2.fillScreen(T.red);
+    S2.fillRect(0, 0, 10, 5, T.fg);        // metade de cima branca
+    check('useSprite direciona fillScreen e draws ao sprite (tela intacta)',
+          r2.sprite.fb[0] === T.fg && r2.sprite.fb[95] === T.red && r2.fb[0] === T.bg);
+    S2.useSprite(idB);
+    S2.fillScreen(T.accent);
+    S2.fillRect(2, 2, 2, 2, T.red);        // centro vermelho sobre fundo ciano
+    S2.useSprite(0);
+    check('useSprite(0) devolve o desenho a tela', r2.target() === r2.fb);
+    S2.pushSprite(100, 100, T.accent);     // blit do B (corrente) com a chave
+    check('pushSprite com cor-chave: pixels da chave ficam transparentes, os demais copiam',
+          r2.fb[100 * W + 100] === T.bg && r2.fb[102 * W + 102] === T.red,
+          'chave=' + r2.fb[100 * W + 100] + ' vivo=' + r2.fb[102 * W + 102]);
+    S2.useSprite(idA);
+    S2.pushSprite(20, 20);                 // bindado: destino continua sendo a tela
+    check('pushSprite bindado blita o sprite selecionado na tela',
+          r2.fb[20 * W + 20] === T.fg && r2.fb[29 * W + 29] === T.red);
+    S2.deleteSprite(idA);
+    S2.deleteSprite(idB);
+    check('deleteSprite por id libera o pool (id 1 volta)', S2.createSprite(4, 4) === 1);
+    S2.deleteSprite();
+
     // texto: glifo 'A' (0x41) com fg
     r.fg = T.fg; r.bg = T.bg; r.textSize = 1;
     r.drawString('A', 5, 5, 1);
@@ -452,6 +486,38 @@ function check(name, ok, detail) {
     check('sensor dispara onCollide na travessia', hits >= 2, 'hits=' + hits);
     check('sensor nao resolve (corpo atravessa)', passThru.x > 70, 'x=' + passThru.x.toFixed(1));
     check('sem penetracao residual apos sensor', P.hit(ghost, passThru) === false);
+
+    // World.each (contrato do d.ts): itera os corpos vivos do mundo
+    var wEach = P.world({ gravity: { x: 0, y: 0 } });
+    var bA = wEach.add({ x: 10, y: 10, r: 2 });
+    var bB = wEach.add({ x: 30, y: 10, r: 2 });
+    var vistos = [];
+    wEach.each(function (b) { vistos.push(b); });
+    wEach.remove(bA);
+    var depois = [];
+    wEach.each(function (b) { depois.push(b); });
+    check('world.each visita os corpos vivos (e segue o remove)',
+          vistos.length === 2 && vistos.indexOf(bA) >= 0 && vistos.indexOf(bB) >= 0 &&
+          depois.length === 1 && depois[0] === bB,
+          JSON.stringify([vistos.length, depois.length]));
+
+    // onCollide 1x por PAR por step: corpo tocando dois outros no mesmo
+    // passo dispara os dois pares (a dedupe antiga, por corpo, engolia o
+    // segundo) e nenhum par repete DENTRO do mesmo step
+    var wPar = P.world({ gravity: { x: 0, y: 0 } });
+    var pares = [];
+    wPar.add({ x: 90, y: 100, r: 6, static: true, sensor: true, tag: 'esq' });
+    wPar.add({ x: 100, y: 100, r: 6, sensor: true,
+               onCollide: function (me, other) { pares.push(other.tag); } });
+    wPar.add({ x: 110, y: 100, r: 6, static: true, sensor: true, tag: 'dir' });
+    wPar.step(1 / 60);
+    check('onCollide: corpo entre dois sensores dispara os DOIS pares no step',
+          pares.indexOf('esq') >= 0 && pares.indexOf('dir') >= 0 && pares.length === 2,
+          JSON.stringify(pares));
+    wPar.step(1 / 60);
+    check('onCollide: contato continuo repete 1x por par por step (sem duplicar)',
+          pares.length === 4 && pares.indexOf('esq') >= 0 && pares.indexOf('dir') >= 0,
+          'pares=' + pares.length);
 
     // grupos/mascaras: pares fora da mascara se atravessam
     var w5 = P.world({ gravity: { x: 0, y: 0 } });
@@ -824,6 +890,36 @@ function depSize(nome) {
     check('timers: after e every (com cancel) disparam no loop',
           r.grabbed.got.indexOf('after') >= 0 && r.grabbed.got.indexOf('every') >= 0,
           JSON.stringify(r.grabbed.got));
+
+    // callback que limpa a lista no MEIO do tick nao derruba o E.run (o
+    // iterador caia em undefined e t.dead explodia fora do loop)
+    var erroTimer = null;
+    try {
+        r = runEngine(
+            'var E = require("celeros.engine"); E.init({});' +
+            'var rodou = 0; var t0 = System.millis();' +
+            'E.after(100, function () { rodou++; });' +          // indice 0: vence o clear
+            'E.after(100, function () { E.clearTimers(); });' +  // indice 1: roda PRIMEIRO (reverse)
+            'E.run({ s: { update: function () { if (System.millis() > t0 + 250) E.quit(); } } }, "s");' +
+            '__harness.grab("rodou", rodou);');
+    } catch (e) { erroTimer = String(e); }
+    check('timer cujo callback limpa a lista no meio do tick nao derruba o run',
+          erroTimer === null && r.grabbed.rodou === 0,
+          erroTimer || ('rodou=' + r.grabbed.rodou));
+
+    var erroTween = null;
+    try {
+        r = runEngine(
+            'var E = require("celeros.engine"); E.init({});' +
+            'var obj = { x: 0 }, obj2 = { x: 0 }; var t0 = System.millis();' +
+            'E.tween(obj, { x: 10 }, 100, {});' +
+            'E.tween(obj2, { x: 10 }, 100, { onDone: function () { E.clearTweens(); } });' +
+            'E.run({ s: { update: function () { if (System.millis() > t0 + 300) E.quit(); } } }, "s");' +
+            '__harness.grab("t2", obj2.x);');
+    } catch (e) { erroTween = String(e); }
+    check('tween cujo onDone limpa a lista no meio do tick nao derruba o run',
+          erroTween === null && r.grabbed.t2 === 10,
+          erroTween || ('t2=' + r.grabbed.t2));
 
     // tween com easing linear chega no alvo e chama onDone
     r = runEngine(
@@ -1417,9 +1513,9 @@ function depSize(nome) {
           mf.type === 'Game' && mf.category === 'Jogos' &&
           Array.isArray(mf.requires) && mf.requires.indexOf('psram') >= 0 &&
           mf.topbar === false);
-    check('app.json declara deps celeros.engine/physics',
+    check('app.json declara dep celeros.engine (fisica de arcade e na mao)',
           mf.deps && /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.engine']) &&
-          /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.physics']),
+          !mf.deps['celeros.physics'],
           JSON.stringify(mf.deps));
 
     var result = runLint([appDir], {});
@@ -1433,7 +1529,7 @@ function depSize(nome) {
     // MAX_MAIN_JS_PSRAM)
     var TETO = 1024 * 1024;
     var size = JSSTRIP.strip(fs.readFileSync(path.join(appDir, 'main.js'))).length +
-               depSize('celeros.engine') + depSize('celeros.physics');
+               depSize('celeros.engine');
     check('soma dos .js (pacote + deps) cabe no teto psram (1 MB)', size < TETO,
           (size / 1024).toFixed(1) + ' KB');
     // os dois jogos grandes da loja tambem (pacote + deps do app.json)
@@ -1463,6 +1559,31 @@ function depSize(nome) {
         events: function (env) { env.__harness.tap(120, 178); },
     });
     check('tap no JOGAR entra na cena de jogo sem erro', r2.err === null, r2.err);
+
+    // gameplay de verdade: a raquete persegue a bola (fisica na mao do
+    // template) e as rebatidas pontuam — prova que pools + reflexao no
+    // lugar da dep celeros.physics sustentam o jogo-exemplo
+    var viu = 0;
+    var r3 = runAppFolder(appDir, {
+        render: true, stopAtMs: 15000,
+        events: function (env) {
+            env.__harness.tap(120, 178);
+            var origDelay = env.System.delay;
+            var fim = env.System.millis() + 13000;
+            env.System.delay = function (ms) {
+                var q = env.__harness.quica && env.__harness.quica.g;
+                if (q && q.balls.length && env.System.millis() < fim) {
+                    var b = q.balls[q.balls.length - 1];
+                    env.__harness.pushTouch([{ x: b.x, y: 200, touched: 1 }]);
+                    if (q.score > viu) viu = q.score;
+                }
+                return origDelay(ms);
+            };
+        },
+    });
+    check('quica joga: raquete segue a bola e pontua (sem dep de fisica)',
+          r3.err === null && viu > 0,
+          r3.err || ('score maximo visto: ' + viu));
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 

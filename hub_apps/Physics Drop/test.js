@@ -1,15 +1,17 @@
-// test.js — smoke do Physics Drop 4.0 no harness: Corda+Pano caem (com a
-// colisao ponto-ponto do stub), PEGAR arrasta um no do pano e CORTAR
-// remove vinculos na varredura. Agendamentos em env.setTimeout (relogio
-// virtual do harness); nunca embarca para o device.
+// test.js — smoke do Physics Drop 4.0 no harness: o caminho NATIVO do
+// P.verletFast (System.verlet* do stub), Corda+Pano caem (com a colisao
+// ponto-ponto), PEGAR arrasta um no do pano, CORTAR remove vinculos na
+// varredura e a gravidade INVERTIDA ergue o mundo (fisica de verdade).
+// Agendamentos em env.setTimeout (relogio virtual do harness); nunca
+// embarca para o device.
 
 module.exports.wire = function (env) {
     var h = env.__harness;
     var at = env.setTimeout;
 
-    // watchdog: a rodada inteira cabe em ~6 s de relogio virtual
+    // watchdog: a rodada inteira cabe em ~12 s de relogio virtual
     var origDelay = env.System.delay;
-    var stopAt = 1000 + 7000;
+    var stopAt = 1000 + 12000;
     env.System.delay = function (ms) {
         if (env.System.millis() > stopAt) throw { harnessStop: true };
         return origDelay(ms);
@@ -26,6 +28,24 @@ module.exports.wire = function (env) {
         for (var k = 0; k < i; k++) x += drop.TOOLS[k].w + 2;
         return x + drop.TOOLS[i].w / 2;
     }
+
+    // menor Y dos nos LIVRES (a gravidade invertida so ergue quem nao
+    // esta pinado — os pinos seguram os pontos onde estao)
+    function minYlivre() {
+        var w = drop.world(), xy = w.xy(), pins = w.pins(), best = 1e9;
+        for (var i = 0; i < w.count(); i++) {
+            if (pins[i]) continue;
+            if (xy[i * 2 + 1] < best) best = xy[i * 2 + 1];
+        }
+        return best;
+    }
+
+    // 300ms: o wrapper pegou o caminho NATIVO (System.verlet* do stub),
+    // nao o fallback interpretado verletFastJS
+    at(function () {
+        need();
+        if (drop.world().native !== true) throw new Error('P.verletFast deve usar o System.verlet* (nativo)');
+    }, 300);
 
     // 400ms: solta uma corda e um pano
     at(function () { need(); h.tap(45, drop.BAR_Y + 70); }, 400);
@@ -88,4 +108,23 @@ module.exports.wire = function (env) {
         var st = drop.world().sticks().length / 2;
         if (st >= drop.__st0) throw new Error('CORTAR nao removeu vinculos (' + st + ' vs ' + drop.__st0 + ')');
     }, 4800);
+
+    // 5300..7300ms: 5 toques no status ciclam a gravidade ate a INVERTIDA;
+    // o mundo inteiro flutua para o topo (bounds seguram, pinos ficam)
+    at(function () {
+        need();
+        drop.__topAntes = minYlivre();
+        if (drop.__topAntes > 500) throw new Error('mundo vazio antes da gravidade invertida');
+    }, 5300);
+    [5500, 6000, 6500, 7000, 7500].forEach(function (t) {
+        at(function () { need(); h.tap(120, drop.BAR_Y + 12); }, t);
+    });
+    at(function () {
+        need();
+        var top = minYlivre();
+        if (!(top < drop.__topAntes - 15 && top < 25)) {
+            throw new Error('gravidade invertida nao ergueu o mundo (topo livre ' +
+                            top.toFixed(1) + ' vs ' + drop.__topAntes.toFixed(1) + ')');
+        }
+    }, 11500);
 };

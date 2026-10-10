@@ -2,55 +2,78 @@
 // Segure as bolas no ar com a raquete (arraste o dedo): cada rebatida vale
 // 1 ponto, bolas novas entram a cada poucos segundos e 3 perdidas encerram.
 //
-// E um tour pela engine: cenas (titulo/jogo/fim), input (tap/drag), fisica
-// (celeros.physics: gravidade, bounce, bordas), particulas, audio e recorde
-// no NVS. Use como base do seu jogo — sprites PNG entram por E.spr.load().
+// E um tour pela engine: cenas (titulo/jogo/fim), input (tap/drag), particulas,
+// audio e recorde no NVS. Use como base do seu jogo — sprites PNG entram por
+// E.spr.load().
+//
+// FISICA DE ARCADE NAO PRECISA DE ENGINE: sao 4 bolas, uma raquete e quatro
+// paredes — pools pre-alocados + reflexao na mao custam nada e nao geram
+// lixo pro GC do Duktape. Quando o jogo pedir mais (cordas/panos: P.verletFast;
+// empilhamento com rotacao: P.rigid — nativos em System.verlet*/System.rigid*),
+// ai sim declare a dep celeros.physics no app.json. Veja a "escada de fisica"
+// no Game Engine Guide.
 //
 // Boas praticas de render (engine 1.2): menus sao cenas `static` (desenham
 // 1x e so repintam no press de botao), o jogo liga a camada suja E.dirty
 // (cada quadro apaga so o que o anterior desenhou — nada de fillScreen por
 // frame) e o texto vai por papel (ts: "title", "label"...) ou px, nunca
 // size cru: a escala acompanha a tela (E.u / E.U).
-// A engine e a fisica sao DEPS do app.json (instaladas pelo hub em
-// /local/modules — sem copias dentro do jogo).
+// A engine e DEP do app.json (instalada pelo hub em /local/modules — sem
+// copia dentro do jogo).
 
 var E = require("celeros.engine");
-var P = require("celeros.physics");
 
 E.init({ dir: "{{APP_NAME}}", fps: 30, save: "quica." });
 var W = E.W, H = E.H;
 var T = E.theme;
 
+var GRAV = 220;          // px/s^2 — mesma conta que a fisica antiga fazia
+var PADDLE_W = 64, PADDLE_H = 10, PADDLE_Y = H - 22;
+
 // --------------------------------------------- estado do jogo corrente ---
 var g = {
-    world: null, paddle: null, balls: [],
+    balls: [],                       // pool: {x, y, vx, vy, r} (sem alocar por quadro)
+    paddleX: 0,
     score: 0, lives: 3, spawnIn: 0, newBest: false
 };
 
+// estado exposto ao harness (testes/CI); no aparelho __harness nao existe
+if (typeof __harness !== "undefined") __harness.quica = { g: g, E: E };
+
 function novaBola() {
-    var b = g.world.add({
+    g.balls.push({
         x: E.m.rand(40, W - 40), y: 24, r: 7,
-        vx: E.m.rand(-70, 70), vy: 60,
-        bounce: 1,
-        onCollide: function (me, other) {
-            if (other !== g.paddle) return;
-            g.score++;
-            me.vy = -Math.abs(me.vy) - 40;   // sempre sai pra cima
-            E.fx.burst(me.x, me.y, { n: 10, color: T.accent, speed: 90, life: 0.5 });
-            E.fx.popText(me.x, me.y - 14, "+1", { color: T.accent });
-            E.audio.sfx("coin");
-        }
+        vx: E.m.rand(-70, 70), vy: 60
     });
-    g.balls.push(b);
-    return b;
+}
+
+// Um passo de fisica de bola: gravidade, paredes laterais/teto e raquete.
+// A raquete e testada por travessia (a bola cruzou o topo entre um quadro e
+// o outro?) — bullet-proof contra tunelamento, sem sub-passos.
+function stepBola(b, dt) {
+    b.vy += GRAV * dt;
+    b.x += b.vx * dt;
+    var y0 = b.y;
+    b.y += b.vy * dt;
+
+    if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
+    else if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx); }
+    if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
+
+    // raquete: a bola cruzou a face de cima dentro da largura?
+    var top = PADDLE_Y - PADDLE_H / 2;
+    if (y0 + b.r <= top && b.y + b.r > top &&
+        Math.abs(b.x - g.paddleX) <= PADDLE_W / 2 + b.r) {
+        b.y = top - b.r;
+        b.vy = -Math.abs(b.vy) - 40;   // sempre sai pra cima
+        return true;                    // rebateu!
+    }
+    return false;
 }
 
 function resetJogo() {
-    g.world = P.world({ gravity: { x: 0, y: 220 },
-                        bounds: { x: 0, y: 0, w: W, h: H + 40 },
-                        walls: "contain" });
-    g.paddle = g.world.add({ x: W / 2, y: H - 22, w: 64, h: 10, static: true });
     g.balls = [];
+    g.paddleX = W / 2;
     g.score = 0;
     g.lives = 3;
     g.spawnIn = 4;
@@ -88,7 +111,7 @@ E.run({
         update: function (dt) {
             // raquete segue o dedo (arraste em qualquer lugar da tela)
             if (E.input.down) {
-                g.paddle.x = E.m.clamp(E.input.x, 36, W - 36);
+                g.paddleX = E.m.clamp(E.input.x, PADDLE_W / 2 + 4, W - PADDLE_W / 2 - 4);
             }
             // bolas novas entram cada vez mais rapido
             g.spawnIn -= dt;
@@ -96,21 +119,26 @@ E.run({
                 novaBola();
                 g.spawnIn = Math.max(2.5, 6 - g.score * 0.15);
             }
-            g.world.step(dt);
-            // bola perdida: caiu alem da raquete
             for (var k = g.balls.length - 1; k >= 0; k--) {
                 var b = g.balls[k];
-                if (b.y <= H + 20) continue;
-                g.world.remove(b);
-                g.balls.splice(k, 1);
-                g.lives--;
-                E.audio.sfx("bad");
-                E.cam.shake(4, 0.25);
-                E.fx.flash(T.err, 120);
-                if (g.lives <= 0) {
-                    g.newBest = E.save.best("recorde", g.score);
-                    E.goto("fim");
-                    return;
+                if (stepBola(b, dt)) {
+                    g.score++;
+                    E.fx.burst(b.x, b.y, { n: 10, color: T.accent, speed: 90, life: 0.5 });
+                    E.fx.popText(b.x, b.y - 14, "+1", { color: T.accent });
+                    E.audio.sfx("coin");
+                }
+                // bola perdida: caiu alem da raquete
+                if (b.y - b.r > H + 20) {
+                    g.balls.splice(k, 1);
+                    g.lives--;
+                    E.audio.sfx("bad");
+                    E.cam.shake(4, 0.25);
+                    E.fx.flash(T.err, 120);
+                    if (g.lives <= 0) {
+                        g.newBest = E.save.best("recorde", g.score);
+                        E.goto("fim");
+                        return;
+                    }
                 }
             }
         },
@@ -121,7 +149,8 @@ E.run({
                 E.gfx.circle(b.x, b.y, b.r, T.accent);
                 E.gfx.circle(b.x - 2, b.y - 2, 2, T.onAccent);
             }
-            E.gfx.rect(g.paddle.x - 32, g.paddle.y - 5, 64, 10, T.text, { r: 5 });
+            E.gfx.rect(g.paddleX - PADDLE_W / 2, PADDLE_Y - PADDLE_H / 2,
+                       PADDLE_W, PADDLE_H, T.text, { r: 5 });
             E.gfx.text(String(g.score), 8, 6, { ts: "big", color: T.text, bg: T.bg });
             for (var l = 0; l < g.lives; l++) {
                 E.gfx.circle(W - 14 - l * 16, 14, 5, T.err);
