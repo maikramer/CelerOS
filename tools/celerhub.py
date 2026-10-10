@@ -561,12 +561,16 @@ def cmd_publish_dep(args):
         die(f"versao invalida: {version!r} (declare no modulo "
             f"version: 'x.y.z' ou use --version)")
     # sintaxe de verdade antes de subir: dep quebrada quebra TODOS os apps
-    # que a require (cache publico compartilhado)
-    chk = subprocess.run(["node", "--check", str(src)], capture_output=True, text=True)
+    # que a require (cache publico compartilhado). O app_lint parseia com
+    # acorn ES5 (mesmo perfil do Duktape do device); o node --check aceitava
+    # ES6 que o aparelho rejeitaria na hora de compilar a dep
+    lint_js = Path(__file__).resolve().parent / "app_lint" / "lint.js"
+    chk = subprocess.run(["node", str(lint_js), str(src)], capture_output=True, text=True)
     if chk.returncode != 0:
-        detalhe = (chk.stderr or chk.stdout).strip().splitlines()
-        die(f"{src.name}: sintaxe invalida no node --check: "
-            f"{detalhe[-1] if detalhe else 'sem detalhe'}")
+        erros = [l.strip() for l in (chk.stdout or chk.stderr or "").splitlines()
+                 if " erro[" in l]
+        die(f"{src.name}: sintaxe invalida no lint ES5 (app_lint): "
+            f"{erros[0] if erros else 'sem detalhe'}")
     # pre-flight contra o indice: mesma versao ja publicada so passa com
     # --force explicito (antes moria no 409 do servidor, com rede, e a
     # mensagem nao dizia o que fazer)
