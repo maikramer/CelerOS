@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 33 — 296 funcoes.
+// API level 34 — 297 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -22,7 +22,7 @@ interface UIListItem { label: string; sub?: string; right?: string; rightColor?:
 // CelerNet (API 26): malha BLE — poll/nodes/status
 interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }
 interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }
-interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; rxDropped: number; relayed: number; heard: number; }
+interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }
 
 declare function setTimeout(callback: () => void, ms: number): number;
 declare function setInterval(callback: () => void, ms: number): number;
@@ -66,9 +66,10 @@ declare const System: {
     rigidSet(id: string, idx: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): any;
     rigidImpulse(id: string, idx: number, jx: number, jy: number): any;
     rigidStep(id: string, dt: number, gx?: number, gy?: number, maxSub?: number): any;
-    rigidState(id: string): any;
+    rigidState(id: string, buf?: number): any;
     rigidCount(id: string): any;
     drawSprite(id: string, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: string, smooth?: number): void;
+    blitSprite(id: string, x: number, y: number, w: number, h: number): void;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
     /** desenha retângulos vazados ou preenchidos. */

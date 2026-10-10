@@ -113,6 +113,8 @@ declare namespace E {
         unclip(): void;
         /** Registra caixa de TELA desenhada por System.* direto. */
         add(x: number, y: number, w: number, h: number): void;
+        /** Apaga JA o rect (fundo/painter) e registra a caixa (1.2.4): desenho PARADO que vai se mexer. Chame no inicio do draw. */
+        erase(x: number, y: number, w: number, h: number): void;
         /** Alguma caixa apagada/desenhada agora toca o rect? */
         touches(x: number, y: number, w: number, h: number): boolean;
     };
@@ -295,6 +297,8 @@ declare namespace E {
         stars(n: number, o?: {
             w?: number; h?: number; vy?: number; color?: number;
             colors?: number[];
+            /** move 1/N das estrelas por quadro (velocidade media preservada) */
+            stride?: number;
         }): {
             update(dt: number): void;
             draw(): void;
@@ -422,6 +426,7 @@ declare namespace P {
         impulse(i: number, jx: number, jy: number): boolean;
         /** devolve os sub-passos rodados */
         step(dt: number, o?: { gravity?: Vec; maxSub?: number }): number;
+        /** o MESMO array a cada chamada (2.1: preenchido no lugar) — copie com slice() para guardar um quadro */
         state(): number[];
         count(): number;
         x(i: number, s: number[]): number;

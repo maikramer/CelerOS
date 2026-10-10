@@ -184,10 +184,14 @@ A.init = function (W, H, dir, pkg) {
 };
 
 // --------------------------------------------------------- fundo ----------
-// painter da camada suja: devolve o pedaco do cenario (pushSprite recortado)
+// painter da camada suja: devolve o pedaco do cenario. API 34: blitSprite
+// numa chamada; antes, pushSprite recortado (5 bindings por caixa — no
+// quadro de voo eram ~30 caixas, 2/3 das chamadas nativas do quadro)
+var BLIT = typeof S.blitSprite === "function";
 A.painter = function (x, y, w, h) {
     var f = A.spr.fundo;
     if (!f) { S.fillRect(x, y, w, h, C.ceu); return; }
+    if (BLIT) { S.blitSprite(f.id, x, y, w, h); return; }
     S.setClip(x, y, w, h);
     S.useSprite(f.id);
     S.pushSprite(0, 0);
@@ -222,10 +226,13 @@ function corBase(mat) {
 }
 A.corMat = corBase;
 
-// cantos do retangulo girado em px de tela (reaproveita o array)
+// cantos do retangulo girado em px de tela (reaproveita o array). Guarda
+// o cos/sin em CS/SN: o loc() da mesma peca reaproveita (faixa da TNT e
+// rachaduras chamavam Math.cos/sin de novo por ponto)
 var Q = [0, 0, 0, 0, 0, 0, 0, 0];
+var CS = 1, SN = 0;
 function cantos(x, y, hw, hh, a) {
-    var c = Math.cos(a), s = Math.sin(a);
+    var c = CS = Math.cos(a), s = SN = Math.sin(a);
     var ax = c * hw, ay = s * hw, bx = -s * hh, by = c * hh;
     var X = sx(x), Y = sy(y), E = A.ESC;
     Q[0] = X + (-ax - bx) * E; Q[1] = Y + (-ay - by) * E;
@@ -234,9 +241,10 @@ function cantos(x, y, hw, hh, a) {
     Q[6] = X + (-ax + bx) * E; Q[7] = Y + (-ay + by) * E;
 }
 
-// local (u) -> tela, no referencial da peca
-function loc(x, y, a, lx, ly, out, k) {
-    var c = Math.cos(a), s = Math.sin(a);
+// local (u) -> tela, no referencial da peca (cos/sin do ultimo cantos():
+// so chame logo depois dele, para a mesma peca)
+function loc(x, y, lx, ly, out, k) {
+    var c = CS, s = SN;
     out[k] = sx(x + c * lx - s * ly);
     out[k + 1] = sy(y + s * lx + c * ly);
 }
@@ -279,10 +287,10 @@ A.peca = function (c, x, y, a) {
         S.fillTriangle(Q[0], Q[1], Q[2], Q[3], Q[4], Q[5], C.tnt);
         S.fillTriangle(Q[0], Q[1], Q[4], Q[5], Q[6], Q[7], C.tnt);
         // faixa amarela + estopim
-        loc(x, y, a, -hw, -hh * 0.25, P2, 0);
-        loc(x, y, a, hw, -hh * 0.25, P2, 2);
+        loc(x, y, -hw, -hh * 0.25, P2, 0);
+        loc(x, y, hw, -hh * 0.25, P2, 2);
         S.drawWideLine(P2[0], P2[1], P2[2], P2[3], Math.max(2, c.h * 0.32 * A.ESC), C.amarelo);
-        loc(x, y, a, 0, -hh * 0.25, P2, 0);
+        loc(x, y, 0, -hh * 0.25, P2, 0);
         S.fillCircle(Math.round(P2[0]), Math.round(P2[1]), Math.max(1, Math.round(1.6 * A.ESC)), C.preto);
     }
     var ct = contorno(c.mat), e = Math.max(1, A.ESC * 0.9);
@@ -297,8 +305,8 @@ A.peca = function (c, x, y, a) {
         for (var k = 0; k < n; k++) {
             var L = rs[k];
             for (var j = 0; j + 3 < L.length; j += 2) {
-                loc(x, y, a, L[j], L[j + 1], P2, 0);
-                loc(x, y, a, L[j + 2], L[j + 3], P2, 2);
+                loc(x, y, L[j], L[j + 1], P2, 0);
+                loc(x, y, L[j + 2], L[j + 3], P2, 2);
                 S.drawLine(Math.round(P2[0]), Math.round(P2[1]), Math.round(P2[2]), Math.round(P2[3]), cr);
             }
         }
@@ -314,14 +322,24 @@ function caixaQ(m) {
     return BOX;
 }
 
-// caixa de tela de uma peca/goblin/tiro sem desenhar (dirty/touches)
+// caixa de tela de uma peca/goblin/tiro sem desenhar (dirty/touches).
+// Memoizada por POSE no proprio corpo: a pilha dormindo pergunta a caixa a
+// cada quadro (a borracha me tocou?) com x/y/angulo identicos — sem cos/sin
+// nem min/max de 4 cantos de novo
 A.caixa = function (c, x, y, a) {
+    if (c._cx === x && c._cy === y && c._ca === a) {
+        BOX.x = c._bx; BOX.y = c._by; BOX.w = c._bw; BOX.h = c._bh;
+        return BOX;
+    }
     if (c.k === "box") {
         cantos(x, y, c.w / 2, c.h / 2, a);
-        return caixaQ(A.ESC + 1);
+        caixaQ(A.ESC + 1);
+    } else {
+        var r = (c.k === "goblin" ? c.r * 1.45 : c.r * 1.2 + 3) * A.ESC + 2;
+        BOX.x = sx(x) - r; BOX.y = sy(y) - r * 1.15; BOX.w = r * 2; BOX.h = r * 2.15;
     }
-    var r = (c.k === "goblin" ? c.r * 1.45 : c.r * 1.2 + 3) * A.ESC + 2;
-    BOX.x = sx(x) - r; BOX.y = sy(y) - r * 1.15; BOX.w = r * 2; BOX.h = r * 2.15;
+    c._cx = x; c._cy = y; c._ca = a;
+    c._bx = BOX.x; c._by = BOX.y; c._bw = BOX.w; c._bh = BOX.h;
     return BOX;
 };
 

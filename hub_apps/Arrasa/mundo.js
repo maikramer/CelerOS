@@ -19,9 +19,17 @@
 //
 // O mundo nao desenha nem toca som: step() devolve EVENTOS que o main.js
 // traduz em particulas, pontos e efeitos.
+//
+// Estado do quadro: M.s e o array do P.rigid (6 numeros por indice, o
+// MESMO array reaproveitado a cada state()). Os lacos por corpo leem por
+// INDICE (s[i * NS + campo]) — w.x(i, s) e cia. sao chamadas de funcao, e
+// no Duktape uma chamada custa mais que o resto do corpo do laco.
 
 var P = require("celeros.physics");
 var NIV = require("niveis");
+
+// campos do estado por corpo (P.rigid: [x, y, ang, hit, rapidez, flags])
+var NS = 6, SX = 0, SY = 1, SA = 2, SHIT = 3, SVEL = 4, SFL = 5;
 
 var MW = 320;
 var GROUND = NIV.GROUND;
@@ -279,12 +287,12 @@ M.habilidade = function (ev) {
 
 // ----------------------------------------------------------- explosao -----
 M.explodir = function (x, y, R, dvMax, ev) {
-    var s = M.w.state();
+    var s = M.s = M.w.state();
     if (ev) ev.push({ t: "boom", x: x, y: y, r: R });
     for (var i = 0; i < M.corpos.length; i++) {
-        var c = M.corpos[i];
-        if (!c || c.fixo || c.k === "chao" || !M.w.alive(i, s)) continue;
-        var dx = M.w.x(i, s) - x, dy = M.w.y(i, s) - y;
+        var c = M.corpos[i], o = i * NS;
+        if (!c || c.fixo || c.k === "chao" || !(s[o + SFL] & 1)) continue;
+        var dx = s[o + SX] - x, dy = s[o + SY] - y;
         var d = Math.sqrt(dx * dx + dy * dy);
         if (d >= R) continue;
         var f = 1 - d / R;
@@ -338,20 +346,21 @@ M.step = function (dt) {
     }
     M.w.step(dt, { gravity: { x: 0, y: GRAV }, maxSub: 12 });
     var s = M.s = M.w.state();
-    var n = M.w.count(), i, c;
+    var n = M.w.count(), i, c, o;
 
     // dano por impacto (fora da carencia de montagem)
     for (i = 0; i < n; i++) {
         c = M.corpos[i];
-        if (!c || !M.w.alive(i, s)) continue;
-        var x = M.w.x(i, s), y = M.w.y(i, s);
+        o = i * NS;
+        if (!c || !(s[o + SFL] & 1)) continue;
+        var x = s[o + SX], y = s[o + SY];
         if (fora(x, y)) {
             c.morto = c.k !== "chao";
             c.caiu = true;
             continue;
         }
         if (!c.hp0 || M.t < CARENCIA) continue;
-        var hit = M.w.hit(i, s);
+        var hit = s[o + SHIT];
         if (hit <= 0) continue;
         var dv = hit / c.m;
         var lim = c.k === "goblin" ? LIMIAR.goblin : LIMIAR.bloco;
@@ -365,19 +374,23 @@ M.step = function (dt) {
     if (t && t.estado === "voando") {
         t.t += dt;
         var vivos = 0, ativos = 0;
-        var lista = t.extras.slice();
-        if (t.idx >= 0) lista.unshift(t.idx);
-        for (var k = 0; k < lista.length; k++) {
-            var j = lista[k];
-            if (!M.corpos[j] || !M.w.alive(j, s)) continue;
+        // o tiro (k = -1) e os extras (tripla/ovo), sem montar lista por quadro
+        for (var k = -1; k < t.extras.length; k++) {
+            var j = k < 0 ? t.idx : t.extras[k];
+            if (j < 0) continue;
+            var oj = j * NS;
+            if (!M.corpos[j] || !(s[oj + SFL] & 1)) continue;
             vivos++;
-            var tx = M.w.x(j, s), ty = M.w.y(j, s);
+            var tx = s[oj + SX], ty = s[oj + SY];
             if (j === t.idx) {
-                if (t.px !== undefined && dt > 0) t.v = { x: (tx - t.px) / dt, y: (ty - t.py) / dt };
+                if (t.px !== undefined && dt > 0) {
+                    if (!t.v) t.v = { x: 0, y: 0 };
+                    t.v.x = (tx - t.px) / dt; t.v.y = (ty - t.py) / dt;
+                }
                 t.px = tx; t.py = ty;
-                if (t.bateu < 0 && M.w.hit(j, s) > 0 && t.t > 0.05) {
+                if (t.bateu < 0 && s[oj + SHIT] > 0 && t.t > 0.05) {
                     t.bateu = t.t;
-                    ev.push({ t: "impacto", x: tx, y: ty, forca: M.w.hit(j, s) / M.corpos[j].m });
+                    ev.push({ t: "impacto", x: tx, y: ty, forca: s[oj + SHIT] / M.corpos[j].m });
                 }
                 // rastro do voo (ate o primeiro impacto)
                 if (t.bateu < 0) {
@@ -389,12 +402,12 @@ M.step = function (dt) {
             if (fora(tx, ty)) { M.corpos[j].morto = true; continue; }
             // ovo da chocadeira explode na primeira pancada
             var cj = M.corpos[j];
-            if (cj.ovo && M.t - cj.nasceu > 0.05 && M.w.hit(j, s) > 0) {
+            if (cj.ovo && M.t - cj.nasceu > 0.05 && s[oj + SHIT] > 0) {
                 M.remover(j, ev, true);
                 M.explodir(tx, ty, 46, 300, ev);
                 continue;
             }
-            if (M.w.speed(j, s) > 9) ativos++;
+            if (s[oj + SVEL] > 9) ativos++;
         }
         // bomba sem toque explode sozinha 1,5 s depois da primeira pancada
         if (t.tipo === "bomba" && !t.usado && t.bateu >= 0 && t.t - t.bateu > 1.5) M.habilidade(ev);
@@ -408,8 +421,9 @@ M.step = function (dt) {
             M.rastro = M.rastroNovo;
             M.rastroNovo = [];
             // projetil gasto sai com um "puf" (como no classico)
-            for (k = 0; k < lista.length; k++) {
-                if (M.corpos[lista[k]]) M.corpos[lista[k]].morto = true;
+            for (k = -1; k < t.extras.length; k++) {
+                j = k < 0 ? t.idx : t.extras[k];
+                if (j >= 0 && M.corpos[j]) M.corpos[j].morto = true;
             }
         }
     }
@@ -421,7 +435,7 @@ M.step = function (dt) {
             c = M.corpos[i];
             if (!c || !c.morto) continue;
             algum = true;
-            var ex = M.w.x(i, s), ey = M.w.y(i, s);
+            var ex = s[i * NS + SX], ey = s[i * NS + SY];
             M.remover(i, ev, c.caiu && c.k !== "goblin");
             if (c.mat === "tnt" && !c.caiu) M.explodir(ex, ey, 58, 320, ev);
         }
@@ -435,7 +449,8 @@ M.step = function (dt) {
         var acordado = false;
         for (i = 0; i < M.corpos.length; i++) {
             c = M.corpos[i];
-            if (c && !c.fixo && c.k !== "chao" && M.w.alive(i, s) && M.w.speed(i, s) > 6) {
+            o = i * NS;
+            if (c && !c.fixo && c.k !== "chao" && (s[o + SFL] & 1) && s[o + SVEL] > 6) {
                 acordado = true;
                 break;
             }
@@ -483,6 +498,7 @@ M.estrelas = function () {
     return M.pontos >= m[2] ? 3 : (M.pontos >= m[1] ? 2 : 1);
 };
 
+M.NS = NS;
 M.MW = MW;
 M.GROUND = GROUND;
 M.GRAV = GRAV;

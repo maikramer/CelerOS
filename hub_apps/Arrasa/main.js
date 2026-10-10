@@ -240,48 +240,77 @@ function processa(evs) {
 
 // ------------------------------------------------------------- desenho ---
 // corpos: os que se mexem registram a caixa (a borracha do proximo quadro
-// apaga); os dormindo so redesenham se a borracha deste quadro os tocou
-var mov = [];
-function desenhaMundo() {
-    var s = M.s, w = M.w, n = w.count(), i, c, b;
-    mov.length = 0;
-    for (i = 0; i < n; i++) {
-        c = M.corpos[i];
-        if (!c || c.k === "chao" || c.k === "tiro" || !w.alive(i, s)) continue;
-        var x = w.x(i, s), y = w.y(i, s), a = w.angle(i, s);
-        if (w.awake(i, s) || c.hpVisto !== c.hp) {
-            b = A.caixa(c, x, y, a);
-            D.add(b.x, b.y, b.w, b.h);
-            mov.push(i);
+// apaga); os parados so redesenham se a borracha deste quadro os tocou.
+// O estado e lido por indice (s[i * NS + campo]): w.x(i, s) e cia. sao
+// chamadas de funcao, caras no Duktape para 2 lacos por corpo por quadro.
+var NS = M.NS;
+var mov = [], quietos = [];
+
+// corpos que acordaram neste quadro (pancada, explosao): o desenho PARADO
+// nao tem caixa na camada suja (a borracha so conhece as do quadro
+// anterior) e ficaria na tela. D.erase apaga JA, no inicio do draw — o que
+// estiver por baixo (rastro, fila, pecas paradas) ve o toque e se
+// redesenha neste mesmo quadro; o resto e o desenhaMundo
+function preparaMundo() {
+    var s = M.s, n = M.w.count();
+    for (var i = 0; i < n; i++) {
+        var c = M.corpos[i];
+        if (!c || !c._qw || c.k === "chao" || c.k === "tiro") continue;
+        var fl = s[i * NS + 5];
+        if (!(fl & 1) || (fl & 2)) {
+            D.erase(c._qx, c._qy, c._qw, c._qh);
+            c._qw = 0;
         }
     }
+}
+
+function desenhaMundo() {
+    var s = M.s, n = M.w.count(), i, c, b, o, k;
+    mov.length = 0;
+    quietos.length = 0;
     for (i = 0; i < n; i++) {
         c = M.corpos[i];
-        if (!c || c.k === "chao" || c.k === "tiro" || !w.alive(i, s)) continue;
-        if (w.awake(i, s) || c.hpVisto !== c.hp) continue;
-        var x2 = w.x(i, s), y2 = w.y(i, s), a2 = w.angle(i, s);
-        b = A.caixa(c, x2, y2, a2);
-        if (!D.touches(b.x, b.y, b.w, b.h)) continue;
-        if (c.k === "goblin") A.goblin(c, x2, y2, a2);
-        else A.peca(c, x2, y2, a2);
+        if (!c || c.k === "chao" || c.k === "tiro") continue;
+        o = i * NS;
+        var fl = s[o + 5];
+        if (!(fl & 1)) continue;
+        b = A.caixa(c, s[o], s[o + 1], s[o + 2]);
+        if ((fl & 2) || c.hpVisto !== c.hp) {
+            D.add(b.x, b.y, b.w, b.h);
+            mov.push(i);
+            c._qw = 0;
+        } else {
+            quietos.push(i);
+            // caixa do desenho parado (o preparaMundo apaga quando acordar)
+            c._qx = b.x; c._qy = b.y; c._qw = b.w; c._qh = b.h;
+        }
     }
-    for (var k = 0; k < mov.length; k++) {
+    for (k = 0; k < quietos.length; k++) {
+        i = quietos[k];
+        c = M.corpos[i];
+        if (!D.touches(c._qx, c._qy, c._qw, c._qh)) continue;
+        o = i * NS;
+        if (c.k === "goblin") A.goblin(c, s[o], s[o + 1], s[o + 2]);
+        else A.peca(c, s[o], s[o + 1], s[o + 2]);
+    }
+    for (k = 0; k < mov.length; k++) {
         i = mov[k];
         c = M.corpos[i];
-        if (c.k === "goblin") A.goblin(c, w.x(i, s), w.y(i, s), w.angle(i, s));
-        else A.peca(c, w.x(i, s), w.y(i, s), w.angle(i, s));
+        o = i * NS;
+        if (c.k === "goblin") A.goblin(c, s[o], s[o + 1], s[o + 2]);
+        else A.peca(c, s[o], s[o + 1], s[o + 2]);
         c.hpVisto = c.hp;
     }
     // projeteis em voo (e os rachados da tripla)
     var t = M.tiro;
     if (t && (t.estado === "voando" || t.estado === "assentando")) {
-        var lista = t.extras.slice();
-        if (t.idx >= 0) lista.unshift(t.idx);
-        for (k = 0; k < lista.length; k++) {
-            i = lista[k];
+        for (k = -1; k < t.extras.length; k++) {
+            i = k < 0 ? t.idx : t.extras[k];
+            if (i < 0) continue;
             c = M.corpos[i];
-            if (!c || !w.alive(i, s)) continue;
-            b = A.tiro(c.tipo, w.x(i, s), w.y(i, s), w.angle(i, s), M.t);
+            o = i * NS;
+            if (!c || !(s[o + 5] & 1)) continue;
+            b = A.tiro(c.tipo, s[o], s[o + 1], s[o + 2], M.t);
             D.add(b.x, b.y, b.w, b.h);
         }
     }
@@ -316,7 +345,51 @@ function desenhaFila() {
     }
 }
 
-function desenhaEstilingue() {
+// estilingue (elastico de tras, pedra, elastico da frente, mira) como UMA
+// peca: a caixa uniao fica em ESTI. Na mesma pose do quadro anterior ele
+// fica fora da camada suja — so redesenha se a borracha tocar — e a pedra
+// armada esperando o dedo deixa de custar apaga+desenha+push por quadro.
+// Pose = estado do tiro, tipo, puxao, vibracao e o pisca do estopim.
+var ESTI = { estado: "", tipo: "", px: 0, py: 0, pisca: false, parado: false,
+             x: 0, y: 0, w: 0, h: 0, x1: 0, y1: 0 };
+
+function estilingueMexe() {
+    var t = M.tiro;
+    var est = t ? t.estado : "", tipo = t ? t.tipo : "";
+    var pisca = tipo === "bomba" && ((M.t * 12) % 2 < 1);
+    var mexe = G.vib > 0 || est === "carregando" || est !== ESTI.estado || tipo !== ESTI.tipo ||
+               M.pull.x !== ESTI.px || M.pull.y !== ESTI.py || pisca !== ESTI.pisca;
+    ESTI.estado = est; ESTI.tipo = tipo; ESTI.pisca = pisca;
+    ESTI.px = M.pull.x; ESTI.py = M.pull.y;
+    return mexe;
+}
+
+// soma a caixa na uniao do estilingue; mexendo, entra na camada suja
+var _estiMexe = true;
+function regEsti(b) {
+    if (!b) return;
+    if (b.x < ESTI.x) ESTI.x = b.x;
+    if (b.y < ESTI.y) ESTI.y = b.y;
+    if (b.x + b.w > ESTI.x1) ESTI.x1 = b.x + b.w;
+    if (b.y + b.h > ESTI.y1) ESTI.y1 = b.y + b.h;
+    if (_estiMexe) D.add(b.x, b.y, b.w, b.h);
+}
+
+function desenhaEstilingue(mexe) {
+    if (!mexe && !D.touches(ESTI.x, ESTI.y, ESTI.w, ESTI.h)) {
+        ESTI.parado = true;
+        return;
+    }
+    _estiMexe = mexe;
+    ESTI.parado = !mexe;
+    ESTI.x = ESTI.y = 1e9;
+    ESTI.x1 = ESTI.y1 = -1e9;
+    desenhaEstilingue0();
+    ESTI.w = ESTI.x1 > ESTI.x ? ESTI.x1 - ESTI.x : 0;
+    ESTI.h = ESTI.y1 > ESTI.y ? ESTI.y1 - ESTI.y : 0;
+}
+
+function desenhaEstilingue0() {
     var t = M.tiro, p = null, forca = 0;
     if (t && (t.estado === "pronto" || t.estado === "mirando")) {
         var q = M.pedraNoBerco();
@@ -327,45 +400,60 @@ function desenhaEstilingue() {
         var f = Math.min(1, t.t / 0.35), r = M.TIRO[t.tipo].r;
         var x0 = 32, y0 = M.GROUND - r;
         var hx = x0 + (M.BERCO.x - x0) * f, hy = y0 + (M.BERCO.y - y0) * f - Math.sin(f * Math.PI) * 26;
-        var bb = A.tiro(t.tipo, hx, hy, f * 6, M.t);
-        D.add(bb.x, bb.y, bb.w, bb.h);
+        regEsti(A.tiro(t.tipo, hx, hy, f * 6, M.t));
     }
     var vib = 0;
     if (G.vib > 0) {
         vib = G.vib * Math.sin(G.vibT * 38) * Math.exp(-G.vibT * 7);
         if (G.vibT > 0.6) { G.vib = 0; vib = 0; }
     }
-    var b = A.elastico("tras", p, forca, vib);
-    if (b) D.add(b.x, b.y, b.w, b.h);
+    regEsti(A.elastico("tras", p, forca, vib));
     if (p) {
-        b = A.tiro(p.tipo, p.x, p.y, 0, M.t);
-        D.add(b.x, b.y, b.w, b.h);
-        b = A.elastico("frente", p, forca, 0);
-        if (b) D.add(b.x, b.y, b.w, b.h);
+        regEsti(A.tiro(p.tipo, p.x, p.y, 0, M.t));
+        regEsti(A.elastico("frente", p, forca, 0));
     }
     // mira: pontinhos do inicio da trajetoria
     if (t && t.estado === "mirando" && M.forca() >= 0.2) {
         var pv = M.previsao(9, 0.055);
         for (var k = 0; k + 1 < pv.length; k += 2) {
-            var bp = A.ponto(pv[k], pv[k + 1], k < 8 ? 1.5 : 1.1, S.mixColor(C.branco, C.ouro, 30));
-            D.add(bp.x, bp.y, bp.w, bp.h);
+            regEsti(A.ponto(pv[k], pv[k + 1], k < 8 ? 1.5 : 1.1, S.mixColor(C.branco, C.ouro, 30)));
         }
     }
+}
+
+// banner do nome da fase: texto PARADO (fora da camada suja) na faixa
+// BAN — so redesenha se a borracha tocar, e sai com D.erase no inicio do
+// draw quando vence (antes: apagado e redesenhado a cada quadro por 2,2 s)
+var BAN = { x: 0, y: 0, w: 0, h: 0 };
+function faixaBanner() {
+    var y = Math.round(H * 0.3);
+    BAN.x = 0; BAN.w = W;
+    BAN.y = y - u(16); BAN.h = u(48);
+    return y;
+}
+
+function venceBanner() {
+    if (!G.banner || G.banner.t <= 2.2) return;
+    G.banner = null;
+    faixaBanner();
+    D.erase(BAN.x, BAN.y, BAN.w, BAN.h);
 }
 
 function desenhaBanner() {
     var bn = G.banner;
     if (!bn) return;
-    if (bn.t > 2.2) { G.banner = null; return; }
-    var y = Math.round(H * 0.3);
-    E.gfx.text(bn.txt, W / 2 + u(1), y + u(1), { align: "center", valign: "middle", px: u(22),
-               color: C.sombra, screen: true });
-    E.gfx.text(bn.txt, W / 2, y, { align: "center", valign: "middle", px: u(22),
-               color: bn.cor || C.texto, screen: true });
-    if (bn.sub) {
-        E.gfx.text(bn.sub, W / 2, y + u(20), { align: "center", valign: "middle", ts: "small",
-                   color: C.texto, screen: true });
-    }
+    var y = faixaBanner();
+    if (!D.touches(BAN.x, BAN.y, BAN.w, BAN.h)) return;
+    mudo(function () {
+        E.gfx.text(bn.txt, W / 2 + u(1), y + u(1), { align: "center", valign: "middle", px: u(22),
+                   color: C.sombra, screen: true });
+        E.gfx.text(bn.txt, W / 2, y, { align: "center", valign: "middle", px: u(22),
+                   color: bn.cor || C.texto, screen: true });
+        if (bn.sub) {
+            E.gfx.text(bn.sub, W / 2, y + u(20), { align: "center", valign: "middle", ts: "small",
+                       color: C.texto, screen: true });
+        }
+    });
 }
 
 function semFirmware() {
@@ -592,10 +680,15 @@ E.run({
             }
         },
         draw: function () {
+            // o que estava parado e vai se mexer sai da tela ANTES de tudo
+            var mexe = estilingueMexe();
+            if (mexe && ESTI.parado && ESTI.w > 0) D.erase(ESTI.x, ESTI.y, ESTI.w, ESTI.h);
+            preparaMundo();
+            venceBanner();
             desenhaRastro();
             desenhaFila();
             desenhaMundo();
-            desenhaEstilingue();
+            desenhaEstilingue(mexe);
             desenhaBanner();
             E.fx.draw();
             desenhaHUD();
@@ -644,6 +737,9 @@ E.run({
                     });
                 }
             }
+        },
+        exit: function () {
+            E.clearTimers();   // timers das estrelas nao vazam pra proxima cena
         },
         update: function (dt) {
             this.t += dt;
