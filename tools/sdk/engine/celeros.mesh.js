@@ -19,7 +19,7 @@
 // e false quando desenhou o portao — nesse caso so falta UI.end() + continue.
 // Em placa sem BT no firmware (globais ausentes) o card e fixo, sem botao.
 
-var mesh = { version: '1.0.0' };
+var mesh = { version: '1.0.1' };
 
 // firmware com CelerNet+Pack (placa com BT e build que os expoe)
 mesh.available = function () {

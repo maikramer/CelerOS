@@ -16,6 +16,10 @@ declare namespace E {
         arc: boolean;        // fillArc (API 22)
         wide: boolean;       // drawWideLine/mixColor (API 22)
         slots: number;       // limite do pool (spriteSlots, API 29; 4 em firmware velho)
+        mix: boolean;        // System.sfx: efeito misturado sem bloquear (API 32)
+        clip: boolean;       // setClip/clearClip
+        button: boolean;     // System.button (botao fisico)
+        big: boolean;        // tela fisica >= 400 px (firmware promove as fontes)
         native: boolean;     // canvas nativo ativo (API 28)
         w: number;
         h: number;
@@ -34,6 +38,16 @@ declare namespace E {
     const theme: CelerTheme | null;
     let W: number;
     let H: number;
+    /** Escala do projeto: min(W, H) / 240 (1 no virtual, 2 no 480 nativo). */
+    let U: number;
+    /** Medida do projeto (240 de largura) em pixels da tela atual. */
+    function u(v: number): number;
+    interface FontPick { font: number; size: number; h: number }
+    /** Maior fonte (1/2/4 x textSize) cuja altura cabe em px. */
+    function font(px: number): FontPick;
+    /** Alturas de texto por papel, em px do projeto (o text escala por U). */
+    const ts: { tiny: number; small: number; body: number; label: number;
+                big: number; title: number; huge: number; [k: string]: number };
     let dt: number;
     let fps: number;
     let fpsTarget: number;
@@ -71,6 +85,8 @@ declare namespace E {
     // ----------------------------------------------------- cenas e loop --
     interface Scene {
         fps?: number;        // sobrepoe o alvo global nesta cena (0 = sem teto)
+        /** Desenha so na entrada, no E.redraw() e quando o dedo entra/sai de um E.gfx.button. */
+        static?: boolean;
         enter?: () => void;
         update?: (dt: number) => void;
         draw?: () => void;
@@ -79,6 +95,42 @@ declare namespace E {
     function run(scenes: Record<string, Scene>, first: string): void;
     function goto(name: string): void;
     function quit(): void;
+    /** Cena static: agenda um draw (o estado mudou). */
+    function redraw(): void;
+
+    // ------------------------------------------------- camada suja ------
+    const dirty: {
+        /** true enquanto ligada (desliga sozinha na troca de cena). */
+        on: boolean;
+        /** Liga: fundo = cor RGB565 ou painter(x, y, w, h). 1o quadro repinta tudo. */
+        enable(bg?: number | ((x: number, y: number, w: number, h: number) => void)): any;
+        off(): void;
+        /** Proximo quadro repinta o fundo inteiro. */
+        full(): void;
+        /** Recorte da area de jogo (o HUD fica de fora); sem args remove. */
+        clip(x?: number, y?: number, w?: number, h?: number): void;
+        /** Solta o recorte no meio do draw (desenhar o HUD). */
+        unclip(): void;
+        /** Registra caixa de TELA desenhada por System.* direto. */
+        add(x: number, y: number, w: number, h: number): void;
+        /** Alguma caixa apagada/desenhada agora toca o rect? */
+        touches(x: number, y: number, w: number, h: number): boolean;
+    };
+    interface Tilemap {
+        cols: number; rows: number; cw: number; ch: number; ox: number; oy: number;
+        mark(c: number, r: number): void;
+        markRect(x: number, y: number, w: number, h: number): void;
+        all(): void;
+        dirty(): number;
+        flush(): number;
+        cellAt(x: number, y: number): { c: number; r: number } | null;
+    }
+    /** Grade com repintura suja: paint(c, r, x, y, w, h) desenha uma celula. */
+    function tilemap(o: {
+        cols: number; rows: number; cell?: number; cw?: number; ch?: number;
+        ox?: number; oy?: number;
+        paint: (c: number, r: number, x: number, y: number, w: number, h: number) => void;
+    }): Tilemap;
 
     // -------------------------------------------------- timers e tweens --
     interface Timer { dead: boolean }
@@ -183,6 +235,18 @@ declare namespace E {
 
     // ------------------------------------------------------------ gfx --
     interface DrawOpts { screen?: boolean; fill?: boolean; r?: number }
+    interface TextOpts {
+        color?: number; bg?: number;
+        /** altura em pixels (escolhe fonte/size) */
+        px?: number;
+        /** papel em E.ts (escala com E.U) */
+        ts?: 'tiny' | 'small' | 'body' | 'label' | 'big' | 'title' | 'huge';
+        size?: number; font?: number;
+        /** largura maxima: encolhe ate caber */
+        fit?: number;
+        align?: 'left' | 'center' | 'right';
+        valign?: 'top' | 'middle' | 'bottom'; screen?: boolean;
+    }
     const gfx: {
         rect(x: number, y: number, w: number, h: number, color: number, o?: DrawOpts): void;
         circle(x: number, y: number, r: number, color: number,
@@ -195,14 +259,12 @@ declare namespace E {
                  o?: DrawOpts & { dir?: 'x' | 'y' }): void;
         arc(x: number, y: number, r0: number, r1: number, a0: number, a1: number,
             color: number, o?: DrawOpts): void;
-        text(str: any, x: number, y: number, o?: {
-            color?: number; bg?: number; size?: number; font?: number;
-            align?: 'left' | 'center' | 'right';
-            valign?: 'top' | 'middle' | 'bottom'; screen?: boolean;
-        }): void;
+        text(str: any, x: number, y: number, o?: TextOpts): void;
+        /** Largura em pixels com as mesmas opts do text(). */
+        measure(str: any, o?: TextOpts): number;
         button(label: string, x: number, y: number, w: number, h: number, o?: {
             primary?: boolean; color?: number; bg?: number; r?: number; font?: number;
-            screen?: boolean;
+            px?: number; textColor?: number; stroke?: number | false; screen?: boolean;
         }): Rect;
         bar(x: number, y: number, w: number, h: number, frac: number, o?: {
             fg?: number; bg?: number; r?: number; screen?: boolean;
@@ -221,9 +283,11 @@ declare namespace E {
             shape?: 'dot' | 'spark' | 'ring';
         }): void;
         popText(x: number, y: number, str: any, o?: {
-            color?: number; life?: number; font?: number; screen?: boolean;
+            color?: number; life?: number; font?: number; px?: number;
+            ts?: TextOpts['ts']; screen?: boolean;
         }): void;
-        flash(color: number, ms?: number): void;
+        /** Brilho na borda (default) ou tela cheia com {full: true}. */
+        flash(color: number, ms?: number, o?: { full?: boolean }): void;
         /** onda de choque: anel que expande (speed px/s) e some */
         ring(x: number, y: number, o?: {
             r0?: number; speed?: number; color?: number; life?: number;
@@ -251,8 +315,9 @@ declare namespace E {
         stop(): void;
         playing(): boolean;
         beat(): number;      // -1 sem musica
+        /** Misturado por cima da trilha sem bloquear (API 32); playTone em firmware velho. */
         sfx(what: string | number[] | number[][]): void;
-        /** Abafa a trilha por ms (sfx alto rouba o canal) e retoma sozinho do ponto onde parou. */
+        /** Abafa a trilha por ms (sfx alto rouba o canal) e retoma sozinho. No-op com caps.mix. */
         duck(ms: number): boolean;
         mute(on: boolean): void;
         volume(v: number): void;

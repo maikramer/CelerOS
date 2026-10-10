@@ -149,6 +149,210 @@ function check(name, ok, detail) {
     check('Detona roda limpo no harness (smoke completo)', r5.err === null, r5.err);
 })();
 
+// ------------------------------------------------------- Detona: sim ----
+// A simulacao do Detona direto (sem cenas): movimento de grade, bomba
+// atravessavel so ate sair dela, quina assistida, deslize ao soltar,
+// fuzz do invariante "o corpo nunca entra em parede", i-frames do chefe,
+// acerto no meio do passo, respiro do Forno e teleporte do Nucleo.
+(function () {
+    console.log('Detona (arena.js/ia.js):');
+    var harness = require('../../test/js_harness/run.js');
+    var DIR = path.join(ROOT, 'hub_apps', 'Detona');
+    function nova(mundo, nivel, ajusta) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(DIR, env);
+        // os modulos leem System/Storage como globais do app
+        global.System = env.System; global.Storage = env.Storage;
+        var out = {};
+        new Function('System', 'Storage', 'require', '__out',
+            'var NV = require("niveis"), A = require("arena"), IA = require("ia");' +
+            '__out.NV = NV; __out.A = A; __out.IA = IA;')(env.System, env.Storage, req, out);
+        var plano = out.NV.gerar(mundo, nivel);
+        if (ajusta) ajusta(plano);
+        out.A.iniciar(mundo, nivel, plano);
+        out.A.layout(32, 0, 0);
+        out.A.state().intro = 0;
+        out.env = env;
+        return out;
+    }
+    var dd0 = nova(1, 1);
+    var HALF = 0.4;
+    function invadiu(A) {
+        var st = A.state(), u = st.player.x / 32, v = st.player.y / 32;
+        for (var r = Math.floor(v - HALF + 1e-6); r <= Math.floor(v + HALF - 1e-6); r++) {
+            for (var c = Math.floor(u - HALF + 1e-6); c <= Math.floor(u + HALF - 1e-6); c++) {
+                var ch = A.em(c, r);
+                if (ch === '#' || ch === '%') return ch + '@' + c + ',' + r;
+                if (ch === 'B' && A.bloqueado(c, r)) return 'B@' + c + ',' + r;
+            }
+        }
+        return null;
+    }
+    function anda(A, ax, ay, quadros) {
+        var ruim = null;
+        for (var i = 0; i < quadros && !ruim; i++) { A.mover(ax, ay, 1 / 30); ruim = invadiu(A); }
+        return ruim;
+    }
+    function limpaCanto(plano) {
+        // corredor (1..5, 1) livre e (1..1, 1..5) livre: cenario conhecido
+        for (var c = 1; c <= 5; c++) plano.grid[1][c] = '.';
+        for (var r = 1; r <= 5; r++) plano.grid[r][1] = '.';
+        plano.spawns = [];
+    }
+
+    // 1) o bug relatado: planta e anda — nunca entra na parede, sai da bomba
+    var d = nova(1, 1, limpaCanto), A = d.A, st = A.state();
+    check('planta no canto (1,1)', A.plantar() === true && A.em(1, 1) === 'B');
+    var ruim = anda(A, 1, 0, 40);
+    check('planta e anda pra direita: corpo nunca invade bloco/parede', ruim === null, ruim);
+    check('saiu da propria bomba e seguiu o corredor', A.celulaPlayer().c >= 3, 'c=' + A.celulaPlayer().c);
+    ruim = anda(A, -1, 0, 60);
+    var u = st.player.x / 32;
+    check('depois de sair, a bomba vira parede (nao volta pra dentro)', ruim === null && u >= 2.5 - 1e-6,
+          'u=' + u.toFixed(3) + ' ' + ruim);
+    // plantar e sair pra BAIXO/CIMA tambem (eixo y)
+    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
+    A.plantar();
+    ruim = anda(A, 0, 1, 40);
+    check('planta e desce: corpo nunca invade', ruim === null && A.celulaPlayer().r >= 3, ruim);
+    // tentar entrar na parede de cima/esquerda a partir do canto com a bomba no pe
+    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
+    A.plantar();
+    ruim = anda(A, -1, 0, 20) || anda(A, 0, -1, 20);
+    check('com a bomba no pe, empurrar contra a borda nao atravessa', ruim === null &&
+          Math.abs(st.player.x - 48) < 1e-6 && Math.abs(st.player.y - 48) < 1e-6, ruim);
+
+    // 2) quina assistida: deslocado 0.3 para a trilha de baixo, empurrando
+    // contra o pilar (2,2) a partir de (1,2)... usa (3,1)->(3,2) livres
+    d = nova(1, 1, function (pl) {
+        limpaCanto(pl);
+        for (var rr = 1; rr <= 3; rr++) { pl.grid[rr][3] = '.'; }
+        pl.grid[1][4] = '.'; pl.grid[3][4] = '.';   // (4,2) segue pilar
+    });
+    A = d.A; st = A.state();
+    st.player.x = 3.5 * 32; st.player.y = 1.5 * 32;
+    anda(A, 1, 0, 1);   // fica em (3,1)
+    st.player.x = 3.5 * 32; st.player.y = 1.5 * 32;
+    // pilar em (4,2): de (3,1) andando pra baixo deslocado ok; testa ao contrario:
+    // no corredor vertical x=3, deslocado +0.3 em x, empurra pra cima ate o topo
+    st.player.x = 3.8 * 32; st.player.y = 3.5 * 32;
+    ruim = anda(A, 0, -1, 30);
+    check('deslocado na trilha, anda alinhando sem invadir o pilar', ruim === null &&
+          Math.abs(st.player.x / 32 - 3.5) < 1e-3, 'x=' + (st.player.x / 32).toFixed(3) + ' ' + ruim);
+
+    // 3) soltar o dedo: termina o passo no centro da celula
+    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
+    anda(A, 1, 0, 4);
+    var antes = st.player.x / 32;
+    anda(A, 0, 0, 20);
+    var depois = st.player.x / 32;
+    check('soltar o dedo: desliza ate o centro da proxima celula', depois > antes &&
+          Math.abs(depois - (Math.floor(depois) + 0.5)) < 1e-6, antes.toFixed(3) + ' -> ' + depois.toFixed(3));
+
+    // 4) fuzz: 3000 quadros aleatorios com bombas — o invariante nunca quebra
+    var seeds = [[1, 2], [2, 3], [3, 5]], falhou = null, quadros = 0;
+    seeds.forEach(function (sd) {
+        var dd = nova(sd[0], sd[1], function (pl) { pl.spawns = []; pl.ventos = []; });
+        var AA = dd.A, ss = AA.state(), rng = dd.NV.rng(sd[0] * 31 + sd[1]);
+        ss.stats.bombs = 3; ss.stats.inv = 1e9;
+        var dir = [0, 0];
+        for (var i = 0; i < 1000 && !falhou; i++) {
+            if (rng() < 0.08) dir = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(rng() * 5)];
+            AA.mover(dir[0], dir[1], 1 / 30);
+            if (rng() < 0.04) AA.plantar();
+            dd.env.System.delay(33);
+            AA.update(1 / 30);
+            if (!AA.state()) break;
+            ss.stats.vidas = 9;
+            var r2 = invadiu(AA);
+            if (r2) falhou = 'mundo ' + sd[0] + '-' + sd[1] + ' quadro ' + i + ': ' + r2;
+            quadros++;
+        }
+    });
+    check('fuzz 3000 quadros (andar + plantar + explodir): corpo nunca invade', falhou === null && quadros > 2500,
+          falhou || ('quadros=' + quadros));
+
+    // 5) ia: labareda acerta o bicho no MEIO do passo e o chefe tem i-frames
+    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
+    d.IA.ligar();
+    var e = d.IA.colocar('balao', 3, 3);
+    e.tc = 4; e.tr = 3; e.fx = 4.3; e.fy = 3.5;   // 80% dentro da (4,3)
+    d.IA.ferirNa(4, 3, 'p');
+    check('labareda na celula de destino mata o bicho no meio do passo', e.morto === true);
+    var ch = d.IA.colocar('chefe', 6, 5);
+    var hp0 = ch.hp;
+    for (var k = 0; k < 8; k++) d.IA.ferirNa(6, 5, 'p');   // 8 quadros de labareda
+    check('chefe: uma labareda (8 quadros) tira 1 hp so', ch.hp === hp0 - 1, 'hp ' + hp0 + ' -> ' + ch.hp);
+    d.IA.ferirNa(6, 5, 'x');
+    check('bomba do chefe nao fere o chefe', ch.hp === hp0 - 1);
+    var dv = d.IA.colocar('divisor', 9, 9);
+    var antesN = st.enemies.length;
+    d.IA.ferirNa(9, 9, 'p');
+    var minis = st.enemies.filter(function (x) { return x.kind === 'mini' && !x.morto; }).length;
+    check('divisor se parte em 2 mini ao morrer', dv.morto && minis === 2, 'minis=' + minis + ' antes=' + antesN);
+
+    // 6) Forno: o respiro entra em erupcao na batida (e fere o jogador)
+    d = nova(2, 1, function (pl) { limpaCanto(pl); pl.ventos = [{ c: 1, r: 3, aviso: false }]; });
+    A = d.A; st = A.state();
+    st.player.x = 1.5 * 32; st.player.y = 2.5 * 32;   // vizinho do respiro
+    var vidas0 = st.stats.vidas, viuFogo = false;
+    for (var q = 0; q < 200 && st.stats.vidas === vidas0; q++) {
+        d.env.System.delay(33);
+        A.update(1 / 30);
+        if (st.flames.length) viuFogo = true;
+    }
+    check('Forno: respiro erupciona na batida e fere quem esta do lado', viuFogo && st.stats.vidas === vidas0 - 1,
+          'fogo=' + viuFogo + ' vidas ' + vidas0 + '->' + st.stats.vidas);
+
+    // 8) as 24 fases + sobrevivencia rodam 900 quadros de jogo aleatorio
+    // (ia, bombas, perigos, chefe) sem excecao e sem o corpo invadir
+    var falhaFase = null, fases = 0;
+    for (var mu = 1; mu <= 3 && !falhaFase; mu++) {
+        for (var nv = 1; nv <= 8 && !falhaFase; nv++) {
+            [false, true].forEach(function (sobre) {
+                if (falhaFase || (sobre && (mu > 1 || nv > 1))) return;
+                try {
+                    var dd = nova(mu, nv, sobre ? function (pl) {
+                        var g = dd0.NV.gerar(1, 1, { sobrevivencia: true });
+                        for (var k in g) pl[k] = g[k];
+                    } : null);
+                    var AA = dd.A, ss = AA.state(), rr = dd.NV.rng(mu * 97 + nv);
+                    dd.IA.ligar();
+                    if (sobre) dd.IA.onda();
+                    var dir = [0, 0];
+                    for (var i = 0; i < 900; i++) {
+                        var s2 = AA.state();
+                        if (!s2) break;
+                        s2.stats.inv = 1e9; s2.stats.vidas = 9; s2.tLeft = 500;
+                        if (rr() < 0.08) dir = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(rr() * 5)];
+                        AA.mover(dir[0], dir[1], 1 / 30);
+                        if (rr() < 0.05) AA.plantar();
+                        dd.env.System.delay(33);
+                        AA.update(1 / 30);
+                        var inv2 = invadiu(AA);
+                        if (inv2) { falhaFase = mu + '-' + nv + ' quadro ' + i + ': ' + inv2; break; }
+                    }
+                    fases++;
+                } catch (ex) {
+                    falhaFase = mu + '-' + nv + (sobre ? ' (sobre)' : '') + ': ' + (ex && ex.stack || ex);
+                }
+            });
+        }
+    }
+    check('24 fases + sobrevivencia: 900 quadros de jogo cada sem excecao nem invasao',
+          falhaFase === null && fases === 25, falhaFase || ('fases=' + fases));
+
+    // 7) Nucleo: o teleporte leva ao par e nao volta em ping-pong
+    d = nova(3, 1, function (pl) { limpaCanto(pl); pl.teles = [{ c: 3, r: 1 }, { c: 1, r: 5 }]; });
+    A = d.A; st = A.state();
+    for (var tq = 0; tq < 25 && A.celulaPlayer().r === 1; tq++) { A.mover(1, 0, 1 / 30); A.update(1 / 30); }
+    var cel = A.celulaPlayer();
+    check('Nucleo: entrar no portal leva ao par', cel.c === 1 && cel.r === 5, cel.c + ',' + cel.r);
+    A.update(1 / 30); A.update(1 / 30);
+    cel = A.celulaPlayer();
+    check('Nucleo: parado no pad de chegada nao volta (sem ping-pong)', cel.c === 1 && cel.r === 5);
+})();
+
 // ---------------------------------------------------------------- physics --
 (function () {
     console.log('SDK physics (tools/sdk/engine/celeros.physics.js):');
@@ -462,6 +666,15 @@ function check(name, ok, detail) {
     var fl = GRID.flood(ar.grid, 1, 1, function (ch) { return ch === '.'; });
     check('grid.flood: so celulas livres alcanca menos',
           fl.quantos < fr.quantos, 'livres=' + fl.quantos);
+    // flow (1.1.0): BFS ate o alvo; next desce um passo; parede = sem caminho
+    var gf = GRID.nova(7, 3, '#');
+    for (var fc = 1; fc <= 5; fc++) gf[1][fc] = '.';
+    var campo = GRID.flow(gf, 1, 1, function (ch) { return ch === '.'; });
+    var nx1 = campo.next(5, 1);
+    check('grid.flow: distancia e next descem ate o alvo',
+          campo.dist(5, 1) === 4 && nx1 && nx1.c === 4 && nx1.r === 1 &&
+          campo.next(1, 1) === null && campo.dist(0, 0) === -1 && campo.next(0, 1) === null,
+          JSON.stringify([campo.dist(5, 1), nx1]));
     // escolheAlcancavel: bolso cercado por # e rejeitado em favor do livre
     var gsel = GRID.nova(7, 5, '#');
     for (var cc = 1; cc <= 5; cc++) gsel[1][cc] = '.';
@@ -480,6 +693,13 @@ function check(name, ok, detail) {
           livre && ar.grid[livre.r][livre.c] === '.' && livre.c + livre.r > 12,
           livre ? livre.c + ',' + livre.r : 'null');
 })();
+
+// tamanho de uma dep como o hub a guarda (enxuta pelo jsstrip, o porte 1:1
+// do JsStripper do firmware — publish-dep sobe assim)
+var JSSTRIP = require('../../tools/sdk/lib/jsstrip.js');
+function depSize(nome) {
+    return JSSTRIP.strip(fs.readFileSync(path.join(ROOT, 'tools', 'sdk', 'engine', nome + '.js'))).length;
+}
 
 // ----------------------------------------------------------------- engine --
 (function () {
@@ -529,6 +749,21 @@ function check(name, ok, detail) {
           JSON.stringify(r.grabbed.marks) === JSON.stringify(
               ['a.enter', 'a.update', 'a.draw', 'a.update', 'a.draw', 'a.exit', 'b.enter']),
           JSON.stringify(r.grabbed.marks));
+
+    // a engine ENXUTA (como o hub serve) roda igual: o mesmo ciclo de cenas
+    (function () {
+        var env = harness.makeEnv();
+        var code = JSSTRIP.strip(fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'))).toString('utf8');
+        var linhasIguais = code.split('\n').length ===
+            fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'), 'utf8').split('\n').length;
+        var mod = { exports: {} };
+        new Function('System', 'Storage', 'module', 'exports', code)(env.System, env.Storage, mod, mod.exports);
+        var E2 = mod.exports, marks = [];
+        E2.init({});
+        E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
+        check('engine enxuta (jsstrip) preserva as linhas e roda o loop',
+              linhasIguais && marks.length === 3 && E2.version === /version:\s*'([^']+)'/.exec(fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'), 'utf8'))[1], 'linhas=' + linhasIguais);
+    })();
 
     // input: tap, swipe e justDown sinteticos via touchQ
     r = runEngine(
@@ -654,9 +889,10 @@ function check(name, ok, detail) {
         '  tracks: [{ wave: "sq", vol: 80, notes: [[69, 16]] }] });' +
         'var batida = E.audio.beat();' +
         'E.audio.stop();' +
-        '__harness.grab("aud", [b0, batida >= 0, !E.audio.playing()]);');
+        '__harness.grab("aud", [b0, batida >= 0, !E.audio.playing()]);',
+        function (env) { delete env.System.sfx; });   // firmware < API 32
     var tones = r.log.filter(function (l) { return l.indexOf('[tone]') === 0; });
-    check('audio: sfx por nome e melodia chegam ao playTone (2 tons)',
+    check('audio: sem System.sfx, sfx por nome e melodia chegam ao playTone (2 tons)',
           tones.length === 2, JSON.stringify(tones));
     check('audio: beat -1 sem musica e >= 0 com musica tocando',
           r.grabbed.aud[0] === -1 && r.grabbed.aud[1] === true && r.grabbed.aud[2] === true,
@@ -707,7 +943,8 @@ function check(name, ok, detail) {
         'var aindaParada = E.audio.playing();' +
         'System.delay(600);' +
         'E.audio._tick();' +
-        '__harness.grab("duck", [semMusica, d1, parada, aindaParada, E.audio.playing()]);');
+        '__harness.grab("duck", [semMusica, d1, parada, aindaParada, E.audio.playing()]);',
+        function (env) { delete env.System.sfx; });   // duck so existe sem mistura
     var duckTones = r.log.filter(function (l) { return l.indexOf('[tone]') === 0; });
     check('audio.duck: sfx toca na janela (playing falso destrava o canal)',
           duckTones.length === 1, JSON.stringify(duckTones));
@@ -716,6 +953,120 @@ function check(name, ok, detail) {
           r.grabbed.duck[2] === false && r.grabbed.duck[3] === false &&
           r.grabbed.duck[4] === true,
           JSON.stringify(r.grabbed.duck));
+
+    // API 32: sfx misturado — nao bloqueia, toca COM musica, duck vira no-op
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'E.audio.music({ bpm: 120, loops: 1,' +
+        '  tracks: [{ wave: "sq", vol: 80, notes: [[69, 16]] }] });' +
+        'var t0 = System.millis();' +
+        'E.audio.sfx("boom");' +
+        'E.audio.sfx([[440, 30], [0, 10], [660, 30]]);' +
+        'var d = E.audio.duck(500);' +
+        '__harness.grab("mix", [E.caps.mix, E.audio.playing(), d, System.millis() - t0]);');
+    var sfxLog = r.log.filter(function (l) { return l.indexOf('[sfx]') === 0; });
+    var toneLog = r.log.filter(function (l) { return l.indexOf('[tone]') === 0; });
+    check('audio (API 32): sfx vai ao System.sfx por cima da musica, sem playTone',
+          r.grabbed.mix[0] === true && sfxLog.length === 2 && toneLog.length === 0,
+          JSON.stringify([r.grabbed.mix, sfxLog, toneLog]));
+    check('audio (API 32): duck no-op — a trilha segue tocando',
+          r.grabbed.mix[1] === true && r.grabbed.mix[2] === false,
+          JSON.stringify(r.grabbed.mix));
+
+    // 1.2: escala por pixel — E.U e E.font escolhem a fonte pela altura
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var f8 = E.font(8), f16 = E.font(16), f24 = E.font(24), f3 = E.font(3), f99 = E.font(99);' +
+        '__harness.grab("ty", [E.U, E.u(10), f8.h, f16.h, f24.h, f3.h, f99.h <= 99 * 1.08]);');
+    check('E.U = 1 no 240x320 e E.u escala', r.grabbed.ty[0] === 1 && r.grabbed.ty[1] === 10,
+          JSON.stringify(r.grabbed.ty));
+    check('E.font: maior fonte que cabe na altura (8/16/24) e piso na menor',
+          r.grabbed.ty[2] === 8 && r.grabbed.ty[3] === 16 && r.grabbed.ty[4] === 24 &&
+          r.grabbed.ty[5] === 8 && r.grabbed.ty[6] === true,
+          JSON.stringify(r.grabbed.ty));
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({ native: true });' +
+        '__harness.grab("u", [E.W, E.U, E.u(10)]);');
+    check('canvas nativo 480: E.U = 2', r.grabbed.u[0] === 480 && r.grabbed.u[1] === 2 &&
+          r.grabbed.u[2] === 20, JSON.stringify(r.grabbed.u));
+
+    // texto fit: encolhe ate caber na largura
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var big = E.gfx.measure("SUPERNOVA", { px: 40 });' +
+        'var sizes = []; var ss = System.setTextSize;' +
+        'System.setTextSize = function (n) { sizes.push(n); ss(n); };' +
+        'E.gfx.text("SUPERNOVA", 120, 10, { px: 40, fit: 100, align: "center" });' +
+        'var st = E.font(8);' +
+        '__harness.grab("fit", [big, sizes.length, E.gfx.measure("SUPERNOVA", { font: st.font, size: st.size })]);');
+    check('text fit: rotulo largo (px 40 = 252 px) encolhe ate caber em 100 (size 1)',
+          r.grabbed.fit[0] > 100 && r.grabbed.fit[1] === 0 && r.grabbed.fit[2] <= 100,
+          JSON.stringify(r.grabbed.fit));
+
+    // cena static: draw so na entrada, no redraw() e no press de botao
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var draws = 0, frames = 0;' +
+        'E.run({ menu: { static: true,' +
+        '  update: function () { frames++; if (frames === 5) E.redraw();' +
+        '                       if (frames >= 12) E.quit(); },' +
+        '  draw: function () { draws++; E.gfx.button("OK", 20, 20, 100, 40); }' +
+        '} }, "menu");' +
+        '__harness.grab("st", [draws, frames]);',
+        function (env) {
+            // dedo desce no botao no frame ~8 e solta no ~10
+            env.__harness.pushTouch([{ touched: 0 }, { touched: 0 }, { touched: 0 }, { touched: 0 },
+                                     { touched: 0 }, { touched: 0 }, { touched: 0 },
+                                     { x: 50, y: 30, touched: 1 }, { x: 50, y: 30, touched: 1 },
+                                     { x: 50, y: 30, touched: 0 }]);
+        });
+    check('cena static: 1 draw na entrada + redraw() + press/solta do botao (4 no total)',
+          r.grabbed.st[0] === 4 && r.grabbed.st[1] === 12, JSON.stringify(r.grabbed.st));
+
+    // camada suja: o 2o quadro apaga so as caixas do 1o (sem fillScreen)
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var fills = [], frames = 0, sc = System.fillScreen;' +
+        'var fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) { fills.push([x, y, w, h]); fr(x, y, w, h, c); };' +
+        'E.run({ jogo: {' +
+        '  enter: function () { E.dirty.enable(0x0000); },' +
+        '  update: function () { frames++; if (frames >= 3) E.quit(); },' +
+        '  draw: function () { fills.push("draw"); E.gfx.circle(50 + frames * 10, 60, 6, 0xFFFF); }' +
+        '} }, "jogo");' +
+        '__harness.grab("dl", fills);');
+    var dl = r.grabbed.dl;
+    check('E.dirty: 1o quadro repinta o fundo inteiro, o 2o apaga so a caixa do circulo',
+          dl[0][2] === 240 && dl[0][3] === 320 && dl[1] === 'draw' &&
+          dl[2][2] < 30 && dl[2][3] < 30 && dl[3] === 'draw',
+          JSON.stringify(dl));
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var fulls = [], frames = 0, fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) { if (w === 240 && h === 320) fulls.push(frames); fr(x, y, w, h, c); };' +
+        'E.run({ jogo: {' +
+        '  enter: function () { E.dirty.enable(0x0000); },' +
+        '  update: function () { frames++; if (frames >= 4) E.quit(); },' +
+        '  draw: function () { if (frames === 2) E.fx.flash(0xFFFF, 40, { full: true }); E.fx.draw(); }' +
+        '} }, "jogo");' +
+        '__harness.grab("fl", fulls);');
+    check('E.dirty: full() pedido no draw (flash de tela cheia) repinta o fundo no quadro seguinte',
+          r.grabbed.fl.indexOf(1) >= 0 && r.grabbed.fl.indexOf(3) >= 0,
+          JSON.stringify(r.grabbed.fl));
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var pinted = [];' +
+        'var m = E.tilemap({ cols: 15, rows: 13, cell: 16, paint: function (c, r) { pinted.push(c + "," + r); } });' +
+        'm.markRect(10, 10, 10, 10);' +
+        'var n1 = m.dirty(); m.markRect(10, 10, 10, 10); var n2 = m.dirty();' +
+        'var f = m.flush();' +
+        'm.all(); var tot = m.dirty();' +
+        '__harness.grab("tm", [n1, n2, f, pinted.join(" "), tot, m.cellAt(40, 40).c]);');
+    check('tilemap: markRect marca as celulas tocadas (sem duplicar) e flush repinta',
+          r.grabbed.tm[0] === 4 && r.grabbed.tm[1] === 4 && r.grabbed.tm[2] === 4 &&
+          r.grabbed.tm[3] === '0,0 1,0 0,1 1,1' && r.grabbed.tm[4] === 195 &&
+          r.grabbed.tm[5] === 2,
+          JSON.stringify(r.grabbed.tm));
 
     // save: prefixo + best (recorde)
     r = runEngine(
@@ -986,13 +1337,27 @@ function check(name, ok, detail) {
           result.totals.errors === 0,
           result.apps[0].diagnostics.map(function (d) { return d.message; }).join('; '));
 
-    // soma dos .js como o install ve: main.js do pacote + as deps da arvore
-    // do SDK (o que a loja baixaria para /local/modules)
-    var size = fs.statSync(path.join(appDir, 'main.js')).size +
-               fs.statSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'celeros.engine.js')).size +
-               fs.statSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'celeros.physics.js')).size;
-    check('soma dos .js (pacote + deps) cabe no teto psram (128 KB)', size < 128 * 1024,
+    // soma dos .js como o hub mede: pacote E deps ENXUTOS (publish e
+    // publish-dep sobem pelo jsstrip, como o aparelho compila). Teto = o do
+    // SERVIDOR (hub 0.9.0: 1 MB com psram; o celerhub.py espelha — ver
+    // MAX_MAIN_JS_PSRAM)
+    var TETO = 1024 * 1024;
+    var size = JSSTRIP.strip(fs.readFileSync(path.join(appDir, 'main.js'))).length +
+               depSize('celeros.engine') + depSize('celeros.physics');
+    check('soma dos .js (pacote + deps) cabe no teto psram (1 MB)', size < TETO,
           (size / 1024).toFixed(1) + ' KB');
+    // os dois jogos grandes da loja tambem (pacote + deps do app.json)
+    ['Supernova', 'Detona'].forEach(function (nome) {
+        var dir = path.join(ROOT, 'hub_apps', nome);
+        var total = 0;
+        fs.readdirSync(dir).forEach(function (f) {
+            if (/\.js$/.test(f) && f !== 'test.js') total += JSSTRIP.strip(fs.readFileSync(path.join(dir, f))).length;
+        });
+        var deps = JSON.parse(fs.readFileSync(path.join(dir, 'app.json'), 'utf8')).deps || {};
+        Object.keys(deps).forEach(function (d) { total += depSize(d); });
+        check(nome + ': pacote + deps enxutos cabem no teto do hub (1 MB)', total < TETO,
+              (total / 1024).toFixed(1) + ' KB');
+    });
 
     var r = runAppFolder(appDir, { render: true, stopAtMs: 2000 });
     check('jogo roda limpo no emu (cena titulo)', r.err === null, r.err);

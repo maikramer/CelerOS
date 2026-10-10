@@ -17,8 +17,13 @@
 // tiles (false ignora tilemap), drop (atravessa one-way), onCollide(me,
 // other, info{nx,ny,overlap}) e grounded (apoiado). Top-down: gravity 0 +
 // addTiles (P.flow faz o campo de perseguicao). Veja o guia.
+//
+// 1.4: o SAP do step ganhou CORTE EM Y antes do resolvePair e um
+// parBudget (testes por passo, default 3000; 0 = sem teto) — na rajada do
+// chefe do Supernova o passo passava de 1 s no Duktape e morria de
+// execution timeout; agora o excesso degrada pro proximo step.
 
-var P = { version: '1.3.0' };
+var P = { version: '1.4.0' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 function halfW(b) { return isCircle(b) ? b.r : b.w / 2; }
@@ -129,9 +134,19 @@ P.world = function (opts) {
             }
             if (w.tiles) tilesCollide(w, sdt);
             if (w.bounds && w.walls !== 'none') wallsCollide(w, sdt);
-            // sweep-and-prune: ordena por x (insertion; entre sub-passos o
-            // array ja esta quase ordenado = O(n)) e o loop interno corta
-            // quando a distancia em x passa de 2x a maior meia-largura
+            // sweep-and-prune por X (insertion sort: entre sub-passos o
+            // array ja esta quase ordenado) + CORTE EM Y antes do
+            // resolvePair + ORCAMENTO de testes por passo. A rajada do
+            // chefe do Supernova morria de execution timeout AQUI: o SAP
+            // so cortava em X (balas da mesma coluna a centenas de px em Y
+            // entravam no resolve) e nao havia teto — um cluster de
+            // corpos sensor levava o passo a segundos. Testado em bancada:
+            // grade espacial (hash de celulas) curava o cluster mas custava
+            // ~3x MAIS no caso comum (chave string por corpo e caro no
+            // Duktape); SAP + corte Y + teto resolve os dois lados. O
+            // budget (pairBudget, default 3000; 0 = sem teto) devolve o
+            // resto dos pares ao proximo step — degrada em vez de
+            // congelar.
             for (i = 1; i < bodies.length; i++) {
                 var key = bodies[i];
                 var j = i - 1;
@@ -142,13 +157,21 @@ P.world = function (opts) {
                 bodies[j + 1] = key;
             }
             var cut = maxExt * 2 + 1;
-            for (i = 0; i < bodies.length; i++) {
+            var cutY = maxExt * 2 + 1;
+            var budget = w.pairBudget === undefined || w.pairBudget <= 0 ?
+                         Infinity : w.pairBudget;
+            var tests = 0;
+            for (i = 0; i < bodies.length && tests < budget; i++) {
                 var ai = bodies[i];
                 for (var j2 = i + 1; j2 < bodies.length; j2++) {
                     var cj = bodies[j2];
-                    if (cj.x - ai.x > cut) break;
+                    var dx = cj.x - ai.x;
+                    if (dx > cut) break;
+                    if (tests >= budget) break;
+                    tests++;
                     if (ai.static && cj.static) continue;
                     if (!(ai.mask & cj.group) || !(cj.mask & ai.group)) continue;
+                    if (cj.y - ai.y > cutY || ai.y - cj.y > cutY) continue;
                     resolvePair(ai, cj);
                 }
             }

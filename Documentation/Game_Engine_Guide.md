@@ -104,6 +104,14 @@ E.run({
 }, "menu");
 ```
 
+**Static scenes (menus, pause, game over):** `static: true` makes the scene draw only on entry, on `E.redraw()` and when the finger enters/leaves an `E.gfx.button` — a still menu repaints (and pushes) nothing per frame. On the SmartDisplay's RGB panel the full redraw of a menu at 30 fps was what made the glass "shake with flashes":
+
+```js
+menu: { static: true,
+        update: function () { if (E.hit(this.btn)) E.goto("jogo"); },
+        draw: function () { /* everything once */ this.btn = E.gfx.button("JOGAR", ...); } }
+```
+
 Per frame the engine runs, in order: pending scene switch → dt/fps → input poll → audio keep-alive → camera → fx → timers → tweens → `update(dt)` → `draw()` → frame pacing.
 
 **Leaving scenes cleanly:** timers and tweens created in a scene outlive it. Call `E.clearTimers()`/`E.clearTweens()` in `exit()` (or cancel individual handles with `E.cancel(t)`).
@@ -143,14 +151,18 @@ E.gfx.line(x0, y0, x1, y1, color, { w: 3 });                // wide line (API 22
 E.gfx.tri(x0, y0, x1, y1, x2, y2, color);
 E.gfx.gradient(x, y, w, h, c1, c2, { dir: "y" });
 E.gfx.arc(x, y, r0, r1, a0, a1, color);                     // degrees, -90 = up
-E.gfx.text("SCORE 42", x, y, { size: 2, font: 4, align: "center",
+E.gfx.text("SCORE 42", x, y, { ts: "big", align: "center",       // role (scales with E.U)
                                valign: "middle", color: 0xFFFF, bg: 0x0000 });
+E.gfx.text("SUPERNOVA", x, y, { px: E.u(21), fit: W - 20 });      // pixel height, shrink to fit
+E.gfx.measure("SCORE 42", { ts: "big" });                         // width in pixels
 E.gfx.button("JOGAR", x, y, w, h, { primary: true });        // returns the rect for E.hit()
 E.gfx.bar(x, y, w, h, 0.75);                                 // meter (health/charge)
 E.gfx.panel(x, y, w, h);                                     // card with border
 ```
 
-`bg` omitted in `text` = transparent background (single-arg `setTextColor`). Mixing colors: `System.mixColor(c1, c2, pct)` (API 22).
+`bg` omitted in `text` = transparent background (single-arg `setTextColor`). Mixing colors: `System.mixColor(c1, c2, pct)` (API 22) — `pct`% of the way from `c1` to `c2`.
+
+**Scale and type (1.2):** lay out in project units — `E.u(v)` turns a measure of the 240-wide design into pixels of the current screen (`E.U` = min(W, H)/240: 1 on the virtual canvas, 2 on the 480 native canvas, ~1.7 on the watch). Text goes by **pixel height**: `px`, or a role in `E.ts` (`tiny 9, small 11, body 13, label 15, big 20, title 28, huge 40`, scaled by `E.U`). `E.font(px)` picks among the firmware fonts (already promoted on big screens: 13/25/42 px line on the 480) and prefers the crisp native glyph over a blocky `textSize` blow-up. Avoid raw `size`: on a big screen the firmware has already doubled the font and `size: 3` on top gives 75-120 px titles.
 
 ## 7. Camera
 
@@ -214,8 +226,12 @@ E.fx.burst(x, y, { n: 14, colors: [0xFFE0, 0xFD20], speed: 120, life: 0.6,
                    grav: 200, shape: "dot" });   // dot | spark | ring
 E.fx.ring(x, y, { speed: 700, color: 0xFFE0 });  // shockwave (expanding circle)
 E.fx.popText(x, y, "+10", { color: 0xFFE0 });    // floating score
-E.fx.flash(0xFFFF, 150);                         // fullscreen flash
-var stars = E.fx.stars(60, { colors: [0x39E7, 0xC5F9] });  // parallax (keep the ref)
+E.fx.flash(0xF800, 150);                         // edge glow (frame that fades)
+E.fx.flash(0xFFFF, 400, { full: true });         // fullscreen flash (save it for the big moment)
+// stride: N > 1 moves each star once every N frames (spread by index), so only
+// n/N stars dirty a box per frame - a full-sky field otherwise makes the dirty
+// union cover the whole screen again. Average speed is preserved.
+var stars = E.fx.stars(60, { colors: [0x39E7, 0xC5F9], stride: 4 });  // parallax
 stars.update(E.dt); stars.draw();
 E.fx.draw();                                     // call at the END of your scene draw
 ```
@@ -237,7 +253,7 @@ Easings: `E.m.linear/inQuad/outQuad/inOutQuad/outBack`.
 
 ## 12. Audio
 
-One speaker slot on the device: `playMusic` OR `playWav`/`playTone` at a time. `E.audio` manages the music side and keeps sfx polite:
+Since API 32 sound effects are **mixed on top of the track** by the synth (`System.sfx`): `E.audio.sfx` does not block the loop and plays with music on (`E.caps.mix`). On older firmware there is one speaker slot — `playMusic` OR `playWav`/`playTone` — and `E.audio` falls back to the blocking `playTone`, polite with the music:
 
 ```js
 E.audio.music({ bpm: 132, loops: 0, tracks: [
@@ -245,16 +261,16 @@ E.audio.music({ bpm: 132, loops: 0, tracks: [
   { wave: "tri", vol: 60, drum: true, notes: [[36,2],[0,2],[38,2],[0,2]] },
 ]});
 E.audio.beat();        // beat position (1.0 = downbeat); -1 when not playing
-E.audio.sfx("coin");   // named sfx (skipped while music plays; sfxOverMusic=true overrides)
+E.audio.sfx("coin");   // named sfx (API 32: mixed over the track; older: skipped while music plays)
 E.audio.sfx([880, 60]);        // or a raw [freq, ms]
-E.audio.sfx([[660,60],[880,80]]); // or a short melody (BLOCKING — keep it short)
+E.audio.sfx([[660,60],[0,20],[880,80]]); // or a short melody (freq 0 = rest; one effect at a time: the newest wins)
 E.audio.stop(); E.audio.mute(true); E.audio.volume(80);
-E.audio.duck(600);  // mutes the track for ms (a loud sfx takes the channel);
-                    // the engine resumes it from where it stopped — sfx
-                    // unlock inside the window (playing() is false)
+E.audio.duck(600);  // older firmware: mutes the track for ms (a loud sfx takes
+                    // the channel) and resumes from where it stopped; no-op
+                    // with E.caps.mix (the effect already sounds on top)
 ```
 
-Music auto-restarts when its loops end (keep-alive). Spawn-on-the-beat: `if (Math.floor(E.audio.beat()) !== lastBeat) spawn()`. Default sfx table: `ui, ok, back, bad, hit, coin, boom` — replace entries in `E.audio.sfxTable`. Boards without a speaker (CYD) no-op everything.
+Music auto-restarts when its loops end (keep-alive). Spawn-on-the-beat: `if (Math.floor(E.audio.beat()) !== lastBeat) spawn()`. Resume after a pause: save `System.musicPos()` and call `E.audio.music(song, { startMs: pos })`. Default sfx table: `ui, ok, back, bad, hit, coin, boom, shot, power, over, record, win` — replace entries in `E.audio.sfxTable`. Boards without a speaker (CYD) no-op everything.
 
 ## 13. Save (high scores, settings)
 
@@ -358,6 +374,28 @@ rope.step(dt);       // opts: gravity, damp, bounds, bounce
 
 `E.init({ native: true })` switches drawing/touch to **physical glass pixels** (e.g. 480×480 on the SmartDisplay instead of the scaled 240×320) — crisper and faster for fullscreen games, but shapes are not uniform-scaled anymore. Requires `"topbar": false` in `app.json` (the request fails gracefully otherwise and `E.caps.native` stays false — always branch on it). `E.W/E.H` reflect the active mode.
 
+## 16b. Rendering without flicker (engine 1.2)
+
+The frame is **persistent** and the firmware pushes to the glass only the boxes you drew (up to 8 dirty boxes per frame since API 32 — before, the union of everything). So the cheapest frame is the one that touches the fewest pixels:
+
+- **Menus:** `static: true` scenes (§4).
+- **Action on a plain background:** `E.dirty.enable(bgColor)` in `enter`. Every engine draw (`E.gfx.*`, `E.spr.blit`, `E.fx`, text) records its screen box; next frame the engine repaints just those boxes with the background before calling your `draw`. No `fillScreen`. Direct `System.*` draws register with `E.dirty.add(x, y, w, h)`. `E.fx.stars` erases its own old pixels and only touches stars that moved (a star covered by something drawn over it heals on its next stride tick).
+- **HUD:** `E.dirty.clip(x, y, w, h)` keeps erase and world drawing inside the arena; call `E.dirty.unclip()` and redraw the HUD only when its values change (keep a key string).
+- **Tile worlds:** `E.tilemap({ cols, rows, cell, ox, oy, paint(c, r, x, y, w, h) })` keeps the scenery in the frame; `E.dirty.enable(function (x, y, w, h) { map.markRect(x, y, w, h); })` marks the cells under whatever moved, `map.mark(c, r)` the ones that changed (block broken), and `map.flush()` at the top of `draw` repaints only those. What `paint` draws is background — it never enters the dirty layer.
+- `E.dirty.full()` repaints the whole background next frame (scene change, fullscreen flash do it for you); the layer turns itself off on every scene switch.
+
+```js
+jogo: {
+  enter: function () { E.dirty.enable(0x0000); E.dirty.clip(0, HUD_H, W, H - HUD_H); },
+  draw: function () {
+    drawWorld();                 // E.gfx / E.spr — boxes recorded automatically
+    E.fx.draw();
+    E.dirty.unclip();
+    if (hudKey() !== lastKey) drawHud();
+  }
+}
+```
+
 ## 17. Testing your game
 
 The harness runs your game headless with a virtual clock — physics, engine and all:
@@ -382,11 +420,11 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Engine+physics+game go over 48 KB (deps count toward the app ceiling!) → keep `"requires": ["psram"]`. Sizes today: `celeros.engine` ≈ 35 KB, `celeros.physics` ≈ 17 KB.
+- Engine+physics+game go over 48 KB (deps count toward the app ceiling!) → keep `"requires": ["psram"]`. The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles. Today: `celeros.engine` 54 KB source → 32 KB, `celeros.physics` 25 → 15 KB.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses.
-- Full-screen `fillScreen` + redraw everything at 30 fps is fine on the S3 boards; for few moving objects prefer dirty-erase (erase old position, draw new).
+- Avoid full-screen `fillScreen` + redraw everything per frame: on the SmartDisplay's RGB panel (framebuffer scanned from PSRAM) it starves the LCD DMA and the image jitters. Use `static` scenes, `E.dirty` and `E.tilemap` (§16b).
 - `world.step` is O(n²) on body count in the worst case, but a **sweep-and-prune** (bodies sorted by x each substep, early break on x distance) keeps it near-linear for spread-out scenes — shooters with ~40 bodies run comfortably.
-- `E.audio.sfx` melodies are **blocking** (`playTone`): keep them under ~300 ms.
+- `E.audio.sfx` is non-blocking on API 32 (`System.sfx`); on older firmware it is **blocking** (`playTone`): keep melodies under ~300 ms.
 - Pure-JS bursts longer than ~1 s trip the firmware exec-timeout — the `E.run` loop yields every frame, so stay inside it.
 
 ## 19. API cheat sheet
@@ -397,6 +435,9 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 | `E.goto(name)` / `E.quit()` | switch scene / leave the loop |
 | `E.input`, `E.hit(r)`, `E.press(r)` | touch state, tap in rect, held in rect |
 | `E.gfx.*`, `E.cam` | camera-aware drawing, scroll/shake/follow |
+| `E.u(v)`, `E.U`, `E.font(px)`, `E.ts` | project-unit scale, pixel-height typography |
+| `scene.static`, `E.redraw()` | menus that draw only when something changes |
+| `E.dirty.enable/clip/unclip/add/full`, `E.tilemap` | erase-and-redraw only what changed |
 | `E.group()`, `E.pool(n, f)` | entity lists, pre-allocated recycling |
 | `E.spr.load/blit`, `E.anim(frames, fps)` | PNG sprites with painter fallback, flipbooks |
 | `E.fx.burst/popText/flash/stars/draw` | juice |

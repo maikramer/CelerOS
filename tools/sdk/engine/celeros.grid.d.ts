@@ -32,4 +32,9 @@ declare namespace GRID {
     function celulaLivre(grid: string[][], rng: () => number,
                          filtro?: (c: number, r: number, ch: string) => boolean): { c: number; r: number } | null;
     function contar(grid: string[][], ch: string): number;
+    /** Campo BFS ate o alvo (tc,tr): next() = vizinho um passo mais perto (1.1.0). */
+    function flow(grid: string[][], tc: number, tr: number, passavel: (ch: string) => boolean): {
+        dist(c: number, r: number): number;
+        next(c: number, r: number): { c: number; r: number } | null;
+    };
 }

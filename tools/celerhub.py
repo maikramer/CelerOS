@@ -49,9 +49,19 @@ MAX_API_LEVEL = _read_api_level()
 # temporarios do compile) tem que caber na RAM interna — medido na CYD
 # (ENGINE_NOTES rodada 4): 61KB roda, 82KB nao compila. Declarando
 # "psram" em requires o app sobe para MAX_MAIN_JS_PSRAM: as placas S3
-# com PSRAM (smartdisplay, dog, watch) compilam sem limite runtime.
+# com PSRAM (smartdisplay, dog, watch) compilam sem limite runtime
+# (dukHeapBudgetOk passa direto; o fonte cru vai num bloco so de PSRAM
+# no launch, ~6-7MB contiguos livres). 1MB = 1/8 da PSRAM: cabe com
+# folga — o preco de um app que use isso e a abertura (compile linear,
+# ~12x o maior app de 2026-10) e ~30% da littlefs de 3,5MB do
+# SmartDisplay. O teto e permissivo, nao um alvo.
 MAX_MAIN_JS = 48 * 1024
-MAX_MAIN_JS_PSRAM = 128 * 1024
+# Espelha o SERVIDOR (CelerOS-Server stacks/.celeros-hub/api/app.py, hub
+# 0.9.0+): 1MB com requires psram. Os dois sobem juntos — com o cliente em
+# 1MB e o hub em 128KB o --dry passava e o upload voltava 413 (Detona 0.6.0,
+# 2026-10-09). O publish manda os .js enxutos (jsstrip): a soma conta o que
+# o aparelho compila de fato.
+MAX_MAIN_JS_PSRAM = 1024 * 1024
 STREAM_SAFE_MAIN_JS = 30 * 1024
 VALID_REQUIRES = ("psram",)
 # Pacote multi-arquivo (modulos .js + assets): flat, sem subpastas; mesmas
@@ -151,6 +161,20 @@ def http(method, url, token=None, data=None, headers=None, timeout=30):
 
 
 # --------------------------------------------------------------- validacao -
+def strip_js(path: Path) -> bytes:
+    """Fonte enxuto do jeito que o aparelho compila (tools/sdk/lib/jsstrip.js,
+    porte 1:1 do JsStripper do firmware: sem comentarios/indentacao, quebras
+    de linha preservadas — a linha do erro no device bate com o repo)."""
+    tool = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+    try:
+        out = subprocess.run(["node", str(tool), str(path)], capture_output=True, timeout=60)
+    except FileNotFoundError:
+        die("node nao encontrado no PATH: necessario para enxugar o .js (ou --sem-strip)")
+    if out.returncode != 0 or (not out.stdout and path.stat().st_size > 0):
+        die(f"jsstrip falhou em {path.name}: {out.stderr.decode('utf-8', 'replace').strip()}")
+    return out.stdout
+
+
 def run_app_lint(folder: Path):
     """Lint estatico do app (tools/app_lint): parser ES5 de verdade + checagem
     da API do firmware (funcoes, aridades, permissoes, niveis). Erros bloqueiam.
@@ -314,6 +338,15 @@ def cmd_publish(args):
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
         meta, avisos, js_sum, extras = validate(folder)
+        # .js do pacote sobem ENXUTOS (como o aparelho compila): a soma do
+        # teto passa a contar o tamanho real; o fonte comentado fica no repo
+        enxutos = {}
+        if not args.no_strip:
+            enxutos["main.js"] = strip_js(folder / "main.js")
+            for n, p in extras.items():
+                if n.endswith(".js"):
+                    enxutos[n] = strip_js(p)
+            js_sum = sum(len(b) for b in enxutos.values())
         deps = meta.get("deps") or {}
         # deps: resolve contra o indice do hub (existencia + teto com a soma
         # das deps — o mesmo calculo que o servidor faz no upload)
@@ -358,11 +391,17 @@ def cmd_publish(args):
             zpath = Path(td) / "app.zip"
             with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.write(folder / "app.json", "app.json")
-                zf.write(folder / "main.js", "main.js")
+                if "main.js" in enxutos:
+                    zf.writestr("main.js", enxutos["main.js"])
+                else:
+                    zf.write(folder / "main.js", "main.js")
                 if (folder / "icon.png").is_file():
                     zf.write(folder / "icon.png", "icon.png")
                 for n, p in extras.items():
-                    zf.write(p, n)
+                    if n in enxutos:
+                        zf.writestr(n, enxutos[n])
+                    else:
+                        zf.write(p, n)
             blob = zpath.read_bytes()
 
         boundary = "----celeroshub7d1f2c"
@@ -392,7 +431,14 @@ def cmd_publish_dep(args):
     Nome = nome do arquivo sem .js (tools/sdk/engine/celeros.engine.js ->
     dep "celeros.engine"); versao lida do `version: 'x.y.z'` do modulo;
     --min-api e o CELEROS_API_LEVEL minimo do device que roda a dep.
-    Transitivas: --dep nome=range (repetivel)."""
+    Transitivas: --dep nome=range (repetivel).
+
+    Sobe o modulo ENXUTO (tools/sdk/lib/jsstrip.js, porte 1:1 do JsStripper
+    do firmware): sem comentarios/indentacao, com as quebras de linha
+    preservadas (o "line N" do erro bate com o fonte do repo). O hub mede o
+    .js recebido no teto de compile e o aparelho enxuga do mesmo jeito antes
+    de compilar — o tamanho medido vira o custo real em RAM (a engine 1.2
+    cai de 54 KB crus para 32 KB). --sem-strip sobe o fonte como esta."""
     tok = token_or_die(args)
     src = Path(args.file).expanduser().resolve()
     if not src.is_file():
@@ -415,6 +461,18 @@ def cmd_publish_dep(args):
             die(f"--dep invalida: {pair}")
         sub[d] = r
 
+    code = src.read_bytes()
+    if not args.no_strip:
+        strip = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+        try:
+            out = subprocess.run(["node", str(strip), str(src)], capture_output=True, timeout=60)
+        except FileNotFoundError:
+            die("node nao encontrado no PATH: necessario para enxugar a dep (ou --sem-strip)")
+        if out.returncode != 0 or not out.stdout:
+            die(f"jsstrip falhou: {out.stderr.decode('utf-8', 'replace').strip()}")
+        print(f"{name}: {len(code)}B -> {len(out.stdout)}B enxuto (linhas preservadas)")
+        code = out.stdout
+
     with tempfile.TemporaryDirectory() as td:
         zpath = Path(td) / "dep.zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -422,7 +480,7 @@ def cmd_publish_dep(args):
                 "name": name, "version": version,
                 "minApi": args.min_api, "deps": sub,
             }))
-            zf.write(src, f"{name}.js")
+            zf.writestr(f"{name}.js", code)
         blob = zpath.read_bytes()  # depois do with: zip fechado tem o central directory
 
     boundary = "----celeroshub7d1f2c"
@@ -526,6 +584,8 @@ def main():
     p.add_argument("--dry", action="store_true", help="so valida, nao envia")
     p.add_argument("--force", action="store_true",
                    help="republica mesmo com version <= a do hub")
+    p.add_argument("--sem-strip", action="store_true", dest="no_strip",
+                   help="sobe os .js com comentarios (padrao: enxutos como o aparelho compila)")
     p.set_defaults(fn=cmd_publish)
 
     p = sub.add_parser("publish-dep", help="publica dependencia JS no repo do hub")
@@ -537,6 +597,8 @@ def main():
     p.add_argument("--dep", action="append", metavar="NOME=RANGE",
                    help="dep transitiva (repetivel)")
     p.add_argument("--force", action="store_true", help="republica a versao")
+    p.add_argument("--sem-strip", action="store_true", dest="no_strip",
+                   help="sobe o fonte com comentarios (padrao: enxuto como o aparelho compila)")
     p.set_defaults(fn=cmd_publish_dep)
 
     p = sub.add_parser("list", help="lista o catalogo e compara com o repo")

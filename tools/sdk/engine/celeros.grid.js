@@ -8,7 +8,7 @@
 //   var arena = GRID.classica(15, 13, GRID.rng(101), { dens: 0.55 });
 //   // arena.grid + arena.macios[{c,r}]
 
-var GRID = { version: '1.0.0' };
+var GRID = { version: '1.1.0' };
 
 // xorshift32 — mesmo esquema do E.rng/celeros.physics; modulo independente
 GRID.rng = function (seed) {
@@ -125,6 +125,49 @@ GRID.celulaLivre = function (grid, rng, filtro) {
         if (passa(c, r, grid[r][c])) return { c: c, r: r };
     }
     return null;
+};
+
+// flow(grid, tc, tr, passavel) — campo de distancia BFS ate o alvo
+// (tc,tr): perseguicao em grade sem a dep de fisica. passavel(ch) decide o
+// que se atravessa. Devolve {dist(c,r), next(c,r)}: next e o vizinho um
+// passo mais perto do alvo (null na origem, fora do mapa ou sem caminho);
+// ordem fixa dir/esq/baixo/cima = deterministico. Recompute quando o
+// labirinto ou o alvo mudam (~2x/s), nunca por frame.
+GRID.flow = function (grid, tc, tr, passavel) {
+    var rows = grid.length, cols = rows ? grid[0].length : 0;
+    var n = rows * cols, dist = new Array(n), i;
+    for (i = 0; i < n; i++) dist[i] = -1;
+    function anda(c, r) {
+        return r >= 0 && r < rows && c >= 0 && c < cols && passavel(grid[r][c]);
+    }
+    var q = [], head = 0;
+    if (tc >= 0 && tc < cols && tr >= 0 && tr < rows) {
+        dist[tr * cols + tc] = 0;
+        q.push(tr * cols + tc);
+    }
+    while (head < q.length) {
+        var at = q[head++], c = at % cols, r = (at - c) / cols, d = dist[at] + 1;
+        if (anda(c + 1, r) && dist[at + 1] < 0) { dist[at + 1] = d; q.push(at + 1); }
+        if (anda(c - 1, r) && dist[at - 1] < 0) { dist[at - 1] = d; q.push(at - 1); }
+        if (anda(c, r + 1) && dist[at + cols] < 0) { dist[at + cols] = d; q.push(at + cols); }
+        if (anda(c, r - 1) && dist[at - cols] < 0) { dist[at - cols] = d; q.push(at - cols); }
+    }
+    function distAt(c, r) {
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return -1;
+        return dist[r * cols + c];
+    }
+    return {
+        dist: distAt,
+        next: function (c, r) {
+            var d = distAt(c, r);
+            if (d <= 0) return null;
+            if (distAt(c + 1, r) === d - 1) return { c: c + 1, r: r };
+            if (distAt(c - 1, r) === d - 1) return { c: c - 1, r: r };
+            if (distAt(c, r + 1) === d - 1) return { c: c, r: r + 1 };
+            if (distAt(c, r - 1) === d - 1) return { c: c, r: r - 1 };
+            return null;
+        }
+    };
 };
 
 GRID.contar = function (grid, ch) {

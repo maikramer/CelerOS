@@ -134,9 +134,9 @@ for (const c of CASES) {
   check('teto: 50KB com requires psram = limpo', fmt(got) === '{}', fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
-  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 130 * 1024);
+  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 1030 * 1024);
   got = countsOf(dir);
-  check('teto: 130KB com requires psram = erro (teto absoluto 128KB)',
+  check('teto: 1030KB com requires psram = erro (teto absoluto 1MB)',
     got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 

@@ -11,10 +11,18 @@
 // E.tween/E.after/E.every, E.audio (musica com beat + sfx), E.save (NVS),
 // E.group/E.pool (entidades), E.m/E.rng (matematica). Fisica opcional e o
 // modulo "physics". Recursos novos sao detectados em E.caps (sprites 12,
-// keepAwake 13, smooth 22, playMusic 25, canvas nativo 28) — roda em toda
-// placa e no harness/emu sem mudanca. Veja Documentation/Game_Engine_Guide.
+// keepAwake 13, smooth 22, playMusic 25, canvas nativo 28, sfx misturado
+// 32) — roda em toda placa e no harness/emu sem mudanca. Veja
+// Documentation/Game_Engine_Guide.
+//
+// 1.2: escala e tipografia por PIXEL (E.U/E.u, E.font, text {px}) — o
+// firmware ja promove a fonte em tela grande e o size por cima dava texto
+// de 80-120 px na 4848; cenas `static` (desenham so quando algo muda:
+// menus sem redesenho por quadro = sem tremor no painel RGB); camada
+// E.dirty (apaga so o que mudou, nada de fillScreen por quadro) e
+// E.tilemap (celulas sujas); sfx misturado sem bloquear (System.sfx).
 
-var E = { version: '1.1.1' };
+var E = { version: '1.2.2' };
 var S = System;
 
 // ------------------------------------------------------- caps / init ------
@@ -34,6 +42,11 @@ E.caps = (function () {
         arc: typeof S.fillArc === 'function',
         wide: typeof S.drawWideLine === 'function',
         slots: typeof S.spriteSlots === 'function' ? S.spriteSlots() : 4,
+        mix: typeof S.sfx === 'function',          // API 32: sfx sem bloquear
+        clip: typeof S.setClip === 'function',
+        button: typeof S.button === 'function',
+        // tela fisica grande (>= 400): o firmware promove as fontes 1/2/4
+        big: !!(info && info.screenW >= 400),
         native: false, w: 240, h: 320
     };
 })();
@@ -41,6 +54,7 @@ E.caps = (function () {
 E.theme = null;
 E.W = 240;
 E.H = 320;
+E.U = 1;                // escala do projeto: min(W, H) / 240 (2 no 480 nativo)
 E.dt = 0;
 E.fps = 0;
 E.data = {};            // bolsa compartilhada entre cenas
@@ -57,6 +71,8 @@ E.init = function (opts) {
     }
     E.W = E.caps.w = S.screenWidth();
     E.H = E.caps.h = S.screenHeight();
+    E.U = Math.min(E.W, E.H) / 240;
+    E._fonts = null;    // tabela de fontes medida sob demanda (E.font)
     try { E.theme = S.theme(); } catch (e) { E.theme = null; }
     if (opts.keepAwake !== false && typeof S.keepAwake === 'function') {
         S.keepAwake(true);
@@ -68,6 +84,52 @@ E.init = function (opts) {
     E.fx._reset(opts.particles || 96);
     return E.caps;
 };
+
+// u(v): medida do projeto (240 de largura) em pixels da tela atual —
+// layout que vale igual no 240x320 virtual, no 480 nativo e no relogio
+E.u = function (v) { return Math.round(v * E.U); };
+
+// Tipografia por PIXEL: as fontes do firmware (1/2/4) medidas no alvo
+// (fontHeight ja inclui a promocao de tela grande) x textSize 1..4. font(px)
+// devolve {font, size, h} da maior que cabe em px (ou a menor de todas).
+E.font = function (px) {
+    var t = E._fonts;
+    if (!t) {
+        t = [];
+        var fs = [1, 2, 4];
+        for (var i = 0; i < fs.length; i++) {
+            var h = 0;
+            try { h = S.fontHeight(fs[i]); } catch (e) { h = 0; }
+            if (!(h > 0)) h = fs[i] === 1 ? 8 : (fs[i] === 2 ? 16 : 26);
+            for (var sz = 1; sz <= 4; sz++) t.push({ font: fs[i], size: sz, h: h * sz });
+        }
+        // menor altura primeiro; no empate vence a fonte maior (size 1 de
+        // uma fonte grande e mais nitido que size 2 de uma pequena)
+        t.sort(function (a, b) { return a.h - b.h || a.size - b.size; });
+        E._fonts = t;
+    }
+    var best = t[0], k;
+    for (k = 0; k < t.length; k++) {
+        if (t[k].h <= px * 1.08) {
+            if (t[k].h > best.h || (t[k].h === best.h && t[k].size < best.size)) best = t[k];
+        }
+    }
+    // menos ampliacao vence a ate 15% da altura: DejaVu24 (25 px) e nitida,
+    // a DejaVu12 x2 (26 px) serrilhada; DejaVu24 x2 (50) bate DejaVu12 x4
+    if (best.size > 1) {
+        var pick = best;
+        for (k = 0; k < t.length; k++) {
+            var c = t[k];
+            if (c.h > best.h || c.h < best.h * 0.85) continue;
+            if (c.size < pick.size || (c.size === pick.size && c.h > pick.h)) pick = c;
+        }
+        best = pick;
+    }
+    return best;
+};
+
+// tamanhos de texto por PAPEL (px no projeto 240; o text escala por E.U)
+E.ts = { tiny: 9, small: 11, body: 13, label: 15, big: 20, title: 28, huge: 40 };
 
 // ------------------------------------------------------------- mat -------
 
@@ -199,7 +261,7 @@ E._pollInput = function (now) {
             }
         }
     }
-    i.btn = typeof S.button === 'function' ? S.button() : 0;
+    i.btn = E.caps.button ? S.button() : 0;
     return t;
 };
 
@@ -224,12 +286,31 @@ E._quit = false;
 E._last = 0;
 E._fpsT = 0;
 E._fpsN = 0;
+E._redraw = true;       // cena static: pede 1 draw
+E._btns = [];           // botoes desenhados no ultimo draw (E.gfx.button)
+E._btnOn = -1;          // indice do botao sob o dedo (feedback de press)
 
 E.goto = function (name) { E._next = name; };
 E.quit = function () { E._quit = true; };
+// cena static: agenda um draw (estado mudou). Em cena comum e no-op.
+E.redraw = function () { E._redraw = true; };
 
-// roda cenas {enter, update(dt), draw, exit} ate E.quit(); ticka input,
-// audio, camera, fx, timers e tweens antes do update da cena
+// botao sob o dedo entre os do ultimo draw (-1 = nenhum)
+E._btnUnder = function () {
+    var i = E.input;
+    if (!i.down) return -1;
+    for (var k = 0; k < E._btns.length; k++) {
+        var b = E._btns[k];
+        if (i.x >= b.x && i.x <= b.x + b.w && i.y >= b.y && i.y <= b.y + b.h) return k;
+    }
+    return -1;
+};
+
+// roda cenas {enter, update(dt), draw, exit, fps, static} ate E.quit();
+// ticka input, audio, camera, fx, timers e tweens antes do update da cena.
+// static: true = a cena so desenha na entrada, no E.redraw() e quando o
+// dedo entra/sai de um E.gfx.button — menu parado nao repinta (nem
+// empurra) nada por quadro.
 E.run = function (scenes, first) {
     E._scenes = scenes;
     E._quit = false;
@@ -240,6 +321,11 @@ E.run = function (scenes, first) {
         cur = scenes[name];
         E._scene = cur;
         E.sceneName = name;
+        E._redraw = true;
+        E._btns.length = 0;
+        E._btnOn = -1;
+        // a camada suja e da cena que a liga: a proxima recomeca do zero
+        E.dirty.off();
         if (cur && cur.enter) cur.enter();
     }
     enter(first);
@@ -275,7 +361,24 @@ E.run = function (scenes, first) {
         E._tickTweens(now);
         if (cur && cur.update) cur.update(dt);
         if (E._quit) break;
-        if (cur && cur.draw) cur.draw();
+        if (cur && cur.draw) {
+            var draw = true;
+            if (cur.static) {
+                var on = E._btnUnder();
+                if (on !== E._btnOn) {
+                    E._btnOn = on;
+                    E._redraw = true;
+                }
+                draw = E._redraw;
+            }
+            if (draw) {
+                E._redraw = false;
+                E._btns.length = 0;
+                if (E.dirty.on) E.dirty._begin();
+                cur.draw();
+                if (E.dirty.on) E.dirty._end();
+            }
+        }
         // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto)
         var fps = cur && cur.fps !== undefined ? cur.fps : E.fpsTarget;
         var frameMin = fps > 0 ? Math.floor(1000 / fps) : 0;
@@ -284,6 +387,177 @@ E.run = function (scenes, first) {
     }
     if (cur && cur.exit) cur.exit();
     E._scene = null;
+};
+
+// ----------------------------------------------------- camada suja -------
+
+// Apaga-e-redesenha SO o que mudou: cada desenho da engine (gfx, blit, fx,
+// texto) registra sua caixa de tela; no quadro seguinte essas caixas voltam
+// ao fundo (cor lisa ou painter) antes do draw. Substitui o fillScreen por
+// quadro — no painel RGB de 480x480 o redesenho integral saturava a PSRAM
+// e o vidro tremia; com o firmware de caixas sujas (API 32) so as caixas
+// vao ao vidro. Desenho direto via System.* registra com E.dirty.add().
+//
+//   enter: function () { E.dirty.enable(0x0000); }   // fundo preto
+//   E.dirty.enable(function (x, y, w, h) { mapa.markRect(x, y, w, h); })
+//   (a cena chama mapa.flush() na 1a linha do draw)
+E.dirty = {
+    on: false,
+    _bg: 0,
+    _paint: null,
+    _prev: [],          // [x,y,w,h, x,y,w,h, ...] do quadro anterior
+    _cur: [],
+    _full: true,
+    _wasFull: false,
+    _clip: null,
+    _mute: 0,           // >0: repintura de fundo (tilemap.flush) nao registra
+
+    // liga a camada (bg: cor RGB565 ou painter(x, y, w, h)); o 1o quadro
+    // repinta o fundo inteiro
+    enable: function (bg) {
+        var d = E.dirty;
+        d.on = true;
+        if (typeof bg === 'function') { d._paint = bg; d._bg = 0; }
+        else { d._paint = null; d._bg = bg === undefined ? 0 : bg; }
+        d._prev.length = 0;
+        d._cur.length = 0;
+        d._full = true;
+        return d;
+    },
+    off: function () {
+        var d = E.dirty;
+        d.on = false;
+        d._prev.length = 0;
+        d._cur.length = 0;
+        d._clip = null;
+    },
+    // proximo quadro repinta o fundo inteiro (flash, troca de tela, shake
+    // de cenario)
+    full: function () { E.dirty._full = true; },
+    // recorte da area de jogo: o apagar e o desenho do mundo nao invadem o
+    // HUD (o HUD so repinta quando muda)
+    clip: function (x, y, w, h) {
+        E.dirty._clip = w === undefined ? null : { x: x, y: y, w: w, h: h };
+    },
+    // solta o recorte no meio do draw (o HUD desenha por cima da area de
+    // jogo depois do mundo); o _end fecha de qualquer jeito
+    unclip: function () {
+        if (E.dirty._clip && E.caps.clip) S.clearClip();
+    },
+    // registra uma caixa de TELA desenhada neste quadro
+    add: function (x, y, w, h) {
+        var d = E.dirty;
+        if (!d.on || d._mute || !(w > 0) || !(h > 0)) return;
+        d._cur.push(Math.floor(x) - 1, Math.floor(y) - 1, Math.ceil(w) + 2, Math.ceil(h) + 2);
+    },
+    // alguma caixa (apagada agora ou desenhada neste quadro) toca o rect?
+    // o HUD usa para saber se precisa repintar
+    touches: function (x, y, w, h) {
+        var d = E.dirty;
+        if (d._wasFull || d._full) return true;
+        return d._hit(d._prev, x, y, w, h) || d._hit(d._cur, x, y, w, h);
+    },
+    _hit: function (a, x, y, w, h) {
+        for (var i = 0; i < a.length; i += 4) {
+            if (a[i] < x + w && a[i] + a[i + 2] > x && a[i + 1] < y + h && a[i + 1] + a[i + 3] > y) return true;
+        }
+        return false;
+    },
+    _fill: function (x, y, w, h) {
+        var d = E.dirty;
+        if (x < 0) { w += x; x = 0; }
+        if (y < 0) { h += y; y = 0; }
+        if (x + w > E.W) w = E.W - x;
+        if (y + h > E.H) h = E.H - y;
+        if (w <= 0 || h <= 0) return;
+        if (d._paint) d._paint(x, y, w, h);
+        else S.fillRect(x, y, w, h, d._bg);
+    },
+    _begin: function () {
+        var d = E.dirty, c = d._clip;
+        if (c && E.caps.clip) S.setClip(c.x, c.y, c.w, c.h);
+        // consome o pedido AQUI: um full() pedido durante o draw (flash de
+        // tela cheia) vale para o quadro seguinte
+        d._wasFull = d._full;
+        d._full = false;
+        if (d._wasFull) {
+            if (c) d._fill(c.x, c.y, c.w, c.h);
+            else d._fill(0, 0, E.W, E.H);
+        } else {
+            var a = d._prev;
+            for (var i = 0; i < a.length; i += 4) d._fill(a[i], a[i + 1], a[i + 2], a[i + 3]);
+        }
+    },
+    // fim do draw: o que foi desenhado agora e o que se apaga no proximo
+    _end: function () {
+        var d = E.dirty;
+        if (d._clip && E.caps.clip) S.clearClip();
+        var t = d._prev;
+        d._prev = d._cur;
+        t.length = 0;
+        d._cur = t;
+    }
+};
+// ---------------------------------------------------------- tilemap ------
+
+// Grade de celulas com repintura SUJA: o cenario (chao, blocos) fica no
+// quadro persistente e so as celulas marcadas repintam no flush() — por
+// baixo do que se moveu (E.dirty com painter markRect) ou do que mudou
+// (bloco quebrado). paint(c, r, x, y, w, h) desenha UMA celula inteira.
+E.tilemap = function (o) {
+    var cols = o.cols, rows = o.rows;
+    var cw = o.cw || o.cell, ch = o.ch || o.cell;
+    var ox = o.ox || 0, oy = o.oy || 0;
+    var marks = [];
+    var list = [];
+    for (var i = 0; i < cols * rows; i++) marks.push(0);
+    var m = {
+        cols: cols, rows: rows, cw: cw, ch: ch, ox: ox, oy: oy,
+        paint: o.paint,
+        mark: function (c, r) {
+            if (c < 0 || r < 0 || c >= cols || r >= rows) return;
+            var k = r * cols + c;
+            if (marks[k]) return;
+            marks[k] = 1;
+            list.push(k);
+        },
+        // caixa em PIXELS de tela: marca as celulas que ela toca
+        markRect: function (x, y, w, h) {
+            var c0 = Math.floor((x - ox) / cw), c1 = Math.floor((x + w - 1 - ox) / cw);
+            var r0 = Math.floor((y - oy) / ch), r1 = Math.floor((y + h - 1 - oy) / ch);
+            if (c0 < 0) c0 = 0;
+            if (r0 < 0) r0 = 0;
+            if (c1 >= cols) c1 = cols - 1;
+            if (r1 >= rows) r1 = rows - 1;
+            for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) m.mark(c, r);
+        },
+        all: function () {
+            for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) m.mark(c, r);
+        },
+        dirty: function () { return list.length; },
+        // repinta as celulas marcadas (devolve quantas). O que o paint
+        // desenha e FUNDO: nao entra na camada suja (senao cada bloco
+        // repintado se apagaria no quadro seguinte, em loop)
+        flush: function () {
+            var n = list.length;
+            E.dirty._mute++;
+            for (var j = 0; j < n; j++) {
+                var k = list[j];
+                marks[k] = 0;
+                var c = k % cols, r = (k - c) / cols;
+                m.paint(c, r, ox + c * cw, oy + r * ch, cw, ch);
+            }
+            E.dirty._mute--;
+            list.length = 0;
+            return n;
+        },
+        cellAt: function (x, y) {
+            var c = Math.floor((x - ox) / cw), r = Math.floor((y - oy) / ch);
+            if (c < 0 || r < 0 || c >= cols || r >= rows) return null;
+            return { c: c, r: r };
+        }
+    };
+    return m;
 };
 
 // -------------------------------------------------- timers e tweens ------
@@ -497,6 +771,7 @@ E.spr = {
         if (!s) return;
         var dx = Math.round(opts && opts.cx ? x - s.w / 2 : x);
         var dy = Math.round(opts && opts.cy ? y - s.h / 2 : y);
+        if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
         if (s.id) {
             S.useSprite(s.id);
             S.pushSprite(dx, dy, opts && opts.key !== undefined ? opts.key : 0x0000);
@@ -610,78 +885,123 @@ E.cam = {
 
 // ------------------------------------------------------------ gfx --------
 
-// wrappers com camera: opts.screen = true desenha fora da camera (HUD)
+// wrappers com camera: opts.screen = true desenha fora da camera (HUD).
+// Com E.dirty ligado cada primitiva registra a caixa que pintou.
 E.gfx = (function () {
-    function xy(x, y, screen) {
-        if (screen) return [Math.round(x), Math.round(y)];
-        return [Math.round(E.cam.wx(x)), Math.round(E.cam.wy(y))];
+    var D = E.dirty;
+    function px(x, screen) { return Math.round(screen ? x : E.cam.wx(x)); }
+    function py(y, screen) { return Math.round(screen ? y : E.cam.wy(y)); }
+
+    // resolve {font, size} do texto: px (pixels), ts (papel em E.ts,
+    // escalado por E.U) ou o par cru font/size de antes
+    function textStyle(o) {
+        var want = o.px !== undefined ? o.px :
+                   (o.ts !== undefined ? (E.ts[o.ts] || 13) * E.U : -1);
+        if (want > 0) return E.font(want);
+        return { font: o.font || 2, size: o.size || 1, h: 0 };
     }
-    return {
+    // firmware ate a API 31 devolvia o textWidth no espaco virtual 240 mesmo
+    // no canvas nativo (metade no 480): corrige pela escala do vidro
+    var api = 0;
+    try { api = S.getAPILevel(); } catch (e) { api = 0; }
+    function measure(str, st) {
+        var w = 0;
+        try { w = S.textWidth(str, st.font) * st.size; } catch (e) { w = str.length * 8 * st.size; }
+        if (E.caps.native && api > 0 && api < 32) w = Math.round(w * E.W / 240);
+        return w;
+    }
+
+    var g = {
         // rect(x,y,w,h,cor,{fill=true, r (cantos), screen})
         rect: function (x, y, w, h, color, o) {
             o = o || {};
-            var p = xy(x, y, o.screen);
+            var X = px(x, o.screen), Y = py(y, o.screen);
+            var W2 = Math.round(w), H2 = Math.round(h);
             if (o.r && E.caps.round) {
-                S.fillSmoothRoundRect(p[0], p[1], Math.round(w), Math.round(h),
-                                      Math.round(o.r), color);
+                if (o.fill === false && typeof S.drawRoundRect === 'function') {
+                    S.drawRoundRect(X, Y, W2, H2, Math.round(o.r), color);
+                } else {
+                    S.fillSmoothRoundRect(X, Y, W2, H2, Math.round(o.r), color);
+                }
             } else if (o.fill === false) {
-                S.drawRect(p[0], p[1], Math.round(w), Math.round(h), color);
+                S.drawRect(X, Y, W2, H2, color);
             } else {
-                S.fillRect(p[0], p[1], Math.round(w), Math.round(h), color);
+                S.fillRect(X, Y, W2, H2, color);
             }
+            if (D.on) D.add(X, Y, W2, H2);
         },
         // circle(x,y,r,cor,{fill=true, smooth, screen})
         circle: function (x, y, r, color, o) {
             o = o || {};
-            var p = xy(x, y, o.screen);
-            if (o.fill === false) S.drawCircle(p[0], p[1], Math.round(r), color);
-            else if (o.smooth && E.caps.smooth) S.fillSmoothCircle(p[0], p[1], Math.round(r), color);
-            else S.fillCircle(p[0], p[1], Math.round(r), color);
+            var X = px(x, o.screen), Y = py(y, o.screen), R = Math.round(r);
+            if (R < 1) R = 1;
+            if (o.fill === false) S.drawCircle(X, Y, R, color);
+            else if (o.smooth && E.caps.smooth) S.fillSmoothCircle(X, Y, R, color);
+            else S.fillCircle(X, Y, R, color);
+            if (D.on) D.add(X - R - 1, Y - R - 1, R * 2 + 3, R * 2 + 3);
         },
         // line(x0,y0,x1,y1,cor,{w (espessura), screen})
         line: function (x0, y0, x1, y1, color, o) {
             o = o || {};
-            var a = xy(x0, y0, o.screen), b = xy(x1, y1, o.screen);
-            if (o.w > 1 && E.caps.wide) {
-                S.drawWideLine(a[0], a[1], b[0], b[1], Math.round(o.w), color);
-            } else {
-                S.drawLine(a[0], a[1], b[0], b[1], color);
+            var ax = px(x0, o.screen), ay = py(y0, o.screen);
+            var bx = px(x1, o.screen), by = py(y1, o.screen);
+            var lw = o.w > 1 ? Math.round(o.w) : 1;
+            if (lw > 1 && E.caps.wide) S.drawWideLine(ax, ay, bx, by, lw, color);
+            else S.drawLine(ax, ay, bx, by, color);
+            if (D.on) {
+                D.add(Math.min(ax, bx) - lw, Math.min(ay, by) - lw,
+                      Math.abs(bx - ax) + lw * 2 + 1, Math.abs(by - ay) + lw * 2 + 1);
             }
         },
         tri: function (x0, y0, x1, y1, x2, y2, color, o) {
             o = o || {};
-            var a = xy(x0, y0, o.screen), b = xy(x1, y1, o.screen), c = xy(x2, y2, o.screen);
-            if (o.fill === false) {
-                S.drawTriangle(a[0], a[1], b[0], b[1], c[0], c[1], color);
-            } else {
-                S.fillTriangle(a[0], a[1], b[0], b[1], c[0], c[1], color);
+            var ax = px(x0, o.screen), ay = py(y0, o.screen);
+            var bx = px(x1, o.screen), by = py(y1, o.screen);
+            var cx = px(x2, o.screen), cy = py(y2, o.screen);
+            if (o.fill === false) S.drawTriangle(ax, ay, bx, by, cx, cy, color);
+            else S.fillTriangle(ax, ay, bx, by, cx, cy, color);
+            if (D.on) {
+                var l = Math.min(ax, bx, cx), t = Math.min(ay, by, cy);
+                D.add(l, t, Math.max(ax, bx, cx) - l + 1, Math.max(ay, by, cy) - t + 1);
             }
         },
         gradient: function (x, y, w, h, c1, c2, o) {
             if (!E.caps.gradient) {
-                E.gfx.rect(x, y, w, h, c1, o);
+                g.rect(x, y, w, h, c1, o);
                 return;
             }
             o = o || {};
-            var p = xy(x, y, o.screen);
-            S.fillGradient(p[0], p[1], Math.round(w), Math.round(h), c1, c2,
-                           o.dir === 'x' ? 1 : 0);
+            var X = px(x, o.screen), Y = py(y, o.screen);
+            S.fillGradient(X, Y, Math.round(w), Math.round(h), c1, c2, o.dir === 'x' ? 1 : 0);
+            if (D.on) D.add(X, Y, w, h);
         },
         arc: function (x, y, r0, r1, a0, a1, color, o) {
             if (!E.caps.arc) {
-                E.gfx.circle(x, y, r1, color, o);
+                g.circle(x, y, r1, color, o);
                 return;
             }
             o = o || {};
-            var p = xy(x, y, o.screen);
-            S.fillArc(p[0], p[1], Math.round(r0), Math.round(r1),
-                      Math.round(a0), Math.round(a1), color);
+            var X = px(x, o.screen), Y = py(y, o.screen), R = Math.round(r1);
+            S.fillArc(X, Y, Math.round(r0), R, Math.round(a0), Math.round(a1), color);
+            if (D.on) D.add(X - R - 1, Y - R - 1, R * 2 + 3, R * 2 + 3);
         },
-        // texto: opts {color, bg, size (textSize), font (1..8), align
+        // texto: opts {color, bg, px (altura em pixels) | ts (papel: tiny,
+        // small, body, label, big, title, huge — escala com E.U) | size+font
+        // (cru, como antes), fit (largura maxima: encolhe ate caber), align
         // left|center|right, valign top|middle|bottom, screen}
         text: function (str, x, y, o) {
             o = o || {};
-            var p = xy(x, y, o.screen);
+            str = String(str);
+            var st = textStyle(o);
+            if (o.fit > 0 && st.h > 0) {
+                var guard = 0;
+                while (measure(str, st) > o.fit && guard++ < 12) {
+                    var smaller = E.font((st.h - 1) / 1.08);   // estritamente menor
+                    if (smaller.h >= st.h) break;
+                    st = smaller;
+                }
+            }
+            var X = px(x, o.screen), Y = py(y, o.screen);
             // bg ausente = chamada de 1 arg = fundo transparente (firmware)
             if (o.bg === undefined) {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color);
@@ -689,55 +1009,78 @@ E.gfx = (function () {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color, o.bg);
             }
             // datum no LAYOUT DO LOVYANGFX (nao TFT_eSPI): linha vale 4 —
-            // 4=middle-left, 5=middle-center, 8=bottom-left (9=BC, 10=BR);
-            // row+col com base 3 (TFT_eSPI) casava middle-center em 4 = o
-            // texto ancorava a esquerda e escorria pra direita
+            // 4=middle-left, 5=middle-center, 8=bottom-left (9=BC, 10=BR)
             var col = o.align === 'center' ? 1 : (o.align === 'right' ? 2 : 0);
             var row = o.valign === 'middle' ? 4 : (o.valign === 'bottom' ? 8 : 0);
             S.setTextDatum(row + col);
-            if (o.size) S.setTextSize(o.size);
-            S.drawString(String(str), p[0], p[1], o.font || 2);
-            if (o.size) S.setTextSize(1);
+            if (st.size !== 1) S.setTextSize(st.size);
+            S.drawString(str, X, Y, st.font);
+            if (st.size !== 1) S.setTextSize(1);
             S.setTextDatum(0);
+            if (D.on) {
+                var tw = measure(str, st);
+                var th = st.h || (S.fontHeight(st.font) * st.size);
+                var lx = col === 1 ? X - tw / 2 : (col === 2 ? X - tw : X);
+                var ly = row === 4 ? Y - th / 2 : (row === 8 ? Y - th : Y);
+                D.add(lx - 1, ly - 1, tw + 3, th + 3);
+            }
         },
-        // botao immediate-mode: desenha e devolve o rect p/ E.hit()
+        // largura em pixels do texto com as mesmas opts do text()
+        measure: function (str, o) { return measure(String(str), textStyle(o || {})); },
+        // botao immediate-mode: desenha e devolve o rect p/ E.hit(). O
+        // rotulo escala com a altura do botao (px = 50% de h, encolhe ate
+        // caber na largura). Registra o rect: cena static repinta sozinha
+        // quando o dedo entra/sai dele (feedback de press sem draw/quadro)
         button: function (label, x, y, w, h, o) {
             o = o || {};
             var T = E.theme || {};
+            var r = { x: x, y: y, w: w, h: h };
             var accent = o.color || T.accent || 0x07FF;
-            var on = E.press({ x: x, y: y, w: w, h: h });
-            var fill = o.primary === false ?
-                (o.bg !== undefined ? o.bg : (T.card || 0x1082)) :
-                (on ? accent : (E.caps.wide ? S.mixColor(accent, 0x0000, 25) : accent));
-            E.gfx.rect(x, y, w, h, fill, { r: o.r === undefined ? 8 : o.r, screen: o.screen });
-            E.gfx.text(label, x + w / 2, y + h / 2, {
-                color: o.primary === false ? (T.text || 0xFFFF) : (T.onAccent || 0x0000),
-                bg: fill, align: 'center', valign: 'middle',
-                font: o.font || 2, screen: o.screen
-            });
-            return { x: x, y: y, w: w, h: h };
+            var on = E.press(r);
+            var primary = o.primary !== false;
+            var fill = primary ?
+                (on ? accent : (E.caps.wide ? S.mixColor(accent, 0x0000, 25) : accent)) :
+                (on ? (E.caps.wide ? S.mixColor(o.bg !== undefined ? o.bg : (T.card || 0x1082), 0xFFFF, 18) : accent)
+                    : (o.bg !== undefined ? o.bg : (T.card || 0x1082)));
+            var rad = o.r === undefined ? Math.round(Math.min(h * 0.28, 12 * E.U)) : o.r;
+            g.rect(x, y, w, h, fill, { r: rad, screen: o.screen });
+            if (!primary && o.stroke !== false) {
+                g.rect(x, y, w, h, o.stroke || accent, { r: rad, fill: false, screen: o.screen });
+            }
+            var lo = {
+                color: o.textColor !== undefined ? o.textColor :
+                       (primary ? (T.onAccent || 0x0000) : (T.text || 0xFFFF)),
+                align: 'center', valign: 'middle', screen: o.screen,
+                fit: w - Math.round(12 * E.U)
+            };
+            if (o.font) lo.font = o.font;
+            else lo.px = o.px || Math.round(h * 0.5);
+            g.text(label, x + w / 2, y + h / 2, lo);
+            E._btns.push(r);
+            return r;
         },
         // medidor de fracao: opts {fg, bg, r, screen}
         bar: function (x, y, w, h, frac, o) {
             o = o || {};
             var T = E.theme || {};
             var f = E.m.clamp(frac, 0, 1);
-            E.gfx.rect(x, y, w, h, o.bg || (T.stroke || 0x3186), { r: o.r, screen: o.screen });
+            g.rect(x, y, w, h, o.bg || (T.stroke || 0x3186), { r: o.r, screen: o.screen });
             if (f > 0.01) {
-                E.gfx.rect(x + 1, y + 1, Math.max(1, (w - 2) * f), h - 2,
-                           o.fg || (T.accent || 0x07FF), { r: o.r, screen: o.screen });
+                g.rect(x + 1, y + 1, Math.max(1, (w - 2) * f), h - 2,
+                       o.fg || (T.accent || 0x07FF), { r: o.r, screen: o.screen });
             }
         },
         // painel/card com borda
         panel: function (x, y, w, h, o) {
             o = o || {};
             var T = E.theme || {};
-            E.gfx.rect(x, y, w, h, o.bg || (T.card || 0x1082),
-                       { r: o.r === undefined ? 10 : o.r, screen: o.screen });
-            E.gfx.rect(x, y, w, h, o.stroke || (T.stroke || 0x3186),
-                       { r: o.r === undefined ? 10 : o.r, fill: false, screen: o.screen });
+            var rad = o.r === undefined ? Math.round(10 * E.U) : o.r;
+            g.rect(x, y, w, h, o.bg || (T.card || 0x1082), { r: rad, screen: o.screen });
+            g.rect(x, y, w, h, o.stroke || (T.stroke || 0x3186),
+                   { r: rad, fill: false, screen: o.screen });
         }
     };
+    return g;
 })();
 
 // ------------------------------------------------------------- fx --------
@@ -750,6 +1093,7 @@ E.fx = {
     _flashColor: 0,
     _flashT: 0,
     _flashDur: 1,
+    _flashFull: false,
 
     _reset: function (max) {
         this._parts = [];
@@ -811,28 +1155,41 @@ E.fx = {
         p.grow = o.speed === undefined ? 300 : o.speed;
     },
 
-    // texto flutuante (score, dano) que sobe e some
+    // texto flutuante (score, dano) que sobe e some; opts {color, life,
+    // px | ts (default 'label'), font (cru), screen}
     popText: function (x, y, str, o) {
         o = o || {};
         this._floaters.push({
             x: x, y: y, str: String(str),
             color: o.color === undefined ? 0xFFE0 : o.color,
-            t: 0, life: o.life || 0.9, font: o.font || 1, screen: !!o.screen
+            t: 0, life: o.life || 0.9, screen: !!o.screen,
+            font: o.font, px: o.px !== undefined ? o.px :
+                (o.font ? undefined : (E.ts[o.ts || 'label'] || 15) * E.U)
         });
         if (this._floaters.length > 12) this._floaters.shift();
     },
 
-    flash: function (color, ms) {
+    // flash(cor, ms, {full}): por padrao um BRILHO NA BORDA (moldura que
+    // some) — o flash de tela cheia branca a cada impacto era o "pisca
+    // aleatorio" e custava 2 pushes integrais; full: true = tela cheia
+    flash: function (color, ms, o) {
         this._flashColor = color;
         this._flashDur = (ms || 180) / 1000;
         this._flashT = this._flashDur;
+        this._flashFull = !!(o && o.full);
     },
 
     // campo de estrelas parallax (2 camadas): guardado pelo chamador;
-    // opts {w, h, vy, color} ou {colors: [perto, longe]}
+    // opts {w, h, vy, color} ou {colors: [perto, longe]}. stride > 1 move
+    // cada estrela 1 vez a cada N quadros, escalonado por indice (n/N
+    // estrelas por quadro): 60 pontos de 1 px espalhados pelo vidro por
+    // quadro faziam a uniao das caixas sujas virar a tela inteira e o push
+    // integral voltava — e a disputa de banda com o DMA do painel RGB que
+    // faz o vidro vibrar. Velocidade media preservada (dt x stride).
     stars: function (n, o) {
         o = o || {};
         var w = o.w || E.W, h = o.h || E.H;
+        var stride = o.stride || 1;
         var pts = [];
         for (var i = 0; i < n; i++) {
             pts.push({
@@ -844,18 +1201,36 @@ E.fx = {
         }
         return {
             update: function (dt) {
+                var c = (this._c = (this._c || 0) + 1);
+                var vy = (o.vy === undefined ? 14 : o.vy) * (stride > 1 ? dt * stride : dt);
                 for (var i = 0; i < pts.length; i++) {
+                    if (stride > 1 && (c + i) % stride) continue;
                     var p = pts[i];
-                    p.y += (o.vy === undefined ? 14 : o.vy) * p.layer * dt;
+                    p.y += vy * p.layer;
                     if (p.y >= h) {
                         p.y -= h;
                         p.x = Math.random() * w;
                     }
                 }
             },
+            // com E.dirty ligado cada estrela apaga o proprio pixel antigo
+            // (1 chamada em vez de uma caixa na camada); estrela parada com
+            // o fundo intacto nao pinta nada — o que passou por cima dela
+            // cura no proximo tick (ou no quadro de fundo cheio)
             draw: function () {
+                var d = E.dirty;
+                var full = !d.on || d._wasFull;
+                var erase = d.on && !d._paint && !full;
+                var bg = d._bg;
                 for (var i = 0; i < pts.length; i++) {
-                    S.drawPixel(Math.round(pts[i].x), Math.round(pts[i].y), pts[i].color);
+                    var p = pts[i];
+                    var x = Math.round(p.x), y = Math.round(p.y);
+                    var moved = p.dx !== x || p.dy !== y;
+                    if (!moved && !full) continue;
+                    if (erase && p.dx !== undefined) S.drawPixel(p.dx, p.dy, bg);
+                    S.drawPixel(x, y, p.color);
+                    p.dx = x;
+                    p.dy = y;
                 }
             }
         };
@@ -900,20 +1275,27 @@ E.fx = {
     },
 
     draw: function () {
-        var ps = this._parts;
+        var ps = this._parts, D = E.dirty, mix = E.caps.wide;
         for (var i = 0; i < ps.length; i++) {
             var p = ps[i];
             if (p.dead) continue;
             var k = 1 - p.t / p.life;
             var col = p.color;
-            if (k < 0.5 && E.caps.wide) col = S.mixColor(p.color, 0x0000, Math.round(100 - k * 200));
+            if (k < 0.5 && mix) col = S.mixColor(p.color, 0x0000, Math.round(100 - k * 200));
             var x = Math.round(E.cam.wx(p.x)), y = Math.round(E.cam.wy(p.y));
             if (p.shape === 'spark') {
-                E.gfx.line(p.x, p.y, p.x - p.vx * 0.05, p.y - p.vy * 0.05, col);
+                var x2 = Math.round(x - p.vx * 0.05), y2 = Math.round(y - p.vy * 0.05);
+                S.drawLine(x, y, x2, y2, col);
+                if (D.on) D.add(Math.min(x, x2), Math.min(y, y2), Math.abs(x2 - x) + 1, Math.abs(y2 - y) + 1);
             } else if (p.shape === 'ring') {
-                S.drawCircle(x, y, Math.round(p.size + p.t * p.grow), col);
+                var rr = Math.round(p.size + p.t * p.grow);
+                S.drawCircle(x, y, rr, col);
+                if (D.on) D.add(x - rr, y - rr, rr * 2 + 1, rr * 2 + 1);
             } else {
-                S.fillCircle(x, y, Math.max(1, Math.round(p.size * k)), col);
+                var r = Math.max(1, Math.round(p.size * k));
+                if (r <= 1) S.fillRect(x, y, 2, 2, col);
+                else S.fillCircle(x, y, r, col);
+                if (D.on) D.add(x - r, y - r, r * 2 + 1, r * 2 + 1);
             }
         }
         var fs = this._floaters;
@@ -921,14 +1303,31 @@ E.fx = {
             var f = fs[j];
             var al = 1 - f.t / f.life;
             var fc = f.color;
-            if (al < 0.4 && E.caps.wide) fc = S.mixColor(f.color, 0x0000, Math.round(100 - al * 250));
-            E.gfx.text(f.str, f.x, f.y, { color: fc, align: 'center', font: f.font, screen: f.screen });
+            if (al < 0.4 && mix) fc = S.mixColor(f.color, 0x0000, Math.round(100 - al * 250));
+            E.gfx.text(f.str, f.x, f.y, { color: fc, align: 'center', font: f.font, px: f.px,
+                                          screen: f.screen });
         }
         if (this._flashT > 0) {
             var q = Math.round(100 * (1 - this._flashT / this._flashDur));
             if (q < 70) {   // some antes de virar veu cinza: flash e curto
-                var c = E.caps.wide ? S.mixColor(this._flashColor, 0x0000, q) : this._flashColor;
-                S.fillRect(0, 0, E.W, E.H, c);
+                var c = mix ? S.mixColor(this._flashColor, 0x0000, q) : this._flashColor;
+                if (this._flashFull) {
+                    S.fillRect(0, 0, E.W, E.H, c);
+                    if (D.on) D.full();
+                } else {
+                    // moldura que afina conforme some
+                    var bw = Math.max(2, Math.round(10 * E.U * (1 - q / 70)));
+                    S.fillRect(0, 0, E.W, bw, c);
+                    S.fillRect(0, E.H - bw, E.W, bw, c);
+                    S.fillRect(0, bw, bw, E.H - bw * 2, c);
+                    S.fillRect(E.W - bw, bw, bw, E.H - bw * 2, c);
+                    if (D.on) {
+                        D.add(0, 0, E.W, bw);
+                        D.add(0, E.H - bw, E.W, bw);
+                        D.add(0, bw, bw, E.H - bw * 2);
+                        D.add(E.W - bw, bw, bw, E.H - bw * 2);
+                    }
+                }
             }
         }
     }
@@ -946,7 +1345,12 @@ E.audio = {
         bad: [160, 120],
         hit: [220, 50],
         coin: [[988, 50], [1319, 80]],
-        boom: [[120, 80], [70, 160]]
+        boom: [[120, 80], [70, 160]],
+        shot: [[1400, 18], [1000, 22]],
+        power: [[784, 40], [988, 40], [1319, 90]],
+        over: [[300, 90], [220, 90], [140, 220]],
+        record: [[659, 70], [784, 70], [988, 70], [1319, 200]],
+        win: [[523, 90], [659, 90], [784, 160]]
     },
     _song: null,
     _bpm: 120,
@@ -985,21 +1389,28 @@ E.audio = {
         if (pos < 0) return -1;
         return pos / (60000 / E.audio._bpm);
     },
-    // o que: nome da tabela, [f, ms] ou melodia [[f,ms],...] (bloqueante!)
+    // o que: nome da tabela, [f, ms] ou melodia [[f,ms],...]. Firmware
+    // com API 32: misturado por cima da trilha, NAO bloqueia. Antes disso
+    // cai no playTone (bloqueante, e calado com musica tocando)
     sfx: function (what) {
         if (E.audio.muted || !E.caps.speaker) return;
-        if (E.audio.playing() && !E.audio.sfxOverMusic) return;
         var mel = typeof what === 'string' ? E.audio.sfxTable[what] : what;
         if (!mel) return;
         if (typeof mel[0] === 'number') mel = [mel];
+        if (E.caps.mix) {
+            try { S.sfx(mel); } catch (e) {}
+            return;
+        }
+        if (E.audio.playing() && !E.audio.sfxOverMusic) return;
         try { S.playTone(mel); } catch (e) {}
     },
     // abafa a trilha por ms (um sfx alto, ex. explosao, rouba o canal):
     // para a musica e o _tick retoma do ponto onde parou quando a janela
-    // fecha — sfx toca normal na janela (playing() esta falso)
+    // fecha — sfx toca normal na janela (playing() esta falso). Com mistura
+    // (API 32) o efeito ja soa por cima: no-op, a trilha segue
     duck: function (ms) {
         var song = E.audio._song;
-        if (!song || E.audio.muted) return false;
+        if (!song || E.audio.muted || E.caps.mix) return false;
         var pos = -1;
         if (typeof S.musicPos === 'function') {
             try { pos = S.musicPos(); } catch (e) {}

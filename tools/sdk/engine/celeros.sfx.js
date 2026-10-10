@@ -10,7 +10,7 @@
 // freq 0 = pausa que avanca o tempo. Sons curtos de verdade: o falante do
 // device tem um canal so (musica OU sfx; o E.audio.duck resolve a disputa).
 
-var SFX = { version: '1.0.0' };
+var SFX = { version: '1.0.1' };
 
 // Tabela por intencao. "p" = pausa curta de articulacao.
 var T = {

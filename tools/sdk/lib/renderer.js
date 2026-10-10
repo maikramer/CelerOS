@@ -23,7 +23,7 @@ class Renderer {
         this.fg = 0xFFFF;
         this.bg = 0x0000;
         this.textSize = 1;
-        this.textDatum = 0;    // TL (ancoras 0-8 como no LovyanGFX)
+        this.textDatum = 0;    // TL (ancoras 0..10 do LovyanGFX)
         this.sprite = null;     // { w, h, fb } criado por createSprite
         this.bound = false;     // bindSprite(true): draws vao ao sprite (contrato do firmware)
         this.unsupported = new Set();
@@ -212,12 +212,15 @@ class Renderer {
         const g = this.glyphW(font);
         const h = this.glyphH(font);
         const w = s.length * g;
-        // datum (LovyanGFX): 0=TL 1=TC 2=TR 3=ML 4=MC 5=MR 6=BL 7=BC 8=BR
+        // datum no layout do LovyanGFX (o do firmware, nao o do TFT_eSPI):
+        // coluna = d & 3 (0 esq, 1 centro, 2 dir), linha = d & 12 (0 topo,
+        // 4 meio, 8 base) — 0=TL 1=TC 2=TR 4=ML 5=MC 6=MR 8=BL 9=BC 10=BR
         const d = this.textDatum;
-        if (d === 1 || d === 4 || d === 7) x -= w / 2;
-        else if (d === 2 || d === 5 || d === 8) x -= w;
-        if (d === 3 || d === 4 || d === 5) y -= h / 2;
-        else if (d === 6 || d === 7 || d === 8) y -= h;
+        const col = d & 3, row = d & 12;
+        if (col === 1) x -= w / 2;
+        else if (col === 2) x -= w;
+        if (row === 4) y -= h / 2;
+        else if (row === 8) y -= h;
         const src = Math.max(1, Math.round(g / 8));      // escala do glifo 8x8
         const cols = Math.min(8, Math.round(g / src));   // font1: 6 colunas
         for (let i = 0; i < s.length; i++) {
@@ -276,7 +279,7 @@ class Renderer {
         // como o LovyanGFX: sem cor de fundo o texto e transparente
         S.setTextColor = (fg, bg) => { r.fg = fg; r.bg = (bg == null ? null : bg); };
         S.setTextSize = (sz) => { r.textSize = Math.max(1, sz | 0); };
-        S.setTextDatum = (d) => { r.textDatum = Math.max(0, Math.min(8, d | 0)); };
+        S.setTextDatum = (d) => { d = d | 0; r.textDatum = d < 0 || d > 10 ? 0 : d; };   // firmware: fora de 0..10 vira TL
         S.drawString = (s, x, y, font) => r.drawString(s, x, y, font);
         S.setClip = (x, y, w, h) => { r.clip = { x: x | 0, y: y | 0, w: Math.max(0, w | 0), h: Math.max(0, h | 0) }; };
         S.clearClip = () => { r.clip = null; };
