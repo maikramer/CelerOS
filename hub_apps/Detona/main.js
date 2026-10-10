@@ -450,22 +450,29 @@ E.spr.load([
       w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
     { name: "chefe", file: USA_PNG ? "chefe" : null,
       w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe },
-    // painters puros: o slot deles vem por fase (ou nunca)
-    { name: "blindado", w: SZ.jogador, h: SZ.jogador, paint: painterBlindado },
-    { name: "divisor", w: SZ.jogador, h: SZ.jogador, paint: painterDivisor },
+    // mini/rival: mini e painter (0,7x de tamanho); o rival ganha slot no
+    // duelo (as vagas de bicho ficam livres sem spawns)
+    { name: "blindado", file: USA_PNG ? "blindado" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterBlindado },
+    { name: "divisor", file: USA_PNG ? "divisor" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterDivisor },
     { name: "mini", w: Math.round(SZ.jogador * 0.7), h: Math.round(SZ.jogador * 0.7), paint: painterMini },
     { name: "cuspidor", file: USA_PNG ? "cuspidor" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterCuspidor },
     { name: "ladrao", file: USA_PNG ? "ladrao" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterLadrao },
-    { name: "rival", w: SZ.jogador, h: SZ.jogador, paint: painterRival }
+    { name: "rival", file: USA_PNG ? "rival" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterRival }
 ]);
 
 var BICHOS_PNG = { balao: "balao", fantasma: "fantasma", cacador: "perseguidor",
-                   chefe: "chefe", cuspidor: "cuspidor", ladrao: "ladrao" };
+                   chefe: "chefe", cuspidor: "cuspidor", ladrao: "ladrao",
+                   blindado: "blindado", divisor: "divisor", rival: "rival" };
 var PAINTERS = { balao: painterBalao, fantasma: painterFantasma,
                  cacador: painterCacador, chefe: painterChefe,
-                 cuspidor: painterCuspidor, ladrao: painterLadrao };
+                 cuspidor: painterCuspidor, ladrao: painterLadrao,
+                 blindado: painterBlindado, divisor: painterDivisor,
+                 rival: painterRival };
 var SLOTS_BICHO = ["balao", "fantasma", "cacador", "chefe"];
 var BICHO_SLOT = {};   // kind -> slot que o desenha nesta fase
 
@@ -502,6 +509,7 @@ function armarSprites(s) {
     BICHO_SLOT = {};
     if (!USA_PNG) return;
     var cont = {}, ordem = [];
+    if (s.duelo) { cont.rival = 1; ordem.push("rival"); }   // sem spawns: vaga livre
     for (var i = 0; i < s.spawns.length; i++) {
         var k = s.spawns[i].kind;
         if (!cont[k]) { cont[k] = 0; ordem.push(k); }
@@ -783,7 +791,7 @@ function drawEntidades(s, beat, pulso) {
     if (s.duelo && s.rival && !s.rival.morto && !s.fim) {
         var rx = OX + s.rival.x, ry = OY + s.rival.y;
         var rbob = Math.floor(2 * Math.sin(beat * Math.PI * 2 + 1.7));
-        E.spr.blit("rival", Math.round(rx - SZ.jogador / 2),
+        E.spr.blit(BICHO_SLOT["rival"] || "rival", Math.round(rx - SZ.jogador / 2),
                    Math.round(ry - SZ.jogador / 2 + rbob));
     }
     // jogador (pisca invulneravel; bob no compasso)

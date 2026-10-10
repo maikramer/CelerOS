@@ -123,6 +123,35 @@ ITEMS = {
         "seed": 7217, "gen": (512, 512), "final": (30, 30),
         "kind": "sprite",
     },
+    "blindado": {
+        "prompt": (
+            "retro arcade enemy sprite, squat armored beetle creature with "
+            "thick riveted iron shell helmet and narrow glowing cyan visor "
+            "slit, small stubby legs, top-down view, single centered sprite "
+            "filling most of the frame, on pure solid black background, " + STYLE + NO_TEXT),
+        "seed": 7228, "gen": (512, 512), "final": (30, 30),
+        "kind": "sprite",
+    },
+    "divisor": {
+        "prompt": (
+            "retro arcade enemy sprite, bright green jelly blob creature "
+            "shaped like two merged round lobes side by side, one sleepy "
+            "eye on each lobe, glossy highlights, top-down view, single "
+            "centered sprite filling most of the frame, on pure solid "
+            "black background, " + STYLE + NO_TEXT),
+        "seed": 7239, "gen": (512, 512), "final": (30, 30),
+        "kind": "sprite",
+    },
+    "rival": {
+        "prompt": (
+            "retro arcade top-down game hero sprite, cute round bomber "
+            "character with white helmet and ORANGE visor, red headband "
+            "stripe, small pink cheeks, white and orange suit, seen from "
+            "directly above, single centered sprite filling most of the "
+            "frame, on pure solid black background, " + STYLE + NO_TEXT),
+        "seed": 6112, "gen": (512, 512), "final": (30, 30),
+        "kind": "sprite",
+    },
     "chefe": {
         "prompt": (
             "retro arcade boss sprite, huge round bomb-king monster with "

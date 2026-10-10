@@ -1,86 +1,20 @@
 [
   {
-    "id": "cuspidor",
-    "prompt": "retro arcade enemy sprite, round volcanic rock creature with cracked dark basalt shell, glowing orange lava mouth wide open ready to spit fire, small ember eyes, top-down view, single centered sprite filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7206,
-    "output": "cuspidor_src.png"
+    "id": "blindado",
+    "prompt": "retro arcade enemy sprite, squat armored beetle creature with thick riveted iron shell helmet and narrow glowing cyan visor slit, small stubby legs, top-down view, single centered sprite filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
+    "seed": 7228,
+    "output": "blindado_src.png"
   },
   {
-    "id": "ladrao",
-    "prompt": "retro arcade enemy sprite, sneaky grey raccoon thief with black eye mask, striped tail, clutching a small bulging beige loot sack, top-down view, single centered sprite filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7217,
-    "output": "ladrao_src.png"
+    "id": "divisor",
+    "prompt": "retro arcade enemy sprite, bright green jelly blob creature shaped like two merged round lobes side by side, one sleepy eye on each lobe, glossy highlights, top-down view, single centered sprite filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
+    "seed": 7239,
+    "output": "divisor_src.png"
   },
   {
-    "id": "bloco_macio_1",
-    "prompt": "retro arcade destructible crate block tile, top-down view, warm wooden box with metal corners, soft green moss patches on the edges, faint cracks, the tile fills the ENTIRE frame edge to edge, flat lighting, seamless square texture, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7308,
-    "output": "bloco_macio_1_src.png"
-  },
-  {
-    "id": "bloco_macio_2",
-    "prompt": "retro arcade destructible volcanic block tile, top-down view, dark cracked magma rock with glowing orange ember veins, the tile fills the ENTIRE frame edge to edge, flat lighting, seamless square texture, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7319,
-    "output": "bloco_macio_2_src.png"
-  },
-  {
-    "id": "bloco_macio_3",
-    "prompt": "retro arcade destructible tech crate block tile, top-down view, dark gunmetal panel box with small rivets, glowing magenta seam lines, the tile fills the ENTIRE frame edge to edge, flat lighting, seamless square texture, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7320,
-    "output": "bloco_macio_3_src.png"
-  },
-  {
-    "id": "pw_bomba",
-    "prompt": "retro arcade game item icon, small round black bomb with short lit fuse and bright spark, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7501,
-    "output": "pw_bomba_src.png"
-  },
-  {
-    "id": "pw_chama",
-    "prompt": "retro arcade game item icon, single bright orange fire flame with golden core, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7512,
-    "output": "pw_chama_src.png"
-  },
-  {
-    "id": "pw_veloz",
-    "prompt": "retro arcade game item icon, single blue and white sneaker boot with speed lines, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7523,
-    "output": "pw_veloz_src.png"
-  },
-  {
-    "id": "pw_chute",
-    "prompt": "retro arcade game item icon, single soccer cleat boot kicking a small white ball, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7534,
-    "output": "pw_chute_src.png"
-  },
-  {
-    "id": "pw_boom",
-    "prompt": "retro arcade game item icon, plunger detonator box with red handle and small antenna, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7545,
-    "output": "pw_boom_src.png"
-  },
-  {
-    "id": "pw_escudo",
-    "prompt": "retro arcade game item icon, round silver knight shield with golden rim and shine, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7556,
-    "output": "pw_escudo_src.png"
-  },
-  {
-    "id": "pw_vida",
-    "prompt": "retro arcade game item icon, single glossy red heart with bright highlight, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7567,
-    "output": "pw_vida_src.png"
-  },
-  {
-    "id": "pw_furo",
-    "prompt": "retro arcade game item icon, fiery golden arrow piercing through a small cracked stone block, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7578,
-    "output": "pw_furo_src.png"
-  },
-  {
-    "id": "pw_relogio",
-    "prompt": "retro arcade game item icon, round pocket clock with white face and blue rim, hands almost at twelve, bold simple shapes readable at small size, single centered object filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
-    "seed": 7589,
-    "output": "pw_relogio_src.png"
+    "id": "rival",
+    "prompt": "retro arcade top-down game hero sprite, cute round bomber character with white helmet and ORANGE visor, red headband stripe, small pink cheeks, white and orange suit, seen from directly above, single centered sprite filling most of the frame, on pure solid black background, vivid 16-bit arcade style, crisp clean edges, no text, no letters, no watermark",
+    "seed": 6112,
+    "output": "rival_src.png"
   }
 ]
