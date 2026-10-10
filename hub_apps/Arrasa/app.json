@@ -1,0 +1,20 @@
+{
+  "name": "Arrasa!",
+  "packageName": "celeros.arrasa",
+  "version": "0.1.0",
+  "api": 30,
+  "permissions": [],
+  "requires": [
+    "psram"
+  ],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "topbar": false,
+  "description": "Duelo de catapultas com fisica verlet NATIVA em C++: o estilingue e uma corda de verdade que o dedo tensiona e solta, e os castelos racham vinculo por vinculo por tensao e desabam de verdade — os escombros empilham. Derrube a coroa com as pedras que tem; rachadura no tempo forte da trilha chiptune vale dobro. Solo hoje, duelo 1x1 pela malha CelerNet chegando.",
+  "changelog": "0.1.0 - nucleo fisico: estilingue verlet de verdade (2 elasticos aos garfos fixos, corte no plano da forquilha), pedra cluster rigido, castelo de blocos com rompimento de vinculos por tensao (madeira/pedra/coroa), escombros que empilham, camada suja com painter de ceu/chao, trilha chiptune com racha critico no tempo forte, recorde no NVS",
+  "deps": {
+    "celeros.engine": "^1.2.2",
+    "celeros.physics": "^1.4.0"
+  }
+}
