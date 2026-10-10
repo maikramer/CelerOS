@@ -56,8 +56,7 @@ CelerOS/
 | `Kui` | class | `main/UI/` | immediate-mode UI: Canvas/Screen/Widget/TouchPump/Navigator |
 | `NetworkManager::instance()` | singleton | `components/Network` | sole WiFi radio owner |
 | `SystemInfo::instance()` | singleton | `components/System` | device info |
-| `Singleton<T>` | CRTP template | `components/Utility/Singleton.h` | token-ctor singleton pattern |
-| `Event<Args...>` | template | `components/Utility` | trigger holds mutex: handlers only set flags |
+| `Event<Args...>` | template | `components/Utility` | type-erased core; single static mutex; handlers only set flags |
 | `ErrorCode` | registry type | `components/ErrorCodes` | fallible return type (not esp_err_t) |
 
 Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART, or log-only hook on USB-native boards) -> USBDevice -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> WebManager::startAsync -> CelerKernel::init -> LauncherUI -> Navigator::begin -> WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp).
