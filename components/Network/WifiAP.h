@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "Event.h"
 #include "IPAddress.h"
 
 /**
@@ -80,10 +79,8 @@ struct WifiAPClientInfo {
  * // Or with password
  * ap.start("MyESP32", "password123");
  * 
- * // Monitor connections
- * ap.onClientConnected.subscribe([](const WifiAPClientInfo& client) {
- *     ESP_LOGI(TAG, "Client connected: %s", client.macString.c_str());
- * });
+ * // Check connected clients (polling: os eventos de cliente foram removidos)
+ * int n = ap.getConnectedClients();
  * 
  * // Stop AP
  * ap.stop();
@@ -174,29 +171,10 @@ public:
      */
     bool disconnectClient(const uint8_t* mac);
 
-    // ========== Events ==========
-
-    /**
-     * @brief Event triggered when AP starts.
-     */
-    Event<> onStarted;
-
-    /**
-     * @brief Event triggered when AP stops.
-     */
-    Event<> onStopped;
-
-    /**
-     * @brief Event triggered when a client connects.
-     * Parameter: WifiAPClientInfo
-     */
-    Event<const WifiAPClientInfo&> onClientConnected;
-
-    /**
-     * @brief Event triggered when a client disconnects.
-     * Parameter: WifiAPClientInfo
-     */
-    Event<const WifiAPClientInfo&> onClientDisconnected;
+    // Sem eventos (onStarted/onStopped/onClientConnected/onClientDisconnected):
+    // triagem de 2026-10 nao achou UM assinante em todo o firmware — os
+    // objetos Event custavam heap a toa. Quem precisar dos clientes usa
+    // getClientList()/getConnectedClients().
 
 private:
     WifiAP();

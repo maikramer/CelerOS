@@ -193,38 +193,13 @@ public:
     // ========== Events ==========
 
     /**
-     * @brief Event triggered when portal starts.
-     */
-    Event<> onStarted;
-
-    /**
-     * @brief Event triggered when portal stops.
-     */
-    Event<> onStopped;
-
-    /**
      * @brief Event triggered when credentials are received.
      * Parameter: WiFiCredentials
+     *
+     * Unico evento do portal (2026-10): onStarted/onStopped/onConnecting/
+     * onConnected/onConnectionFailed nao tinham UM assinante no firmware.
      */
     Event<const WiFiCredentials&> onCredentialsReceived;
-
-    /**
-     * @brief Event triggered when connection attempt starts.
-     * Parameter: SSID being connected to
-     */
-    Event<const std::string&> onConnecting;
-
-    /**
-     * @brief Event triggered when connection succeeds.
-     * Parameters: SSID, IP address
-     */
-    Event<const std::string&, const std::string&> onConnected;
-
-    /**
-     * @brief Event triggered when connection fails.
-     * Parameters: SSID, error message
-     */
-    Event<const std::string&, const std::string&> onConnectionFailed;
 
     /**
      * @brief URL decode string (%XX e '+'); util compartilhada com o

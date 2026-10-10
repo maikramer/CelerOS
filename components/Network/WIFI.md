@@ -105,14 +105,11 @@ public:
 | Evento | Parâmetros | Descrição |
 |--------|------------|-----------|
 | `onStateChanged` | `WifiConnection*`, `old_state`, `new_state` | Mudança de estado |
-| `onScanStarted` | `WifiConnection*` | Scan iniciado |
 | `onScanCompleted` | `WifiConnection*`, `WiFiScanResult&` | Scan concluído |
-| `onConnecting` | `WifiConnection*`, `ssid` | Iniciando conexão |
 | `onConnected` | `WifiConnection*`, `WiFiConnectionEvent&` | Conectado |
 | `onAuthFailed` | `WifiConnection*`, `ssid`, `ErrorCode` | Falha de autenticação |
 | `onDisconnected` | `WifiConnection*`, `WiFiConnectionEvent&` | Desconectado |
 | `onSignalChanged` | `WifiConnection*`, `old_rssi`, `new_rssi` | Mudança de sinal |
-| `onRetrying` | `WifiConnection*`, `retry_count`, `max_retries` | Tentando reconectar |
 
 ### Estruturas
 
@@ -207,12 +204,6 @@ void setupWifi() {
                  ssid.c_str(), error.description());
     });
     
-    wifi.onRetrying.addHandler([](WifiConnection* conn, 
-                                  uint8_t retry, 
-                                  uint8_t maxRetries) {
-        ESP_LOGW("WIFI", "Reconectando... %d/%d", retry, maxRetries);
-    });
-    
     wifi.onSignalChanged.addHandler([](WifiConnection* conn, 
                                        int8_t oldRssi, 
                                        int8_t newRssi) {
@@ -251,10 +242,6 @@ if (count > 0) {
 ### Scan Assíncrono
 
 ```cpp
-wifi.onScanStarted.addHandler([](WifiConnection* conn) {
-    ESP_LOGI("SCAN", "Scan iniciado...");
-});
-
 wifi.onScanCompleted.addHandler([](WifiConnection* conn, 
                                    const WiFiScanResult& result) {
     if (result.success) {
@@ -400,9 +387,12 @@ void setupWifi() {
         ESP_LOGI("WIFI", "Estado: %d -> %d", (int)oldState, (int)newState);
     });
     
-    network.onNetworkAvailable.addHandler([](const NetworkInfo& info) {
-        ESP_LOGI("WIFI", "Conectado a %s - IP: %s", 
-                 info.ssid.c_str(), info.ipAddress.c_str());
+    network.onStateChanged.addHandler([&network](NetworkState oldState, NetworkState newState) {
+        if (newState == NetworkState::Connected) {
+            NetworkInfo info = network.getActiveNetwork();
+            ESP_LOGI("WIFI", "Conectado a %s - IP: %s",
+                     info.ssid.c_str(), info.ip.c_str());
+        }
     });
     
     // Inicializar (com task de background para reconexão automática)

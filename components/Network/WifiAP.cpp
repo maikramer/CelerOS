@@ -86,10 +86,15 @@ bool WifiAP::start(const WifiAPConfig& config) {
     wifi_config_t wifi_config = {};
     
     // Copy SSID
-    strncpy(reinterpret_cast<char*>(wifi_config.ap.ssid), 
-            _config.ssid.c_str(), 
+    strncpy(reinterpret_cast<char*>(wifi_config.ap.ssid),
+            _config.ssid.c_str(),
             sizeof(wifi_config.ap.ssid) - 1);
-    wifi_config.ap.ssid_len = static_cast<uint8_t>(_config.ssid.length());
+    // Tamanho do que foi DE FATO copiado (o strncpy acima para em 31): o
+    // length() cru dizia mais que os bytes gravados e, se a string viesse
+    // maior, ainda embrulhava no uint8_t
+    wifi_config.ap.ssid_len = static_cast<uint8_t>(
+        strnlen(reinterpret_cast<const char*>(wifi_config.ap.ssid),
+                sizeof(wifi_config.ap.ssid)));
 
     // Configure security
     if (_config.password.empty()) {
@@ -144,8 +149,7 @@ bool WifiAP::start(const WifiAPConfig& config) {
     setState(WifiAPState::Running);
     ESP_LOGI(TAG, "AP started: %s on channel %d", _config.ssid.c_str(), _config.channel);
     ESP_LOGI(TAG, "AP IP: %s", getIPAddress().c_str());
-    
-    onStarted.trigger();
+
     return true;
 }
 
@@ -172,7 +176,6 @@ bool WifiAP::stop() {
     }
 
     setState(WifiAPState::Stopped);
-    onStopped.trigger();
 
     ESP_LOGI(TAG, "AP stopped");
     return true;
@@ -331,7 +334,6 @@ void WifiAP::eventHandler(void* arg, esp_event_base_t event_base,
 
                 ESP_LOGI(TAG, "Client connected: %s (AID=%d)",
                          info.macString.c_str(), event->aid);
-                self->onClientConnected.trigger(info);
                 break;
             }
 
@@ -343,7 +345,6 @@ void WifiAP::eventHandler(void* arg, esp_event_base_t event_base,
 
                 ESP_LOGI(TAG, "Client disconnected: %s (AID=%d)",
                          info.macString.c_str(), event->aid);
-                self->onClientDisconnected.trigger(info);
                 break;
             }
 

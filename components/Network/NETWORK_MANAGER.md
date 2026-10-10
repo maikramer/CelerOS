@@ -184,22 +184,19 @@ ErrorCode err = netMgr.connectToKnown();
 ### Registrar Handlers de Eventos
 
 ```cpp
-// Quando conectar
-netMgr.onNetworkAvailable.addHandler([](const NetworkInfo& info) {
-    ESP_LOGI("App", "Conectado a: %s", info.ssid.c_str());
-    ESP_LOGI("App", "IP: %s", info.ip.c_str());
-    ESP_LOGI("App", "RSSI: %d dBm", info.rssi);
+// Mudancas de estado (conectado, desconectado, reconectando...)
+netMgr.onStateChanged.addHandler([](NetworkState oldState, NetworkState newState) {
+    if (newState == NetworkState::Connected) {
+        ESP_LOGI("App", "Conectado");
+    } else if (newState == NetworkState::Disconnected) {
+        ESP_LOGW("App", "Desconectado");
+    }
 });
 
-// Quando desconectar
-netMgr.onNetworkLost.addHandler([](const NetworkInfo& info) {
-    ESP_LOGW("App", "Desconectado de: %s", info.ssid.c_str());
-});
-
-// Quando mudar de rede (roaming)
-netMgr.onNetworkChanged.addHandler([](const NetworkInfo& oldNet, const NetworkInfo& newNet) {
-    ESP_LOGI("App", "Roaming: %s -> %s", oldNet.ssid.c_str(), newNet.ssid.c_str());
-});
+// Detalhes da rede ativa: polling leve (getActiveNetwork/isConnected)
+NetworkInfo info = netMgr.getActiveNetwork();
+ESP_LOGI("App", "IP: %s", info.ip.c_str());
+ESP_LOGI("App", "RSSI: %d dBm", info.rssi);
 
 // Quando scan completar
 netMgr.onScanCompleted.addHandler([](const std::vector<ScannedNetwork>& networks) {
@@ -281,38 +278,35 @@ netMgr.onScanCompleted.addHandler([](const std::vector<ScannedNetwork>& networks
 
 | Evento | Parâmetros | Descrição |
 |--------|------------|-----------|
-| `onStateChanged` | `(NetworkState old, NetworkState new)` | Estado mudou |
-| `onNetworkAvailable` | `(NetworkInfo& info)` | Rede disponível/conectado |
-| `onNetworkLost` | `(NetworkInfo& info)` | Rede perdida/desconectado |
-| `onNetworkChanged` | `(NetworkInfo& old, NetworkInfo& new)` | Roaming ocorreu |
+| `onStateChanged` | `(NetworkState old, NetworkState new)` | Estado mudou (conectado, desconectado, reconectando...) |
 | `onScanCompleted` | `(vector<ScannedNetwork>& networks)` | Scan finalizado |
-| `onConnectionFailed` | `(string& ssid, ErrorCode error)` | Conexão falhou |
-| `onRetrying` | `(string& ssid, uint8_t count, uint8_t max)` | Tentando reconectar |
 
 ### Exemplo de Uso de Eventos
 
 ```cpp
 // Usando lambda
-netMgr.onNetworkAvailable.addHandler([](const NetworkInfo& info) {
-    // Fazer algo quando conectar
+netMgr.onStateChanged.addHandler([](NetworkState oldState, NetworkState newState) {
+    if (newState == NetworkState::Connected) {
+        // Fazer algo quando conectar
+    }
 });
 
 // Usando função
-void onConnect(const NetworkInfo& info) {
-    ESP_LOGI("App", "Conectado!");
+void onStateChange(NetworkState oldState, NetworkState newState) {
+    ESP_LOGI("App", "Estado: %d", (int)newState);
 }
-netMgr.onNetworkAvailable.addHandler(onConnect);
+netMgr.onStateChanged.addHandler(onStateChange);
 
 // Usando método de classe
 class MyApp {
 public:
     void setup() {
-        netMgr.onNetworkAvailable.addHandler(
-            [this](const NetworkInfo& info) { this->handleConnect(info); }
+        netMgr.onStateChanged.addHandler(
+            [this](NetworkState oldState, NetworkState newState) { this->handleState(newState); }
         );
     }
     
-    void handleConnect(const NetworkInfo& info) {
+    void handleState(NetworkState state) {
         // ...
     }
 };
@@ -483,13 +477,13 @@ void wifiTask(void* param) {
     NetworkManager& netMgr = NetworkManager::instance();
     
     // Registrar handlers
-    netMgr.onNetworkAvailable.addHandler([](const NetworkInfo& info) {
+    netMgr.onStateChanged.addHandler([](NetworkState oldState, NetworkState newState) {
         // Notificar outras tasks que WiFi está disponível
-        xEventGroupSetBits(appEventGroup, WIFI_CONNECTED_BIT);
-    });
-    
-    netMgr.onNetworkLost.addHandler([](const NetworkInfo& info) {
-        xEventGroupClearBits(appEventGroup, WIFI_CONNECTED_BIT);
+        if (newState == NetworkState::Connected) {
+            xEventGroupSetBits(appEventGroup, WIFI_CONNECTED_BIT);
+        } else if (newState == NetworkState::Disconnected) {
+            xEventGroupClearBits(appEventGroup, WIFI_CONNECTED_BIT);
+        }
     });
     
     // Inicializar

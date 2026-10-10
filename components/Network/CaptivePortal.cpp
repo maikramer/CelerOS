@@ -1,4 +1,6 @@
 #include "CaptivePortal.h"
+#include "NetworkManager.h"
+#include "WifiConnection.h"
 
 #include "esp_log.h"
 #include "esp_http_server.h"
@@ -24,7 +26,7 @@ static const char* HTML_TEMPLATE = R"rawhtml(
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh; padding: 20px;
         }
         .container { 
@@ -33,8 +35,8 @@ static const char* HTML_TEMPLATE = R"rawhtml(
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             overflow: hidden;
         }
-        .header { 
-            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; padding: 24px; text-align: center;
         }
         .header h1 { font-size: 24px; margin-bottom: 8px; }
@@ -63,14 +65,14 @@ static const char* HTML_TEMPLATE = R"rawhtml(
         .form-group { margin-bottom: 16px; }
         label { display: block; margin-bottom: 6px; font-weight: 500; color: #333; }
         input[type="text"], input[type="password"] {
-            width: 100%%; padding: 12px 16px;
+            width: 100%; padding: 12px 16px;
             border: 2px solid #e0e0e0; border-radius: 8px;
             font-size: 16px; transition: border-color 0.2s;
         }
         input:focus { outline: none; border-color: #667eea; }
         .btn {
-            width: 100%%; padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);
+            width: 100%; padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; border: none; border-radius: 8px;
             font-size: 16px; font-weight: 600; cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
@@ -93,9 +95,9 @@ static const char* HTML_TEMPLATE = R"rawhtml(
         .spinner {
             width: 40px; height: 40px; margin: 0 auto 12px;
             border: 3px solid #f3f3f3; border-top: 3px solid #667eea;
-            border-radius: 50%%; animation: spin 1s linear infinite;
+            border-radius: 50%; animation: spin 1s linear infinite;
         }
-        @keyframes spin { 0%% { transform: rotate(0deg); } 100%% { transform: rotate(360deg); } }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -146,15 +148,30 @@ static const char* HTML_TEMPLATE = R"rawhtml(
                         list.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Nenhuma rede encontrada</div>';
                         return;
                     }
-                    list.innerHTML = data.networks.map(n => 
-                        `<div class="network" onclick="selectNetwork('${n.ssid.replace(/'/g, "\\'")}', ${n.rssi})">
-                            <span class="network-name">${n.ssid}</span>
-                            <span class="network-signal">
-                                <span class="signal-icon">${getSignalIcon(n.rssi)}</span>
-                                ${n.rssi} dBm
-                            </span>
-                        </div>`
-                    ).join('');
+                    // Linhas por DOM + textContent (nao innerHTML): o SSID vem
+                    // cru do /scan e nome de rede nao e HTML — nada a escapar,
+                    // UTF-8 inteiro e sem injecao via nome malicioso
+                    list.innerHTML = '';
+                    data.networks.forEach(n => {
+                        const row = document.createElement('div');
+                        row.className = 'network';
+                        const name = document.createElement('span');
+                        name.className = 'network-name';
+                        name.textContent = n.ssid;
+                        const sig = document.createElement('span');
+                        sig.className = 'network-signal';
+                        const icon = document.createElement('span');
+                        icon.className = 'signal-icon';
+                        icon.textContent = getSignalIcon(n.rssi);
+                        sig.appendChild(icon);
+                        sig.appendChild(document.createTextNode(' ' + n.rssi + ' dBm'));
+                        row.appendChild(name);
+                        row.appendChild(sig);
+                        row.addEventListener('click', function () {
+                            selectNetwork(n.ssid, n.rssi, this);
+                        });
+                        list.appendChild(row);
+                    });
                 })
                 .catch(e => {
                     document.getElementById('network-list').innerHTML = 
@@ -168,9 +185,9 @@ static const char* HTML_TEMPLATE = R"rawhtml(
             return '📶';
         }
         
-        function selectNetwork(ssid, rssi) {
+        function selectNetwork(ssid, rssi, el) {
             document.querySelectorAll('.network').forEach(n => n.classList.remove('selected'));
-            event.currentTarget.classList.add('selected');
+            el.classList.add('selected');
             document.getElementById('ssid').value = ssid;
             selectedNetwork = ssid;
         }
@@ -299,8 +316,7 @@ bool CaptivePortal::start(const std::string& apSsid, const std::string& apPasswo
 
     setState(CaptivePortalState::Running);
     ESP_LOGI(TAG, "Captive Portal running on http://%s", ap.getIPAddress().c_str());
-    
-    onStarted.trigger();
+
     return true;
 }
 
@@ -317,7 +333,6 @@ bool CaptivePortal::stop() {
     WifiAP::instance().stop();
 
     setState(CaptivePortalState::Stopped);
-    onStopped.trigger();
 
     ESP_LOGI(TAG, "Captive Portal stopped");
     return true;
@@ -328,38 +343,31 @@ int CaptivePortal::scanNetworks() {
     
     _scannedNetworks.clear();
 
-    // Configure scan
-    wifi_scan_config_t scan_config = {};
-    scan_config.ssid = nullptr;
-    scan_config.bssid = nullptr;
-    scan_config.channel = 0;
-    scan_config.show_hidden = false;
-    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 100;
-    scan_config.scan_time.active.max = 300;
-
-    // Start scan (blocking)
-    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
+    // O scan bloqueante passa pelo WifiConnection (mesma chamada dos tres
+    // caminhos de scan do NetworkManager): ele toma o mutex/flag de scan
+    // (_scanInProgress) antes de tocar no radio. Chamando esp_wifi_scan_*
+    // cru aqui, um scan da STA (roaming/Ajustes) no meio do voo cancelava o
+    // scan do portal (e vice-versa).
+    WifiConnection* wifi = NetworkManager::instance().getWifiConnection();
+    if (wifi == nullptr) {
+        ESP_LOGE(TAG, "Scan failed: NetworkManager not initialized");
         return -1;
     }
-
-    // Get results
-    uint16_t ap_count = 0;
-    esp_wifi_scan_get_ap_num(&ap_count);
-
-    if (ap_count == 0) {
+    std::vector<wifi_ap_record_t> ap_records(20);
+    int count = wifi->scan(ap_records.data(), (uint16_t)ap_records.size());
+    if (count < 0) {
+        ESP_LOGE(TAG, "Scan failed: WifiConnection::scan error");
+        return -1;
+    }
+    if (count == 0) {
         ESP_LOGW(TAG, "No networks found");
         return 0;
     }
 
-    std::vector<wifi_ap_record_t> ap_records(ap_count);
-    esp_wifi_scan_get_ap_records(&ap_count, ap_records.data());
-
     // Process results (filter duplicates and empty SSIDs)
     std::vector<std::string> seen_ssids;
-    for (const auto& record : ap_records) {
+    for (int i = 0; i < count; i++) {
+        const wifi_ap_record_t& record = ap_records[i];
         std::string ssid = reinterpret_cast<const char*>(record.ssid);
         
         // Skip empty or invalid SSIDs
@@ -633,14 +641,24 @@ bool CaptivePortal::startHttpServer() {
         .handler = [](httpd_req_t* req) -> esp_err_t {
             CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
             
-            // Read POST data
+            // Read POST data — o corpo pode chegar em varios pedacos: um recv
+            // unico truncava corpos > 255 B em silencio (senha pela metade =
+            // falha de autenticacao sem pista)
             char buf[256];
-            int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-            if (ret <= 0) {
-                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+            if (req->content_len >= sizeof(buf)) {
+                httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Payload too large");
                 return ESP_FAIL;
             }
-            buf[ret] = '\0';
+            size_t received = 0;
+            while (received < req->content_len) {
+                int ret = httpd_req_recv(req, buf + received, sizeof(buf) - 1 - received);
+                if (ret <= 0) {
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+                    return ESP_FAIL;
+                }
+                received += (size_t)ret;
+            }
+            buf[received] = '\0';
 
             // Parse ssid and password
             std::string data(buf);
@@ -669,7 +687,6 @@ bool CaptivePortal::startHttpServer() {
             creds.password = password;
             portal->_connState = PortalConnState::Connecting;  // /status
             portal->onCredentialsReceived.trigger(creds);
-            portal->onConnecting.trigger(ssid);
 
             // Simple response - actual connection should be handled by event subscriber
             std::string response = "{\"success\":true,\"message\":\"Credenciais recebidas\",\"ip\":\"Verificar na rede\"}";
@@ -777,27 +794,36 @@ std::string CaptivePortal::generateHtml() {
 
 std::string CaptivePortal::generateScanJson() {
     std::string json = "{\"networks\":[";
-    
+
     bool first = true;
     for (const auto& network : _scannedNetworks) {
         if (!first) json += ",";
         first = false;
-        
-        // Escape SSID for JSON
-        std::string escaped_ssid;
-        for (char c : network.first) {
-            if (c == '"') escaped_ssid += "\\\"";
-            else if (c == '\\') escaped_ssid += "\\\\";
-            else if (c >= 32 && c < 127) escaped_ssid += c;
+
+        // SSID cru: so os metacaracteres do JSON sao escapados (" \ e
+        // controles). O filtro antigo (32..126) descartava todo byte >= 127
+        // — "Rede Cafe" com acento chegava como "Rede Caf" e o
+        // toque-para-conectar enviava o SSID mutilado. UTF-8 valido passa
+        // inteiro (JSON aceita); a pagina insere via textContent.
+        json += "{\"ssid\":\"";
+        for (unsigned char c : network.first) {
+            if (c == '"') {
+                json += "\\\"";
+            } else if (c == '\\') {
+                json += "\\\\";
+            } else if (c < 0x20) {
+                char esc[8];
+                snprintf(esc, sizeof(esc), "\\u%04x", (unsigned)c);
+                json += esc;
+            } else {
+                json += static_cast<char>(c);
+            }
         }
-        
-        char entry[128];
-        snprintf(entry, sizeof(entry), 
-                 "{\"ssid\":\"%s\",\"rssi\":%d}",
-                 escaped_ssid.c_str(), network.second);
+        char entry[24];
+        snprintf(entry, sizeof(entry), "\",\"rssi\":%d}", network.second);
         json += entry;
     }
-    
+
     json += "]}";
     return json;
 }

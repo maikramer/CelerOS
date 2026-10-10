@@ -190,7 +190,6 @@ ErrorCode WifiConnection::connect(const std::string &ssid, const std::string &pa
 
     // Update state and trigger event
     setState(WiFiConnectionState::Connecting);
-    onConnecting.trigger(this, ssid);
 
     ESP_LOGI(TAG, "Connecting to WiFi network: %s", ssid.c_str());
 
@@ -272,7 +271,10 @@ std::string WifiConnection::getSSID() const {
 
     wifi_config_t wifi_config;
     if (esp_wifi_get_config(WIFI_IF_STA, &wifi_config) == ESP_OK) {
-        return std::string(reinterpret_cast<char*>(wifi_config.sta.ssid));
+        // SSID de 32 bytes pode vir SEM terminador: o std::string(ptr) antigo
+        // lia alem do fim do campo. Constroi com o tamanho limitado ao array.
+        const char* ssid = reinterpret_cast<const char*>(wifi_config.sta.ssid);
+        return std::string(ssid, strnlen(ssid, sizeof(wifi_config.sta.ssid)));
     }
     return _ssid;
 }
@@ -427,7 +429,6 @@ ErrorCode WifiConnection::startScanAsync() {
 
     _scanInProgress = true;
     setState(WiFiConnectionState::Scanning);
-    onScanStarted.trigger(this);
 
     ESP_LOGI(TAG, "Starting async WiFi scan...");
 
@@ -470,7 +471,6 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     _scanInProgress = true;
     _blockingScan = true;  // Mark as blocking scan - event handler should not consume results
     setState(WiFiConnectionState::Scanning);
-    onScanStarted.trigger(this);
 
     ESP_LOGI(TAG, "Iniciando scan WiFi...");
 
@@ -623,7 +623,6 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                     } else if (self->_retryNum < self->_maxRetries) {
                         // Retry connection
                         self->_retryNum++;
-                        self->onRetrying.trigger(self, self->_retryNum, self->_maxRetries);
                         ESP_LOGI(TAG, "Retrying connection (%d/%d)...", self->_retryNum, self->_maxRetries);
                         esp_wifi_connect();
                     } else {

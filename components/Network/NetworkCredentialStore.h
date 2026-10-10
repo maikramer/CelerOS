@@ -4,9 +4,10 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "NetworkTypes.h"
 #include "ErrorCode.h"
-#include "Event.h"
 
 /**
  * @file NetworkCredentialStore.h
@@ -31,10 +32,15 @@ namespace NetworkStoreConstants {
 /**
  * @class NetworkCredentialStore
  * @brief Manages persistent storage of known network credentials.
- * 
+ *
  * This class provides methods to save, load, update, and remove network
  * credentials from NVS. It uses a simple indexing system where each
  * network is stored with a unique index and an index list is maintained.
+ *
+ * Thread-safe: o cache em memoria (_networks) e lido/escrito de varias
+ * tasks (portal, UI, sys_evt absorvendo scans, NetworkMgr) — tudo passa
+ * por _mutex, com regioes criticas curtas (so memoria; o NVS roda fora,
+ * sobre um snapshot).
  */
 class NetworkCredentialStore {
 public:
@@ -148,19 +154,8 @@ public:
      */
     std::vector<KnownNetwork> getAutoConnectNetworks() const;
 
-    // Events
-    
-    /**
-     * @brief Event triggered when a network is added or updated.
-     * Parameter: The network that was saved.
-     */
-    Event<const KnownNetwork&> onNetworkSaved;
-
-    /**
-     * @brief Event triggered when a network is removed.
-     * Parameter: The SSID of the removed network.
-     */
-    Event<const std::string&> onNetworkRemoved;
+    // Sem eventos (onNetworkSaved/onNetworkRemoved): nenhum assinante em
+    // todo o firmware (triagem 2026-10) — so custavam heap.
 
 private:
     NetworkCredentialStore();
@@ -201,6 +196,8 @@ private:
 
     /**
      * @brief Find network index by SSID.
+     *
+     * Chamador deve segurar _mutex: itera _networks.
      * @param ssid The SSID to search for.
      * @return Index if found, -1 otherwise.
      */
@@ -209,6 +206,9 @@ private:
     /**
      * @brief Guarda compartilhada dos metodos por SSID: store inicializado +
      *        rede presente no cache.
+     *
+     * Chamador deve segurar _mutex: devolve ponteiro DENTRO de _networks
+     * (invalido apos um push_back/erase concurrente).
      * @param ssid SSID procurado.
      * @param err Recebe NotInitialized ou FileNotFound quando devolve nullptr
      *            (None quando devolve ponteiro).
@@ -224,7 +224,8 @@ private:
      */
     static std::string getNetworkKey(size_t index);
 
-    std::vector<KnownNetwork> _networks;    /**< In-memory cache of networks */
+    std::vector<KnownNetwork> _networks;    /**< In-memory cache of networks (guardado por _mutex) */
+    SemaphoreHandle_t _mutex;               /**< Guarda de _networks: criado no init() */
     bool _initialized;                       /**< Initialization flag */
     
     static constexpr const char* TAG = "NetCredStore";

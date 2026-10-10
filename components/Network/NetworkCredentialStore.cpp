@@ -7,8 +7,16 @@
 #include <cstring>
 #include <cstdio>
 
-NetworkCredentialStore::NetworkCredentialStore() 
-    : _initialized(false) {
+namespace {
+
+// Espera maxima pela guarda do cache: as regioes criticas so tocam o vector
+// em memoria (NVS roda fora delas), entao 100 ms e folga generosa.
+constexpr TickType_t kStoreLockTimeout = pdMS_TO_TICKS(100);
+
+} // namespace
+
+NetworkCredentialStore::NetworkCredentialStore()
+    : _mutex(nullptr), _initialized(false) {
 }
 
 NetworkCredentialStore& NetworkCredentialStore::instance() {
@@ -22,6 +30,16 @@ ErrorCode NetworkCredentialStore::init() {
     }
 
     ESP_LOGI(TAG, "Initializing NetworkCredentialStore...");
+
+    // Guarda do cache _networks antes de qualquer acesso: o store e
+    // lido/escrito de varias tasks (portal, UI, sys_evt absorvendo scans,
+    // NetworkMgr) — sem ela, um push_back/erase realocando o vector virava
+    // use-after-free no leitor.
+    _mutex = xSemaphoreCreateMutex();
+    if (_mutex == nullptr) {
+        ESP_LOGE(TAG, "Failed to create store mutex");
+        return CommonErrorCodes::OperationFailed;
+    }
 
     // Initialize NVS if not already done
     ErrorCode err = NVS::initialize();
@@ -53,9 +71,14 @@ ErrorCode NetworkCredentialStore::saveNetwork(const KnownNetwork& network) {
         return CommonErrorCodes::ArgumentError;
     }
 
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGE(TAG, "Lock timeout saving network");
+        return CommonErrorCodes::Timeout;
+    }
+
     // Check if network already exists
     int existingIndex = findNetworkIndex(network.ssid);
-    
+
     if (existingIndex >= 0) {
         // Update existing network
         _networks[existingIndex] = network;
@@ -63,33 +86,40 @@ ErrorCode NetworkCredentialStore::saveNetwork(const KnownNetwork& network) {
     } else {
         // Check if we have room for more networks
         if (_networks.size() >= NetworkStoreConstants::MAX_STORED_NETWORKS) {
-            ESP_LOGE(TAG, "Maximum number of stored networks reached (%zu)", 
+            ESP_LOGE(TAG, "Maximum number of stored networks reached (%zu)",
                      NetworkStoreConstants::MAX_STORED_NETWORKS);
+            xSemaphoreGive(_mutex);
             return CommonErrorCodes::StorageFull;
         }
-        
+
         // Add new network
         _networks.push_back(network);
         ESP_LOGI(TAG, "Added network: %s", network.ssid);
     }
+    xSemaphoreGive(_mutex);
 
-    // Persist to NVS
+    // Persist to NVS (fora da guarda: saveToNvs tira um snapshot sob lock)
     ErrorCode err = saveToNvs();
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description());
         return err;
     }
 
-    // Trigger event
-    onNetworkSaved.trigger(network);
-
     return CommonErrorCodes::None;
 }
 
 ErrorCode NetworkCredentialStore::removeNetwork(const std::string& ssid) {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGE(TAG, "Lock timeout removing network");
+        return CommonErrorCodes::Timeout;
+    }
     KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         if (err == CommonErrorCodes::FileNotFound) {
             ESP_LOGW(TAG, "Network not found: %s", ssid.c_str());
         }
@@ -98,6 +128,7 @@ ErrorCode NetworkCredentialStore::removeNetwork(const std::string& ssid) {
 
     // Remove from memory (indice no cache via aritmetica de ponteiro)
     _networks.erase(_networks.begin() + (net - _networks.data()));
+    xSemaphoreGive(_mutex);
     ESP_LOGI(TAG, "Removed network: %s", ssid.c_str());
 
     // Persist to NVS
@@ -106,9 +137,6 @@ ErrorCode NetworkCredentialStore::removeNetwork(const std::string& ssid) {
         ESP_LOGE(TAG, "Failed to save networks to NVS: %s", err.description());
         return err;
     }
-
-    // Trigger event
-    onNetworkRemoved.trigger(ssid);
 
     return CommonErrorCodes::None;
 }
@@ -120,13 +148,13 @@ ErrorCode NetworkCredentialStore::clearAllNetworks() {
 
     ESP_LOGI(TAG, "Clearing all stored networks...");
 
-    // Store SSIDs for events before clearing
-    std::vector<std::string> ssids;
-    for (const auto& net : _networks) {
-        ssids.push_back(net.ssid);
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGE(TAG, "Lock timeout clearing networks");
+        return CommonErrorCodes::Timeout;
     }
 
     _networks.clear();
+    xSemaphoreGive(_mutex);
 
     // Apaga apenas as chaves deste namespace. NAO usar NVS::eraseData():
     // ele apaga a particao NVS inteira e levaria junto dados de outros
@@ -136,44 +164,75 @@ ErrorCode NetworkCredentialStore::clearAllNetworks() {
         ESP_LOGW(TAG, "Failed to clear NVS keys: %s", err.description());
     }
 
-    // Trigger events for each removed network
-    for (const auto& ssid : ssids) {
-        onNetworkRemoved.trigger(ssid);
-    }
-
     ESP_LOGI(TAG, "All networks cleared");
     return CommonErrorCodes::None;
 }
 
 std::vector<KnownNetwork> NetworkCredentialStore::getKnownNetworks() const {
-    return _networks;
+    std::vector<KnownNetwork> copy;
+    if (_mutex == nullptr) {
+        return copy;  // init nem rodou: cache vazio mesmo
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) == pdTRUE) {
+        copy = _networks;
+        xSemaphoreGive(_mutex);
+    } else {
+        ESP_LOGW(TAG, "Lock timeout in getKnownNetworks");
+    }
+    return copy;
 }
 
 ErrorCode NetworkCredentialStore::getNetwork(const std::string& ssid, KnownNetwork& network) const {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGW(TAG, "Lock timeout in getNetwork");
+        return CommonErrorCodes::Timeout;
+    }
     const KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         return err;
     }
 
     network = *net;
+    xSemaphoreGive(_mutex);
     return CommonErrorCodes::None;
 }
 
 bool NetworkCredentialStore::isKnownNetwork(const std::string& ssid) const {
-    return findNetworkIndex(ssid) >= 0;
+    if (_mutex == nullptr) {
+        return false;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        return false;  // ocupado: trata como desconhecida (so marca de UI)
+    }
+    bool known = findNetworkIndex(ssid) >= 0;
+    xSemaphoreGive(_mutex);
+    return known;
 }
 
 ErrorCode NetworkCredentialStore::setNetworkPriority(const std::string& ssid, int8_t priority) {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGE(TAG, "Lock timeout setting priority");
+        return CommonErrorCodes::Timeout;
+    }
     KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         return err;
     }
 
     // Clamp priority to valid range
     priority = std::max<int8_t>(0, std::min<int8_t>(100, priority));
     net->priority = priority;
+    xSemaphoreGive(_mutex);
 
     ESP_LOGI(TAG, "Set priority for %s to %d", ssid.c_str(), priority);
 
@@ -182,8 +241,16 @@ ErrorCode NetworkCredentialStore::setNetworkPriority(const std::string& ssid, in
 
 ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, uint32_t timestamp) {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGD(TAG, "Lock timeout in updateLastConnected");
+        return CommonErrorCodes::Timeout;
+    }
     KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         return err;
     }
 
@@ -193,7 +260,8 @@ ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, u
     }
 
     net->lastConnected = timestamp;
-    ESP_LOGD(TAG, "Updated lastConnected for %s to %lu", ssid.c_str(), 
+    xSemaphoreGive(_mutex);
+    ESP_LOGD(TAG, "Updated lastConnected for %s to %lu", ssid.c_str(),
              static_cast<unsigned long>(timestamp));
 
     // So em memoria (como o lastRssi): o timestamp e uptime (esp_timer), sem
@@ -206,12 +274,21 @@ ErrorCode NetworkCredentialStore::updateLastConnected(const std::string& ssid, u
 
 ErrorCode NetworkCredentialStore::updateLastRssi(const std::string& ssid, int8_t rssi) {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGD(TAG, "Lock timeout in updateLastRssi");
+        return CommonErrorCodes::Timeout;
+    }
     KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         return err;
     }
 
     net->lastRssi = rssi;
+    xSemaphoreGive(_mutex);
 
     // Don't save to NVS for RSSI updates (too frequent)
     return CommonErrorCodes::None;
@@ -219,12 +296,21 @@ ErrorCode NetworkCredentialStore::updateLastRssi(const std::string& ssid, int8_t
 
 ErrorCode NetworkCredentialStore::setAutoConnect(const std::string& ssid, bool autoConnect) {
     ErrorCode err = CommonErrorCodes::None;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        ESP_LOGE(TAG, "Lock timeout setting autoConnect");
+        return CommonErrorCodes::Timeout;
+    }
     KnownNetwork* net = findNetwork(ssid, err);
     if (net == nullptr) {
+        xSemaphoreGive(_mutex);
         return err;
     }
 
     net->autoConnect = autoConnect;
+    xSemaphoreGive(_mutex);
     ESP_LOGI(TAG, "Set autoConnect for %s to %s", ssid.c_str(), autoConnect ? "true" : "false");
 
     return saveToNvs();
@@ -235,17 +321,25 @@ size_t NetworkCredentialStore::getNetworkCount() const {
 }
 
 std::vector<KnownNetwork> NetworkCredentialStore::getNetworksByPriority() const {
-    std::vector<KnownNetwork> sorted = _networks;
+    std::vector<KnownNetwork> sorted = getKnownNetworks();
     std::sort(sorted.begin(), sorted.end(), compareByPriority);
     return sorted;
 }
 
 std::vector<KnownNetwork> NetworkCredentialStore::getAutoConnectNetworks() const {
     std::vector<KnownNetwork> result;
-    for (const auto& network : _networks) {
-        if (network.autoConnect) {
-            result.push_back(network);
+    if (_mutex == nullptr) {
+        return result;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) == pdTRUE) {
+        for (const auto& network : _networks) {
+            if (network.autoConnect) {
+                result.push_back(network);
+            }
         }
+        xSemaphoreGive(_mutex);
+    } else {
+        ESP_LOGW(TAG, "Lock timeout in getAutoConnectNetworks");
     }
     // Sort by priority
     std::sort(result.begin(), result.end(), compareByPriority);
@@ -255,6 +349,9 @@ std::vector<KnownNetwork> NetworkCredentialStore::getAutoConnectNetworks() const
 // Private methods
 
 ErrorCode NetworkCredentialStore::loadFromNvs() {
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) != pdTRUE) {
+        return CommonErrorCodes::Timeout;
+    }
     _networks.clear();
 
     // Read the network count
@@ -264,11 +361,13 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
 
     if (err == CommonErrorCodes::FileNotFound) {
         ESP_LOGI(TAG, "No stored networks found");
+        xSemaphoreGive(_mutex);
         return CommonErrorCodes::None;
     }
 
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to read network count: %s", err.description());
+        xSemaphoreGive(_mutex);
         return err;
     }
 
@@ -289,14 +388,19 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
         }
     }
 
+    const size_t loaded = _networks.size();
     // Entrada vinda do formato pipe legado: regrava tudo no formato por
-    // campo (migracao transparente, uma unica vez)
-    if (sawLegacy && !_networks.empty()) {
+    // campo (migracao transparente, uma unica vez) — fora da guarda, o
+    // saveToNvs tira o proprio snapshot
+    const bool migrate = sawLegacy && loaded > 0;
+    xSemaphoreGive(_mutex);
+
+    if (migrate) {
         ESP_LOGI(TAG, "Migrating legacy pipe format to per-field keys...");
         saveToNvs();
     }
 
-    ESP_LOGI(TAG, "Successfully loaded %zu networks", _networks.size());
+    ESP_LOGI(TAG, "Successfully loaded %zu networks", loaded);
     return CommonErrorCodes::None;
 }
 
@@ -318,8 +422,23 @@ static const char* F_AUTO = "ac";
 static const char* F_AUTH = "am";
 
 ErrorCode NetworkCredentialStore::saveToNvs() {
+    // Snapshot sob a guarda: gravar o NVS (open/commit por campo, dezenas
+    // de ms) segurando o lock travaria leitores (scan, roaming, UI). Fora
+    // dela, o pior caso e gravar o estado de quem salvou por ultimo.
+    std::vector<KnownNetwork> snapshot;
+    if (_mutex == nullptr) {
+        return CommonErrorCodes::NotInitialized;
+    }
+    if (xSemaphoreTake(_mutex, kStoreLockTimeout) == pdTRUE) {
+        snapshot = _networks;
+        xSemaphoreGive(_mutex);
+    } else {
+        ESP_LOGE(TAG, "Lock timeout snapshotting networks for NVS");
+        return CommonErrorCodes::Timeout;
+    }
+
     // Save the network count
-    uint8_t count = static_cast<uint8_t>(_networks.size());
+    uint8_t count = static_cast<uint8_t>(snapshot.size());
     ErrorCode err = NVS::storeValue<uint8_t>(NetworkStoreConstants::NVS_NAMESPACE,
                                              NetworkStoreConstants::INDEX_KEY, count, true);
 
@@ -329,8 +448,8 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
     }
 
     // Save each network
-    for (size_t i = 0; i < _networks.size(); i++) {
-        err = saveNetworkToNvs(i, _networks[i]);
+    for (size_t i = 0; i < snapshot.size(); i++) {
+        err = saveNetworkToNvs(i, snapshot[i]);
         if (err != CommonErrorCodes::None) {
             ESP_LOGE(TAG, "Failed to save network at index %zu: %s", i, err.description());
             return err;
@@ -339,7 +458,7 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
 
     // Chaves residuais de redes removidas (indices >= count): sem isso, uma
     // rede apagada deixava senha/ssid fantasma no NVS para sempre.
-    for (size_t i = _networks.size(); i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
+    for (size_t i = snapshot.size(); i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_SSID));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PASS));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PRIO));
@@ -351,7 +470,7 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
                       getNetworkKey(i));  // chave do formato pipe legado
     }
 
-    ESP_LOGD(TAG, "Saved %zu networks to NVS", _networks.size());
+    ESP_LOGD(TAG, "Saved %zu networks to NVS", snapshot.size());
     return CommonErrorCodes::None;
 }
 

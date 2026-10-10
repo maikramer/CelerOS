@@ -296,40 +296,15 @@ public:
     Event<NetworkState, NetworkState> onStateChanged;
 
     /**
-     * @brief Event triggered when a network becomes available.
-     * Parameter: NetworkInfo of the available network.
-     */
-    Event<const NetworkInfo&> onNetworkAvailable;
-
-    /**
-     * @brief Event triggered when network is lost.
-     * Parameter: NetworkInfo of the lost network.
-     */
-    Event<const NetworkInfo&> onNetworkLost;
-
-    /**
-     * @brief Event triggered when network changes (roaming).
-     * Parameters: (old_network, new_network)
-     */
-    Event<const NetworkInfo&, const NetworkInfo&> onNetworkChanged;
-
-    /**
      * @brief Event triggered when scan completes.
      * Parameter: Vector of scanned networks.
      */
     Event<const std::vector<ScannedNetwork>&> onScanCompleted;
 
-    /**
-     * @brief Event triggered when connection fails.
-     * Parameters: (ssid, error_code)
-     */
-    Event<const std::string&, ErrorCode> onConnectionFailed;
-
-    /**
-     * @brief Event triggered on connection retry.
-     * Parameters: (ssid, retry_count, max_retries)
-     */
-    Event<const std::string&, uint8_t, uint8_t> onRetrying;
+    // Demais eventos removidos (triagem 2026-10, zero assinantes no
+    // firmware): onNetworkAvailable/onNetworkLost/onNetworkChanged/
+    // onConnectionFailed/onRetrying. Estado va via onStateChanged ou
+    // polling (getActiveNetwork/isConnected/getStats).
 
     // ========== Direct Access (Advanced) ==========
 

@@ -101,11 +101,6 @@ ErrorCode NetworkManager::init(bool startBackgroundTask) {
             onWifiSignalChanged(conn, oldRssi, newRssi);
         });
 
-    _wifiConnection->onRetrying.addHandler(
-        [this](WifiConnection* conn, uint8_t retryCount, uint8_t maxRetries) {
-            onRetrying.trigger(_lastSsid, retryCount, maxRetries);
-        });
-
     _initialized = true;
     ESP_LOGI(TAG, "NetworkManager initialized");
 
@@ -192,7 +187,6 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
     } else {
         _stats.failedConnections++;
         setState(NetworkState::Disconnected);
-        onConnectionFailed.trigger(ssid, err);
         ESP_LOGE(TAG, "Failed to connect to %s: %s", ssid.c_str(), err.description());
     }
 
@@ -636,18 +630,34 @@ void NetworkManager::checkForBetterNetwork() {
                 
                 setState(NetworkState::Roaming);
                 _stats.roamingEvents++;
-                
+
+                // Atualiza _last* no inicio do roam, como o connect() faz: um
+                // reconnect() manual depois do roam A->B dar certo usaria a
+                // senha de A contra B (staleness do caminho de sucesso).
+                _lastSsid = network.ssid;
+                _lastPassword = network.password;
+
                 // Disconnect and connect to new network
                 _wifiConnection->disconnect();
                 ErrorCode err = _wifiConnection->connect(network.ssid, network.password, false);
-                
+
                 if (err == CommonErrorCodes::None) {
-                    NetworkInfo newNetwork = getActiveNetwork();
-                    onNetworkChanged.trigger(oldNetwork, newNetwork);
+                    // Sucesso do roam: _activeNetwork e atualizado pelo
+                    // onWifiConnected que chega junto.
                 } else {
-                    // Roaming failed, try to reconnect to old network
+                    // Roaming failed, try to reconnect to old network.
+                    // A senha TEM que vir do store: _lastSsid/_lastPassword
+                    // agora descrevem a rede ALVO do roam que falhou
+                    // (A->B ok, B->C falhou => _lastPassword e a senha de
+                    // C): autenticar B com ela falhava sempre.
                     ESP_LOGW(TAG, "Roaming failed, reconnecting to previous network");
-                    _wifiConnection->connect(oldNetwork.ssid, _lastPassword, false);
+                    KnownNetwork previous;
+                    if (NetworkCredentialStore::instance().getNetwork(oldNetwork.ssid, previous) ==
+                        CommonErrorCodes::None) {
+                        _wifiConnection->connect(oldNetwork.ssid, previous.password, false);
+                    } else {
+                        _wifiConnection->connect(oldNetwork.ssid, _lastPassword, false);
+                    }
                 }
             }
             break;  // Only try one roaming target
@@ -730,13 +740,11 @@ void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionE
     NetworkCredentialStore::instance().updateLastRssi(event.ssid, event.rssi);
 
     setState(NetworkState::Connected);
-    onNetworkAvailable.trigger(_activeNetwork);
 }
 
 void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnectionEvent& event) {
     ESP_LOGI(TAG, "WiFi disconnected: %s", event.ssid.c_str());
 
-    NetworkInfo lostNetwork = _activeNetwork;
     _activeNetwork.clear();
 
     // Update uptime stats
@@ -749,8 +757,6 @@ void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnecti
     if (_state != NetworkState::Roaming) {
         setState(NetworkState::Disconnected);
     }
-    
-    onNetworkLost.trigger(lostNetwork);
 }
 
 void NetworkManager::onWifiScanCompleted(WifiConnection* conn, const WiFiScanResult& result) {
@@ -775,7 +781,6 @@ void NetworkManager::onWifiAuthFailed(WifiConnection* conn, const std::string& s
 
     _stats.failedConnections++;
     setState(NetworkState::Disconnected);
-    onConnectionFailed.trigger(ssid, error);
 }
 
 void NetworkManager::onWifiSignalChanged(WifiConnection* conn, int8_t oldRssi, int8_t newRssi) {

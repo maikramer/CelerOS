@@ -203,22 +203,10 @@ public:
     Event<WifiConnection*, WiFiConnectionState, WiFiConnectionState> onStateChanged;
 
     /**
-     * @brief Event triggered when a scan is started.
-     * Parameter: WifiConnection*
-     */
-    Event<WifiConnection*> onScanStarted;
-
-    /**
      * @brief Event triggered when a scan completes.
      * Parameters: (WifiConnection*, WiFiScanResult)
      */
     Event<WifiConnection*, const WiFiScanResult&> onScanCompleted;
-
-    /**
-     * @brief Event triggered when starting to connect to a network.
-     * Parameters: (WifiConnection*, ssid)
-     */
-    Event<WifiConnection*, const std::string&> onConnecting;
 
     /**
      * @brief Event triggered when WiFi connection is established.
@@ -244,11 +232,9 @@ public:
      */
     Event<WifiConnection*, int8_t, int8_t> onSignalChanged;
 
-    /**
-     * @brief Event triggered on connection retry.
-     * Parameters: (WifiConnection*, retry_count, max_retries)
-     */
-    Event<WifiConnection*, uint8_t, uint8_t> onRetrying;
+    // Removidos por falta de assinante (triagem 2026-10): onScanStarted,
+    // onConnecting e onRetrying (o pass-through do onRetrying no
+    // NetworkManager foi junto com o evento espelho dele).
 
 
 private:
