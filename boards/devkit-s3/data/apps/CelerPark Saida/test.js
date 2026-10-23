@@ -11,6 +11,7 @@ var CODE_OPEN = 'CP1-01ARZ3NDEKTSV4RRFFQ69G5FBW';
 var CODE_EXIT = 'CP1-01ARZ3NDEKTSV4RRFFQ69G5FCX';
 var CODE_VOID = 'CP1-01ARZ3NDEKTSV4RRFFQ69G5FDZ';
 var CODE_NEW = 'CP1-01ARZ3NDEKTSV4RRFFQ69G5FE1';
+var CODE_UNPAID = 'CP1-01ARZ3NDEKTSV4RRFFQ69G5FG2';
 
 var cloud = null;
 
@@ -59,6 +60,7 @@ exports.wire = function (env) {
     cloud.tickets[CODE_OPEN] = 'paid';
     cloud.tickets[CODE_EXIT] = 'exited';
     cloud.tickets[CODE_VOID] = 'void';
+    cloud.tickets[CODE_UNPAID] = 'issued';
 
     env.Net.isConnected = function () { return !cloud.netDown; };
     env.Net.request = function (opts) {
@@ -119,19 +121,25 @@ exports.wire = function (env) {
     }
 
     // ---- linha do tempo do teste -------------------------------------------
-    env.setTimeout(function () { type(CODE_PAID); }, 100);              // paga: abre
-    env.setTimeout(function () { type(CODE_EXIT); }, 400);              // ja usada: recusa
-    env.setTimeout(function () { type(CODE_VOID); }, 700);              // anulada: recusa
-    env.setTimeout(function () { type(CODE_NEW); }, 1000);              // desconhecida: recusa
-    env.setTimeout(function () {
-        cloud.netDown = true;
-        type(CODE_OPEN);                                                 // sem rede: recusa
-    }, 1300);
-    env.setTimeout(function () { cloud.netDown = false; }, 2500);
-    env.setTimeout(function () {
-        cloud.cmds.push({ id: 'cmd-open', command: 'open' });            // portal remoto
-    }, 3000);
-    env.setTimeout(function () { type('https://pay.teste/' + CODE_OPEN); }, 3600);  // URL + paga: abre
+    // UM timer so (o pool do harness divide 8 com o app/stubs): fila de
+    // [msRelativo, fn] drenada por um setInterval de 50 ms.
+    var t0 = null;
+    var queue = [
+        [100, function () { type(CODE_PAID); }],                 // paga: abre (verde)
+        [400, function () { type(CODE_EXIT); }],                 // ja usada: recusa (amarelo)
+        [700, function () { type(CODE_VOID); }],                 // anulada: recusa (amarelo)
+        [1000, function () { type(CODE_NEW); }],                 // desconhecida: recusa (amarelo)
+        [1150, function () { type(CODE_UNPAID); }],              // em aberto: recusa (vermelho)
+        [1400, function () { cloud.netDown = true; type(CODE_OPEN); }],  // sem rede: recusa (amarelo)
+        [2800, function () { cloud.netDown = false; }],
+        [3200, function () { cloud.cmds.push({ id: 'cmd-open', command: 'open' }); }],  // portal remoto
+        [3800, function () { type('https://pay.teste/' + CODE_OPEN); }]  // URL + paga: abre (verde)
+    ];
+    env.setInterval(function () {
+        if (t0 === null) t0 = sys.millis();
+        var rel = sys.millis() - t0;
+        while (queue.length && queue[0][0] <= rel) queue.shift()[1]();
+    }, 50);
 
     return cloud;
 };

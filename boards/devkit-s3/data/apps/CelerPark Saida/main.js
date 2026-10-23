@@ -33,6 +33,29 @@ var lastPoll = 0;
 var lastBeat = 0;
 var lastErrLogged = "";
 
+// ---- LED de veredicto (WS2812 do devkit-s3, GPIO38) ------------------------
+// verde = saida liberada, vermelho = ticket em aberto (nao pago), amarelo =
+// invalido (desconhecido/ja usado/anulado/codigo ruim/sem rede). Cada cor
+// fica 3 s e o loop apaga (o app nao bloqueia enquanto acende).
+var LED_GREEN = 0x007000;
+var LED_RED = 0x700000;
+var LED_YELLOW = 0x605000;
+var LED_MS = 3000;
+var ledOffAt = 0;
+
+function ledFlash(rgb) {
+    if (typeof System.neopixel !== "function") return;
+    if (!System.neopixel(0, [rgb])) return;  // sem fita no perfil (v1.0): nada
+    ledOffAt = System.millis() + LED_MS;
+}
+
+function ledIdle() {
+    if (ledOffAt && System.millis() >= ledOffAt) {
+        ledOffAt = 0;
+        System.neopixel(0, [0]);
+    }
+}
+
 // ---- teclado HID -> texto (usage ID -> ASCII) ------------------------------
 // Tabela US completa o bastante para QR (URLs, maiusculas, digitos, pontuacao).
 
@@ -140,8 +163,9 @@ function pollReader() {
 
 // ---- validacao do ticket (Session::scan do Rust) ------------------------------
 
-function refuse(code, reason) {
+function refuse(code, reason, unpaid) {
     park.log("saida recusada (" + code + "): " + reason);
+    ledFlash(unpaid ? LED_RED : LED_YELLOW);  // vermelho = em aberto; amarelo = invalido
 }
 
 function scan(raw) {
@@ -164,7 +188,7 @@ function scan(raw) {
         return;
     }
     if (r.status === "issued") {
-        refuse(code, "em aberto, pagamento nao confirmado");
+        refuse(code, "em aberto, pagamento nao confirmado", true);
         return;
     }
     if (r.status === "exited") {
@@ -204,6 +228,7 @@ function scan(raw) {
         park.log("aviso: saida nao marcada na nuvem (" + m.error + "); abrindo com o lookup pago");
     }
     park.gateOpen(cfg);
+    ledFlash(LED_GREEN);
     park.log("saida " + code + " paga. Cancela aberta.");
 }
 
@@ -240,6 +265,7 @@ function pollCycle() {
 // ---- laco principal ------------------------------------------------------------
 
 park.log("totem de saida. device " + cfg.deviceId + " (" + cfg.lane + ")");
+if (typeof System.neopixel === "function") System.neopixel(0, [0]);  // LED comeca apagado
 if (!cfg.secret) park.log("aviso: device_secret vazio na config");
 if (!cfg.key) park.log("aviso: publishable key vazia na config (o gateway exige apikey)");
 if (typeof USB === "undefined") {
@@ -248,6 +274,7 @@ if (typeof USB === "undefined") {
 scanReader(true);
 
 while (true) {
+    ledIdle();
     var hotplug = false;
     if (typeof USB !== "undefined") {
         while (usb.poll() !== null) hotplug = true;
