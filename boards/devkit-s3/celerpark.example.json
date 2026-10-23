@@ -1,0 +1,35 @@
+// Modelo de configuracao dos totems CelerPark (NAO e JSON com comentarios:
+// copie para a placa SEM estas linhas). O arquivo vive em
+// /local/celerpark.json — celerctl push celerpark.json /local/celerpark.json
+// Qualquer campo omitido cai no default do modulo celerpark.js.
+//
+// Os dois totems (Entrada e Saida) leem o MESMO arquivo; deviceId/secret
+// identificam a FAIXA (cancela) de cada um — enrola uma linha por totem na
+// tabela parking_lanes do Supabase:
+//   INSERT INTO public.parking_lanes (tenant_id, name, device_id, device_secret_hash)
+//   VALUES ('<tenant-uuid>', 'Cancela 1', 'lane-01',
+//           public.parking_device_secret_hash('<o-mesmo-secret-abaixo>'));
+//
+// As chaves do Supabase estao em GitClones/ProjetoCursor/env/secrets.env
+// (SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY) e no GlobalSettings do
+// ProjetoCursor. A publishable e chave PUBLICA do cliente; o device_secret
+// nao versiona — ele abre a cancela.
+{
+    "url": "https://supabase.locatelli.app.br",
+    "key": "sb_publishable_...",
+    "deviceId": "lane-01",
+    "secret": "troque-este-segredo",
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+
+    "header": "CelerPark",
+    "lane": "Cancela 1",
+    "qrTemplate": "{code}",
+
+    "relayPin": 4,
+    "relayPinClose": -1,
+    "relayActiveLow": false,
+    "pulseMs": 500,
+
+    "pollMs": 5000,
+    "outboxPath": "/local/celerpark_outbox.json"
+}

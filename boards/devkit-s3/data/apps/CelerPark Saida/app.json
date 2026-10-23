@@ -1,0 +1,12 @@
+{
+  "name": "CelerPark Saida",
+  "packageName": "celeros.park.saida",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Totem de saida do estacionamento CelerPark (migracao do agente Rust): o leitor de QR entra como teclado USB (celeros.usb.hid) e cada leitura valida o ticket CP1 na nuvem (edge function parking-gate) - pago abre o rele da cancela, em aberto/ja usado/anulado/sem rede mantem fechada, tudo no logcat. Headless.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 49,
+  "permissions": ["usb", "net", "gpio", "fs"],
+  "changelog": "1.0.0 - primeira versao: decodificacao HID boot com tabela US (shift incluso), leitura terminada no Enter do leitor, recusas com o mesmo texto do agente Rust, comandos remotos open/close com ack e heartbeat de 60s; deps celeros.usb/celeros.usb.hid/celerpark vendoradas na pasta do app"
+}

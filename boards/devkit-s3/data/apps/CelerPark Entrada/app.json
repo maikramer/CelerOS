@@ -1,0 +1,12 @@
+{
+  "name": "CelerPark Entrada",
+  "packageName": "celeros.park.entrada",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Totem de entrada do estacionamento CelerPark (migracao do agente Rust): botao BOOT gera o ticket CP1-ULID, registra na nuvem (edge function parking-gate, fila local offline), imprime na Epson TM-T20X via celeros.usb.escpos e pulsa o rele da cancela. Headless: saida e o logcat.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 49,
+  "permissions": ["usb", "net", "gpio", "fs"],
+  "changelog": "1.0.0 - primeira versao: cupom identico ao do agente Rust (QR nativo modulo 6, WPC1252, corte), fila local de entradas offline com reenvio, comandos remotos open/close do portal com ack e heartbeat de 60s; deps celeros.usb/celeros.usb.escpos/celerpark vendoradas na pasta do app"
+}
